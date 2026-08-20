@@ -42,7 +42,17 @@ impl Command for UpsertLayerCommand {
         let mut added_coordinates = (0.0, 0.0, 0.0);
         let mut total_coordinates = 0;
 
-        self.layer.parent_id = self.current_layer.clone();
+        // `current_layer` picks the parent for a layer that is being created. Updating an
+        // existing layer must never move it: the boundary nodes of an open layer report that
+        // layer as the current one, which would make it its own parent and cut it out of the
+        // hierarchy every rename, pin edit or comment.
+        self.layer.parent_id = board
+            .layers
+            .get(&self.layer.id)
+            .map(|existing| existing.parent_id.clone())
+            .unwrap_or_else(|| self.current_layer.clone())
+            .filter(|parent| parent != &self.layer.id);
+
         self.old_layer = board
             .layers
             .insert(self.layer.id.clone(), self.layer.clone());
@@ -73,7 +83,7 @@ impl Command for UpsertLayerCommand {
         }
 
         for layer in board.layers.values_mut() {
-            if nodes_set.contains(&layer.id) {
+            if nodes_set.contains(&layer.id) && layer.id != self.layer.id {
                 layer.parent_id = Some(self.layer.id.clone());
                 total_coordinates += 1;
                 added_coordinates = (
@@ -129,5 +139,87 @@ impl Command for UpsertLayerCommand {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::board::LayerType;
+    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use crate::utils::http::HTTPClient;
+    use flow_like_storage::Path;
+
+    fn state() -> Arc<FlowLikeState> {
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    fn board_with_nested_layers() -> Board {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        let mut outer = Layer::new("outer".into(), "Outer".into(), LayerType::Collapsed);
+        outer.parent_id = None;
+        let mut inner = Layer::new("inner".into(), "Inner".into(), LayerType::Collapsed);
+        inner.parent_id = Some(outer.id.clone());
+        board.layers.insert(outer.id.clone(), outer);
+        board.layers.insert(inner.id.clone(), inner);
+        board
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn updating_an_open_layer_keeps_its_parent() {
+        let mut board = board_with_nested_layers();
+
+        // The boundary nodes of an open layer report that layer as `current_layer`.
+        let mut renamed = board.layers["inner"].clone();
+        renamed.name = "Renamed".into();
+        let mut command = UpsertLayerCommand::new(renamed);
+        command.current_layer = Some("inner".into());
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["inner"].name, "Renamed");
+        assert_eq!(
+            board.layers["inner"].parent_id.as_deref(),
+            Some("outer"),
+            "an update must not re-parent the layer"
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn updating_a_layer_from_the_root_keeps_its_parent() {
+        let mut board = board_with_nested_layers();
+
+        let mut command = UpsertLayerCommand::new(board.layers["inner"].clone());
+        command.current_layer = None;
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["inner"].parent_id.as_deref(), Some("outer"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn creating_a_layer_parents_it_to_the_current_layer() {
+        let mut board = board_with_nested_layers();
+
+        let created = Layer::new("created".into(), "Created".into(), LayerType::Collapsed);
+        let mut command = UpsertLayerCommand::new(created);
+        command.current_layer = Some("inner".into());
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["created"].parent_id.as_deref(), Some("inner"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_layer_can_never_become_its_own_parent() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+
+        let created = Layer::new("self".into(), "Self".into(), LayerType::Collapsed);
+        let mut command = UpsertLayerCommand::new(created);
+        command.current_layer = Some("self".into());
+        command.node_ids = vec!["self".into()];
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["self"].parent_id, None);
     }
 }

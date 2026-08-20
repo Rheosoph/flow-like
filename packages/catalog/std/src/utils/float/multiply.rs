@@ -20,7 +20,7 @@ impl NodeLogic for MultiplyFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_multiply",
-            "*",
+            "* (Float)",
             "Multiplies two floats together",
             "Math/Float",
         );

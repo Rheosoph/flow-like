@@ -45,8 +45,8 @@ import { getParallelEdgeRenderAttributes } from "./edge-rendering";
 import type { ClusterModel } from "./graph-clusters";
 import {
 	type ConnectivityPartition,
-	type LayoutPosition as GraphPosition,
 	DEFAULT_NODE_SIZE,
+	type LayoutPosition as GraphPosition,
 	applyClusterLayout,
 	computeSeedSpread,
 	createAnchoredPosition,
@@ -478,7 +478,7 @@ async function finishLayoutAsync(
 
 		updateProgress?.(
 			completed / totalIterations,
-			i18next.t('separatingOverlappingNodes', 'Separating overlapping nodes.'),
+			i18next.t("separatingOverlappingNodes", "Separating overlapping nodes."),
 		);
 
 		// A pass that resolved nothing means the set is already clean.
@@ -527,7 +527,14 @@ async function applyLayoutAsync(
 
 		updateProgress(
 			(completedIterations / totalIterations) * 0.85,
-			i18next.t('valVal2LayoutPassesComplete', '{{val}} / {{val2}} layout passes complete.', { val: completedIterations.toLocaleString(), val2: totalIterations.toLocaleString() }),
+			i18next.t(
+				"valVal2LayoutPassesComplete",
+				"{{val}} / {{val2}} layout passes complete.",
+				{
+					val: completedIterations.toLocaleString(),
+					val2: totalIterations.toLocaleString(),
+				},
+			),
 		);
 
 		if (completedIterations < totalIterations) {
@@ -723,8 +730,11 @@ async function buildGraphAsync(
 
 	publish(
 		0.02,
-		i18next.t('preparingGraphScene', 'Preparing graph scene'),
-		i18next.t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
+		i18next.t("preparingGraphScene", "Preparing graph scene"),
+		i18next.t(
+			"schedulingGraphWorkSoThePageStaysResponsive",
+			"Scheduling graph work so the page stays responsive.",
+		),
 	);
 
 	const nodesBuilt = await processInChunks(
@@ -783,7 +793,11 @@ async function buildGraphAsync(
 			publish(
 				NODE_PROGRESS_WEIGHT * fraction,
 				"Staging nodes",
-				i18next.t('valOfNodeMetadataReady', '{{val}}% of node metadata ready.', { val: Math.round(fraction * 100) }),
+				i18next.t(
+					"valOfNodeMetadataReady",
+					"{{val}}% of node metadata ready.",
+					{ val: Math.round(fraction * 100) },
+				),
 			);
 		},
 		isCancelled,
@@ -817,7 +831,9 @@ async function buildGraphAsync(
 			publish(
 				NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT * fraction,
 				"Linking connections",
-				i18next.t('valOfEdgesConnected', '{{val}}% of edges connected.', { val: Math.round(fraction * 100) }),
+				i18next.t("valOfEdgesConnected", "{{val}}% of edges connected.", {
+					val: Math.round(fraction * 100),
+				}),
 			);
 		},
 		isCancelled,
@@ -829,7 +845,10 @@ async function buildGraphAsync(
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT,
 			"Optimizing connections",
-			i18next.t('resolvingParallelEdgesForClearerPaths', 'Resolving parallel edges for clearer paths.'),
+			i18next.t(
+				"resolvingParallelEdgesForClearerPaths",
+				"Resolving parallel edges for clearer paths.",
+			),
 		);
 		indexParallelEdgesIndex(graph);
 		graph.forEachEdge((edge, edgeAttrs) => {
@@ -878,10 +897,7 @@ async function buildGraphAsync(
 
 			const scaledSize = Math.max(
 				MIN_RENDERED_NODE_SIZE,
-				Math.min(
-					baseSize * fitScale * (density > 4 ? 0.85 : 1),
-					sizeCeiling,
-				),
+				Math.min(baseSize * fitScale * (density > 4 ? 0.85 : 1), sizeCeiling),
 			);
 			graph.setNodeAttribute(node.id, "size", scaledSize);
 		},
@@ -890,8 +906,11 @@ async function buildGraphAsync(
 				NODE_PROGRESS_WEIGHT +
 					EDGE_PROGRESS_WEIGHT +
 					SIZE_PROGRESS_WEIGHT * fraction,
-				i18next.t('balancingNodeSizes', 'Balancing node sizes'),
-				i18next.t('scalingNodesForReadability', 'Scaling nodes for readability.'),
+				i18next.t("balancingNodeSizes", "Balancing node sizes"),
+				i18next.t(
+					"scalingNodesForReadability",
+					"Scaling nodes for readability.",
+				),
 			);
 		},
 		isCancelled,
@@ -909,7 +928,7 @@ async function buildGraphAsync(
 		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			i18next.t('keepingLayoutStable', 'Keeping layout stable'),
+			i18next.t("keepingLayoutStable", "Keeping layout stable"),
 			`Reusing the current node positions while adding new connections.`,
 			"ready",
 		);
@@ -928,7 +947,10 @@ async function buildGraphAsync(
 		publish(
 			base,
 			"Grouping nodes",
-			i18next.t('arrangingEachGroupAroundItsHub', 'Arranging each group around its hub.'),
+			i18next.t(
+				"arrangingEachGroupAroundItsHub",
+				"Arranging each group around its hub.",
+			),
 			"layout",
 		);
 		await applyClusterLayout(graph, clusters.clusters, {
@@ -936,7 +958,9 @@ async function buildGraphAsync(
 				publish(
 					base + LAYOUT_PROGRESS_WEIGHT * fraction,
 					"Grouping nodes",
-					i18next.t('valOfGroupsArranged', '{{val}}% of groups arranged.', { val: Math.round(fraction * 100) }),
+					i18next.t("valOfGroupsArranged", "{{val}}% of groups arranged.", {
+						val: Math.round(fraction * 100),
+					}),
 					"layout",
 				);
 			},
@@ -944,7 +968,12 @@ async function buildGraphAsync(
 			isCancelled,
 		});
 		if (isCancelled()) return null;
-		publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
+		publish(
+			1,
+			"Graph ready",
+			i18next.t("renderingInteractiveView", "Rendering interactive view."),
+			"ready",
+		);
 		return {
 			graph,
 			shouldRunWorkerLayout: false,
@@ -956,12 +985,20 @@ async function buildGraphAsync(
 	if (partition.connected.length <= 1) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			i18next.t('arrangingNodes', 'Arranging nodes'),
-			i18next.t('noConnectionsToLayOutPlacingNodesOnAGrid', 'No connections to lay out — placing nodes on a grid.'),
+			i18next.t("arrangingNodes", "Arranging nodes"),
+			i18next.t(
+				"noConnectionsToLayOutPlacingNodesOnAGrid",
+				"No connections to lay out — placing nodes on a grid.",
+			),
 			"layout",
 		);
 		packNodesOnGrid(graph, [...partition.connected, ...partition.isolated]);
-		publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
+		publish(
+			1,
+			"Graph ready",
+			i18next.t("renderingInteractiveView", "Rendering interactive view."),
+			"ready",
+		);
 		return {
 			graph,
 			shouldRunWorkerLayout: false,
@@ -971,8 +1008,11 @@ async function buildGraphAsync(
 	if (shouldUseWorkerLayout(partition.connected.length, edgeCount)) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			i18next.t('preparingWorkerLayout', 'Preparing worker layout'),
-			i18next.t('renderingTheGraphNowAndRefiningPositionsInTheBackground', 'Rendering the graph now and refining positions in the background.'),
+			i18next.t("preparingWorkerLayout", "Preparing worker layout"),
+			i18next.t(
+				"renderingTheGraphNowAndRefiningPositionsInTheBackground",
+				"Rendering the graph now and refining positions in the background.",
+			),
 			"ready",
 		);
 		return {
@@ -1000,7 +1040,12 @@ async function buildGraphAsync(
 
 	if (isCancelled()) return null;
 
-	publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
+	publish(
+		1,
+		"Graph ready",
+		i18next.t("renderingInteractiveView", "Rendering interactive view."),
+		"ready",
+	);
 	return {
 		graph,
 		shouldRunWorkerLayout: false,
@@ -1083,7 +1128,7 @@ function GraphCanvasLoadingOverlay({
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 						<div className="rounded-2xl border bg-background/70 p-3">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								{t('nodes2', 'Nodes')}
+								{t("nodes2", "Nodes")}
 							</p>
 							<p className="mt-1 text-lg font-semibold">
 								{formatOverlayMetric(nodeCount)}
@@ -1091,7 +1136,7 @@ function GraphCanvasLoadingOverlay({
 						</div>
 						<div className="rounded-2xl border bg-background/70 p-3">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								{t('edges', 'Edges')}
+								{t("edges", "Edges")}
 							</p>
 							<p className="mt-1 text-lg font-semibold">
 								{formatOverlayMetric(edgeCount)}
@@ -1099,7 +1144,7 @@ function GraphCanvasLoadingOverlay({
 						</div>
 						<div className="col-span-2 rounded-2xl border bg-background/70 p-3 sm:col-span-1">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								{t('progress2', 'Progress')}
+								{t("progress2", "Progress")}
 							</p>
 							<p className="mt-1 text-lg font-semibold">{`${progressPercent}%`}</p>
 						</div>
@@ -1107,7 +1152,12 @@ function GraphCanvasLoadingOverlay({
 
 					<div className="space-y-2">
 						<div className="flex items-center justify-between text-xs text-muted-foreground">
-							<span>{t('preparingInteractiveCanvas', 'Preparing interactive canvas')}</span>
+							<span>
+								{t(
+									"preparingInteractiveCanvas",
+									"Preparing interactive canvas",
+								)}
+							</span>
 							<span>{`${progressPercent}%`}</span>
 						</div>
 						<div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -1388,7 +1438,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleZoomIn}
-				title={t('zoomIn', 'Zoom in')}
+				title={t("zoomIn", "Zoom in")}
 				disabled={disabled}
 			>
 				<ZoomIn className="h-4 w-4" />
@@ -1397,7 +1447,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleZoomOut}
-				title={t('zoomOut', 'Zoom out')}
+				title={t("zoomOut", "Zoom out")}
 				disabled={disabled}
 			>
 				<ZoomOut className="h-4 w-4" />
@@ -1406,7 +1456,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleFitView}
-				title={t('fitToView', 'Fit to view')}
+				title={t("fitToView", "Fit to view")}
 				disabled={disabled}
 			>
 				<Maximize className="h-4 w-4" />
@@ -1415,7 +1465,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={onResetLayout}
-				title={t('rerunLayout', 'Re-run layout')}
+				title={t("rerunLayout", "Re-run layout")}
 				disabled={disabled}
 			>
 				<RotateCcw className="h-4 w-4" />
@@ -1518,8 +1568,11 @@ export function GraphCanvas({
 
 		setPreparationState({
 			phase: "building",
-			title: t('preparingGraphScene', 'Preparing graph scene'),
-			detail: t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
+			title: t("preparingGraphScene", "Preparing graph scene"),
+			detail: t(
+				"schedulingGraphWorkSoThePageStaysResponsive",
+				"Scheduling graph work so the page stays responsive.",
+			),
 			progress: 0.01,
 			nodeCount: nextData.nodes.length,
 			edgeCount: nextData.edges.length,
@@ -1555,8 +1608,8 @@ export function GraphCanvas({
 				setIsWorkerLayoutRunning(false);
 				setPreparationState({
 					phase: "ready",
-					title: t('graphReady', 'Graph ready'),
-					detail: t('interactiveViewUpdated', 'Interactive view updated.'),
+					title: t("graphReady", "Graph ready"),
+					detail: t("interactiveViewUpdated", "Interactive view updated."),
 					progress: 1,
 					nodeCount: nextData.nodes.length,
 					edgeCount: nextData.edges.length,
@@ -1591,7 +1644,9 @@ export function GraphCanvas({
 
 		if (loading) {
 			return {
-				title: graph ? t('refreshingGraphSnapshot', 'Refreshing graph snapshot') : t('loadingGraphSnapshot', 'Loading graph snapshot'),
+				title: graph
+					? t("refreshingGraphSnapshot", "Refreshing graph snapshot")
+					: t("loadingGraphSnapshot", "Loading graph snapshot"),
 				detail: graph
 					? `Keeping the current view visible while new graph data arrives.`
 					: `Fetching nodes and connections from the database.`,
@@ -1607,8 +1662,11 @@ export function GraphCanvas({
 			hasRenderableData
 		) {
 			return {
-				title: t('preparingGraphScene', 'Preparing graph scene'),
-				detail: t('updatingTheCanvasWithoutBlockingThePage', 'Updating the canvas without blocking the page.'),
+				title: t("preparingGraphScene", "Preparing graph scene"),
+				detail: t(
+					"updatingTheCanvasWithoutBlockingThePage",
+					"Updating the canvas without blocking the page.",
+				),
 				progress: 0.01,
 				nodeCount,
 				edgeCount,
@@ -1617,8 +1675,11 @@ export function GraphCanvas({
 
 		if (preparationState.phase === "idle" && hasRenderableData) {
 			return {
-				title: t('preparingGraphScene', 'Preparing graph scene'),
-				detail: t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
+				title: t("preparingGraphScene", "Preparing graph scene"),
+				detail: t(
+					"schedulingGraphWorkSoThePageStaysResponsive",
+					"Scheduling graph work so the page stays responsive.",
+				),
 				progress: 0.01,
 				nodeCount,
 				edgeCount,
@@ -1705,8 +1766,11 @@ export function GraphCanvas({
 
 		setPreparationState({
 			phase: "layout",
-			title: t('restartingLayout', 'Restarting layout'),
-			detail: t('generatingAFreshLayoutWithoutBlockingThePage', 'Generating a fresh layout without blocking the page.'),
+			title: t("restartingLayout", "Restarting layout"),
+			detail: t(
+				"generatingAFreshLayoutWithoutBlockingThePage",
+				"Generating a fresh layout without blocking the page.",
+			),
 			progress: 0.01,
 			nodeCount: nextData.nodes.length,
 			edgeCount: nextData.edges.length,
@@ -1784,8 +1848,8 @@ export function GraphCanvas({
 				res.image = undefined;
 				res.label = "";
 				res.zIndex = 0;
-				res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) *
-					CONTEXT_DIM_NODE_SCALE;
+				res.size =
+					((res.size as number) ?? DEFAULT_NODE_SIZE) * CONTEXT_DIM_NODE_SCALE;
 			};
 
 			const pullToForeground = (zIndex: number) => {
@@ -1978,7 +2042,7 @@ export function GraphCanvas({
 			<div
 				className={`relative flex h-full w-full items-center justify-center text-muted-foreground ${className ?? ""}`}
 			>
-				{t('noGraphDataToDisplay', 'No graph data to display')}
+				{t("noGraphDataToDisplay", "No graph data to display")}
 			</div>
 		);
 	}
@@ -2025,7 +2089,7 @@ export function GraphCanvas({
 			{isWorkerLayoutRunning ? (
 				<div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-full border bg-background/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
 					<LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
-					<span>{t('refiningLayout', 'Refining layout')}</span>
+					<span>{t("refiningLayout", "Refining layout")}</span>
 				</div>
 			) : null}
 

@@ -1,4 +1,3 @@
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -19,6 +18,7 @@ import {
 	hfTtsAssetUrl,
 	humanFileSize,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import type { Dispatch, SetStateAction } from "react";
 
 export type TtsAssetDraft = {
@@ -345,7 +345,11 @@ export function defaultTtsAssetLayout(
 					...baseBit.meta,
 					en: {
 						...baseBit.meta?.en,
-						description: i18next.t('labelAssetRelativepath', '{{label}} asset: {{relativePath}}', { label: preset.label, relativePath: presetAsset.relativePath }),
+						description: i18next.t(
+							"labelAssetRelativepath",
+							"{{label}} asset: {{relativePath}}",
+							{ label: preset.label, relativePath: presetAsset.relativePath },
+						),
 						name: `${preset.label} ${presetAsset.relativePath}`,
 						tags: ["tts-asset", "any-tts", ...preset.tags],
 					},
@@ -438,19 +442,23 @@ export function TTSConfiguration({
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader>
-					<CardTitle>{t('ttsModel', 'TTS Model')}</CardTitle>
-					<CardDescription>{t('descriptionLengthFiles', '{{description}} {{length}} files,', { description: selectedPreset.description, length: assetBits.length })}{" "}
+					<CardTitle>{t("ttsModel", "TTS Model")}</CardTitle>
+					<CardDescription>
+						{t("descriptionLengthFiles", "{{description}} {{length}} files,", {
+							description: selectedPreset.description,
+							length: assetBits.length,
+						})}{" "}
 						{humanFileSize(totalAssetSize)}.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2">
-					<Label htmlFor="tts-model-type">{t('model', 'Model')}</Label>
+					<Label htmlFor="tts-model-type">{t("model", "Model")}</Label>
 					<Select
 						value={selectedModelType}
 						onValueChange={(value) => applyPreset(value as ITtsModelType)}
 					>
 						<SelectTrigger id="tts-model-type">
-							<SelectValue placeholder={t('selectModel', 'Select model')} />
+							<SelectValue placeholder={t("selectModel", "Select model")} />
 						</SelectTrigger>
 						<SelectContent>
 							{TTS_MODEL_TYPES.map((modelType) => {

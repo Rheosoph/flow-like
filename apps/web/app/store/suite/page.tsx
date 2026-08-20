@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { SuiteDetail } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useSearchParams } from "next/navigation";
 
 export default function Page() {
@@ -12,7 +12,7 @@ export default function Page() {
 	if (!id) {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
-				{t('noSuiteSelected', 'No suite selected.')}
+				{t("noSuiteSelected", "No suite selected.")}
 			</div>
 		);
 	}

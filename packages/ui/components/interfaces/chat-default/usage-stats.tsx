@@ -266,11 +266,11 @@ function TokenRatioBar({
 			<div className="flex justify-between text-[11px] text-muted-foreground">
 				<span className="flex items-center gap-1">
 					<ArrowUpIcon className="w-3 h-3 text-blue-400" />
-					{t('input', 'Input')} {formatTokenCount(prompt)}{" "}
+					{t("input", "Input")} {formatTokenCount(prompt)}{" "}
 					<span className="opacity-60">{`(${promptPct}%)`}</span>
 				</span>
 				<span className="flex items-center gap-1">
-					{t('output', 'Output')} {formatTokenCount(completion)}{" "}
+					{t("output", "Output")} {formatTokenCount(completion)}{" "}
 					<span className="opacity-60">{`(${completionPct}%)`}</span>
 					<ArrowDownIcon className="w-3 h-3 text-emerald-400" />
 				</span>
@@ -320,8 +320,11 @@ function ModelBadge({ model }: { model: string }) {
 					<p className="font-mono text-xs break-all">{model}</p>
 					<p className="text-[11px] text-muted-foreground mt-1">
 						{resolved
-							? t('internalModelDeploymentId', 'Internal model / deployment ID')
-							: t('unresolvedModelDeploymentId', 'Unresolved model / deployment ID')}
+							? t("internalModelDeploymentId", "Internal model / deployment ID")
+							: t(
+									"unresolvedModelDeploymentId",
+									"Unresolved model / deployment ID",
+								)}
 					</p>
 				</TooltipContent>
 			</Tooltip>
@@ -460,7 +463,11 @@ function StepDetail({
 					)}
 					{stat.stats.iterations != null && stat.stats.iterations > 1 && (
 						<div className="flex items-center gap-1 text-[11px] text-muted-foreground pt-0.5">
-							<RepeatIcon className="w-3 h-3" />{t('iterationsIterations', '{{iterations}} iterations', { iterations: stat.stats.iterations })}</div>
+							<RepeatIcon className="w-3 h-3" />
+							{t("iterationsIterations", "{{iterations}} iterations", {
+								iterations: stat.stats.iterations,
+							})}
+						</div>
 					)}
 				</div>
 			</div>
@@ -514,7 +521,7 @@ function ModelBreakdownSection({
 			<div className="flex items-center gap-2">
 				<BrainIcon className="w-3.5 h-3.5 text-muted-foreground" />
 				<span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-					{t('modelsUsed', 'Models Used')}
+					{t("modelsUsed", "Models Used")}
 				</span>
 			</div>
 			<div className="space-y-2.5">
@@ -527,7 +534,8 @@ function ModelBreakdownSection({
 							<div className="flex items-center justify-between gap-2">
 								<div className="flex items-center gap-2 min-w-0">
 									<ModelBadge model={model} />
-									<span className="text-[11px] text-muted-foreground">{t('countCalls', '{{count}} call', { count: data.calls })}
+									<span className="text-[11px] text-muted-foreground">
+										{t("countCalls", "{{count}} call", { count: data.calls })}
 									</span>
 								</div>
 								<span
@@ -651,7 +659,8 @@ export function UsageStats({
 									className={cn("w-3.5 h-3.5", intensityColor(totalIntensity))}
 								/>
 								<span className="font-medium">
-									{formatTokenCountFull(aggregated.totalTokens)} {t('totalTokens', 'total tokens')}
+									{formatTokenCountFull(aggregated.totalTokens)}{" "}
+									{t("totalTokens", "total tokens")}
 								</span>
 								<Badge
 									variant="outline"
@@ -679,14 +688,18 @@ export function UsageStats({
 												<span className="truncate">
 													{modelLabel(model, modelNames).label}
 												</span>
-												<span className="text-muted-foreground tabular-nums shrink-0">{`${data.calls}x ·`}{formatTokenCount(data.tokens)} tok
+												<span className="text-muted-foreground tabular-nums shrink-0">
+													{`${data.calls}x ·`}
+													{formatTokenCount(data.tokens)} tok
 												</span>
 											</div>
 										),
 									)}
 								</div>
 							)}
-							<div className="text-muted-foreground">{t('countSteps', '{{count}} step', { count: stats.length })} {t('clickForDetails', "· Click for details")}
+							<div className="text-muted-foreground">
+								{t("countSteps", "{{count}} step", { count: stats.length })}{" "}
+								{t("clickForDetails", "· Click for details")}
 							</div>
 						</div>
 					</TooltipContent>
@@ -705,10 +718,13 @@ export function UsageStats({
 					<SheetHeader className="px-2 shrink-0">
 						<SheetTitle className="flex items-center gap-2">
 							<ZapIcon className="w-4 h-4" />
-							{t('modelUsage', 'Model Usage')}
+							{t("modelUsage", "Model Usage")}
 						</SheetTitle>
 						<SheetDescription>
-							{t('detailedBreakdownOfModelInvocationsForThisMessage', 'Detailed breakdown of model invocations for this message')}
+							{t(
+								"detailedBreakdownOfModelInvocationsForThisMessage",
+								"Detailed breakdown of model invocations for this message",
+							)}
 						</SheetDescription>
 					</SheetHeader>
 
@@ -723,7 +739,7 @@ export function UsageStats({
 							>
 								<div className="flex items-center justify-between mb-2">
 									<div className="text-xs text-muted-foreground">
-										{t('totalTokens2', 'Total Tokens')}
+										{t("totalTokens2", "Total Tokens")}
 									</div>
 									<Badge
 										variant="outline"
@@ -758,7 +774,7 @@ export function UsageStats({
 								<div className="rounded-xl border p-4">
 									<div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
 										<ClockIcon className="w-3.5 h-3.5" />
-										{t('duration', 'Duration')}
+										{t("duration", "Duration")}
 									</div>
 									<div className="text-lg font-semibold tabular-nums">
 										{formatDuration(aggregated.totalDuration)}
@@ -769,7 +785,7 @@ export function UsageStats({
 								<div className="rounded-xl border p-4">
 									<div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
 										<CoinsIcon className="w-3.5 h-3.5" />
-										{t('totalCost', 'Total Cost')}
+										{t("totalCost", "Total Cost")}
 									</div>
 									<div className="text-lg font-semibold tabular-nums">
 										{formatCost(aggregated.totalCost)}
@@ -779,7 +795,7 @@ export function UsageStats({
 							<div className="rounded-xl border p-4">
 								<div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
 									<LayersIcon className="w-3.5 h-3.5" />
-									{t('steps', 'Steps')}
+									{t("steps", "Steps")}
 								</div>
 								<div className="text-lg font-semibold">{stats.length}</div>
 							</div>
@@ -800,9 +816,10 @@ export function UsageStats({
 							<div className="flex items-center gap-2">
 								<ClockIcon className="w-3.5 h-3.5 text-muted-foreground" />
 								<span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-									{t('timeline', 'Timeline')}
+									{t("timeline", "Timeline")}
 								</span>
-								<span className="text-[11px] text-muted-foreground/60">{t('countSteps', '{{count}} step', { count: stats.length })}
+								<span className="text-[11px] text-muted-foreground/60">
+									{t("countSteps", "{{count}} step", { count: stats.length })}
 								</span>
 							</div>
 							<div className="pl-1">

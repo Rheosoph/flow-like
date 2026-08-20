@@ -56,7 +56,7 @@
 		"next": "16.2.6",
 		"path-to-regexp": "8.4.2",
 		"picomatch": "4.0.4",
-		"postcss": "8.5.14",
+		"postcss": "8.5.26",
 		"preact": "10.29.1",
 		"protobufjs": "7.5.8",
 		"protocol-buffers-schema": "3.6.1",

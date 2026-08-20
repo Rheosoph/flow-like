@@ -47,6 +47,7 @@ pub struct ExecuteCommandsBody {
 /// `Commands` when the request carried no `sync`, `WithSync` when it did. `sync: null` inside
 /// `WithSync` means the tail could not be built (never an error — the write is committed) and the
 /// client should sync separately.
+#[allow(clippy::large_enum_variant)] // untagged response body, built once per request and moved straight into Json(..)
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ExecuteCommandsResponse {

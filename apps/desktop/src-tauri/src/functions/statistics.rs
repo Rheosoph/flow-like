@@ -789,7 +789,7 @@ pub async fn get_board_statistics(
 
     stats
         .board_summaries
-        .sort_by(|a, b| b.node_count.cmp(&a.node_count));
+        .sort_by_key(|summary| std::cmp::Reverse(summary.node_count));
 
     let _ = channel.send(BoardStatisticsUpdate::BoardsLoaded {
         total_boards: stats.total_boards,
@@ -804,7 +804,7 @@ pub async fn get_board_statistics(
     });
 
     let mut node_usage_vec: Vec<NodeUsage> = global_node_usage.into_values().collect();
-    node_usage_vec.sort_by(|a, b| b.count.cmp(&a.count));
+    node_usage_vec.sort_by_key(|usage| std::cmp::Reverse(usage.count));
     stats.most_used_nodes = node_usage_vec.into_iter().take(50).collect();
 
     stats.category_stats = category_node_counts
@@ -817,7 +817,7 @@ pub async fn get_board_statistics(
         .collect();
     stats
         .category_stats
-        .sort_by(|a, b| b.node_count.cmp(&a.node_count));
+        .sort_by_key(|category| std::cmp::Reverse(category.node_count));
 
     let _ = channel.send(BoardStatisticsUpdate::NodeUsage {
         most_used_nodes: stats.most_used_nodes.clone(),

@@ -26,6 +26,9 @@ pub struct A2UIFileInputFile {
     pub size: Option<u64>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Path of the file inside the picked folder, when the upload came from a folder selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,6 +107,12 @@ fn value_to_file(value: Value) -> Option<A2UIFileInputFile> {
                     .get("type")
                     .or_else(|| obj.get("mimeType"))
                     .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                relative_path: obj
+                    .get("relativePath")
+                    .or_else(|| obj.get("relative_path"))
+                    .and_then(|v| v.as_str())
+                    .filter(|value| !value.is_empty())
                     .map(str::to_string),
                 url: obj
                     .get("url")
@@ -321,20 +330,55 @@ async fn download_file_input_url(
     Ok((bytes, content_type))
 }
 
-async fn flow_path_exists(
+/// Existence checks per flight. A folder upload can hand us thousands of files, and
+/// one round trip at a time would dominate the node's runtime.
+const FLOW_PATH_CHECK_CONCURRENCY: usize = 16;
+
+/// Checks every supplied FlowPath concurrently. Store resolution stays sequential
+/// because it needs the execution context, but it only reads the context cache.
+async fn existing_flow_paths(
     context: &mut ExecutionContext,
-    flow_path: &FlowPath,
-) -> flow_like_types::Result<bool> {
-    let runtime = flow_path.to_runtime(context).await?;
-    match runtime.store.as_generic().head(&runtime.path).await {
-        Ok(_) => Ok(true),
-        Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok(false),
-        Err(error) => Err(flow_like_types::anyhow!(
-            "Failed to check uploaded file at {}: {}",
-            flow_path.path,
-            error
-        )),
+    files: &[A2UIFileInputFile],
+) -> flow_like_types::Result<Vec<bool>> {
+    use futures::StreamExt;
+
+    let mut runtimes = Vec::with_capacity(files.len());
+    for file in files {
+        match file.flow_path.as_ref() {
+            Some(flow_path) => runtimes.push(Some((
+                flow_path.path.clone(),
+                flow_path.to_runtime(context).await?,
+            ))),
+            None => runtimes.push(None),
+        }
     }
+
+    let mut present = vec![false; files.len()];
+    let mut checks = futures::stream::iter(runtimes.into_iter().enumerate().map(
+        |(index, runtime)| async move {
+            let Some((path, runtime)) = runtime else {
+                return Ok::<(usize, bool), flow_like_types::Error>((index, false));
+            };
+
+            match runtime.store.as_generic().head(&runtime.path).await {
+                Ok(_) => Ok((index, true)),
+                Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok((index, false)),
+                Err(error) => Err(flow_like_types::anyhow!(
+                    "Failed to check uploaded file at {}: {}",
+                    path,
+                    error
+                )),
+            }
+        },
+    ))
+    .buffer_unordered(FLOW_PATH_CHECK_CONCURRENCY);
+
+    while let Some(result) = checks.next().await {
+        let (index, exists) = result?;
+        present[index] = exists;
+    }
+
+    Ok(present)
 }
 
 async fn materialize_missing_flow_paths(
@@ -353,12 +397,13 @@ async fn materialize_missing_flow_paths(
     };
     let client = reqwest::Client::new();
     let mut flow_paths = Vec::new();
+    let present = existing_flow_paths(context, files).await?;
 
     for (index, file) in files.iter_mut().enumerate() {
         let supplied_flow_path = file.flow_path.clone();
 
         if let Some(flow_path) = supplied_flow_path.clone()
-            && flow_path_exists(context, &flow_path).await?
+            && present[index]
         {
             flow_paths.push(flow_path);
             continue;

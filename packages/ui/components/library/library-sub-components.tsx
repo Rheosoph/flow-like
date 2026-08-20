@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -15,6 +14,7 @@ import {
 	useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowRight,
 	ChevronDown,
@@ -157,7 +157,7 @@ export function Section({
 							onClick={() => setExpanded(true)}
 							className="text-sm font-medium text-primary"
 						>
-							{t('seeAll', 'See All')}
+							{t("seeAll", "See All")}
 						</button>
 					)}
 				</div>
@@ -198,10 +198,14 @@ export function Section({
 						>
 							{expanded ? (
 								<>
-									{t('less', 'Less')} <ChevronUp className="h-3 w-3" />
+									{t("less", "Less")} <ChevronUp className="h-3 w-3" />
 								</>
 							) : (
-								<>{t('hiddencountMore', '{{hiddenCount}} more', { hiddenCount })}<ChevronDown className="h-3 w-3" />
+								<>
+									{t("hiddencountMore", "{{hiddenCount}} more", {
+										hiddenCount,
+									})}
+									<ChevronDown className="h-3 w-3" />
 								</>
 							)}
 						</button>
@@ -269,10 +273,12 @@ export function Section({
 					>
 						{expanded ? (
 							<>
-								{t('less', 'Less')} <ChevronUp className="h-3 w-3" />
+								{t("less", "Less")} <ChevronUp className="h-3 w-3" />
 							</>
 						) : (
-							<>{t('hiddencountMore', '{{hiddenCount}} more', { hiddenCount })}<ChevronDown className="h-3 w-3" />
+							<>
+								{t("hiddencountMore", "{{hiddenCount}} more", { hiddenCount })}
+								<ChevronDown className="h-3 w-3" />
 							</>
 						)}
 					</button>
@@ -335,7 +341,7 @@ export function FavoritesSection({
 							: "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"
 					}
 				>
-					{t('favorites', 'Favorites')}
+					{t("favorites", "Favorites")}
 				</h2>
 				{!isMobile && (
 					<span className="text-xs text-muted-foreground/30">
@@ -420,7 +426,7 @@ export function PinnedHero({
 							: "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"
 					}
 				>
-					{t('pinned', 'Pinned')}
+					{t("pinned", "Pinned")}
 				</h2>
 			</div>
 			{isMobile ? (
@@ -506,9 +512,15 @@ export function SearchResults({
 				<div className="rounded-full bg-muted/30 p-5 mb-5">
 					<Search className="h-7 w-7 text-muted-foreground/40" />
 				</div>
-				<p className="text-sm text-foreground/60 mb-1">{t('nothingFoundForLdquoqueryrdquo', 'Nothing found for “{{query}}”', { query })}</p>
+				<p className="text-sm text-foreground/60 mb-1">
+					{t(
+						"nothingFoundForLdquoqueryrdquo",
+						"Nothing found for “{{query}}”",
+						{ query },
+					)}
+				</p>
 				<p className="text-xs text-muted-foreground/60">
-					{t('tryDifferentKeywords', 'Try different keywords')}
+					{t("tryDifferentKeywords", "Try different keywords")}
 				</p>
 			</div>
 		);
@@ -516,7 +528,9 @@ export function SearchResults({
 
 	return (
 		<div>
-			<p className="text-xs text-muted-foreground/60 mb-3">{t('lengthResult', '{{length}} result', { length: items.length })}{items.length !== 1 ? "s" : ""}
+			<p className="text-xs text-muted-foreground/60 mb-3">
+				{t("lengthResult", "{{length}} result", { length: items.length })}
+				{items.length !== 1 ? "s" : ""}
 			</p>
 			{isMobile ? (
 				<div className="divide-y divide-border/30">
@@ -624,7 +638,9 @@ export function JoinInline() {
 						<Link2 className="h-4 w-4" />
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent>{t('joinWithInviteLink', 'Join with invite link')}</TooltipContent>
+				<TooltipContent>
+					{t("joinWithInviteLink", "Join with invite link")}
+				</TooltipContent>
 			</Tooltip>
 		);
 	}
@@ -633,7 +649,7 @@ export function JoinInline() {
 		<div className="flex items-center gap-1.5 animate-in fade-in-0 slide-in-from-right-4 duration-200">
 			<Input
 				ref={inputRef}
-				placeholder={t('pasteInviteLink', 'Paste invite link…')}
+				placeholder={t("pasteInviteLink", "Paste invite link…")}
 				value={value}
 				onChange={(e) => setValue(e.target.value)}
 				onKeyDown={(e) => {
@@ -691,7 +707,7 @@ export function JoinInlineExpanded() {
 	return (
 		<div className="flex gap-2">
 			<Input
-				placeholder={t('pasteInviteLink', 'Paste invite link…')}
+				placeholder={t("pasteInviteLink", "Paste invite link…")}
 				value={value}
 				onChange={(e) => setValue(e.target.value)}
 				onKeyDown={(e) => {
@@ -705,7 +721,7 @@ export function JoinInlineExpanded() {
 				className="shrink-0"
 			>
 				<Link2 className="mr-2 h-4 w-4" />
-				{t('join', 'Join')}
+				{t("join", "Join")}
 			</Button>
 		</div>
 	);

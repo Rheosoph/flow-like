@@ -115,7 +115,7 @@ pub fn storage_path_segment(value: &str, fallback: &str) -> String {
         .chars()
         .take(MAX_STORAGE_PATH_SEGMENT_CHARS - STORAGE_PATH_SEGMENT_DIGEST_CHARS - 1)
         .collect();
-    let base = base.trim_end_matches(|ch| ch == '.' || ch == '_');
+    let base = base.trim_end_matches(['.', '_']);
     let base = if base.is_empty() { fallback } else { base };
     format!("{base}-{digest}")
 }
@@ -140,6 +140,7 @@ pub trait RuntimeCredentialsTrait {
     async fn to_state(&self, state: AppState) -> Result<FlowLikeState>;
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder>;
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder>;
+    #[allow(clippy::wrong_self_convention)] // &self by design: callers keep the credentials and derive a shared view repeatedly
     fn into_shared_credentials(&self) -> SharedCredentials;
 }
 
@@ -236,14 +237,21 @@ impl RuntimeCredentials {
             .unwrap_or_else(|_| mixed_credentials::default_provider_name().to_string())
     }
 
+    /// Whether the **content** store behind this credential is Azure Blob.
+    ///
+    /// Callers use this to decide whether a credential can mint signed URLs at
+    /// all: an Azure SAS cannot sign a new URL, so those routes fall back to
+    /// master credentials. A mixed deployment has to unwrap to its content
+    /// credential to answer that — reporting `false` for a mixed set whose
+    /// content bucket is Azure sends the caller down the scoped branch, where
+    /// every signature then fails.
     pub fn is_azure(&self) -> bool {
-        #[cfg(feature = "azure")]
-        {
-            matches!(self, RuntimeCredentials::Azure(_))
-        }
-        #[cfg(not(feature = "azure"))]
-        {
-            false
+        match self {
+            #[cfg(feature = "azure")]
+            RuntimeCredentials::Azure(_) => true,
+            RuntimeCredentials::Mixed(mixed) => mixed.content.is_azure(),
+            #[allow(unreachable_patterns)]
+            _ => false,
         }
     }
 

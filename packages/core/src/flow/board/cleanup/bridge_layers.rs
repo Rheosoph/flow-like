@@ -339,10 +339,16 @@ impl BridgeLayersCleanup {
 
     fn is_pin_within_layer_scope(&self, pin_layer: Option<&String>, layer_id: &str) -> bool {
         let mut current_layer = pin_layer.cloned();
+        // A damaged `parent_id` chain can be cyclic; walking it unguarded hangs the cleanup.
+        let mut seen = HashSet::new();
 
         while let Some(current) = current_layer {
             if current == layer_id {
                 return true;
+            }
+
+            if !seen.insert(current.clone()) {
+                return false;
             }
 
             current_layer = self.layer_parents.get(&current).cloned().flatten();

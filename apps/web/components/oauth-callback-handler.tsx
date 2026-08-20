@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import type {
 	IOAuthCallbackData,
 	IOAuthPendingAuth,
@@ -8,6 +7,7 @@ import type {
 	IStoredOAuthToken,
 	OAuthService,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next } from "@flow-like/locales";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import {
@@ -175,7 +175,9 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 	} catch (e) {
 		console.error("[Web OAuth] Failed to handle callback:", e);
 		toast.error(
-			i18next.t('authorizationFailedVal', 'Authorization failed: {{val}}', { val: e instanceof Error ? e.message : "Unknown error" }),
+			i18next.t("authorizationFailedVal", "Authorization failed: {{val}}", {
+				val: e instanceof Error ? e.message : "Unknown error",
+			}),
 		);
 		return false;
 	}

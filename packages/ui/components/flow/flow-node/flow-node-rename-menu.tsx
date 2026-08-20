@@ -64,7 +64,7 @@ export function FlowNodeRenameMenu({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{t('renameNode', 'Rename Node')}</DialogTitle>
+					<DialogTitle>{t("renameNode", "Rename Node")}</DialogTitle>
 				</DialogHeader>
 				<DialogDescription>
 					<Input
@@ -81,7 +81,7 @@ export function FlowNodeRenameMenu({
 						}}
 						variant={"secondary"}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={async () => await saveComment()}>Save</Button>
 				</DialogFooter>

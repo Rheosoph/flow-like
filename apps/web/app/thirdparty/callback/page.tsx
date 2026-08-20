@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { Button } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { storePendingOAuthCallback } from "../../../lib/oauth-callback-storage";
@@ -63,7 +63,11 @@ function ThirdpartyCallbackContent() {
 				}, 300);
 			} catch (err) {
 				setError(
-					t('failedToProcessCallbackVal', 'Failed to process callback: {{val}}', { val: err instanceof Error ? err.message : String(err) }),
+					t(
+						"failedToProcessCallbackVal",
+						"Failed to process callback: {{val}}",
+						{ val: err instanceof Error ? err.message : String(err) },
+					),
 				);
 				setProcessing(false);
 			}
@@ -77,7 +81,7 @@ function ThirdpartyCallbackContent() {
 			<div className="flex h-screen items-center justify-center">
 				<div className="text-center">
 					<div className="mb-4 text-lg text-destructive">
-						{t('authenticationError', 'Authentication Error')}
+						{t("authenticationError", "Authentication Error")}
 					</div>
 					<div className="text-sm text-muted-foreground">{error}</div>
 					<Button
@@ -85,7 +89,7 @@ function ThirdpartyCallbackContent() {
 						onClick={() => router.push("/flow")}
 						className="mt-4"
 					>
-						{t('returnToFlow', 'Return to Flow')}
+						{t("returnToFlow", "Return to Flow")}
 					</Button>
 				</div>
 			</div>
@@ -96,7 +100,9 @@ function ThirdpartyCallbackContent() {
 		return (
 			<div className="flex h-screen items-center justify-center">
 				<div className="text-center">
-					<div className="mb-4 text-lg">{t('processingAuthentication', 'Processing authentication...')}</div>
+					<div className="mb-4 text-lg">
+						{t("processingAuthentication", "Processing authentication...")}
+					</div>
 					<div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />
 				</div>
 			</div>
@@ -107,7 +113,9 @@ function ThirdpartyCallbackContent() {
 		return (
 			<div className="flex h-screen items-center justify-center">
 				<div className="max-w-md text-center">
-					<div className="mb-4 text-lg">{t('connectionRequestReceived', 'Connection request received')}</div>
+					<div className="mb-4 text-lg">
+						{t("connectionRequestReceived", "Connection request received")}
+					</div>
 					<div className="text-sm text-muted-foreground">
 						{`You can return to the previous tab while Flow-Like finishes the authorization.`}
 					</div>
@@ -116,7 +124,7 @@ function ThirdpartyCallbackContent() {
 						onClick={() => router.push("/")}
 						className="mt-4"
 					>
-						{t('openFlowlike', 'Open Flow-Like')}
+						{t("openFlowlike", "Open Flow-Like")}
 					</Button>
 				</div>
 			</div>

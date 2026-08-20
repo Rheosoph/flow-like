@@ -332,9 +332,7 @@ fn fixed_input_size(input: &Outlet, fallback: u32, layout: InputLayout) -> (u32,
 
 #[cfg(feature = "execute")]
 fn static_input_size(input: &Outlet, layout: InputLayout) -> Option<(u32, u32)> {
-    let Some(shape) = input_shape(input) else {
-        return None;
-    };
+    let shape = input_shape(input)?;
 
     match layout {
         InputLayout::Nchw if shape.len() == 4 => {

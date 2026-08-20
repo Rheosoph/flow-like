@@ -176,6 +176,7 @@ impl SurfaceManager {
 }
 
 /// Messages sent from server to client
+#[allow(clippy::large_enum_variant)] // internally-tagged wire enum of struct variants; boxing needs a named payload struct per variant
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum A2UIServerMessage {

@@ -37,7 +37,8 @@ export function UploadPlaceholderNode(props: NodeProps<UploadPlaceholderNode>) {
 				</div>
 				<div className="text-center">
 					<p className="text-sm font-medium text-foreground/80">
-						{t('uploading', 'Uploading')} {isImage ? "image" : "video"}{`...`}
+						{t("uploading", "Uploading")} {isImage ? "image" : "video"}
+						{`...`}
 					</p>
 					<p className="text-xs text-muted-foreground">
 						{Math.round(progress)}%

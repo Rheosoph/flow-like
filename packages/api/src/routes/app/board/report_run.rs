@@ -72,6 +72,7 @@ fn execution_status_from_log_level(log_level: u8) -> ExecutionStatus {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn track_reported_execution_usage(
     state: &AppState,
     run_id: &str,

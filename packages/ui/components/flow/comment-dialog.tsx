@@ -28,8 +28,10 @@ export function CommentDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{t('comment', 'Comment')}</DialogTitle>
-					<DialogDescription>{t('addACommentToTheNode', 'Add a comment to the node.')}</DialogDescription>
+					<DialogTitle>{t("comment", "Comment")}</DialogTitle>
+					<DialogDescription>
+						{t("addACommentToTheNode", "Add a comment to the node.")}
+					</DialogDescription>
 				</DialogHeader>
 				<DialogDescription>
 					<Textarea
@@ -45,7 +47,7 @@ export function CommentDialog({
 							onOpenChange(false);
 						}}
 					>
-						{t('save', 'Save')}
+						{t("save", "Save")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -87,6 +87,7 @@ impl Debug for SmbConfig {
     }
 }
 
+#[allow(clippy::large_enum_variant)] // one live session per store, held behind Arc<Mutex<..>>; both arms own connection handles
 enum SmbSession {
     Client {
         client: SmbClient,

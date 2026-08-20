@@ -9,6 +9,7 @@ import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
 import { DataProvider, DataScopeProvider, useData } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
+import { resolveHidden } from "./resolve-hidden";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -24,15 +25,6 @@ const EMPTY_DATA_MODEL: DataEntry[] = [];
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
-}
-
-function resolveHidden(
-	hidden: SurfaceComponent["component"]["hidden"] | undefined,
-	resolve: (boundValue: BoundValue, defaultValue?: unknown) => unknown,
-): boolean {
-	if (hidden === undefined) return false;
-	const value = resolve(hidden as BoundValue, false);
-	return value === true || value === "true";
 }
 
 function resolveStyleBindings(

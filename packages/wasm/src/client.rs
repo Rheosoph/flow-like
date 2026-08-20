@@ -1303,6 +1303,7 @@ impl RegistryClient {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| {

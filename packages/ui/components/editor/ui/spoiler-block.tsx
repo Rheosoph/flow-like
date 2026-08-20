@@ -20,7 +20,7 @@ function parseSpoilerContent(raw: string): {
 		const body = raw.slice(separatorIndex + 5).trim();
 		return { label: label || "Spoiler", body };
 	}
-	return { label: i18next.t('spoiler', 'Spoiler'), body: raw.trim() };
+	return { label: i18next.t("spoiler", "Spoiler"), body: raw.trim() };
 }
 
 export function SpoilerBlock({ content, className }: SpoilerBlockProps) {

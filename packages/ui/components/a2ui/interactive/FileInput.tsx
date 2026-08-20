@@ -1,10 +1,18 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import { File, Loader2, Upload, X } from "lucide-react";
+import { File, Folder, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { IBulkUploadProgress } from "../../../lib/bulk-upload";
+import {
+	type ITemporaryUploadResult,
+	uploadTemporaryFilesLocally,
+} from "../../../lib/temporary-upload-batch";
 import { cn } from "../../../lib/utils";
-import type { ITemporaryFlowPath } from "../../../state/backend-state";
+import type {
+	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
+} from "../../../state/backend-state";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -25,10 +33,14 @@ import {
 	mergeSuccessfulUploadBatch,
 } from "./upload-input-state";
 
+/** Rows rendered for a selection; the rest is summarised. Folder picks can be huge. */
+const MAX_VISIBLE_FILES = 50;
+
 interface FileData {
 	name: string;
 	size: number;
 	type: string;
+	relativePath?: string;
 	dataUrl?: string;
 	url?: string;
 	backendUrl?: string;
@@ -62,10 +74,37 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
+/** Folder picks bypass the browser's `accept` filter, so it is applied here. */
+function matchesAccept(file: File, accept?: string): boolean {
+	const patterns = (accept ?? "")
+		.split(",")
+		.map((pattern) => pattern.trim().toLowerCase())
+		.filter(Boolean);
+	if (patterns.length === 0) return true;
+
+	const name = file.name.toLowerCase();
+	const type = file.type.toLowerCase();
+	return patterns.some((pattern) => {
+		if (pattern === "*" || pattern === "*/*") return true;
+		if (pattern.startsWith(".")) return name.endsWith(pattern);
+		if (pattern.endsWith("/*")) return type.startsWith(pattern.slice(0, -1));
+		return type === pattern;
+	});
+}
+
+function relativePathOf(file: File): string | undefined {
+	const relativePath = (file as File & { webkitRelativePath?: string })
+		.webkitRelativePath;
+	return relativePath ? relativePath : undefined;
+}
+
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
-	return i18next.t('valMb', '{{val}} MB', { val: (bytes / (1024 * 1024)).toFixed(1) });
+	if (bytes < 1024 * 1024)
+		return i18next.t("valKb", "{{val}} KB", { val: (bytes / 1024).toFixed(1) });
+	return i18next.t("valMb", "{{val}} MB", {
+		val: (bytes / (1024 * 1024)).toFixed(1),
+	});
 }
 
 function fileNameFromUrl(url: string): string {
@@ -112,6 +151,7 @@ export function A2UIFileInput({
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const folderInputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
 	const { appId, resolveTemporaryUploadTarget } = useActionContext();
 	const value = useResolved<FileData | FileData[]>(component.value);
@@ -120,7 +160,9 @@ export function A2UIFileInput({
 	const label = useResolved<string>(component.label);
 	const helperText = useResolved<string>(component.helperText);
 	const accept = useResolved<string>(component.accept);
-	const multiple = useResolved<boolean>(component.multiple);
+	const multipleProp = useResolved<boolean>(component.multiple);
+	const allowDirectory = Boolean(useResolved<boolean>(component.directory));
+	const multiple = Boolean(multipleProp) || allowDirectory;
 	const maxSize =
 		useResolved<number>(component.maxSize) ?? Number.POSITIVE_INFINITY;
 	const maxFiles =
@@ -129,6 +171,8 @@ export function A2UIFileInput({
 
 	const [localFiles, setLocalFiles] = useState<FileData[] | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
+	const [uploadProgress, setUploadProgress] =
+		useState<IBulkUploadProgress | null>(null);
 	const uploadOperationRef = useRef(0);
 	const isBusy = isUploading || isTriggering;
 
@@ -171,9 +215,45 @@ export function A2UIFileInput({
 		};
 	}, [surfaceId, componentId, clearFiles]);
 
+	const uploadTemporaryFiles = async (
+		files: File[],
+		onProgress: (percent: number, detail?: IBulkUploadProgress) => void,
+		executionTarget?: ITemporaryUploadExecutionTarget,
+	): Promise<ITemporaryUploadResult[]> => {
+		const helper = backend.helperState;
+		if (helper.filesToTemporaryFiles) {
+			return helper.filesToTemporaryFiles(files, {
+				appId,
+				executionTarget,
+				onProgress,
+			});
+		}
+
+		return uploadTemporaryFilesLocally(
+			files,
+			async (file) =>
+				(await helper.fileToTemporaryFile?.(
+					file,
+					false,
+					appId,
+					executionTarget,
+				)) ?? {
+					url: await helper.fileToUrl(file, false, appId, executionTarget),
+				},
+			{ onProgress },
+		);
+	};
+
 	const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-		const selectedFiles = Array.from(e.target.files || []);
-		if (selectedFiles.length === 0) return;
+		const sourceInput = e.target;
+		const fromDirectory = sourceInput === folderInputRef.current;
+		const selectedFiles = Array.from(sourceInput.files || []).filter(
+			(file) => !fromDirectory || matchesAccept(file, accept),
+		);
+		if (selectedFiles.length === 0) {
+			sourceInput.value = "";
+			return;
+		}
 
 		const currentFiles = displayFiles.filter(
 			(file) => !file.uploading && !file.uploadError,
@@ -185,17 +265,19 @@ export function A2UIFileInput({
 			maxFiles,
 		);
 		if (validFiles.length === 0) {
-			if (inputRef.current) inputRef.current.value = "";
+			sourceInput.value = "";
 			return;
 		}
 
 		const operationId = ++uploadOperationRef.current;
 		setIsUploading(true);
+		setUploadProgress(null);
 		const pendingFiles = validFiles.map(
 			(file, index): FileData => ({
 				name: file.name,
 				size: file.size,
 				type: file.type,
+				relativePath: relativePathOf(file),
 				uploadId: `${operationId}-${index}`,
 				uploading: true,
 			}),
@@ -203,70 +285,67 @@ export function A2UIFileInput({
 		setLocalFiles(
 			multiple ? [...currentFiles, ...pendingFiles] : [pendingFiles[0]],
 		);
-		const uploadResults: FileData[] = [];
 		const executionTarget = await resolveTemporaryUploadTarget?.(
 			firstEventAction(component.eventHandlers, "change", component.actions),
 		);
 		if (uploadOperationRef.current !== operationId) return;
 
-		for (const [index, file] of validFiles.entries()) {
-			if (uploadOperationRef.current !== operationId) return;
-			const uploadId = pendingFiles[index].uploadId;
-			try {
-				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
-					file,
-					false,
-					appId,
-					executionTarget,
-				)) ?? {
-					url: await backend.helperState.fileToUrl(
-						file,
-						false,
-						appId,
-						executionTarget,
-					),
-				};
+		// The orchestrator already throttles its progress callback.
+		const onProgress = (_percent: number, detail?: IBulkUploadProgress) => {
+			if (uploadOperationRef.current !== operationId || !detail) return;
+			setUploadProgress(detail);
+		};
 
-				const uploadedFile: FileData = {
-					name: file.name,
-					size: file.size,
-					type: file.type,
-					url: temporaryFile.url,
-					backendUrl: temporaryFile.url,
-					flowPath: temporaryFile.flowPath,
+		const toUploadedFile = (
+			pending: FileData,
+			result?: ITemporaryUploadResult,
+		): FileData => {
+			if (!result?.uploaded) {
+				return {
+					...pending,
 					uploading: false,
+					uploadId: undefined,
+					uploadError: result?.error ?? t("uploadFailed", "Upload failed"),
 				};
-				uploadResults.push(uploadedFile);
-
-				if (uploadOperationRef.current === operationId) {
-					setLocalFiles((previous) =>
-						(previous ?? []).map((entry) =>
-							entry.uploadId === uploadId ? uploadedFile : entry,
-						),
-					);
-				}
-			} catch (err) {
-				const errorFile: FileData = {
-					name: file.name,
-					size: file.size,
-					type: file.type,
-					uploading: false,
-					uploadError: t('uploadFailed', 'Upload failed'),
-				};
-				uploadResults.push(errorFile);
-
-				if (uploadOperationRef.current === operationId) {
-					setLocalFiles((previous) =>
-						(previous ?? []).map((entry) =>
-							entry.uploadId === uploadId ? errorFile : entry,
-						),
-					);
-				}
 			}
+
+			return {
+				...pending,
+				uploading: false,
+				uploadId: undefined,
+				url: result.uploaded.url,
+				backendUrl: result.uploaded.url,
+				flowPath: result.uploaded.flowPath,
+			};
+		};
+
+		let uploadResults: FileData[];
+		try {
+			const results = await uploadTemporaryFiles(
+				validFiles,
+				onProgress,
+				executionTarget,
+			);
+			uploadResults = pendingFiles.map((pending, index) =>
+				toUploadedFile(pending, results[index]),
+			);
+		} catch (error) {
+			if (uploadOperationRef.current !== operationId) return;
+			const message =
+				error instanceof Error
+					? error.message
+					: t("uploadFailed", "Upload failed");
+			uploadResults = pendingFiles.map((pending) => ({
+				...pending,
+				uploading: false,
+				uploadId: undefined,
+				uploadError: message,
+			}));
 		}
 
 		if (uploadOperationRef.current !== operationId) return;
 		setIsUploading(false);
+		setUploadProgress(null);
 
 		const successfulUploads = uploadResults.filter((file) => file.backendUrl);
 		const failedUploads = uploadResults.filter((file) => file.uploadError);
@@ -309,7 +388,7 @@ export function A2UIFileInput({
 			});
 		}
 
-		if (inputRef.current) inputRef.current.value = "";
+		sourceInput.value = "";
 	};
 
 	const handleRemove = (index: number) => {
@@ -346,6 +425,74 @@ export function A2UIFileInput({
 		});
 	};
 
+	const zoneClassName = cn(
+		"w-full appearance-none bg-transparent border-2 border-dashed rounded-lg p-4 transition-colors",
+		disabled || isBusy ? "opacity-50" : "hover:border-primary",
+		error ? "border-destructive" : "border-muted-foreground/25",
+	);
+
+	const zoneStatus = (
+		<div className="flex flex-col items-center gap-2 text-muted-foreground">
+			{isBusy ? (
+				<>
+					<Loader2 className="h-8 w-8 animate-spin" />
+					<span className="text-sm">
+						{isUploading
+							? uploadProgress && uploadProgress.totalFiles > 1
+								? t(
+										"uploadingCompletedOfTotal",
+										"Uploading {{completed}} of {{total}}...",
+										{
+											completed: uploadProgress.completedFiles,
+											total: uploadProgress.totalFiles,
+										},
+									)
+								: t("uploadingFiles", "Uploading files...")
+							: t("runningAction", "Running action...")}
+					</span>
+					{isUploading && uploadProgress && uploadProgress.totalFiles > 1 && (
+						<div className="h-1 w-40 overflow-hidden rounded-full bg-muted">
+							<div
+								className="h-full bg-primary transition-all"
+								style={{ width: `${Math.round(uploadProgress.percent)}%` }}
+							/>
+						</div>
+					)}
+					{isUploading && uploadProgress && uploadProgress.failedFiles > 0 && (
+						<span className="text-xs text-destructive">
+							{t("nFailed", "{{n}} failed", { n: uploadProgress.failedFiles })}
+						</span>
+					)}
+				</>
+			) : (
+				<>
+					<Upload className="h-8 w-8" />
+					<span className="text-sm">
+						{allowDirectory
+							? t(
+									"pickFilesOrAFolderToUpload",
+									"Pick files or a folder to upload",
+								)
+							: multiple
+								? t(
+										"dropFilesHereOrClickToBrowse",
+										"Drop files here or click to browse",
+									)
+								: t(
+										"dropAFileHereOrClickToBrowse",
+										"Drop a file here or click to browse",
+									)}
+					</span>
+					{accept && (
+						<span className="text-xs text-muted-foreground/70">
+							{t("acceptsAccept", "Accepts: {{accept}}", { accept })}
+						</span>
+					)}
+				</>
+			)}
+		</div>
+	);
+
 	return (
 		<div
 			data-card-action-stop
@@ -366,45 +513,65 @@ export function A2UIFileInput({
 				onChange={handleFileSelect}
 			/>
 
-			<button
-				type="button"
-				className={cn(
-					"w-full appearance-none bg-transparent border-2 border-dashed rounded-lg p-4 transition-colors",
-					disabled || isBusy
-						? "opacity-50 cursor-not-allowed"
-						: "cursor-pointer hover:border-primary",
-					error ? "border-destructive" : "border-muted-foreground/25",
-				)}
-				onClick={() => !disabled && !isBusy && inputRef.current?.click()}
-				disabled={disabled || isBusy}
-			>
-				<div className="flex flex-col items-center gap-2 text-muted-foreground">
-					{isBusy ? (
-						<>
-							<Loader2 className="h-8 w-8 animate-spin" />
-							<span className="text-sm">
-								{isUploading ? t('uploadingFiles', 'Uploading files...') : t('runningAction', 'Running action...')}
-							</span>
-						</>
-					) : (
-						<>
-							<Upload className="h-8 w-8" />
-							<span className="text-sm">
-								{multiple
-									? t('dropFilesHereOrClickToBrowse', 'Drop files here or click to browse')
-									: t('dropAFileHereOrClickToBrowse', 'Drop a file here or click to browse')}
-							</span>
-							{accept && (
-								<span className="text-xs text-muted-foreground/70">{t('acceptsAccept', 'Accepts: {{accept}}', { accept })}</span>
-							)}
-						</>
+			{allowDirectory && (
+				<Input
+					ref={folderInputRef}
+					type="file"
+					className="hidden"
+					multiple
+					// @ts-ignore - webkitdirectory and directory are non-standard attributes
+					webkitdirectory=""
+					directory=""
+					disabled={disabled || isBusy}
+					onChange={handleFileSelect}
+				/>
+			)}
+
+			{allowDirectory ? (
+				<div className={cn(zoneClassName, "flex flex-col items-center gap-3")}>
+					{zoneStatus}
+					{!isBusy && (
+						<div className="flex flex-wrap items-center justify-center gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={disabled}
+								onClick={() => inputRef.current?.click()}
+							>
+								<File className="h-4 w-4" />
+								{t("files", "Files")}
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={disabled}
+								onClick={() => folderInputRef.current?.click()}
+							>
+								<Folder className="h-4 w-4" />
+								{t("folder", "Folder")}
+							</Button>
+						</div>
 					)}
 				</div>
-			</button>
+			) : (
+				<button
+					type="button"
+					className={cn(
+						zoneClassName,
+						disabled || isBusy ? "cursor-not-allowed" : "cursor-pointer",
+					)}
+					onClick={() => !disabled && !isBusy && inputRef.current?.click()}
+					disabled={disabled || isBusy}
+				>
+					{zoneStatus}
+				</button>
+			)}
 
 			{displayFiles.length > 0 && (
 				<div className="space-y-2">
-					{displayFiles.map((file, index) => (
+					{displayFiles.slice(0, MAX_VISIBLE_FILES).map((file, index) => (
 						<div
 							key={`${file.name}-${index}`}
 							className={cn(
@@ -418,7 +585,12 @@ export function A2UIFileInput({
 								<File className="h-4 w-4 shrink-0 text-muted-foreground" />
 							)}
 							<div className="flex-1 min-w-0">
-								<p className="text-sm font-medium truncate">{file.name}</p>
+								<p
+									className="text-sm font-medium truncate"
+									title={file.relativePath ?? file.name}
+								>
+									{file.relativePath ?? file.name}
+								</p>
 								<p
 									className={cn(
 										"text-xs",
@@ -447,6 +619,13 @@ export function A2UIFileInput({
 							</Button>
 						</div>
 					))}
+					{displayFiles.length > MAX_VISIBLE_FILES && (
+						<p className="text-xs text-muted-foreground">
+							{t("andNMoreFiles", "and {{n}} more files", {
+								n: displayFiles.length - MAX_VISIBLE_FILES,
+							})}
+						</p>
+					)}
 				</div>
 			)}
 

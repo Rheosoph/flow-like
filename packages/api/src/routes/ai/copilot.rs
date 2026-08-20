@@ -380,7 +380,7 @@ impl CatalogProvider for ServerCatalogProvider {
             }
         }
 
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored_matches
             .into_iter()
             .take(10)
@@ -680,7 +680,15 @@ pub async fn copilot_chat(
     // resolves against their own Bits instead of the server default. With a hosted Bit + the user's
     // token, the model call loops through this server's metered `/chat/completions`, so tier
     // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
-    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
+    let profile = match super::global_chat::load_user_profile_access(&state, &sub, None).await? {
+        Some((profile, access)) => {
+            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
+                return Err(rejection);
+            }
+            Some(profile)
+        }
+        None => None,
+    };
     let flow_ir_draft_store = payload.board.as_ref().and_then(|board| {
         (!matches!(payload.scope, CopilotScope::Frontend)).then(|| {
             let app_id = retained_app_id
@@ -904,7 +912,15 @@ async fn specialist_chat(
     }
 
     let flow_like_state = master_flow_like_state(&state).await?;
-    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
+    let profile = match super::global_chat::load_user_profile_access(&state, &sub, None).await? {
+        Some((profile, access)) => {
+            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
+                return Err(rejection);
+            }
+            Some(profile)
+        }
+        None => None,
+    };
 
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::specialist(

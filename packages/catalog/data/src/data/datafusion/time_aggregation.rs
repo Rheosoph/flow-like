@@ -908,10 +908,9 @@ impl NodeLogic for TimeRangeFilterNode {
 
             // Try relative time
             if s.starts_with('-') || s.starts_with('+') {
-                let (sign, rest) = if s.starts_with('-') {
-                    (-1i64, &s[1..])
-                } else {
-                    (1i64, &s[1..])
+                let (sign, rest) = match s.strip_prefix('-') {
+                    Some(rest) => (-1i64, rest),
+                    None => (1i64, s.strip_prefix('+').unwrap_or(s)),
                 };
 
                 let (num_str, unit) = rest.split_at(rest.len() - 1);

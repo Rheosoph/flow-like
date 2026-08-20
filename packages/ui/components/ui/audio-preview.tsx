@@ -298,9 +298,14 @@ export function AudioPreview({
 						<AudioLines className="h-6 w-6 text-muted-foreground" />
 					</div>
 					<div>
-						<p className="font-medium">{t('audioPreviewUnavailable', 'Audio preview unavailable')}</p>
+						<p className="font-medium">
+							{t("audioPreviewUnavailable", "Audio preview unavailable")}
+						</p>
 						<p className="mt-1 text-sm text-muted-foreground">
-							{t('theFileCouldNotBeLoadedByTheBrowserAudioPlayer', 'The file could not be loaded by the browser audio player.')}
+							{t(
+								"theFileCouldNotBeLoadedByTheBrowserAudioPlayer",
+								"The file could not be loaded by the browser audio player.",
+							)}
 						</p>
 					</div>
 				</div>
@@ -367,7 +372,9 @@ export function AudioPreview({
 								<span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
 								<span>
 									{isMetadataLoaded
-										? t('valDuration', '{{val}} duration', { val: formatTime(duration) })
+										? t("valDuration", "{{val}} duration", {
+												val: formatTime(duration),
+											})
 										: "Loading metadata"}
 								</span>
 							</div>
@@ -386,10 +393,14 @@ export function AudioPreview({
 									)}
 								>
 									<Download className="h-4 w-4" />
-									<span className="sr-only">{t('downloadAudio', 'Download audio')}</span>
+									<span className="sr-only">
+										{t("downloadAudio", "Download audio")}
+									</span>
 								</a>
 							</TooltipTrigger>
-							<TooltipContent>{t('downloadAudio', 'Download audio')}</TooltipContent>
+							<TooltipContent>
+								{t("downloadAudio", "Download audio")}
+							</TooltipContent>
 						</Tooltip>
 					)}
 				</div>
@@ -402,12 +413,15 @@ export function AudioPreview({
 						onClick={seekFromPointer}
 						onKeyDown={handleWaveformKeyDown}
 						disabled={!showControls || !canSeek}
-						aria-label={t('seekAudioWaveform', 'Seek audio waveform')}
+						aria-label={t("seekAudioWaveform", "Seek audio waveform")}
 						role="slider"
 						aria-valuemin={0}
 						aria-valuemax={Math.round(duration)}
 						aria-valuenow={Math.round(currentTime)}
-						aria-valuetext={t('valOfVal2', '{{val}} of {{val2}}', { val: formatTime(currentTime), val2: formatTime(duration) })}
+						aria-valuetext={t("valOfVal2", "{{val}} of {{val2}}", {
+							val: formatTime(currentTime),
+							val2: formatTime(duration),
+						})}
 					>
 						{waveformBars.map((bar, index) => {
 							const active =
@@ -448,10 +462,14 @@ export function AudioPreview({
 												disabled={!canSeek}
 											>
 												<SkipBack className="h-4 w-4" />
-												<span className="sr-only">{t('back10Seconds', 'Back 10 seconds')}</span>
+												<span className="sr-only">
+													{t("back10Seconds", "Back 10 seconds")}
+												</span>
 											</button>
 										</TooltipTrigger>
-										<TooltipContent>{t('back10Seconds', 'Back 10 seconds')}</TooltipContent>
+										<TooltipContent>
+											{t("back10Seconds", "Back 10 seconds")}
+										</TooltipContent>
 									</Tooltip>
 
 									<Tooltip>
@@ -491,10 +509,14 @@ export function AudioPreview({
 												disabled={!canSeek}
 											>
 												<SkipForward className="h-4 w-4" />
-												<span className="sr-only">{t('forward10Seconds', 'Forward 10 seconds')}</span>
+												<span className="sr-only">
+													{t("forward10Seconds", "Forward 10 seconds")}
+												</span>
 											</button>
 										</TooltipTrigger>
-										<TooltipContent>{t('forward10Seconds', 'Forward 10 seconds')}</TooltipContent>
+										<TooltipContent>
+											{t("forward10Seconds", "Forward 10 seconds")}
+										</TooltipContent>
 									</Tooltip>
 								</div>
 
@@ -506,7 +528,7 @@ export function AudioPreview({
 									disabled={!canSeek}
 									onValueChange={(value) => seekTo(value[0] ?? 0)}
 									className="min-w-0 flex-1"
-									aria-label={t('audioPosition', 'Audio position')}
+									aria-label={t("audioPosition", "Audio position")}
 								/>
 
 								<div className="flex items-center justify-center gap-1">
@@ -549,7 +571,9 @@ export function AudioPreview({
 												<span className="text-xs">{`${playbackRate}x`}</span>
 											</button>
 										</TooltipTrigger>
-										<TooltipContent>{t('playbackSpeed', 'Playback speed')}</TooltipContent>
+										<TooltipContent>
+											{t("playbackSpeed", "Playback speed")}
+										</TooltipContent>
 									</Tooltip>
 
 									<Tooltip>
@@ -585,7 +609,7 @@ export function AudioPreview({
 										step={1}
 										onValueChange={updateVolume}
 										className="hidden w-20 sm:flex"
-										aria-label={t('audioVolume', 'Audio volume')}
+										aria-label={t("audioVolume", "Audio volume")}
 									/>
 								</div>
 							</div>

@@ -61,6 +61,19 @@ export function isUpgradeRequiredError(
 }
 
 /**
+ * True when the backend says the addressed resource is not there (404) or is
+ * deliberately no longer served (410). Callers use it to tell "the request
+ * failed" apart from "there is nothing left to act on".
+ */
+export function isMissingResourceError(
+	error: unknown,
+): error is ApiResponseError {
+	if (typeof error !== "object" || error === null) return false;
+	const candidate = error as Partial<ApiResponseError>;
+	return candidate.status === 404 || candidate.status === 410;
+}
+
+/**
  * The server's own explanation when it sent one, otherwise the caller's generic
  * copy. Backends that distinguish failure cases (already a member vs. already
  * invited) are only useful if the UI shows what they said.

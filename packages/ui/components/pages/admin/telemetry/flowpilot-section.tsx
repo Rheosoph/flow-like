@@ -263,7 +263,7 @@ export function FlowpilotSection({
 		<section className="space-y-4">
 			<h2 className="flex items-center gap-2 text-xl font-semibold">
 				<Bot className="h-5 w-5 text-primary" />
-				{t('flowpilot', 'FlowPilot')}
+				{t("flowpilot", "FlowPilot")}
 				<TelemetryGranularityNotice response={flowpilot.data} />
 			</h2>
 
@@ -288,22 +288,27 @@ export function FlowpilotSection({
 							label="Runs"
 							value={totals.runsStarted.toLocaleString()}
 							icon={<Play className="h-4 w-4" />}
-							hint={t('valFailed', '{{val}} failed', { val: totals.runsFailed.toLocaleString() })}
+							hint={t("valFailed", "{{val}} failed", {
+								val: totals.runsFailed.toLocaleString(),
+							})}
 						/>
 						<StatTile
-							label={t('successRate', 'Success rate')}
+							label={t("successRate", "Success rate")}
 							value={successRate == null ? "—" : `${successRate.toFixed(1)}%`}
 							icon={<CircleCheck className="h-4 w-4" />}
-							hint={t('valOfVal2Runs', '{{val}} of {{val2}} runs', { val: totals.runsSucceeded.toLocaleString(), val2: totals.runsStarted.toLocaleString() })}
+							hint={t("valOfVal2Runs", "{{val}} of {{val2}} runs", {
+								val: totals.runsSucceeded.toLocaleString(),
+								val2: totals.runsStarted.toLocaleString(),
+							})}
 						/>
 						<StatTile
-							label={t('cancelled', 'Cancelled')}
+							label={t("cancelled", "Cancelled")}
 							value={totals.runsCancelled.toLocaleString()}
 							icon={<CircleX className="h-4 w-4" />}
 							hint="Stopped by the user"
 						/>
 						<StatTile
-							label={t('installsReporting', 'Installs reporting')}
+							label={t("installsReporting", "Installs reporting")}
 							value={(flowpilot.data?.installs ?? 0).toLocaleString()}
 							icon={<MonitorSmartphone className="h-4 w-4" />}
 							hint="Distinct anonymous ids"
@@ -312,10 +317,13 @@ export function FlowpilotSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">{t('runsOverTime', 'Runs over time')}</CardTitle>
+							<CardTitle className="text-base">
+								{t("runsOverTime", "Runs over time")}
+							</CardTitle>
 							<CardDescription>
-								{t('generationRunsBucketedBy', 'Generation runs bucketed by')}{" "}
-								<span className="font-mono">{bucket}</span> {t('overTheSelectedWindow', "over the selected window.")}
+								{t("generationRunsBucketedBy", "Generation runs bucketed by")}{" "}
+								<span className="font-mono">{bucket}</span>{" "}
+								{t("overTheSelectedWindow", "over the selected window.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -329,9 +337,14 @@ export function FlowpilotSection({
 					<div className="grid gap-4 lg:grid-cols-2">
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">{t('generationFunnel', 'Generation funnel')}</CardTitle>
+								<CardTitle className="text-base">
+									{t("generationFunnel", "Generation funnel")}
+								</CardTitle>
 								<CardDescription>
-									{t('attemptsSurvivingEachValidationStageAsAShareOfAllAttempts', "Attempts surviving each validation stage, as a share of all attempts.")}
+									{t(
+										"attemptsSurvivingEachValidationStageAsAShareOfAllAttempts",
+										"Attempts surviving each validation stage, as a share of all attempts.",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -340,9 +353,15 @@ export function FlowpilotSection({
 						</Card>
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">{t('reviewDispositions', 'Review dispositions')}</CardTitle>
+								<CardTitle className="text-base">
+									{t("reviewDispositions", "Review dispositions")}
+								</CardTitle>
 								<CardDescription>
-									{totals.queuedReviews.toLocaleString()} {t('reviewsQueuedInThisWindow', "reviews queued in this window.")}
+									{totals.queuedReviews.toLocaleString()}{" "}
+									{t(
+										"reviewsQueuedInThisWindow",
+										"reviews queued in this window.",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -377,9 +396,14 @@ export function FlowpilotSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">{t('quality', 'Quality')}</CardTitle>
+							<CardTitle className="text-base">
+								{t("quality", "Quality")}
+							</CardTitle>
 							<CardDescription>
-								{t('diagnosticAndValidationSignalsAcrossAllReportedRuns', 'Diagnostic and validation signals across all reported runs.')}
+								{t(
+									"diagnosticAndValidationSignalsAcrossAllReportedRuns",
+									"Diagnostic and validation signals across all reported runs.",
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -389,25 +413,29 @@ export function FlowpilotSection({
 									value={totals.diagnosticOccurrences.toLocaleString()}
 								/>
 								<StatTile
-									label={t('repeatedDiagnostics', 'Repeated diagnostics')}
+									label={t("repeatedDiagnostics", "Repeated diagnostics")}
 									value={totals.repeatedDiagnosticOccurrences.toLocaleString()}
 								/>
 								<StatTile
-									label={t('validationRegressions', 'Validation regressions')}
+									label={t("validationRegressions", "Validation regressions")}
 									value={totals.validationRegressions.toLocaleString()}
 								/>
 								<StatTile
-									label={t('emptyBoardsAfterRun', 'Empty boards after run')}
+									label={t("emptyBoardsAfterRun", "Empty boards after run")}
 									value={totals.emptyBoardsAfterRun.toLocaleString()}
 								/>
 								<StatTile
-									label={t('boardsInspected', 'Boards inspected')}
+									label={t("boardsInspected", "Boards inspected")}
 									value={totals.boardsInspected.toLocaleString()}
 								/>
 								<StatTile
-									label={t('plansFeasible', 'Plans feasible')}
+									label={t("plansFeasible", "Plans feasible")}
 									value={`${totals.plansFeasible.toLocaleString()} / ${totals.plansInfeasible.toLocaleString()}`}
-									hint={t('feasibleInfeasibleOfValAssessed', 'feasible / infeasible of {{val}} assessed', { val: totals.plansAssessed.toLocaleString() })}
+									hint={t(
+										"feasibleInfeasibleOfValAssessed",
+										"feasible / infeasible of {{val}} assessed",
+										{ val: totals.plansAssessed.toLocaleString() },
+									)}
 								/>
 							</div>
 						</CardContent>

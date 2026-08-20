@@ -15,7 +15,7 @@ export function AboutSection({
 	return (
 		<div className="space-y-8">
 			<p className="text-base leading-relaxed text-muted-foreground max-w-prose">
-				{meta.description ?? t('noDescriptionFound', 'No description found.')}
+				{meta.description ?? t("noDescriptionFound", "No description found.")}
 			</p>
 
 			{meta.tags?.length ? (
@@ -41,7 +41,7 @@ export function AboutSection({
 							<div key={`${m}-${i}`} className="snap-start shrink-0">
 								<img
 									src={m}
-									alt={t('previewVal', 'Preview {{val}}', { val: i + 1 })}
+									alt={t("previewVal", "Preview {{val}}", { val: i + 1 })}
 									className="h-48 md:h-64 rounded-xl object-cover"
 									loading="lazy"
 									decoding="async"
@@ -55,7 +55,7 @@ export function AboutSection({
 			{hasRelease && (
 				<details className="group text-sm">
 					<summary className="text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors select-none">
-						{t('releaseNotes2', 'Release notes')}
+						{t("releaseNotes2", "Release notes")}
 					</summary>
 					<div className="mt-3 leading-relaxed text-muted-foreground whitespace-pre-wrap pl-4 border-l-2 border-border/20">
 						{meta.release_notes || app.changelog}

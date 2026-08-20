@@ -115,7 +115,21 @@ pub fn declared_placeholders(sql: &str) -> Result<Vec<String>> {
 /// The stable ordering is what lets a caller fingerprint the resolved parameters (e.g. for
 /// a result cache key) without the hash depending on JSON key order.
 pub fn resolve_query_params(sql: &str, supplied: &Value) -> Result<Vec<(String, Value)>> {
-    let declared = declared_placeholders(sql)?;
+    resolve_declared("SQL", declared_placeholders(sql)?, supplied)
+}
+
+/// Pairs already-discovered placeholders with their values, preserving the order they were
+/// declared in.
+///
+/// Shared with [`super::lance_filter_params`], which discovers its placeholders with a
+/// different dialect but owes the caller the same contract: every declared name resolved, or
+/// an error naming the ones that were not. `subject` names the thing that declared them, so
+/// the message reads as the surface the author is looking at.
+pub fn resolve_declared(
+    subject: &str,
+    declared: Vec<String>,
+    supplied: &Value,
+) -> Result<Vec<(String, Value)>> {
     if declared.is_empty() {
         return Ok(Vec::new());
     }
@@ -133,7 +147,7 @@ pub fn resolve_query_params(sql: &str, supplied: &Value) -> Result<Vec<(String, 
 
     if !missing.is_empty() {
         return Err(anyhow!(
-            "SQL declares {} with no value supplied. Connect the matching parameter pin, or supply the name in the parameters object.",
+            "{subject} declares {} with no value supplied. Connect the matching parameter pin, or supply the name in the parameters object.",
             missing.join(", ")
         ));
     }

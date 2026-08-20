@@ -20,7 +20,9 @@ export function IntegerVariable({
 	const { t } = useTranslation("flow");
 	return (
 		<div className="grid w-full items-center gap-1.5">
-			<Label htmlFor="default_value">{t('defaultValue', 'Default Value')}</Label>
+			<Label htmlFor="default_value">
+				{t("defaultValue", "Default Value")}
+			</Label>
 			<Input
 				disabled={disabled}
 				value={parseUint8ArrayToJson(variable.default_value)}
@@ -34,7 +36,7 @@ export function IntegerVariable({
 				}}
 				type={variable.secret ? "password" : "number"}
 				id="default_value"
-				placeholder={t('defaultValue', 'Default Value')}
+				placeholder={t("defaultValue", "Default Value")}
 				step={1}
 			/>
 		</div>

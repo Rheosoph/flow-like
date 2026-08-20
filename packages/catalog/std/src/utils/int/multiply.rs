@@ -18,7 +18,12 @@ impl MultiplyIntegerNode {
 #[async_trait]
 impl NodeLogic for MultiplyIntegerNode {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("int_multiply", "*", "Multiplies two Integers", "Math/Int");
+        let mut node = Node::new(
+            "int_multiply",
+            "* (Int)",
+            "Multiplies two Integers",
+            "Math/Int",
+        );
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

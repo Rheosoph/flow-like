@@ -8,8 +8,10 @@ import {
 	type ComponentProps,
 	getComponentRenderer,
 } from "../ComponentRegistry";
+import { useData } from "../DataContext";
 import { useWidgetRefs } from "../WidgetRefsContext";
 import { resolveEventActions } from "../event-handlers";
+import { resolveHidden } from "../resolve-hidden";
 import type {
 	A2UIComponent,
 	Action,
@@ -261,6 +263,7 @@ export function A2UIWidgetInstance({
 	const effectiveAppId = appId ?? rendererAppId;
 	const widgetRefsContext = useWidgetRefs();
 	const backend = useBackend();
+	const { resolve } = useData();
 
 	const fromRefs = widgetRefsContext?.getWidgetRef(instanceId);
 
@@ -311,6 +314,8 @@ export function A2UIWidgetInstance({
 				return null;
 			}
 
+			if (resolveHidden(childComponent.component.hidden, resolve)) return null;
+
 			const componentType = childComponent.component.type as string;
 			const Renderer = getComponentRenderer(componentType);
 			if (!Renderer) {
@@ -337,7 +342,7 @@ export function A2UIWidgetInstance({
 				/>
 			);
 		},
-		[surfaceId, effectiveAppId, boardId, onAction],
+		[surfaceId, effectiveAppId, boardId, onAction, resolve],
 	);
 
 	if (!widgetDef) {
@@ -348,12 +353,18 @@ export function A2UIWidgetInstance({
 					data-widget-instance={instanceId}
 					data-widget-id={widgetId}
 				>
-					{t('loadingWidget', 'Loading widget…')}
+					{t("loadingWidget", "Loading widget…")}
 				</div>
 			);
 		}
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">{t('widgetInstanceQuotinstanceidquotCouldNotBeResolved', "Widget instance \"{{instanceId}}\" could not be resolved", { instanceId })}{fetched.error ? `: ${fetched.error.message}` : ""}
+			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
+				{t(
+					"widgetInstanceQuotinstanceidquotCouldNotBeResolved",
+					'Widget instance "{{instanceId}}" could not be resolved',
+					{ instanceId },
+				)}
+				{fetched.error ? `: ${fetched.error.message}` : ""}
 			</div>
 		);
 	}
@@ -361,7 +372,10 @@ export function A2UIWidgetInstance({
 	if (!widgetDef.rootComponentId) {
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				{t('widgetDefinitionMissingRootcomponentid', 'Widget definition missing rootComponentId')}
+				{t(
+					"widgetDefinitionMissingRootcomponentid",
+					"Widget definition missing rootComponentId",
+				)}
 			</div>
 		);
 	}

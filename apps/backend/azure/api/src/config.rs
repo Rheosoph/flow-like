@@ -8,7 +8,7 @@ use flow_like_secrets::{
     AzureCredentialConfig, AzureKeyVaultProviderConfig, AzureManagedIdentityConfig,
     AzureManagedIdentityId, ProviderConfig, SecretStoreConfig,
 };
-use std::{collections::HashSet, env, str::FromStr, time::Duration};
+use std::{collections::HashSet, env, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use url::Url;
 

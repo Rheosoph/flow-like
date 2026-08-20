@@ -576,7 +576,9 @@ mod tests {
         assert!(is_forbidden_endpoint_override(
             "CLOUDSDK_API_ENDPOINT_OVERRIDES_SECRETMANAGER"
         ));
-        assert!(is_forbidden_endpoint_override("GOOGLE_STORAGE_CUSTOM_ENDPOINT"));
+        assert!(is_forbidden_endpoint_override(
+            "GOOGLE_STORAGE_CUSTOM_ENDPOINT"
+        ));
         assert!(!is_forbidden_endpoint_override("GOOGLE_PROJECT_ID"));
         assert!(!is_forbidden_endpoint_override("CUSTOM_ENDPOINT"));
     }

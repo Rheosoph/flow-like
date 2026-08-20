@@ -99,7 +99,7 @@ function Sparkline({
 	if (!points.length) {
 		return (
 			<div className="flex h-9 items-center text-xs text-muted-foreground">
-				{t('noData', 'No data')}
+				{t("noData", "No data")}
 			</div>
 		);
 	}
@@ -186,18 +186,21 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<Bug className="h-4 w-4 text-destructive" />
-						{t('recentErrors', 'Recent Errors')}
+						{t("recentErrors", "Recent Errors")}
 						<Badge variant="outline" className="text-[10px]">
 							24h
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						{t('liveSignalOfApiFailuresAcrossThePlatform', 'Live signal of API failures across the platform')}
+						{t(
+							"liveSignalOfApiFailuresAcrossThePlatform",
+							"Live signal of API failures across the platform",
+						)}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/logs">
-						{t('openControlTower', 'Open Control Tower')}
+						{t("openControlTower", "Open Control Tower")}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -215,7 +218,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 						tone={stats.data?.total_errors ? "destructive" : "muted"}
 					/>
 					<StatTile
-						label={t('server5xx', 'Server (5xx)')}
+						label={t("server5xx", "Server (5xx)")}
 						value={
 							stats.isLoading
 								? "…"
@@ -225,7 +228,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 						tone={stats.data?.server_errors ? "destructive" : "muted"}
 					/>
 					<StatTile
-						label={t('client4xx', 'Client (4xx)')}
+						label={t("client4xx", "Client (4xx)")}
 						value={
 							stats.isLoading
 								? "…"
@@ -235,7 +238,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 						tone={stats.data?.client_errors ? "warn" : "muted"}
 					/>
 					<StatTile
-						label={t('usersHit', 'Users hit')}
+						label={t("usersHit", "Users hit")}
 						value={
 							stats.isLoading
 								? "…"
@@ -248,7 +251,8 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 				<div className="rounded-lg border bg-card/50 p-3">
 					<div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
 						<span className="inline-flex items-center gap-1.5">
-							<TrendingUp className="h-3 w-3" /> {t('trendLast24hHourly', 'Trend (last 24h, hourly)')}
+							<TrendingUp className="h-3 w-3" />{" "}
+							{t("trendLast24hHourly", "Trend (last 24h, hourly)")}
 						</span>
 						{change != null && (
 							<span
@@ -262,7 +266,8 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 							>
 								<ChangeIcon className="h-3 w-3" />
 								{change >= 0 ? "+" : ""}
-								{change.toFixed(1)}{t('vsPrior', '% vs prior')}
+								{change.toFixed(1)}
+								{t("vsPrior", "% vs prior")}
 							</span>
 						)}
 					</div>
@@ -272,13 +277,13 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 				<div>
 					<div className="mb-2 flex items-center justify-between">
 						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							{t('latest', 'Latest')}
+							{t("latest", "Latest")}
 						</div>
 						<Link
 							href="/admin/logs"
 							className="text-xs text-muted-foreground hover:text-foreground"
 						>
-							{t('viewAll', 'View all →')}
+							{t("viewAll", "View all →")}
 						</Link>
 					</div>
 					{stats.isLoading ? (
@@ -289,7 +294,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 						</div>
 					) : (stats.data?.recent.length ?? 0) === 0 ? (
 						<div className="flex items-center justify-center rounded-lg border border-dashed py-6 text-sm text-muted-foreground">
-							{t('allClearInTheLast24Hours', 'All clear in the last 24 hours.')}
+							{t("allClearInTheLast24Hours", "All clear in the last 24 hours.")}
 						</div>
 					) : (
 						<div className="space-y-1">
@@ -337,7 +342,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 
 				<div className="grid gap-3 sm:grid-cols-2">
 					<TopList
-						title={t('topErrorCodes', 'Top error codes')}
+						title={t("topErrorCodes", "Top error codes")}
 						buckets={stats.data?.top_codes ?? []}
 						loading={stats.isLoading}
 						hrefBuilder={(b) =>
@@ -345,7 +350,7 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 						}
 					/>
 					<TopList
-						title={t('topPaths', 'Top paths')}
+						title={t("topPaths", "Top paths")}
 						buckets={stats.data?.top_paths ?? []}
 						loading={stats.isLoading}
 						hrefBuilder={(b) => `/admin/logs?path=${encodeURIComponent(b.key)}`}
@@ -381,7 +386,9 @@ function TopList({
 					<Skeleton className="h-4 w-full" />
 				</div>
 			) : buckets.length === 0 ? (
-				<div className="text-xs text-muted-foreground">{t('noData', 'No data')}</div>
+				<div className="text-xs text-muted-foreground">
+					{t("noData", "No data")}
+				</div>
 			) : (
 				<ul className="space-y-1">
 					{buckets.map((b) => (

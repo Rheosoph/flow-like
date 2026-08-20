@@ -54,7 +54,7 @@ export function ErrorChart({ points, bucket }: Readonly<ErrorChartProps>) {
 	if (data.length === 0) {
 		return (
 			<div className="flex h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-				{t('noErrorsInTheSelectedWindow', 'No errors in the selected window.')}
+				{t("noErrorsInTheSelectedWindow", "No errors in the selected window.")}
 			</div>
 		);
 	}

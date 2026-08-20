@@ -334,4 +334,66 @@ describe("page load failures", () => {
 		expect(pageLoadErrorMessage("boom")).toBe("boom");
 		expect(pageLoadErrorMessage(undefined)).toBe("Unknown error");
 	});
+
+	test("surfaces why the board never arrived, not just that the file is missing", () => {
+		// Without the cause, a stale offline flag, a failed local write and a server that no
+		// longer has the board all read as the same "file not found" on the card.
+		const message = pageLoadErrorMessage(
+			new Error(
+				"Failed to open board 'board-1' while looking up page 'page-1': not found",
+				{
+					cause: new Error(
+						"Board board-1 could not be made available (persist)",
+					),
+				},
+			),
+		);
+
+		expect(message).toContain("Failed to open board 'board-1'");
+		expect(message).toContain("(persist)");
+	});
+
+	test("does not repeat a cause the outer message already states", () => {
+		expect(
+			pageLoadErrorMessage(
+				new Error("board unavailable: hub unreachable", {
+					cause: new Error("hub unreachable"),
+				}),
+			),
+		).toBe("board unavailable: hub unreachable");
+	});
+});
+
+describe("board sync retry diagnostics", () => {
+	test("a retry that fails differently is kept as the cause", async () => {
+		const boardState = {
+			async getBoard() {
+				throw new Error("board unavailable");
+			},
+		};
+		let attempt = 0;
+		const pageState = {
+			async getPage() {
+				attempt += 1;
+				throw new Error(
+					attempt === 1 ? "board file missing" : "hub rejected the page",
+				);
+			},
+		};
+
+		const error: unknown = await loadPageWithBoardSync(
+			boardState as never,
+			pageState as never,
+			"app-1",
+			"page-1",
+			"board-2",
+		).catch((e: unknown) => e);
+
+		// The first failure stays the headline — it is the precise one — while the retry's
+		// distinct failure is preserved instead of discarded.
+		expect((error as Error).message).toBe("board file missing");
+		expect(((error as Error).cause as Error).message).toBe(
+			"hub rejected the page",
+		);
+	});
 });

@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -47,6 +46,7 @@ import {
 	useInvoke,
 	validateMlxModelAssets,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	AudioLines,
@@ -350,15 +350,20 @@ function HostedLLMForm({
 			{/* identity */}
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('modelIdentity', 'Model Identity')}</CardTitle>
+					<CardTitle>{t("modelIdentity", "Model Identity")}</CardTitle>
 					<CardDescription>
-						{t('theSlugDrivesAutocomputedCapabilityScoresNoManualSlidersNeeded', "The slug drives auto-computed capability scores — no manual sliders needed.")}
+						{t(
+							"theSlugDrivesAutocomputedCapabilityScoresNoManualSlidersNeeded",
+							"The slug drives auto-computed capability scores — no manual sliders needed.",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
 						<div className="space-y-2">
-							<Label htmlFor="hosted-slug">{t('modelSlug2', 'Model Slug *')}</Label>
+							<Label htmlFor="hosted-slug">
+								{t("modelSlug2", "Model Slug *")}
+							</Label>
 							<Input
 								id="hosted-slug"
 								value={bit.name ?? ""}
@@ -368,37 +373,52 @@ function HostedLLMForm({
 								placeholder="step-3-5-flash"
 							/>
 							<p className="text-xs text-muted-foreground">
-								{t('usedToAutocomputeCapabilityScores', 'Used to auto-compute capability scores.')}
+								{t(
+									"usedToAutocomputeCapabilityScores",
+									"Used to auto-compute capability scores.",
+								)}
 							</p>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-display-name">{t('displayName3', 'Display Name *')}</Label>
+							<Label htmlFor="hosted-display-name">
+								{t("displayName3", "Display Name *")}
+							</Label>
 							<Input
 								id="hosted-display-name"
 								value={bit.meta?.en?.name ?? ""}
 								onChange={(e) => updateMeta("name", e.target.value)}
-								placeholder={t('step35Flash', 'Step 3.5 Flash')}
+								placeholder={t("step35Flash", "Step 3.5 Flash")}
 							/>
 						</div>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="hosted-description">{t('description', 'Description')}</Label>
+						<Label htmlFor="hosted-description">
+							{t("description", "Description")}
+						</Label>
 						<Textarea
 							id="hosted-description"
 							rows={2}
 							value={bit.meta?.en?.description ?? ""}
 							onChange={(e) => updateMeta("description", e.target.value)}
-							placeholder={t('briefDescriptionOfTheModel', 'Brief description of the model…')}
+							placeholder={t(
+								"briefDescriptionOfTheModel",
+								"Brief description of the model…",
+							)}
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="hosted-long-description">{t('longDescription', 'Long Description')}</Label>
+						<Label htmlFor="hosted-long-description">
+							{t("longDescription", "Long Description")}
+						</Label>
 						<Textarea
 							id="hosted-long-description"
 							rows={4}
 							value={bit.meta?.en?.long_description ?? ""}
 							onChange={(e) => updateMeta("long_description", e.target.value)}
-							placeholder={t('detailedDescriptionOfTheModelsCapabilitiesAndUseCases', 'Detailed description of the model\'s capabilities and use cases…')}
+							placeholder={t(
+								"detailedDescriptionOfTheModelsCapabilitiesAndUseCases",
+								"Detailed description of the model's capabilities and use cases…",
+							)}
 						/>
 					</div>
 				</CardContent>
@@ -407,15 +427,18 @@ function HostedLLMForm({
 			{/* provider */}
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('providerSettings', 'Provider Settings')}</CardTitle>
+					<CardTitle>{t("providerSettings", "Provider Settings")}</CardTitle>
 					<CardDescription>
-						{t('configureWhichProviderRoutesAndServesThisModel', 'Configure which provider routes and serves this model.')}
+						{t(
+							"configureWhichProviderRoutesAndServesThisModel",
+							"Configure which provider routes and serves this model.",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-3">
 						<div className="space-y-2">
-							<Label>{t('provider2', 'Provider *')}</Label>
+							<Label>{t("provider2", "Provider *")}</Label>
 							<Select
 								value={provider.provider_name ?? "Hosted"}
 								onValueChange={(v) => updateProvider({ provider_name: v })}
@@ -433,7 +456,9 @@ function HostedLLMForm({
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-model-id">{t('modelId', 'Model ID')}</Label>
+							<Label htmlFor="hosted-model-id">
+								{t("modelId", "Model ID")}
+							</Label>
 							<Input
 								id="hosted-model-id"
 								value={provider.model_id ?? ""}
@@ -444,7 +469,9 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-context">{t('contextLength', 'Context Length')}</Label>
+							<Label htmlFor="hosted-context">
+								{t("contextLength", "Context Length")}
+							</Label>
 							<Input
 								id="hosted-context"
 								type="number"
@@ -460,7 +487,9 @@ function HostedLLMForm({
 					</div>
 					<div className="grid gap-4 sm:grid-cols-2">
 						<div className="space-y-2">
-							<Label htmlFor="hosted-endpoint">{t('endpoint', 'Endpoint')}</Label>
+							<Label htmlFor="hosted-endpoint">
+								{t("endpoint", "Endpoint")}
+							</Label>
 							<Input
 								id="hosted-endpoint"
 								value={
@@ -475,7 +504,7 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-tier">{t('tier', 'Tier')}</Label>
+							<Label htmlFor="hosted-tier">{t("tier", "Tier")}</Label>
 							<Input
 								id="hosted-tier"
 								value={
@@ -494,15 +523,18 @@ function HostedLLMForm({
 			{/* registry info */}
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('registryInfo', 'Registry Info')}</CardTitle>
+					<CardTitle>{t("registryInfo", "Registry Info")}</CardTitle>
 					<CardDescription>
-						{t('hubVersionLicenseAndRepository', 'Hub, version, license, and repository.')}
+						{t(
+							"hubVersionLicenseAndRepository",
+							"Hub, version, license, and repository.",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
 						<div className="space-y-2">
-							<Label htmlFor="hosted-hub">{t('hub', 'Hub')}</Label>
+							<Label htmlFor="hosted-hub">{t("hub", "Hub")}</Label>
 							<Input
 								id="hosted-hub"
 								value={bit.hub ?? ""}
@@ -513,7 +545,7 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-version">{t('version', 'Version')}</Label>
+							<Label htmlFor="hosted-version">{t("version", "Version")}</Label>
 							<Input
 								id="hosted-version"
 								value={bit.version ?? "0.0.1"}
@@ -524,18 +556,20 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-license">{t('license', 'License')}</Label>
+							<Label htmlFor="hosted-license">{t("license", "License")}</Label>
 							<Input
 								id="hosted-license"
 								value={bit.license ?? ""}
 								onChange={(e) =>
 									setBit((old) => ({ ...old, license: e.target.value }))
 								}
-								placeholder={t('egMitApache20', 'e.g. MIT, Apache-2.0')}
+								placeholder={t("egMitApache20", "e.g. MIT, Apache-2.0")}
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-repository">{t('repositoryUrl', 'Repository URL')}</Label>
+							<Label htmlFor="hosted-repository">
+								{t("repositoryUrl", "Repository URL")}
+							</Label>
 							<Input
 								id="hosted-repository"
 								value={bit.repository ?? ""}
@@ -548,7 +582,9 @@ function HostedLLMForm({
 					</div>
 					<div className="grid gap-4 sm:grid-cols-2">
 						<div className="space-y-2">
-							<Label htmlFor="hosted-website">{t('websiteUrl', 'Website URL')}</Label>
+							<Label htmlFor="hosted-website">
+								{t("websiteUrl", "Website URL")}
+							</Label>
 							<Input
 								id="hosted-website"
 								value={bit.meta?.en?.website ?? ""}
@@ -557,12 +593,17 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-use-case">{t('useCase', 'Use Case')}</Label>
+							<Label htmlFor="hosted-use-case">
+								{t("useCase", "Use Case")}
+							</Label>
 							<Input
 								id="hosted-use-case"
 								value={bit.meta?.en?.use_case ?? ""}
 								onChange={(e) => updateMeta("use_case", e.target.value)}
-								placeholder={t('egChatCodeAnalysis', 'e.g. Chat, Code, Analysis')}
+								placeholder={t(
+									"egChatCodeAnalysis",
+									"e.g. Chat, Code, Analysis",
+								)}
 							/>
 						</div>
 					</div>
@@ -572,13 +613,18 @@ function HostedLLMForm({
 			{/* media & authors */}
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('mediaAmpAuthors', "Media & Authors")}</CardTitle>
-					<CardDescription>{t('iconThumbnailAuthorsAndTags', 'Icon, thumbnail, authors, and tags.')}</CardDescription>
+					<CardTitle>{t("mediaAmpAuthors", "Media & Authors")}</CardTitle>
+					<CardDescription>
+						{t(
+							"iconThumbnailAuthorsAndTags",
+							"Icon, thumbnail, authors, and tags.",
+						)}
+					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
 						<div className="space-y-2">
-							<Label htmlFor="hosted-icon">{t('iconUrl', 'Icon URL')}</Label>
+							<Label htmlFor="hosted-icon">{t("iconUrl", "Icon URL")}</Label>
 							<Input
 								id="hosted-icon"
 								value={bit.meta?.en?.icon ?? ""}
@@ -587,7 +633,9 @@ function HostedLLMForm({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="hosted-thumbnail">{t('thumbnailUrl', 'Thumbnail URL')}</Label>
+							<Label htmlFor="hosted-thumbnail">
+								{t("thumbnailUrl", "Thumbnail URL")}
+							</Label>
 							<Input
 								id="hosted-thumbnail"
 								value={bit.meta?.en?.thumbnail ?? ""}
@@ -597,7 +645,7 @@ function HostedLLMForm({
 						</div>
 					</div>
 					<div className="space-y-2">
-						<Label>{t('authors', 'Authors')}</Label>
+						<Label>{t("authors", "Authors")}</Label>
 						<div className="flex gap-2">
 							<Input
 								value={authorInput}
@@ -608,10 +656,13 @@ function HostedLLMForm({
 										addAuthor();
 									}
 								}}
-								placeholder={t('addAuthorAndPressEnter', 'Add author and press Enter')}
+								placeholder={t(
+									"addAuthorAndPressEnter",
+									"Add author and press Enter",
+								)}
 							/>
 							<Button type="button" variant="outline" onClick={addAuthor}>
-								{t('add', 'Add')}
+								{t("add", "Add")}
 							</Button>
 						</div>
 						{authors.length > 0 && (
@@ -628,7 +679,7 @@ function HostedLLMForm({
 						)}
 					</div>
 					<div className="space-y-2">
-						<Label>{t('tags', 'Tags')}</Label>
+						<Label>{t("tags", "Tags")}</Label>
 						<div className="flex gap-2">
 							<Input
 								value={tagInput}
@@ -639,10 +690,13 @@ function HostedLLMForm({
 										addTag();
 									}
 								}}
-								placeholder={t('addTagAndPressEnter', 'Add tag and press Enter')}
+								placeholder={t(
+									"addTagAndPressEnter",
+									"Add tag and press Enter",
+								)}
 							/>
 							<Button type="button" variant="outline" onClick={addTag}>
-								{t('add', 'Add')}
+								{t("add", "Add")}
 							</Button>
 						</div>
 						{tags.length > 0 && (
@@ -671,7 +725,7 @@ function HostedLLMForm({
 				) : (
 					<Zap className="mr-2 h-4 w-4" />
 				)}
-				{t('addHostedModel', 'Add Hosted Model')}
+				{t("addHostedModel", "Add Hosted Model")}
 			</Button>
 		</div>
 	);
@@ -1295,7 +1349,15 @@ export default function Page() {
 					setProgressDownloaded(null);
 					setProgressTotal(asset.size ?? null);
 					setProgressLabel(
-						t('uploadingMlxFileValOfLengthFile_name', 'Uploading MLX file {{val}} of {{length}}: {{file_name}}', { val: assetIndex + 1, length: mlxAssets.length, file_name: asset.file_name }),
+						t(
+							"uploadingMlxFileValOfLengthFile_name",
+							"Uploading MLX file {{val}} of {{length}}: {{file_name}}",
+							{
+								val: assetIndex + 1,
+								length: mlxAssets.length,
+								file_name: asset.file_name,
+							},
+						),
 					);
 					setProgressBit(asset);
 					lastSampleRef.current = null;
@@ -1349,7 +1411,10 @@ export default function Page() {
 					!imageEmbeddingConfig
 				) {
 					throw new Error(
-						t('missingRequiredDependenciesForImageEmbeddingModel', 'Missing required dependencies for Image Embedding model'),
+						t(
+							"missingRequiredDependenciesForImageEmbeddingModel",
+							"Missing required dependencies for Image Embedding model",
+						),
 					);
 				}
 				textEmbeddingModel.license = bit.license;
@@ -1419,7 +1484,11 @@ export default function Page() {
 					}
 					if (asset.required && !asset.bit.download_link) {
 						throw new Error(
-							t('missingDownloadLinkForRequiredTtsAssetRelativepath', 'Missing download link for required TTS asset {{relativePath}}', { relativePath: asset.relativePath }),
+							t(
+								"missingDownloadLinkForRequiredTtsAssetRelativepath",
+								"Missing download link for required TTS asset {{relativePath}}",
+								{ relativePath: asset.relativePath },
+							),
 						);
 					}
 					if (!asset.required && !asset.bit.download_link) continue;
@@ -1465,7 +1534,11 @@ export default function Page() {
 					}
 					if (asset.required && !asset.bit.download_link) {
 						throw new Error(
-							t('missingDownloadLinkForRequiredSttAssetRelativepath', 'Missing download link for required STT asset {{relativePath}}', { relativePath: asset.relativePath }),
+							t(
+								"missingDownloadLinkForRequiredSttAssetRelativepath",
+								"Missing download link for required STT asset {{relativePath}}",
+								{ relativePath: asset.relativePath },
+							),
 						);
 					}
 					if (!asset.required && !asset.bit.download_link) continue;
@@ -1537,7 +1610,9 @@ export default function Page() {
 			setMlxAssets([]);
 		} catch (error: unknown) {
 			toast.error(
-				t('failedToAddBitVal', 'Failed to add bit: {{val}}', { val: error instanceof Error ? error.message : error }),
+				t("failedToAddBitVal", "Failed to add bit: {{val}}", {
+					val: error instanceof Error ? error.message : error,
+				}),
 			);
 		} finally {
 			setLoading(false);
@@ -1568,7 +1643,9 @@ export default function Page() {
 			<div className="flex-1 min-h-0 overflow-y-auto p-6">
 				<div className="space-y-6">
 					<div>
-						<h1 className="text-3xl font-bold">{t('addNewBit', 'Add New Bit')}</h1>
+						<h1 className="text-3xl font-bold">
+							{t("addNewBit", "Add New Bit")}
+						</h1>
 						<p className="text-muted-foreground">
 							{`Register a new model or asset to the registry.`}
 						</p>
@@ -1577,9 +1654,12 @@ export default function Page() {
 					{/* mode selector */}
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('bitType', 'Bit Type')}</CardTitle>
+							<CardTitle>{t("bitType", "Bit Type")}</CardTitle>
 							<CardDescription>
-								{t('chooseWhatKindOfBitYouWantToAdd', 'Choose what kind of bit you want to add.')}
+								{t(
+									"chooseWhatKindOfBitYouWantToAdd",
+									"Choose what kind of bit you want to add.",
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -1786,7 +1866,9 @@ export default function Page() {
 								{loading ? (
 									<Loader2Icon className="w-4 h-4 animate-spin mr-2" />
 								) : null}
-								{isMlxModel ? t('uploadMlxModel', 'Upload MLX model') : t('addBit', 'Add Bit')}
+								{isMlxModel
+									? t("uploadMlxModel", "Upload MLX model")
+									: t("addBit", "Add Bit")}
 							</Button>
 						</>
 					)}

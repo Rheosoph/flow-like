@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use super::copilot_sdk_tools::{
     SideEffectCommandQueue, flow_ir_draft_snapshot_dir, persist_recovery_snapshot,
     retained_flow_ir_draft_store, retained_flow_ir_draft_store_for_board,
@@ -430,6 +432,7 @@ const BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 /// expand to an undo command containing an entire large node, so this is checked on the actual
 /// executed GenericCommand before persistence. The shared validator also checks JSON-string
 /// escaping for the Lambda request event and echoed command response.
+#[cfg_attr(not(test), allow(dead_code))]
 const BOARD_EDIT_JOB_MAX_REMOTE_COMMAND_BYTES: usize =
     crate::functions::flow::board::REMOTE_BOARD_COMMAND_BATCH_MAX_BYTES;
 /// Bound the full durable replay payload independently from compact BoardCommand input size.
@@ -2528,7 +2531,7 @@ impl CatalogProvider for DesktopCatalogProvider {
             }
         }
 
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored_matches
             .into_iter()
             .take(10)
@@ -5747,7 +5750,7 @@ async fn external_code_agent_chat_internal(
         .emitted_surfaces
         .lock()
         .ok()
-        .and_then(|mut surfaces| surfaces.drain(..).last());
+        .and_then(|mut surfaces| surfaces.drain(..).next_back());
     let (components, canvas_settings, root_component_id) = match emitted_surface {
         Some(emitted) => (
             serde_json::from_value::<Vec<SurfaceComponent>>(emitted.components).unwrap_or_default(),
@@ -6526,7 +6529,7 @@ async fn copilot_sdk_chat_internal(
                             let emitted = emitted_surfaces
                                 .lock()
                                 .ok()
-                                .and_then(|mut surfaces| surfaces.drain(..).last());
+                                .and_then(|mut surfaces| surfaces.drain(..).next_back());
                             let (components, canvas, root_id) = match emitted {
                                 Some(surface) => (
                                     serde_json::from_value::<Vec<SurfaceComponent>>(
@@ -6886,7 +6889,7 @@ async fn copilot_sdk_chat_internal(
         && let Some(surface) = emitted_surfaces
             .lock()
             .ok()
-            .and_then(|mut surfaces| surfaces.drain(..).last())
+            .and_then(|mut surfaces| surfaces.drain(..).next_back())
     {
         let components =
             serde_json::from_value::<Vec<SurfaceComponent>>(surface.components).unwrap_or_default();
@@ -8541,6 +8544,7 @@ struct WorkflowToolLoopSnapshot {
     typed_revision: Option<u64>,
     typed_operation_attempts: u16,
     typed_operation_budget: u16,
+    #[allow(dead_code)] // carried across the phase handoff; no consumer restores them yet
     typed_stalled_attempts: u8,
     typed_missing_modules: Vec<String>,
     mutation_path: Option<WorkflowMutationPath>,
@@ -8550,6 +8554,7 @@ struct WorkflowToolLoopSnapshot {
     scope_plan: Option<BoardScopePlan>,
     /// Set when a staged plan was told to commit the prefix it already validated because the wall
     /// clock is running out. The bridge continues the remaining segments in a fresh run.
+    #[allow(dead_code)]
     staged_prefix_commit_requested: bool,
     /// Wall-clock slices this run earned by demonstrating progress, and the total they bought.
     granted_time_extensions: u8,
@@ -12745,6 +12750,7 @@ fn flowscript_source_fingerprint(source: &str) -> String {
 /// - `write_flowscript`: the response source is byte-identical to the submitted document.
 /// - `check_flowscript` / `commit_flowscript`: the response revision equals `expected_revision`;
 ///   neither operation mutates the retained source.
+///
 /// `patch_flowscript` keeps its echo because the merged result is host-computed. This runs after
 /// `workflow_tool_record`, so host retention/continuation state keeps the complete source.
 fn suppress_unchanged_flowscript_source_echo(
@@ -12852,7 +12858,7 @@ fn flowpilot_mcp_server_instructions<'a>(
     let has_global = names.contains("list_apps") && names.contains("flowpilot_board");
 
     if has_global {
-        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either use mode, begin app work with list_apps. Active configured chat/page/headless Events, including REST/API and MCP, are primary: choose the best match and exact consumer. Use data_studio_agent only after prior inventory for an explicit raw schema/table/ontology/SQL/DataFusion request, no suitable Event, or a successfully called Event that reports insufficient capability; set routing_reason and never bypass a failed, declined, timed-out, or approval-blocked Event. Use the sealed no-argument research_agent only after a complete inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
+        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either use mode, begin app work with list_apps. Active configured chat/page/headless Events, including REST/API and MCP, are primary: choose the best match and exact consumer. Call data_studio_agent directly for any work about an app's data — schema, queries, analytics, corrections, migrations, ontologies — on existing apps as well as during a build; it needs no preflight, and a failed, declined, timed-out, or approval-blocked Event is a stop to report rather than work to redo through raw data. Use the sealed no-argument research_agent only after a returned inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
     }
 
     if workflow_mutation && has_ui {
@@ -13704,9 +13710,11 @@ impl ExternalAgentInvocation {
             envs,
             // The global surface relies on Claude's supported-model default ToolSearch behavior.
             // Do not let an ambient desktop/shell override force eager loading or disable it.
-            env_removals: defer_tool_schemas
-                .then(|| vec!["ENABLE_TOOL_SEARCH".to_string()])
-                .unwrap_or_default(),
+            env_removals: if defer_tool_schemas {
+                vec!["ENABLE_TOOL_SEARCH".to_string()]
+            } else {
+                Default::default()
+            },
             final_output_path: Some(mcp_config_path),
         })
     }
@@ -15789,6 +15797,7 @@ impl NestedCopilotPool {
         removed
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn is_registered(&self, client: &Arc<Client>) -> bool {
         self.registered
             .lock()
@@ -16204,6 +16213,7 @@ fn pending_flowscript_redelivery_response(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn append_typed_ir_recovery_context(
     system_content: &mut String,
     recovery: &flow_like::flow::copilot::FlowIrDraftRecovery,
@@ -16907,8 +16917,7 @@ fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
             .collect();
         // Sort by parsed version (numeric, newest first) — a lexical sort would
         // rank "2.1.9" above "2.1.204".
-        extension_dirs
-            .sort_by(|a, b| claude_extension_version_key(b).cmp(&claude_extension_version_key(a)));
+        extension_dirs.sort_by_key(|dir| std::cmp::Reverse(claude_extension_version_key(dir)));
         for dir in extension_dirs {
             let candidate = dir
                 .join("resources")
@@ -20858,9 +20867,11 @@ event onTicket() {
             default_flowscript_module_templates(),
         )
         .expect("checkpoint test manifest");
-        let mut loop_state = WorkflowToolLoopState::default();
-        loop_state.initial_declaration_lookup_usable = true;
-        loop_state.scope_plan = Some(single_segment_plan());
+        let mut loop_state = WorkflowToolLoopState {
+            initial_declaration_lookup_usable: true,
+            scope_plan: Some(single_segment_plan()),
+            ..Default::default()
+        };
         loop_state.attach_shared_session(Some(manifest));
         let state = Arc::new(StdMutex::new(loop_state));
         let args = serde_json::json!({
@@ -25973,9 +25984,9 @@ eventsSimple() {
         assert!(global.contains("at least three apps/interfaces"));
         assert!(global.contains("Active configured chat/page/headless Events"));
         assert!(global.contains("including REST/API and MCP"));
-        assert!(global.contains("Use data_studio_agent only after prior inventory"));
-        assert!(global.contains("set routing_reason"));
-        assert!(global.contains("never bypass a failed, declined"));
+        assert!(global.contains("Call data_studio_agent directly"));
+        assert!(global.contains("on existing apps as well as during a build"));
+        assert!(global.contains("it needs no preflight"));
         assert!(global.contains("BUILD"));
         assert!(global.contains("sealed no-argument research_agent"));
         assert!(global.len() < 2_000);

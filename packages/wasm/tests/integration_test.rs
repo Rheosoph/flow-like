@@ -2223,8 +2223,10 @@ async fn test_fuel_consumption() {
         .expect("Failed to read WASM file");
 
     // Create engine with fuel metering
-    let mut config = WasmConfig::default();
-    config.fuel_metering = true;
+    let config = WasmConfig {
+        fuel_metering: true,
+        ..Default::default()
+    };
     let engine = WasmEngine::new(config).expect("Failed to create engine");
 
     let module = Arc::new(

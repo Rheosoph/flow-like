@@ -50,7 +50,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<KeyboardIcon />
-						{t('keyboardInput', 'Keyboard input')}
+						{t("keyboardInput", "Keyboard input")}
 					</DropdownMenuItem>
 
 					<DropdownMenuItem
@@ -62,7 +62,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<SuperscriptIcon />
-						{t('superscript', 'Superscript')}
+						{t("superscript", "Superscript")}
 						{/* (⌘+,) */}
 					</DropdownMenuItem>
 					<DropdownMenuItem
@@ -74,7 +74,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<SubscriptIcon />
-						{t('subscript', 'Subscript')}
+						{t("subscript", "Subscript")}
 						{/* (⌘+.) */}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>

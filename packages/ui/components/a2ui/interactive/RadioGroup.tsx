@@ -13,6 +13,7 @@ import {
 	valueRevisionOf,
 } from "../hooks/use-bound-input-value";
 import type { BoundValue, RadioGroupComponent } from "../types";
+import { normalizeOptions, toOptionValue } from "./options";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -36,9 +37,7 @@ export function A2UIRadioGroup({
 	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
 		revision: valueRevisionOf(component),
 	});
-	const options =
-		useResolved<Array<{ value: string; label: string }>>(component.options) ??
-		[];
+	const options = normalizeOptions(useResolved<unknown>(component.options));
 	const disabled = useResolved<boolean>(component.disabled);
 	const orientation = useResolved<string>(component.orientation);
 
@@ -66,7 +65,7 @@ export function A2UIRadioGroup({
 			style={resolveInlineStyle(style)}
 		>
 			<RadioGroup
-				value={value}
+				value={toOptionValue(value)}
 				onValueChange={handleChange}
 				disabled={disabled}
 				className={cn("flex", orientationClass)}

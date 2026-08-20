@@ -1,17 +1,66 @@
 use std::time::Duration;
 
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::data::paths, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::data::batch::{SIGN_CONCURRENCY, validate_batch},
+    routes::app::data::paths,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::{Value, create_id, json};
+use futures::stream::{self, StreamExt};
 use utoipa::ToSchema;
 
-const MAX_PREFIXES: usize = 100;
+const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
+
+/// Signs a GET URL per prefix, preserving request order.
+///
+/// A prefix that cannot be signed yields an `error` entry instead of failing
+/// the batch, so one unreadable path does not cost the rest of the selection.
+async fn sign_downloads(
+    store: &FlowLikeStore,
+    entries: Vec<(String, flow_like_storage::Path)>,
+    sub: &str,
+    app_id: &str,
+) -> Vec<Value> {
+    stream::iter(entries)
+        .map(|(prefix, download_path)| async move {
+            match store
+                .sign_cached("GET", &download_path, DOWNLOAD_URL_TTL)
+                .await
+            {
+                Ok(url) => json::json!({
+                    "prefix": prefix,
+                    "url": url.to_string(),
+                }),
+                Err(e) => {
+                    let id = create_id();
+                    tracing::error!(
+                        "[{}] Failed to sign URL for prefix '{}': {:?} [sent by {} for project {}]",
+                        id,
+                        prefix,
+                        e,
+                        sub,
+                        app_id
+                    );
+                    json::json!({
+                        "prefix": prefix,
+                        "error": format!("Failed to create signed URL, reference ID: {}", id),
+                    })
+                }
+            }
+        })
+        .buffered(SIGN_CONCURRENCY)
+        .collect()
+        .await
+}
 
 #[derive(Debug, Clone, serde::Deserialize, ToSchema)]
 pub struct DownloadFilesPayload {
@@ -22,14 +71,14 @@ pub struct DownloadFilesPayload {
     post,
     path = "/apps/{app_id}/data/download",
     tag = "data",
-    description = "Create signed download URLs for file prefixes.",
+    description = "Create signed download URLs for file prefixes. Accepts at most 100 prefixes per request.",
     params(
         ("app_id" = String, Path, description = "Application ID")
     ),
     request_body = DownloadFilesPayload,
     responses(
         (status = 200, description = "Signed download URLs", body = String, content_type = "application/json"),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request - no prefixes, or more than 100 in one request"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -47,6 +96,7 @@ pub async fn download_files(
     Json(payload): Json<DownloadFilesPayload>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    validate_batch(&payload.prefixes)?;
 
     let sub = user.sub()?;
 
@@ -66,55 +116,29 @@ pub async fn download_files(
         scoped_creds.to_store(false).await?
     };
 
-    let mut urls = Vec::with_capacity(payload.prefixes.len());
+    let entries = payload
+        .prefixes
+        .iter()
+        .map(|prefix| (prefix.clone(), paths::resolve_app_upload(&app_id, prefix)))
+        .collect();
 
-    for prefix in payload.prefixes.iter().take(MAX_PREFIXES) {
-        let download_path = paths::resolve_app_upload(&app_id, prefix);
-
-        let signed_url = match project_dir
-            .sign_cached("GET", &download_path, Duration::from_secs(60 * 60 * 24))
-            .await
-        {
-            Ok(url) => url,
-            Err(e) => {
-                let id = create_id();
-                tracing::error!(
-                    "[{}] Failed to sign URL for prefix '{}': {:?} [sent by {} for project {}]",
-                    id,
-                    prefix,
-                    e,
-                    sub,
-                    app_id
-                );
-                urls.push(json::json!({
-                    "prefix": prefix,
-                    "error": format!("Failed to create signed URL, reference ID: {}", id),
-                }));
-                continue;
-            }
-        };
-
-        urls.push(json::json!({
-            "prefix": prefix,
-            "url": signed_url.to_string(),
-        }));
-    }
-
-    Ok(Json(urls))
+    Ok(Json(
+        sign_downloads(&project_dir, entries, &sub, &app_id).await,
+    ))
 }
 
 #[utoipa::path(
     post,
     path = "/apps/{app_id}/data/user/download",
     tag = "data",
-    description = "Create signed download URLs for your private app files.",
+    description = "Create signed download URLs for your private app files. Accepts at most 100 prefixes per request.",
     params(
         ("app_id" = String, Path, description = "Application ID")
     ),
     request_body = DownloadFilesPayload,
     responses(
         (status = 200, description = "Signed download URLs", body = String, content_type = "application/json"),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request - no prefixes, or more than 100 in one request"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -135,6 +159,7 @@ pub async fn download_user_files(
     Json(payload): Json<DownloadFilesPayload>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    validate_batch(&payload.prefixes)?;
 
     let sub = user.sub()?;
 
@@ -152,39 +177,18 @@ pub async fn download_user_files(
         scoped_creds.to_store(false).await?
     };
 
-    let mut urls = Vec::with_capacity(payload.prefixes.len());
+    let entries = payload
+        .prefixes
+        .iter()
+        .map(|prefix| {
+            (
+                prefix.clone(),
+                paths::resolve_user_upload(&sub, &app_id, prefix),
+            )
+        })
+        .collect();
 
-    for prefix in payload.prefixes.iter().take(MAX_PREFIXES) {
-        let download_path = paths::resolve_user_upload(&sub, &app_id, prefix);
-
-        let signed_url = match project_dir
-            .sign_cached("GET", &download_path, Duration::from_secs(60 * 60 * 24))
-            .await
-        {
-            Ok(url) => url,
-            Err(e) => {
-                let id = create_id();
-                tracing::error!(
-                    "[{}] Failed to sign user URL for prefix '{}': {:?} [sent by {} for project {}]",
-                    id,
-                    prefix,
-                    e,
-                    sub,
-                    app_id
-                );
-                urls.push(json::json!({
-                    "prefix": prefix,
-                    "error": format!("Failed to create signed URL, reference ID: {}", id),
-                }));
-                continue;
-            }
-        };
-
-        urls.push(json::json!({
-            "prefix": prefix,
-            "url": signed_url.to_string(),
-        }));
-    }
-
-    Ok(Json(urls))
+    Ok(Json(
+        sign_downloads(&project_dir, entries, &sub, &app_id).await,
+    ))
 }

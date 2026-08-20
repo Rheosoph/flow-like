@@ -273,7 +273,7 @@ function InnerSidebar() {
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
-								{t('settings', 'Settings')}
+								{t("settings", "Settings")}
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
@@ -287,7 +287,7 @@ function InnerSidebar() {
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
 						<span className="w-full flex flex-row items-center justify-between">
-							{t('toggleSidebar', 'Toggle Sidebar')}{" "}
+							{t("toggleSidebar", "Toggle Sidebar")}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
 								{`⌘B`}
 							</span>
@@ -468,7 +468,7 @@ function Profiles() {
 						sideOffset={4}
 					>
 						<DropdownMenuLabel className="text-xs text-muted-foreground">
-							{t('profile', 'Profile')}
+							{t("profile", "Profile")}
 						</DropdownMenuLabel>
 						{profiles
 							.filter(
@@ -520,13 +520,15 @@ function Profiles() {
 										<Plus className="size-4" />
 									</div>
 									<div className="font-medium text-muted-foreground">
-										{t('newProfile', 'New profile')}
+										{t("newProfile", "New profile")}
 									</div>
 								</DropdownMenuItem>
 							</DialogTrigger>
 							<DialogContent className="sm:max-w-md">
 								<DialogHeader>
-									<DialogTitle>{t('createNewProfile', 'Create New Profile')}</DialogTitle>
+									<DialogTitle>
+										{t("createNewProfile", "Create New Profile")}
+									</DialogTitle>
 									<DialogDescription>
 										{`Create a new profile to organize your apps and settings.`}
 									</DialogDescription>
@@ -538,26 +540,29 @@ function Profiles() {
 											id="new-profile-name"
 											value={newProfileName}
 											onChange={(e) => setNewProfileName(e.target.value)}
-											placeholder={t('profileName', 'Profile name')}
+											placeholder={t("profileName", "Profile name")}
 											autoFocus
 										/>
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="new-profile-description">
-											{t('descriptionOptional', 'Description (optional)')}
+											{t("descriptionOptional", "Description (optional)")}
 										</Label>
 										<Textarea
 											id="new-profile-description"
 											value={newProfileDescription}
 											onChange={(e) => setNewProfileDescription(e.target.value)}
-											placeholder={t('shortDescription', 'Short description...')}
+											placeholder={t(
+												"shortDescription",
+												"Short description...",
+											)}
 											rows={3}
 										/>
 									</div>
 								</div>
 								<DialogFooter>
 									<DialogClose asChild>
-										<Button variant="ghost">{t('cancel', 'Cancel')}</Button>
+										<Button variant="ghost">{t("cancel", "Cancel")}</Button>
 									</DialogClose>
 									<Button
 										onClick={handleCreateProfile}
@@ -574,7 +579,7 @@ function Profiles() {
 									<Edit3Icon className="size-4" />
 								</div>
 								<div className="font-medium text-muted-foreground">
-									{t('editProfile', 'Edit profile')}
+									{t("editProfile", "Edit profile")}
 								</div>
 							</DropdownMenuItem>
 						</a>
@@ -758,7 +763,7 @@ function NavMain({
 	return (
 		<>
 			<SidebarGroup>
-				<SidebarGroupLabel>{t('navigation', 'Navigation')}</SidebarGroupLabel>
+				<SidebarGroupLabel>{t("navigation", "Navigation")}</SidebarGroupLabel>
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
@@ -780,7 +785,9 @@ function NavMain({
 			</SidebarGroup>
 			{devItems.length > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>{t('development', 'Development')}</SidebarGroupLabel>
+					<SidebarGroupLabel>
+						{t("development", "Development")}
+					</SidebarGroupLabel>
 					<SidebarMenu>
 						{devItems.map((item) =>
 							item.items && item.items.length > 0 ? (
@@ -800,7 +807,7 @@ function NavMain({
 			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>{t('adminArea', 'Admin Area')}</SidebarGroupLabel>
+					<SidebarGroupLabel>{t("adminArea", "Admin Area")}</SidebarGroupLabel>
 					<SidebarMenu>
 						{items
 							.filter(
@@ -977,7 +984,7 @@ export function NavUser({
 											<a href="/subscription">
 												<DropdownMenuItem className="gap-2">
 													<AnimatedSparklesIcon />
-													{t('upgradeToPro', 'Upgrade to Pro')}
+													{t("upgradeToPro", "Upgrade to Pro")}
 												</DropdownMenuItem>
 											</a>
 										</DropdownMenuGroup>
@@ -988,7 +995,7 @@ export function NavUser({
 									<a href="/account">
 										<DropdownMenuItem className="gap-2">
 											<BadgeCheck className="size-4" />
-											{t('account', 'Account')}
+											{t("account", "Account")}
 										</DropdownMenuItem>
 									</a>
 									{profile.data && (
@@ -1010,7 +1017,7 @@ export function NavUser({
 											}}
 										>
 											<CreditCard className="size-4" />
-											{t('billing', 'Billing')}
+											{t("billing", "Billing")}
 										</DropdownMenuItem>
 									)}
 									<a href="/notifications">
@@ -1024,7 +1031,7 @@ export function NavUser({
 													</div>
 												)}
 											</div>
-											{t('notifications', 'Notifications')}
+											{t("notifications", "Notifications")}
 										</DropdownMenuItem>
 									</a>
 									{developerMode && (
@@ -1032,13 +1039,13 @@ export function NavUser({
 											<a href="/account/pat">
 												<DropdownMenuItem className="gap-2 p-2">
 													<KeyIcon className="size-4" />
-													{t('token', 'Token')}
+													{t("token", "Token")}
 												</DropdownMenuItem>
 											</a>
 											<a href="/settings/sinks">
 												<DropdownMenuItem className="gap-2 p-2">
 													<ZapIcon className="size-4" />
-													{t('activeSinks', 'Active Sinks')}
+													{t("activeSinks", "Active Sinks")}
 												</DropdownMenuItem>
 											</a>
 										</>
@@ -1052,7 +1059,7 @@ export function NavUser({
 									}}
 								>
 									<LogOut className="size-4" />
-									{t('logOut', 'Log out')}
+									{t("logOut", "Log out")}
 								</DropdownMenuItem>
 							</>
 						)}
@@ -1077,7 +1084,7 @@ export function NavUser({
 								}}
 							>
 								<LogInIcon className="size-4" />
-								{t('logIn', 'Log in')}
+								{t("logIn", "Log in")}
 							</DropdownMenuItem>
 						)}
 					</DropdownMenuContent>
@@ -1103,7 +1110,7 @@ function Flows() {
 
 	return (
 		<SidebarGroup>
-			<SidebarGroupLabel>{t('flows', 'Flows')}</SidebarGroupLabel>
+			<SidebarGroupLabel>{t("flows", "Flows")}</SidebarGroupLabel>
 			<SidebarMenu>
 				<Collapsible
 					asChild
@@ -1131,7 +1138,7 @@ function Flows() {
 								<motion.div variants={iconVariants}>
 									<AnimatedFlowsIcon />
 								</motion.div>
-								<span>{t('openFlows', 'Open Flows')}</span>
+								<span>{t("openFlows", "Open Flows")}</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
 							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>

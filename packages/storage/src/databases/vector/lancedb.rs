@@ -33,7 +33,7 @@ use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
-use crate::databases::df_provider::zero_column_safe;
+use crate::databases::df_provider::zero_column_safe_writable;
 
 use super::VectorStore;
 
@@ -314,6 +314,10 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
+    /// The returned provider supports SELECT, INSERT INTO and (via
+    /// [`crate::databases::lance_dml`]) UPDATE/DELETE with a WHERE clause.
+    /// Read-only surfaces registering it must validate their SQL first
+    /// ([`crate::databases::sql_guard::validate_readonly_sql`]).
     pub async fn to_datafusion(&self) -> Result<Arc<dyn TableProvider>> {
         let table = self
             .table
@@ -322,7 +326,7 @@ impl LanceDBVectorStore {
         let df_table = table.base_table();
         let adapter =
             lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
-        Ok(zero_column_safe(Arc::new(adapter)))
+        Ok(zero_column_safe_writable(Arc::new(adapter), table))
     }
 
     pub async fn raw(&self) -> Result<Table> {
@@ -338,6 +342,7 @@ impl LanceDBVectorStore {
         table_name: &str,
         sql: &str,
     ) -> Result<datafusion::dataframe::DataFrame> {
+        crate::databases::sql_guard::validate_lance_dml_sql(sql)?;
         let table = self.to_datafusion().await?;
         let ctx = SessionContext::new();
         ctx.register_table(table_name, table)?;
@@ -1045,6 +1050,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_round_trips_rows_read_back_with_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "round_trip".to_string()).await?;
+        db.insert(vec![json!({
+            "id": "a",
+            "first_seen_at": "2026-08-16T12:00:00.000Z",
+            "hits": 1
+        })])
+        .await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        let first_seen_at = row["first_seen_at"]
+            .as_i64()
+            .expect("timestamps are read back as native-unit integers");
+        row["hits"] = json!(2);
+
+        db.upsert(vec![row], "id".to_string()).await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(first_seen_at));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn buffered_upsert_persists_rows_carrying_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let inner =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "buffered_round_trip".to_string())
+                .await?;
+        let mut db = BufferedVectorStore::new(inner, 2);
+        db.upsert(
+            vec![json!({ "id": "a", "first_seen_at": "2026-08-16T12:00:00.000Z", "hits": 1 })],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        row["hits"] = json!(2);
+
+        let origin = BufferedWriteOrigin::new(Arc::from("writer"), Some("operation".to_string()));
+        db.upsert_with_origin(vec![row], "id".to_string(), origin)
+            .await?;
+        db.flush().await?;
+
+        assert!(!db.has_write_failures());
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(1_786_881_600_000));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn sql_supports_queries_that_project_no_columns() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
@@ -1084,6 +1153,184 @@ mod tests {
             .collect::<Result<Vec<_>>>()?
             .concat();
         assert_eq!(rows[0]["cnt"], json!(2));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dml_statements_flow_through_a_registered_datafusion_table() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": 1, "name": "a" }),
+            json!({ "id": 2, "name": "b" }),
+            json!({ "id": 3, "name": "c" }),
+        ])
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("people", db.to_datafusion().await?)?;
+
+        let count = |ctx: SessionContext| async move {
+            let batches = ctx
+                .sql("SELECT COUNT(*) AS cnt FROM people")
+                .await?
+                .collect()
+                .await?;
+            let rows: Vec<Value> = batches
+                .iter()
+                .map(record_batch_to_value)
+                .collect::<Result<Vec<_>>>()?
+                .concat();
+            Ok::<Value, flow_like_types::Error>(rows[0]["cnt"].clone())
+        };
+
+        // EXPLAIN builds the DML plan without executing the mutation.
+        ctx.sql("EXPLAIN DELETE FROM people WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(count(ctx.clone()).await?, json!(3));
+
+        let batches = ctx
+            .sql("UPDATE people SET name = 'z' WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+
+        // The mutation is visible through the provider registered before it ran.
+        let batches = ctx
+            .sql("SELECT name FROM people WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["name"], json!("z"));
+
+        let batches = ctx
+            .sql("DELETE FROM people WHERE id = 3")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // No effective WHERE clause (missing, constant-true or constant-false —
+        // indistinguishable after optimization) must refuse, not write the table.
+        assert!(
+            ctx.sql("DELETE FROM people")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert!(
+            ctx.sql("DELETE FROM people WHERE false")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert!(
+            ctx.sql("UPDATE people SET name = 'q'")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // Subquery DML shapes are refused before planning — DataFusion would
+        // only forward the subquery's inner filters to the table, silently
+        // mutating the wrong rows.
+        assert!(
+            db.sql(
+                "people",
+                "DELETE FROM people WHERE id IN (SELECT id FROM people WHERE name = 'z')",
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // INSERT keeps working through the same provider.
+        ctx.sql("INSERT INTO people (id, name) VALUES (4, 'd')")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(count(ctx.clone()).await?, json!(3));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dml_translates_temporal_predicates() -> Result<()> {
+        use arrow_array::{Int64Array, RecordBatch, TimestampMicrosecondArray};
+        use arrow_schema::{DataType, Schema as ArrowSchema};
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "events".to_string()).await?;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1_609_459_200_000_000, // 2021-01-01
+                    1_640_995_200_000_000, // 2022-01-01
+                ])),
+            ],
+        )?;
+        db.insert_record_batch(batch).await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("events", db.to_datafusion().await?)?;
+
+        let batches = ctx
+            .sql("DELETE FROM events WHERE ts < '2021-06-01T00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+
+        let batches = ctx.sql("SELECT id FROM events").await?.collect().await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], json!(2));
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
@@ -1822,6 +2069,60 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&test_path).unwrap();
+        Ok(())
+    }
+
+    /// The end of the parameter path: a value bound into an `only_if` predicate reaches the
+    /// row it names, and a value that tries to close its own literal reaches none — proved
+    /// against a real table rather than against the string this module produces.
+    #[tokio::test]
+    async fn bound_filter_values_stay_inside_their_literal() -> Result<()> {
+        use crate::databases::lance_filter_params::{bind_filter_params, resolve_filter_params};
+
+        fn bind(filter: &str, supplied: Value) -> Result<String> {
+            bind_filter_params(filter, &resolve_filter_params(filter, &supplied)?)
+        }
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "bound_filter".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": "a", "name": "first" }),
+            json!({ "id": "o'brien", "name": "second" }),
+            json!({ "id": "c", "name": "third" }),
+        ])
+        .await?;
+
+        let quoted = bind("id = $id", json!({ "id": "o'brien" }))?;
+        let rows = db.filter(&quoted, None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "second");
+
+        for attempt in [
+            "' OR id != '",
+            "a' OR 'a' = 'a",
+            // The backslash case: this dialect does not read `\'` as an escape, so the
+            // doubled quote is what keeps the tail inside the literal.
+            "x\\' OR true --",
+        ] {
+            let filter = bind("id = $id", json!({ "id": attempt }))?;
+            assert!(
+                db.filter(&filter, None, 10, 0).await?.is_empty(),
+                "matched rows for {attempt}: {filter}"
+            );
+        }
+
+        let in_list = bind("id IN ($ids)", json!({ "ids": ["a", "c"] }))?;
+        assert_eq!(db.filter(&in_list, None, 10, 0).await?.len(), 2);
+        let empty_list = bind("id IN ($ids)", json!({ "ids": [] }))?;
+        assert!(db.filter(&empty_list, None, 10, 0).await?.is_empty());
+
+        // The delete predicate goes through the same parser as the query one.
+        db.delete(&quoted).await?;
+        assert_eq!(db.count(None).await?, 2);
+
+        std::fs::remove_dir_all(&test_path)?;
         Ok(())
     }
 }

@@ -32,12 +32,12 @@ export const FlowTemplateButton = forwardRef<
 					>
 						<LayoutTemplate className="h-3.5 w-3.5 text-primary" />
 						<span className="text-xs font-medium hidden sm:inline">
-							{i18next.t('templates', 'Templates')}
+							{i18next.t("templates", "Templates")}
 						</span>
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					<p>{i18next.t('browseTemplates', 'Browse templates')}</p>
+					<p>{i18next.t("browseTemplates", "Browse templates")}</p>
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>

@@ -137,7 +137,7 @@ export function MediaToolbarButton({
 							</DropdownMenuItem>
 							<DropdownMenuItem onSelect={() => setDialogOpen(true)}>
 								<LinkIcon />
-								{t('insertViaUrl', 'Insert via URL')}
+								{t("insertViaUrl", "Insert via URL")}
 							</DropdownMenuItem>
 						</DropdownMenuGroup>
 					</DropdownMenuContent>
@@ -215,14 +215,14 @@ function MediaUrlDialogContent({
 			</AlertDialogDescription>
 
 			<AlertDialogFooter>
-				<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+				<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 				<AlertDialogAction
 					onClick={(e) => {
 						e.preventDefault();
 						embedMedia();
 					}}
 				>
-					{t('accept', 'Accept')}
+					{t("accept", "Accept")}
 				</AlertDialogAction>
 			</AlertDialogFooter>
 		</>

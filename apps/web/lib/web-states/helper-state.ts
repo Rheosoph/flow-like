@@ -1,4 +1,8 @@
-import { getOrUploadTemporaryFile } from "@flow-like/flow-like-ui";
+import {
+	buildContentDisposition,
+	getOrUploadTemporaryFile,
+	uploadTemporaryFilesInBatches,
+} from "@flow-like/flow-like-ui";
 import type {
 	IHelperState,
 	ITemporaryFlowPath,
@@ -6,7 +10,12 @@ import type {
 	ITemporaryUploadedFile,
 } from "@flow-like/flow-like-ui";
 import type { IFileMetadata } from "@flow-like/flow-like-ui/lib";
-import { type WebBackendRef, apiGet } from "./api-utils";
+import type {
+	BulkUploadProgressCallback,
+	ITemporaryPresignedUpload,
+	ITemporaryUploadResult,
+} from "@flow-like/flow-like-ui/lib";
+import { type WebBackendRef, apiGet, apiPost } from "./api-utils";
 
 interface ITemporaryFileResponse {
 	key: string;
@@ -16,9 +25,13 @@ interface ITemporaryFileResponse {
 	uploadExpiresAt: string;
 	downloadUrl: string;
 	downloadExpiresAt: string;
-	headUrl: string;
-	deleteUrl: string;
+	headUrl?: string;
+	deleteUrl?: string;
 	sizeLimitBytes?: number;
+}
+
+interface ITemporaryFileBatchResponse {
+	files: ITemporaryFileResponse[];
 }
 
 export class WebHelperState implements IHelperState {
@@ -110,22 +123,59 @@ export class WebHelperState implements IHelperState {
 			};
 		});
 	}
-}
 
-function buildContentDisposition(
-	filename: string,
-	disposition: "inline" | "attachment" = "inline",
-): string {
-	let fallback = filename
-		.normalize("NFKD")
-		.replace(/[^\x20-\x7E]+/g, "")
-		.replace(/["\\]/g, "_")
-		.trim();
+	async filesToTemporaryFiles(
+		files: File[],
+		options?: {
+			offline?: boolean;
+			appId?: string;
+			executionTarget?: ITemporaryUploadExecutionTarget;
+			onProgress?: BulkUploadProgressCallback;
+			signal?: AbortSignal;
+		},
+	): Promise<ITemporaryUploadResult[]> {
+		const appId = options?.appId;
+		const auth = this.backend.auth;
+		const profileScope =
+			this.backend.profile?.id ?? this.backend.profile?.hub ?? "no-profile";
+		const scope = `web:${profileScope}:${appId ?? "global"}:${auth ? "auth" : "anon"}`;
 
-	if (!fallback) {
-		fallback = "file";
+		if (!auth) {
+			return files.map((file) => ({
+				file,
+				uploaded: { url: URL.createObjectURL(file) },
+			}));
+		}
+
+		return uploadTemporaryFilesInBatches(files, {
+			scope,
+			onProgress: options?.onProgress,
+			signal: options?.signal,
+			presign: async (batch) => {
+				const response = await apiPost<ITemporaryFileBatchResponse>(
+					"tmp/batch",
+					{
+						appId,
+						files: batch.map((file) => ({
+							extension: file.name.split(".").pop() || "",
+							contentType: file.type || undefined,
+						})),
+					},
+					auth,
+				);
+				return (response?.files ?? []).map(
+					(entry): ITemporaryPresignedUpload => ({
+						uploadUrl: entry.uploadUrl,
+						downloadUrl: entry.downloadUrl,
+						key: entry.key,
+						contentType: entry.contentType,
+						flowPath: entry.flowPath,
+						uploadExpiresAt: entry.uploadExpiresAt,
+						downloadExpiresAt: entry.downloadExpiresAt,
+						sizeLimitBytes: entry.sizeLimitBytes,
+					}),
+				);
+			},
+		});
 	}
-
-	const encoded = encodeURIComponent(filename);
-	return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }

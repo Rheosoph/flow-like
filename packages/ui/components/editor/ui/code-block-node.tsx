@@ -136,7 +136,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 							variant="ghost"
 							className="size-6 text-xs"
 							onClick={() => setShowChart(!showChart)}
-							title={showChart ? t('editCode', 'Edit code') : "Show chart"}
+							title={showChart ? t("editCode", "Edit code") : "Show chart"}
 						>
 							{showChart ? (
 								<CodeIcon className="size-3.5! text-muted-foreground" />
@@ -176,7 +176,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 							variant="ghost"
 							className="size-6 text-xs"
 							onClick={() => formatCodeBlock(editor, { element })}
-							title={t('formatCode', 'Format code')}
+							title={t("formatCode", "Format code")}
 						>
 							<BracesIcon className="size-3.5! text-muted-foreground" />
 						</Button>
@@ -240,9 +240,11 @@ function CodeBlockCombobox() {
 						className="h-9"
 						value={searchValue}
 						onValueChange={(value) => setSearchValue(value)}
-						placeholder={t('searchLanguage', 'Search language...')}
+						placeholder={t("searchLanguage", "Search language...")}
 					/>
-					<CommandEmpty>{t('noLanguageFound', 'No language found.')}</CommandEmpty>
+					<CommandEmpty>
+						{t("noLanguageFound", "No language found.")}
+					</CommandEmpty>
 
 					<CommandList className="h-[344px] overflow-y-auto">
 						<CommandGroup>
@@ -302,7 +304,7 @@ function CopyButton({
 			}}
 			{...props}
 		>
-			<span className="sr-only">{t('copy', 'Copy')}</span>
+			<span className="sr-only">{t("copy", "Copy")}</span>
 			{hasCopied ? (
 				<CheckIcon className="size-3!" />
 			) : (

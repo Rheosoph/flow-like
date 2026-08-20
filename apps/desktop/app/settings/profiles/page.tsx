@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type ISettingsProfile,
 	IThemes,
@@ -9,6 +8,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { ProfileSettingsPage } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-page";
+import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useDebounce } from "@uidotdev/usehooks";

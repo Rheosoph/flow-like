@@ -91,3 +91,6 @@ model = ["flow-like/model", "flow-like/remote-ml"]
 openapi = ["utoipa", "flow-like/openapi"]
 # Enable all cranelift backends for cross-compilation
 all-arch = ["wasmtime/all-arch"]
+# Load WASM modules directly from a URL (`WasmEngine::load_module_from_url`).
+# reqwest is already an unconditional dependency, so no dep gating is needed.
+http = []

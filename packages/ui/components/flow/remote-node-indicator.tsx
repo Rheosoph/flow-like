@@ -24,11 +24,19 @@ export function RemoteNodeIndicator({
 	const Icon = isRemote ? Cloud : Download;
 	const label = isRemote
 		? packageName
-			? t('runsOnServerNoLocalAccessToPackageName', 'Runs on server — no local access to {{packageName}}', { packageName })
-			: t('runsOnServer', 'Runs on server')
+			? t(
+					"runsOnServerNoLocalAccessToPackageName",
+					"Runs on server — no local access to {{packageName}}",
+					{ packageName },
+				)
+			: t("runsOnServer", "Runs on server")
 		: packageName
-			? t('installAvailableForPackageName', 'Install available for {{packageName}}', { packageName })
-			: t('installAvailable', 'Install available');
+			? t(
+					"installAvailableForPackageName",
+					"Install available for {{packageName}}",
+					{ packageName },
+				)
+			: t("installAvailable", "Install available");
 
 	return (
 		<Tooltip>

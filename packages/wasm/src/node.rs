@@ -228,52 +228,53 @@ async fn register_wasm_flowpath_stores(
     exec_cache: &ExecutionContextCache,
     credentials_store: Option<FlowLikeStore>,
 ) -> flow_like_types::Result<()> {
-    let mut dirs: Vec<(&str, Path, Option<FlowLikeStore>)> = Vec::with_capacity(9);
-    dirs.push((
-        "storage",
-        exec_cache.get_storage(false)?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "storage",
-        exec_cache.get_storage(true)?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "upload",
-        exec_cache.get_upload_dir()?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(false, false)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(true, false)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(false, true)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(true, true)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "user",
-        exec_cache.get_user_dir(false)?,
-        exec_cache.stores.user_store.clone(),
-    ));
-    dirs.push((
-        "user",
-        exec_cache.get_user_dir(true)?,
-        exec_cache.stores.user_store.clone(),
-    ));
+    let dirs: Vec<(&str, Path, Option<FlowLikeStore>)> = vec![
+        (
+            "storage",
+            exec_cache.get_storage(false)?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "storage",
+            exec_cache.get_storage(true)?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "upload",
+            exec_cache.get_upload_dir()?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(false, false)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(true, false)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(false, true)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(true, true)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "user",
+            exec_cache.get_user_dir(false)?,
+            exec_cache.stores.user_store.clone(),
+        ),
+        (
+            "user",
+            exec_cache.get_user_dir(true)?,
+            exec_cache.stores.user_store.clone(),
+        ),
+    ];
 
     for (dir_type, dir, backing_store) in dirs {
         let Some(backing_store) = backing_store else {

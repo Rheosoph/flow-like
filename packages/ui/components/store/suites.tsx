@@ -60,7 +60,13 @@ export function SuiteCard({
 					</AvatarFallback>
 				</Avatar>
 				<p className="mt-3 text-[11px] font-mono uppercase tracking-wider text-primary flex items-center gap-1.5">
-					<Layers className="w-3 h-3" />{t('platformCountAppS', { defaultValue_one: 'Platform · {{count}} app', defaultValue_other: "Platform · {{count}} apps", count: group.member_count })}</p>
+					<Layers className="w-3 h-3" />
+					{t("platformCountAppS", {
+						defaultValue_one: "Platform · {{count}} app",
+						defaultValue_other: "Platform · {{count}} apps",
+						count: group.member_count,
+					})}
+				</p>
 				<p className="text-lg font-semibold leading-tight mt-0.5">{label}</p>
 				{group.use_case && group.name && (
 					<p className="text-xs text-muted-foreground">{group.name}</p>
@@ -91,7 +97,7 @@ export function SuiteCard({
 					</div>
 					<Badge variant="secondary" className="gap-1 text-[11px]">
 						<Globe className="w-3 h-3" />
-						{t('suite', 'Suite')}
+						{t("suite", "Suite")}
 					</Badge>
 				</div>
 			</div>
@@ -117,10 +123,10 @@ export function SuitesRail() {
 		<section className="space-y-3 mb-8">
 			<div className="flex items-baseline gap-3">
 				<h2 className="text-lg font-semibold tracking-tight">
-					{t('suitesAmpPlatforms', "Suites & Platforms")}
+					{t("suitesAmpPlatforms", "Suites & Platforms")}
 				</h2>
 				<span className="text-xs text-muted-foreground">
-					{t('relatedAppsGroupedAsOne', 'Related apps, grouped as one')}
+					{t("relatedAppsGroupedAsOne", "Related apps, grouped as one")}
 				</span>
 			</div>
 			<div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-3 -mx-1 px-1">
@@ -155,7 +161,7 @@ function MemberTile({ member }: Readonly<{ member: IGroupMember }>) {
 					{member.app_name ?? member.app_id}
 					{isPrimary && (
 						<Badge variant="outline" className="text-[10px]">
-							{t('anchor', 'Anchor')}
+							{t("anchor", "Anchor")}
 						</Badge>
 					)}
 				</p>
@@ -181,7 +187,7 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 	if (!group) {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
-				{t('loadingSuite', 'Loading suite…')}
+				{t("loadingSuite", "Loading suite…")}
 			</div>
 		);
 	}
@@ -192,7 +198,7 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 		<div className="max-w-5xl mx-auto p-6 space-y-6">
 			<Button variant="ghost" size="sm" onClick={() => router.back()}>
 				<ArrowLeft className="w-4 h-4 mr-1.5" />
-				{t('backToStore', 'Back to store')}
+				{t("backToStore", "Back to store")}
 			</Button>
 
 			<div className="relative rounded-2xl overflow-hidden border shadow-sm">
@@ -224,7 +230,13 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 					</Avatar>
 					<div className="pb-1">
 						<p className="text-[11px] font-mono uppercase tracking-wider text-primary flex items-center gap-1.5">
-							<Layers className="w-3 h-3" />{t('platformCountAppS2', { defaultValue_one: 'Platform · {{count}} app', defaultValue_other: "Platform · {{count}} apps", count: group.member_count })}</p>
+							<Layers className="w-3 h-3" />
+							{t("platformCountAppS2", {
+								defaultValue_one: "Platform · {{count}} app",
+								defaultValue_other: "Platform · {{count}} apps",
+								count: group.member_count,
+							})}
+						</p>
 						<h1 className="text-2xl font-bold tracking-tight">{label}</h1>
 						{group.use_case && group.name && (
 							<p className="text-sm text-muted-foreground">{group.name}</p>
@@ -240,7 +252,7 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 
 			<div className="space-y-3">
 				<h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-					{t('appsInThisSuite', 'Apps in this suite')}
+					{t("appsInThisSuite", "Apps in this suite")}
 				</h2>
 				<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 					{group.members.map((member) => (

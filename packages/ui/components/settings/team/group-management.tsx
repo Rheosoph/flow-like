@@ -121,7 +121,9 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 			refresh();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotCreateTheSuite', 'Could not create the suite'),
+				error instanceof Error
+					? error.message
+					: t("couldNotCreateTheSuite", "Could not create the suite"),
 			);
 		} finally {
 			setBusy(false);
@@ -137,20 +139,23 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 				<div>
 					<h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
 						<Layers className="w-5 h-5 text-primary" />
-						{t('suites', 'Suites')}
+						{t("suites", "Suites")}
 					</h2>
 					<p className="text-sm text-muted-foreground mt-1 max-w-prose">
-						{t('curateRelatedAppsIntoASuiteShownAsOneUnitInTheStoreConnectedAppsJoinInstantlyOthersReceiveAnInviteToAccept', "Curate related apps into a suite shown as one unit in the store. Connected apps join instantly; others receive an invite to accept.")}
+						{t(
+							"curateRelatedAppsIntoASuiteShownAsOneUnitInTheStoreConnectedAppsJoinInstantlyOthersReceiveAnInviteToAccept",
+							"Curate related apps into a suite shown as one unit in the store. Connected apps join instantly; others receive an invite to accept.",
+						)}
 					</p>
 				</div>
 				<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 					<Button onClick={() => setCreateOpen(true)} className="shrink-0">
 						<Plus className="w-4 h-4 mr-1.5" />
-						{t('newSuite', 'New suite')}
+						{t("newSuite", "New suite")}
 					</Button>
 					<DialogContent>
 						<DialogHeader>
-							<DialogTitle>{t('createASuite', 'Create a suite')}</DialogTitle>
+							<DialogTitle>{t("createASuite", "Create a suite")}</DialogTitle>
 							<DialogDescription>
 								{`Suites start private. Add artwork, apps and publish it from the suite console.`}
 							</DialogDescription>
@@ -162,40 +167,48 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 									id="suite-name"
 									value={name}
 									onChange={(event) => setName(event.target.value)}
-									placeholder={t('coreSuite', 'Core Suite')}
+									placeholder={t("coreSuite", "Core Suite")}
 								/>
 							</div>
 							<div className="space-y-1.5">
 								<Label htmlFor="suite-usecase">
-									{t('suiteLabel', 'Suite label')}{" "}
+									{t("suiteLabel", "Suite label")}{" "}
 									<span className="text-muted-foreground font-normal">
-										{t('optionalShownAboveTheAppName', '(optional, shown above the app name)')}
+										{t(
+											"optionalShownAboveTheAppName",
+											"(optional, shown above the app name)",
+										)}
 									</span>
 								</Label>
 								<Input
 									id="suite-usecase"
 									value={useCase}
 									onChange={(event) => setUseCase(event.target.value)}
-									placeholder={t('backofficePlatform', 'Back-office platform')}
+									placeholder={t("backofficePlatform", "Back-office platform")}
 								/>
 							</div>
 							<div className="space-y-1.5">
-								<Label htmlFor="suite-desc">{t('description', 'Description')}</Label>
+								<Label htmlFor="suite-desc">
+									{t("description", "Description")}
+								</Label>
 								<Textarea
 									id="suite-desc"
 									value={description}
 									onChange={(event) => setDescription(event.target.value)}
-									placeholder={t('whatThisSuiteOfAppsDoesTogether', 'What this suite of apps does together.')}
+									placeholder={t(
+										"whatThisSuiteOfAppsDoesTogether",
+										"What this suite of apps does together.",
+									)}
 									rows={3}
 								/>
 							</div>
 						</div>
 						<DialogFooter>
 							<Button variant="ghost" onClick={() => setCreateOpen(false)}>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button onClick={handleCreate} disabled={busy || !name.trim()}>
-								{t('createSuite', 'Create suite')}
+								{t("createSuite", "Create suite")}
 							</Button>
 						</DialogFooter>
 					</DialogContent>
@@ -206,7 +219,7 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 				<section className="space-y-3">
 					<h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-2">
 						<Sparkles className="w-4 h-4 text-primary" />
-						{t('invitationsForThisApp', 'Invitations for this app')}
+						{t("invitationsForThisApp", "Invitations for this app")}
 					</h3>
 					<div className="grid gap-3 sm:grid-cols-2">
 						{pendingRequests.map((request) => (
@@ -223,8 +236,11 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 
 			{groupList.length === 0 ? (
 				<EmptyState
-					title={t('noSuitesYet', 'No suites yet')}
-					description={t('groupThisAppWithRelatedAppsIntoASuiteThatReadsAsOneProductInTheStore', 'Group this app with related apps into a suite that reads as one product in the store.')}
+					title={t("noSuitesYet", "No suites yet")}
+					description={t(
+						"groupThisAppWithRelatedAppsIntoASuiteThatReadsAsOneProductInTheStore",
+						"Group this app with related apps into a suite that reads as one product in the store.",
+					)}
 					icons={[Boxes, Layers, Sparkles]}
 				/>
 			) : (
@@ -296,10 +312,10 @@ function GroupRequestCard({
 			</Avatar>
 			<div className="min-w-0 flex-1">
 				<p className="text-sm font-medium truncate">
-					{request.group_name ?? t('aSuite', 'A suite')}
+					{request.group_name ?? t("aSuite", "A suite")}
 				</p>
 				<p className="text-xs text-muted-foreground">
-					{t('wantsToFeatureYourApp', 'wants to feature your app')}
+					{t("wantsToFeatureYourApp", "wants to feature your app")}
 				</p>
 			</div>
 			<div className="flex items-center gap-1.5">
@@ -313,7 +329,7 @@ function GroupRequestCard({
 				</Button>
 				<Button size="sm" disabled={busy} onClick={() => act(true)}>
 					<Check className="w-4 h-4 mr-1" />
-					{t('accept', 'Accept')}
+					{t("accept", "Accept")}
 				</Button>
 			</div>
 		</div>
@@ -403,7 +419,13 @@ function GroupCard({
 								</AvatarFallback>
 							</Avatar>
 						))}
-						<span className="pl-3 text-xs text-muted-foreground font-medium">{t('countApps', { defaultValue_one: '{{count}} app', defaultValue_other: '{{count}} apps', count: group.member_count })}</span>
+						<span className="pl-3 text-xs text-muted-foreground font-medium">
+							{t("countApps", {
+								defaultValue_one: "{{count}} app",
+								defaultValue_other: "{{count}} apps",
+								count: group.member_count,
+							})}
+						</span>
 					</div>
 					<Button
 						size="sm"
@@ -411,7 +433,7 @@ function GroupCard({
 						onClick={() => setConsoleOpen(true)}
 					>
 						<Settings2 className="w-3.5 h-3.5 mr-1.5" />
-						{t('manage', 'Manage')}
+						{t("manage", "Manage")}
 					</Button>
 				</div>
 			</div>

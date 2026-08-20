@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -18,6 +17,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import { AlertCircle, CheckCircle, Clock, Inbox } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -108,7 +108,9 @@ export default function AdminSolutionsPage() {
 				toast.success("Solution updated successfully");
 			} catch (error) {
 				toast.error(
-					t('failedToUpdateSolutionVal', 'Failed to update solution: {{val}}', { val: error instanceof Error ? error.message : "Unknown error" }),
+					t("failedToUpdateSolutionVal", "Failed to update solution: {{val}}", {
+						val: error instanceof Error ? error.message : "Unknown error",
+					}),
 				);
 				throw error;
 			}
@@ -140,7 +142,9 @@ export default function AdminSolutionsPage() {
 				toast.success("Log added successfully");
 			} catch (error) {
 				toast.error(
-					t('failedToAddLogVal', 'Failed to add log: {{val}}', { val: error instanceof Error ? error.message : "Unknown error" }),
+					t("failedToAddLogVal", "Failed to add log: {{val}}", {
+						val: error instanceof Error ? error.message : "Unknown error",
+					}),
 				);
 				throw error;
 			}
@@ -180,7 +184,7 @@ export default function AdminSolutionsPage() {
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 								<CardTitle className="text-sm font-medium">
-									{t('totalRequests', 'Total Requests')}
+									{t("totalRequests", "Total Requests")}
 								</CardTitle>
 								<Inbox className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
@@ -203,7 +207,7 @@ export default function AdminSolutionsPage() {
 						>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 								<CardTitle className="text-sm font-medium">
-									{t('pendingReview', 'Pending Review')}
+									{t("pendingReview", "Pending Review")}
 								</CardTitle>
 								<Clock className="h-4 w-4 text-yellow-500" />
 							</CardHeader>
@@ -220,7 +224,7 @@ export default function AdminSolutionsPage() {
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 								<CardTitle className="text-sm font-medium">
-									{t('inProgress', 'In Progress')}
+									{t("inProgress", "In Progress")}
 								</CardTitle>
 								<AlertCircle className="h-4 w-4 text-blue-500" />
 							</CardHeader>
@@ -236,7 +240,9 @@ export default function AdminSolutionsPage() {
 						</Card>
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-								<CardTitle className="text-sm font-medium">{t('thisPage', 'This Page')}</CardTitle>
+								<CardTitle className="text-sm font-medium">
+									{t("thisPage", "This Page")}
+								</CardTitle>
 								<CheckCircle className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
 							<CardContent>

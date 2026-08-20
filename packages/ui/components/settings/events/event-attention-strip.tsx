@@ -64,7 +64,9 @@ export function EventAttentionStrip({
 								size="sm"
 								className="h-auto shrink-0 p-0 text-[12px]"
 								onClick={() => onNavigate(issue.section)}
-							>{t('goToLabel', 'Go to {{label}}', { label: target.label })}</Button>
+							>
+								{t("goToLabel", "Go to {{label}}", { label: target.label })}
+							</Button>
 						)}
 					</div>
 				);

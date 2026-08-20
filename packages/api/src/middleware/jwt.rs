@@ -18,6 +18,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use flow_like::flow::execution::{ExecutionPrincipal, RoleContext, UserExecutionContext};
 use flow_like::hub::UserTier;
 use flow_like_types::Result;
 use flow_like_types::anyhow;
@@ -33,6 +34,7 @@ use crate::state::{AppState, CachedAuth, cached_openid_is_current};
 /// Client IP address extracted from the request for audit trail purposes.
 /// Checks X-Forwarded-For, X-Real-Ip, then falls back to the peer address.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClientIp(pub Option<String>);
 
 /// Header the AWS edge uses to forward the viewer's `Authorization` value.
@@ -250,6 +252,12 @@ pub struct AppPermissionResponse {
     pub effective_user_id: Option<String>,
     pub technical_user_id: Option<String>,
     pub identifier: String,
+    /// Which kind of principal this is. `sub.is_none()` cannot stand in for it:
+    /// API keys and app connections both leave `sub` unset while meaning very
+    /// different things to a running flow.
+    pub principal: ExecutionPrincipal,
+    /// For `ConnectedApp`, the app that made the call.
+    pub origin_app_id: Option<String>,
 }
 
 impl AppPermissionResponse {
@@ -277,34 +285,59 @@ impl AppPermissionResponse {
         self.identifier.clone()
     }
 
-    /// Convert to UserExecutionContext for execution
-    pub fn to_user_context(&self) -> flow_like::flow::execution::UserExecutionContext {
-        use flow_like::flow::execution::{RoleContext, UserExecutionContext};
+    /// Convert to UserExecutionContext for execution.
+    pub fn to_user_context(&self) -> UserExecutionContext {
+        user_context_from_parts(
+            self.principal,
+            self.sub.as_deref(),
+            self.effective_user_id.as_deref(),
+            self.technical_user_id
+                .as_deref()
+                .unwrap_or(&self.identifier),
+            self.origin_app_id.as_deref().unwrap_or_default(),
+            RoleContext {
+                id: self.role.id.clone(),
+                name: self.role.name.clone(),
+                permissions: self.role.permissions,
+                attributes: self.role.attributes.clone().unwrap_or_default(),
+                custom_attributes: std::collections::HashMap::new(),
+            },
+        )
+    }
+}
 
-        let role_context = RoleContext {
-            id: self.role.id.clone(),
-            name: self.role.name.clone(),
-            permissions: self.role.permissions,
-            attributes: self.role.attributes.clone().unwrap_or_default(),
-            custom_attributes: std::collections::HashMap::new(),
-        };
+/// Maps an authenticated principal onto the identity a run sees.
+///
+/// The three principals stay distinguishable inside the flow: a human keeps
+/// their subject, an API key reports its key id, and a connected app reports
+/// the calling app. The subject an API key or app connection passed through
+/// lands in `on_behalf_of` — it is attribution, not an identity the run may act
+/// as, which is why `effective_user_id` never becomes `sub`.
+fn user_context_from_parts(
+    principal: ExecutionPrincipal,
+    sub: Option<&str>,
+    effective_user_id: Option<&str>,
+    key_id: &str,
+    origin_app_id: &str,
+    role: RoleContext,
+) -> UserExecutionContext {
+    let on_behalf_of = effective_user_id.map(ToOwned::to_owned);
 
-        // Check if this is a technical user (API key) - sub is None for API keys
-        let is_technical_user = self.sub.is_none();
-
-        if is_technical_user {
-            // For API keys, use the technical user constructor with key_id
-            UserExecutionContext::technical(
-                self.identifier.clone(),
-                self.role.id.clone(),
-                self.role.name.clone(),
-                self.role.permissions,
-                self.role.attributes.clone().unwrap_or_default(),
-                std::collections::HashMap::new(),
-            )
-        } else {
-            let sub = self.sub.clone().unwrap_or_default();
-            UserExecutionContext::new(sub).with_role(role_context)
+    match principal {
+        ExecutionPrincipal::User => {
+            UserExecutionContext::new(sub.unwrap_or_default()).with_role(role)
+        }
+        ExecutionPrincipal::ApiKey => UserExecutionContext::technical(
+            key_id,
+            role.id,
+            role.name,
+            role.permissions,
+            role.attributes,
+            role.custom_attributes,
+        )
+        .with_on_behalf_of(on_behalf_of),
+        ExecutionPrincipal::ConnectedApp => {
+            UserExecutionContext::connected_app(origin_app_id, role).with_on_behalf_of(on_behalf_of)
         }
     }
 }
@@ -456,26 +489,7 @@ impl AppUser {
     }
 
     pub async fn tier(&self, state: &AppState) -> Result<UserTier, AuthorizationError> {
-        let sub = self.effective_user_id()?;
-        let user = user::Entity::find_by_id(&sub)
-            .one(&state.db)
-            .await?
-            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
-
-        let db_tier = match user.tier {
-            sea_orm_active_enums::UserTier::Free => "FREE",
-            sea_orm_active_enums::UserTier::Premium => "PREMIUM",
-            sea_orm_active_enums::UserTier::Pro => "PRO",
-            sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
-        };
-
-        let tier = state
-            .platform_config
-            .tiers
-            .get(db_tier)
-            .cloned()
-            .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))?;
-        Ok(tier)
+        tier_for_sub(state, &self.effective_user_id()?).await
     }
 
     pub async fn get_user(&self, state: &AppState) -> Result<user::Model, AuthorizationError> {
@@ -585,6 +599,8 @@ impl AppUser {
                     effective_user_id: Some(sub.clone()),
                     technical_user_id: None,
                     identifier: sub,
+                    principal: ExecutionPrincipal::User,
+                    origin_app_id: None,
                 });
             }
 
@@ -615,6 +631,8 @@ impl AppUser {
                 effective_user_id: Some(sub.clone()),
                 technical_user_id: None,
                 identifier: sub,
+                principal: ExecutionPrincipal::User,
+                origin_app_id: None,
             });
         }
 
@@ -656,6 +674,8 @@ impl AppUser {
                 effective_user_id,
                 technical_user_id: Some(api_key.key_id.clone()),
                 identifier: api_key.key_id.clone(),
+                principal: ExecutionPrincipal::ApiKey,
+                origin_app_id: None,
             });
         }
 
@@ -711,6 +731,10 @@ impl AppUser {
                     effective_user_id: Some(executor.sub.clone()),
                     technical_user_id: executor.technical_user_id.clone(),
                     identifier: executor.sub.clone(),
+                    // A run acts as the subject recorded in its executor token;
+                    // any API key behind it stays visible as technical_user_id.
+                    principal: ExecutionPrincipal::User,
+                    origin_app_id: None,
                 });
             }
 
@@ -746,11 +770,37 @@ impl AppUser {
                 effective_user_id: Some(executor.sub.clone()),
                 technical_user_id: executor.technical_user_id.clone(),
                 identifier: executor.sub.clone(),
+                principal: ExecutionPrincipal::User,
+                origin_app_id: None,
             });
         }
 
         self.app_permission(app_id, state).await
     }
+}
+
+/// The plan tier of a user id. Split out of [`AppUser::tier`] so background work
+/// that only carries a `sub` — the copilot profile loader, for one — can apply the
+/// same plan rules the request-scoped routes do.
+pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, AuthorizationError> {
+    let user = user::Entity::find_by_id(sub)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
+
+    let db_tier = match user.tier {
+        sea_orm_active_enums::UserTier::Free => "FREE",
+        sea_orm_active_enums::UserTier::Premium => "PREMIUM",
+        sea_orm_active_enums::UserTier::Pro => "PRO",
+        sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
+    };
+
+    state
+        .platform_config
+        .tiers
+        .get(db_tier)
+        .cloned()
+        .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))
 }
 
 fn hash_token(token: &str) -> String {
@@ -833,6 +883,8 @@ async fn connected_app_permission(
         effective_user_id: connected_app.sub.clone(),
         technical_user_id: connected_app.technical_user_id.clone(),
         identifier: app_connection_cache_sub(&connected_app.origin_app_id),
+        principal: ExecutionPrincipal::ConnectedApp,
+        origin_app_id: Some(connected_app.origin_app_id.clone()),
     })
 }
 
@@ -894,11 +946,7 @@ pub async fn jwt_middleware(
     if let Some(token) = viewer_authorization(request.headers())
         && !token.starts_with("pat_")
     {
-        let token = if token.starts_with("Bearer ") {
-            &token[7..]
-        } else {
-            token
-        };
+        let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let token = token.trim();
         let cache_key = hash_token(token);
 
@@ -1056,11 +1104,7 @@ pub async fn jwt_middleware(
     // Try PAT auth
     if let Some(raw_token) = viewer_authorization(request.headers()) {
         // Strip "Bearer " prefix if present so PATs sent as standard Bearer tokens are recognized
-        let token = if raw_token.starts_with("Bearer ") {
-            &raw_token[7..]
-        } else {
-            raw_token
-        };
+        let token = raw_token.strip_prefix("Bearer ").unwrap_or(raw_token);
         let token = token.trim();
 
         if token.starts_with("pat_") {
@@ -1283,6 +1327,77 @@ mod tests {
             );
         }
         headers
+    }
+
+    fn role() -> RoleContext {
+        RoleContext {
+            id: "role-1".to_string(),
+            name: "Runner".to_string(),
+            permissions: 0b1000,
+            attributes: vec!["runner".to_string()],
+            custom_attributes: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn human_principals_keep_their_subject() {
+        let context = user_context_from_parts(
+            ExecutionPrincipal::User,
+            Some("user-123"),
+            Some("user-123"),
+            "user-123",
+            "",
+            role(),
+        );
+
+        assert_eq!(context.sub, "user-123");
+        assert!(!context.is_technical());
+        assert_eq!(context.get_key_id(), None);
+        assert!(context.on_behalf_of().is_none());
+        assert!(context.has_attribute("runner"));
+    }
+
+    /// The key's creator is attribution, not an identity the run may act as, so
+    /// it must never surface as the executing subject.
+    #[test]
+    fn api_keys_report_the_key_and_never_borrow_the_creator_subject() {
+        let context = user_context_from_parts(
+            ExecutionPrincipal::ApiKey,
+            None,
+            Some("creator-user"),
+            "key-1",
+            "",
+            role(),
+        );
+
+        assert_eq!(context.principal, ExecutionPrincipal::ApiKey);
+        assert!(context.is_technical());
+        assert_eq!(context.sub, "");
+        assert_eq!(context.get_key_id(), Some("key-1"));
+        assert_eq!(context.on_behalf_of(), Some("creator-user"));
+        assert_eq!(context.origin_app_id(), None);
+    }
+
+    /// An app calling through a connection used to be indistinguishable from an
+    /// API key, down to a fabricated `app-connection::…` key id.
+    #[test]
+    fn connected_apps_are_not_reported_as_api_keys() {
+        let context = user_context_from_parts(
+            ExecutionPrincipal::ConnectedApp,
+            None,
+            Some("initiating-user"),
+            &app_connection_cache_sub("origin-app"),
+            "origin-app",
+            role(),
+        );
+
+        assert_eq!(context.principal, ExecutionPrincipal::ConnectedApp);
+        assert!(context.is_connected_app());
+        assert!(context.is_technical());
+        assert_eq!(context.get_key_id(), None);
+        assert_eq!(context.origin_app_id(), Some("origin-app"));
+        assert_eq!(context.sub, "");
+        assert_eq!(context.on_behalf_of(), Some("initiating-user"));
     }
 
     #[test]

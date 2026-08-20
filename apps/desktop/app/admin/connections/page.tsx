@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IProcessGraphResponse,
 	ProcessGraph,
@@ -9,6 +8,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { Waypoints } from "lucide-react";
 import { useCallback, useState } from "react";
 
@@ -77,10 +77,13 @@ export default function AdminConnectionsPage() {
 					<div>
 						<h1 className="text-3xl font-bold flex items-center gap-2">
 							<Waypoints className="h-7 w-7" />
-							{t('processGraph', 'Process Graph')}
+							{t("processGraph", "Process Graph")}
 						</h1>
 						<p className="text-muted-foreground">
-							{t('platformwideViewOfAppConnectionsObservedCallChainsAndProcessNotes', "Platform-wide view of app connections, observed call chains, and process notes")}
+							{t(
+								"platformwideViewOfAppConnectionsObservedCallChainsAndProcessNotes",
+								"Platform-wide view of app connections, observed call chains, and process notes",
+							)}
 						</p>
 					</div>
 

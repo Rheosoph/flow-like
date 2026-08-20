@@ -1,6 +1,5 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
 import { Badge, Button, Input, Label, cn } from "@flow-like/flow-like-ui";
 import type {
 	DeveloperProject,
@@ -11,6 +10,7 @@ import {
 	TEMPLATE_LANGUAGES,
 	WIDGET_FRAMEWORKS,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
@@ -232,10 +232,13 @@ export default function NewProjectWizard() {
 					</button>
 					<div>
 						<h1 className="text-2xl font-semibold tracking-tight">
-							{t('newPackageProject', 'New Package Project')}
+							{t("newPackageProject", "New Package Project")}
 						</h1>
 						<p className="text-sm text-muted-foreground/70">
-							{t('scaffoldAPackageWithWasmNodesAndorWidgets', 'Scaffold a package with WASM nodes and/or widgets')}
+							{t(
+								"scaffoldAPackageWithWasmNodesAndorWidgets",
+								"Scaffold a package with WASM nodes and/or widgets",
+							)}
 						</p>
 					</div>
 				</div>
@@ -256,21 +259,26 @@ export default function NewProjectWizard() {
 							>
 								<div>
 									<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 mb-1">
-										{t('step1', 'Step 1')}
+										{t("step1", "Step 1")}
 									</p>
-									<h2 className="text-lg font-medium">{t('chooseCapabilities', 'Choose capabilities')}</h2>
+									<h2 className="text-lg font-medium">
+										{t("chooseCapabilities", "Choose capabilities")}
+									</h2>
 									<p className="text-sm text-muted-foreground/70 mt-1">
-										{t('pickANodeLanguageWidgetFrameworksOrBothAtLeastOneIsRequired', "Pick a node language, widget frameworks, or both. At least one is required.")}
+										{t(
+											"pickANodeLanguageWidgetFrameworksOrBothAtLeastOneIsRequired",
+											"Pick a node language, widget frameworks, or both. At least one is required.",
+										)}
 									</p>
 								</div>
 
 								<div className="space-y-3">
 									<SectionHeading
-										title={t('nodeRuntime', 'Node runtime')}
+										title={t("nodeRuntime", "Node runtime")}
 										hint={
 											nodeLanguage
-												? t('clickAgainToDeselect', 'Click again to deselect')
-												: t('noNodeWidgetsOnly', 'No node — widgets only')
+												? t("clickAgainToDeselect", "Click again to deselect")
+												: t("noNodeWidgetsOnly", "No node — widgets only")
 										}
 									/>
 									<div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -313,7 +321,7 @@ export default function NewProjectWizard() {
 										disabled={!hasCapability}
 										className="gap-1.5"
 									>
-										{t('continue', 'Continue')}
+										{t("continue", "Continue")}
 										<ChevronRight className="h-4 w-4" />
 									</Button>
 								</div>
@@ -331,26 +339,35 @@ export default function NewProjectWizard() {
 							>
 								<div>
 									<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 mb-1">
-										{t('step2', 'Step 2')}
+										{t("step2", "Step 2")}
 									</p>
-									<h2 className="text-lg font-medium">{t('projectDetails', 'Project details')}</h2>
+									<h2 className="text-lg font-medium">
+										{t("projectDetails", "Project details")}
+									</h2>
 									<p className="text-sm text-muted-foreground/70 mt-1">
-										{t('nameYourProjectAndPickWhereItLives', 'Name your project and pick where it lives.')}
+										{t(
+											"nameYourProjectAndPickWhereItLives",
+											"Name your project and pick where it lives.",
+										)}
 									</p>
 								</div>
 
 								<div className="rounded-xl border border-border/20 bg-muted/5 p-4 space-y-2">
 									<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-										{t('willBeScaffolded', 'Will be scaffolded')}
+										{t("willBeScaffolded", "Will be scaffolded")}
 									</p>
 									<div className="flex flex-wrap gap-1.5">
 										{selectedLanguageInfo && (
-											<Badge variant="secondary" className="gap-1.5"><Trans i18nKey="imgSrcselectedlanguageinfoimgAltselectedlanguageinfolabelClassnamew35H35RoundedsmObjectcoverLabelSelectedlanguageinfolabelNode"><img
-													src={selectedLanguageInfo.img}
-													alt={selectedLanguageInfo.label}
-													className="w-3.5 h-3.5 rounded-sm object-cover"
-												/>
-												{{ label: selectedLanguageInfo.label }} node</Trans></Badge>
+											<Badge variant="secondary" className="gap-1.5">
+												<Trans i18nKey="imgSrcselectedlanguageinfoimgAltselectedlanguageinfolabelClassnamew35H35RoundedsmObjectcoverLabelSelectedlanguageinfolabelNode">
+													<img
+														src={selectedLanguageInfo.img}
+														alt={selectedLanguageInfo.label}
+														className="w-3.5 h-3.5 rounded-sm object-cover"
+													/>
+													{{ label: selectedLanguageInfo.label }} node
+												</Trans>
+											</Badge>
 										)}
 										{selectedFrameworkInfos.map((framework) => (
 											<Badge
@@ -358,15 +375,28 @@ export default function NewProjectWizard() {
 												variant="secondary"
 												className="gap-1"
 											>
-												<span>{framework.icon}</span>{t('labelWidgets', '{{label}} widgets', { label: framework.label })}</Badge>
+												<span>{framework.icon}</span>
+												{t("labelWidgets", "{{label}} widgets", {
+													label: framework.label,
+												})}
+											</Badge>
 										))}
 									</div>
 									<p className="text-xs text-muted-foreground/70">
 										{selectedLanguageInfo && widgetFrameworks.length > 0
-											? t('monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml', 'Monorepo layout: node/ + widgets/, orchestrated by a root mise.toml.')
+											? t(
+													"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml",
+													"Monorepo layout: node/ + widgets/, orchestrated by a root mise.toml.",
+												)
 											: selectedLanguageInfo
-												? t('singleNodeProjectTheTemplatesStandardLayout', 'Single node project — the template\'s standard layout.')
-												: t('widgetsonlyPackageWidgetsPerFrameworkPackedIntoWidgetsflwb', 'Widgets-only package: widgets/ per framework, packed into widgets.flwb.')}
+												? t(
+														"singleNodeProjectTheTemplatesStandardLayout",
+														"Single node project — the template's standard layout.",
+													)
+												: t(
+														"widgetsonlyPackageWidgetsPerFrameworkPackedIntoWidgetsflwb",
+														"Widgets-only package: widgets/ per framework, packed into widgets.flwb.",
+													)}
 									</p>
 								</div>
 
@@ -376,7 +406,7 @@ export default function NewProjectWizard() {
 											htmlFor="name"
 											className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60"
 										>
-											{t('projectName', 'Project Name')}
+											{t("projectName", "Project Name")}
 										</Label>
 										<Input
 											id="name"
@@ -389,13 +419,16 @@ export default function NewProjectWizard() {
 
 									<div className="space-y-2">
 										<Label className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-											{t('targetDirectory', 'Target Directory')}
+											{t("targetDirectory", "Target Directory")}
 										</Label>
 										<div className="flex gap-2">
 											<Input
 												value={targetDir}
 												readOnly
-												placeholder={t('selectADirectory', 'Select a directory…')}
+												placeholder={t(
+													"selectADirectory",
+													"Select a directory…",
+												)}
 												className="flex-1 h-10 rounded-lg bg-muted/5"
 											/>
 											<Button
@@ -417,7 +450,9 @@ export default function NewProjectWizard() {
 												className="text-xs text-muted-foreground/60 px-1 pt-1"
 											>
 												→{" "}
-												<code className="text-primary/80 font-mono">{`${targetDir}/`}{projectName.toLowerCase().replace(/\s+/g, "-")}
+												<code className="text-primary/80 font-mono">
+													{`${targetDir}/`}
+													{projectName.toLowerCase().replace(/\s+/g, "-")}
 												</code>
 											</motion.p>
 										)}
@@ -431,7 +466,7 @@ export default function NewProjectWizard() {
 										className="gap-1.5 text-muted-foreground/60 hover:text-foreground/80"
 									>
 										<ArrowLeft className="h-4 w-4" />
-										{t('back', 'Back')}
+										{t("back", "Back")}
 									</Button>
 									<Button
 										onClick={handleCreate}
@@ -439,7 +474,7 @@ export default function NewProjectWizard() {
 										className="gap-1.5"
 									>
 										<Rocket className="h-4 w-4" />
-										{t('createProject', 'Create Project')}
+										{t("createProject", "Create Project")}
 									</Button>
 								</div>
 							</motion.div>
@@ -454,10 +489,13 @@ export default function NewProjectWizard() {
 							>
 								<Loader2 className="h-8 w-8 animate-spin text-primary mb-6" />
 								<h2 className="text-lg font-medium mb-1">
-									{t('creatingYourProject', 'Creating your project…')}
+									{t("creatingYourProject", "Creating your project…")}
 								</h2>
 								<p className="text-sm text-muted-foreground/70 max-w-sm">
-									{t('downloadingTheSelectedTemplatesAndScaffoldingYourProjectThisMayTakeAMoment', "Downloading the selected templates and scaffolding your project. This may take a moment.")}
+									{t(
+										"downloadingTheSelectedTemplatesAndScaffoldingYourProjectThisMayTakeAMoment",
+										"Downloading the selected templates and scaffolding your project. This may take a moment.",
+									)}
 								</p>
 							</motion.div>
 						)}

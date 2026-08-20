@@ -594,10 +594,10 @@ function MarkerPopup({
 					type="button"
 					onClick={handleClose}
 					className="absolute top-1 right-1 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-					aria-label={t('closePopup', 'Close popup')}
+					aria-label={t("closePopup", "Close popup")}
 				>
 					<X className="h-4 w-4" />
-					<span className="sr-only">{t('close', 'Close')}</span>
+					<span className="sr-only">{t("close", "Close")}</span>
 				</button>
 			)}
 			{children}
@@ -843,10 +843,13 @@ function MapControls({
 		>
 			{showZoom && (
 				<ControlGroup>
-					<ControlButton onClick={handleZoomIn} label={t('zoomIn', 'Zoom in')}>
+					<ControlButton onClick={handleZoomIn} label={t("zoomIn", "Zoom in")}>
 						<Plus className="size-4" />
 					</ControlButton>
-					<ControlButton onClick={handleZoomOut} label={t('zoomOut', 'Zoom out')}>
+					<ControlButton
+						onClick={handleZoomOut}
+						label={t("zoomOut", "Zoom out")}
+					>
 						<Minus className="size-4" />
 					</ControlButton>
 				</ControlGroup>
@@ -860,7 +863,7 @@ function MapControls({
 				<ControlGroup>
 					<ControlButton
 						onClick={handleLocate}
-						label={t('findMyLocation', 'Find my location')}
+						label={t("findMyLocation", "Find my location")}
 						disabled={waitingForLocation}
 					>
 						{waitingForLocation ? (
@@ -873,7 +876,10 @@ function MapControls({
 			)}
 			{showFullscreen && (
 				<ControlGroup>
-					<ControlButton onClick={handleFullscreen} label={t('toggleFullscreen', 'Toggle fullscreen')}>
+					<ControlButton
+						onClick={handleFullscreen}
+						label={t("toggleFullscreen", "Toggle fullscreen")}
+					>
 						<Maximize className="size-4" />
 					</ControlButton>
 				</ControlGroup>
@@ -909,7 +915,10 @@ function CompassButton({ onClick }: { onClick: () => void }) {
 	}, [map]);
 
 	return (
-		<ControlButton onClick={onClick} label={t('resetBearingToNorth', 'Reset bearing to north')}>
+		<ControlButton
+			onClick={onClick}
+			label={t("resetBearingToNorth", "Reset bearing to north")}
+		>
 			<svg
 				ref={compassRef}
 				viewBox="0 0 24 24"
@@ -1023,10 +1032,10 @@ function MapPopup({
 					type="button"
 					onClick={handleClose}
 					className="absolute top-1 right-1 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-					aria-label={t('closePopup', 'Close popup')}
+					aria-label={t("closePopup", "Close popup")}
 				>
 					<X className="h-4 w-4" />
-					<span className="sr-only">{t('close', 'Close')}</span>
+					<span className="sr-only">{t("close", "Close")}</span>
 				</button>
 			)}
 			{children}

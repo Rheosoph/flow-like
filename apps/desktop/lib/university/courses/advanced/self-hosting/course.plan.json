@@ -11,7 +11,13 @@
 		"isPublished": true,
 		"iconUrl": null,
 		"bannerUrl": null,
-		"tags": ["self-hosting", "docker", "kubernetes", "deployment", "enterprise"],
+		"tags": [
+			"self-hosting",
+			"docker",
+			"kubernetes",
+			"deployment",
+			"enterprise"
+		],
 		"position": 18,
 		"description": "Run Flow-Like on your own terms — Docker Compose to Kubernetes, with execution backends, upgrades, and ops you can defend.",
 		"longDescription": "The pilot won everyone over — then security asked where the data goes. Take Flow-Like from a laptop Compose stack to a production Kubernetes cluster inside your own VPC: stand up the single-host stack and survive its .env traps, override the Helm chart's k3d defaults, route interactive and background runs to the right execution backend, and rehearse the upgrades, backups, key rotations, and alert routing you'll be grilled on. The final assessment is the go-live review itself.",
@@ -495,7 +501,11 @@
 											"label": "Selecting a heavier-sounding backend adds execution isolation automatically"
 										}
 									],
-									"correct": ["typo-fallback", "queue-needs-consumer", "lambda-url-ok"]
+									"correct": [
+										"typo-fallback",
+										"queue-needs-consumer",
+										"lambda-url-ok"
+									]
 								}
 							}
 						],
@@ -684,7 +694,11 @@
 											"label": "runtimeClass.create: false"
 										}
 									],
-									"correct": ["final-k3d-image", "final-internal-db", "final-async-redis"]
+									"correct": [
+										"final-k3d-image",
+										"final-internal-db",
+										"final-async-redis"
+									]
 								}
 							},
 							{
@@ -775,7 +789,11 @@
 											"label": "Skip alert-routing work — the bundled rules already page on-call"
 										}
 									],
-									"correct": ["review-diffs", "backup-before-v", "rotation-window"]
+									"correct": [
+										"review-diffs",
+										"backup-before-v",
+										"rotation-window"
+									]
 								}
 							},
 							{

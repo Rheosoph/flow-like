@@ -140,7 +140,7 @@ export function DiscordConfig({
 	};
 
 	const token = config?.token ?? "";
-	const botName = config?.bot_name ?? t('myDiscordBot', 'My Discord Bot');
+	const botName = config?.bot_name ?? t("myDiscordBot", "My Discord Bot");
 	const botDescription = config?.bot_description ?? "";
 	const publicKey = (config?.webhook_secret as string) ?? ""; // Discord public key stored in webhook_secret
 	const selectedIntents: string[] = config?.intents ?? [
@@ -215,19 +215,19 @@ export function DiscordConfig({
 				<>
 					{/* Bot Token */}
 					<div className="space-y-3">
-						<Label htmlFor="token">{t('botToken', 'Bot Token')}</Label>
+						<Label htmlFor="token">{t("botToken", "Bot Token")}</Label>
 						{isEditing ? (
 							<input
 								type="password"
 								value={token}
 								onChange={(e) => setValue("token", e.target.value)}
 								id="token"
-								placeholder={t('yourDiscordBotToken', 'Your Discord bot token')}
+								placeholder={t("yourDiscordBotToken", "Your Discord bot token")}
 								className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 							/>
 						) : (
 							<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-								{token ? "••••••••••••" : t('noTokenSet', 'No token set')}
+								{token ? "••••••••••••" : t("noTokenSet", "No token set")}
 							</div>
 						)}
 						<p className="text-sm text-muted-foreground">
@@ -238,7 +238,7 @@ export function DiscordConfig({
 								rel="noopener noreferrer"
 								className="text-primary hover:underline inline-flex items-center gap-1"
 							>
-								{t('developerPortal', 'Developer Portal')}
+								{t("developerPortal", "Developer Portal")}
 								<ExternalLink className="h-3 w-3" />
 							</a>
 						</p>
@@ -251,10 +251,15 @@ export function DiscordConfig({
 								<AccordionTrigger className="hover:no-underline">
 									<div className="flex items-center gap-2">
 										<Cloud className="h-4 w-4" />
-										<span>{t('interactionsWebhookSetup', 'Interactions Webhook Setup')}</span>
+										<span>
+											{t(
+												"interactionsWebhookSetup",
+												"Interactions Webhook Setup",
+											)}
+										</span>
 										{supportsRemote && remoteWebhookUrl && (
 											<Badge variant="default" className="ml-2">
-												{t('remoteAvailable', 'Remote Available')}
+												{t("remoteAvailable", "Remote Available")}
 											</Badge>
 										)}
 									</div>
@@ -265,17 +270,22 @@ export function DiscordConfig({
 											<TabsList className="grid w-full grid-cols-2">
 												<TabsTrigger value="remote">
 													<Cloud className="h-3 w-3 mr-1" />
-													{t('remoteServer', 'Remote (Server)')}
+													{t("remoteServer", "Remote (Server)")}
 												</TabsTrigger>
 												<TabsTrigger value="local">
 													<Laptop className="h-3 w-3 mr-1" />
-													{t('localDesktop', 'Local (Desktop)')}
+													{t("localDesktop", "Local (Desktop)")}
 												</TabsTrigger>
 											</TabsList>
 											<TabsContent value="remote" className="space-y-4 pt-2">
 												{/* Public Key */}
 												<div className="space-y-2">
-													<Label>{t('applicationPublicKey', 'Application Public Key')}</Label>
+													<Label>
+														{t(
+															"applicationPublicKey",
+															"Application Public Key",
+														)}
+													</Label>
 													<div className="flex gap-2">
 														<Input
 															type={showPublicKey ? "text" : "password"}
@@ -283,7 +293,10 @@ export function DiscordConfig({
 															onChange={(e) =>
 																setValue("webhook_secret", e.target.value)
 															}
-															placeholder={t('discordApplicationPublicKey', 'Discord application public key')}
+															placeholder={t(
+																"discordApplicationPublicKey",
+																"Discord application public key",
+															)}
 															disabled={!isEditing}
 															className="font-mono text-xs"
 														/>
@@ -297,13 +310,21 @@ export function DiscordConfig({
 														</Button>
 													</div>
 													<p className="text-xs text-muted-foreground">
-														{t('findThisInYourDiscordDeveloperPortalUnderGeneralInformationPublicKey', "Find this in your Discord Developer Portal under General Information → Public Key")}
+														{t(
+															"findThisInYourDiscordDeveloperPortalUnderGeneralInformationPublicKey",
+															"Find this in your Discord Developer Portal under General Information → Public Key",
+														)}
 													</p>
 												</div>
 
 												{/* Webhook URL */}
 												<div className="space-y-2">
-													<Label>{t('interactionsEndpointUrl', 'Interactions Endpoint URL')}</Label>
+													<Label>
+														{t(
+															"interactionsEndpointUrl",
+															"Interactions Endpoint URL",
+														)}
+													</Label>
 													<div className="relative">
 														<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm font-mono break-all">
 															{remoteWebhookUrl}
@@ -317,71 +338,127 @@ export function DiscordConfig({
 																navigator.clipboard.writeText(remoteWebhookUrl)
 															}
 														>
-															{t('copy', 'Copy')}
+															{t("copy", "Copy")}
 														</Button>
 													</div>
 												</div>
 
 												{/* Setup Instructions */}
 												<Alert>
-													<AlertTitle>{t('setupInstructions', 'Setup Instructions')}</AlertTitle>
+													<AlertTitle>
+														{t("setupInstructions", "Setup Instructions")}
+													</AlertTitle>
 													<AlertDescription className="space-y-3">
 														<ol className="text-xs list-decimal list-inside space-y-2">
 															<li>
-																{t('goToThe', 'Go to the')}{" "}
+																{t("goToThe", "Go to the")}{" "}
 																<a
 																	href="https://discord.com/developers/applications"
 																	target="_blank"
 																	rel="noopener noreferrer"
 																	className="text-primary hover:underline"
 																>
-																	{t('discordDeveloperPortal', 'Discord Developer Portal')}
+																	{t(
+																		"discordDeveloperPortal",
+																		"Discord Developer Portal",
+																	)}
 																</a>
 															</li>
-															<li>{t('selectYourApplication', 'Select your application')}</li>
-															<li><Trans i18nKey="copyTheStrongpublicKeystrongFromGeneralInformationAndPasteItAbove">Copy the <strong>Public Key</strong> from
-																General Information and paste it above</Trans></li>
 															<li>
-																{t('goToGeneralInformationInteractionsEndpointUrl', "Go to General Information → Interactions Endpoint URL")}
+																{t(
+																	"selectYourApplication",
+																	"Select your application",
+																)}
 															</li>
 															<li>
-																{t('pasteTheInteractionsEndpointUrlShownAbove', 'Paste the Interactions Endpoint URL shown above')}
+																<Trans i18nKey="copyTheStrongpublicKeystrongFromGeneralInformationAndPasteItAbove">
+																	Copy the <strong>Public Key</strong> from
+																	General Information and paste it above
+																</Trans>
 															</li>
 															<li>
-																{t('discordWillVerifyTheEndpointMakeSureTheSinkIsActive', "Discord will verify the endpoint - make sure the sink is active")}
+																{t(
+																	"goToGeneralInformationInteractionsEndpointUrl",
+																	"Go to General Information → Interactions Endpoint URL",
+																)}
+															</li>
+															<li>
+																{t(
+																	"pasteTheInteractionsEndpointUrlShownAbove",
+																	"Paste the Interactions Endpoint URL shown above",
+																)}
+															</li>
+															<li>
+																{t(
+																	"discordWillVerifyTheEndpointMakeSureTheSinkIsActive",
+																	"Discord will verify the endpoint - make sure the sink is active",
+																)}
 															</li>
 														</ol>
-														<p className="text-xs text-muted-foreground mt-2"><Trans i18nKey="strongnotestrongDiscordVerifiesSignaturesUsingEd25519ThePublicKeyIsUsedToVerifyIncomingWebhookRequests"><strong>Note:</strong> Discord verifies signatures
-															using Ed25519. The public key is used to verify
-															incoming webhook requests.</Trans></p>
+														<p className="text-xs text-muted-foreground mt-2">
+															<Trans i18nKey="strongnotestrongDiscordVerifiesSignaturesUsingEd25519ThePublicKeyIsUsedToVerifyIncomingWebhookRequests">
+																<strong>Note:</strong> Discord verifies
+																signatures using Ed25519. The public key is used
+																to verify incoming webhook requests.
+															</Trans>
+														</p>
 													</AlertDescription>
 												</Alert>
 											</TabsContent>
 											<TabsContent value="local" className="space-y-4 pt-2">
 												<Alert>
-													<AlertTitle>{t('localSetupGatewayMode', 'Local Setup (Gateway Mode)')}</AlertTitle>
+													<AlertTitle>
+														{t(
+															"localSetupGatewayMode",
+															"Local Setup (Gateway Mode)",
+														)}
+													</AlertTitle>
 													<AlertDescription className="space-y-3">
-														<p className="text-xs"><Trans i18nKey="whenRunningLocallyDesktopAppTheBotConnectsViaStrongdiscordGatewaystrong">When running locally (desktop app), the bot
-															connects via <strong>Discord Gateway</strong></Trans>{" "}
-															{t('websocketInsteadOfWebhooksNoInteractionsEndpointUrlSetupIsRequiredTheBotWillAutomaticallyConnectWhenTheEventIsActivated', "(WebSocket) instead of webhooks. No Interactions Endpoint URL setup is required - the bot will automatically connect when the event is activated.")}
+														<p className="text-xs">
+															<Trans i18nKey="whenRunningLocallyDesktopAppTheBotConnectsViaStrongdiscordGatewaystrong">
+																When running locally (desktop app), the bot
+																connects via <strong>Discord Gateway</strong>
+															</Trans>{" "}
+															{t(
+																"websocketInsteadOfWebhooksNoInteractionsEndpointUrlSetupIsRequiredTheBotWillAutomaticallyConnectWhenTheEventIsActivated",
+																"(WebSocket) instead of webhooks. No Interactions Endpoint URL setup is required - the bot will automatically connect when the event is activated.",
+															)}
 														</p>
-														<p className="text-xs"><Trans i18nKey="strongnotestrongIfYouPreviouslySetAnInteractionsEndpointUrlInTheDeveloperPortalYouCanLeaveItTheLocalBotWillUseGatewayConnectionRegardless"><strong>Note:</strong> If you previously set an
-															Interactions Endpoint URL in the Developer Portal,
-															you can leave it - the local bot will use Gateway
-															connection regardless.</Trans></p>
+														<p className="text-xs">
+															<Trans i18nKey="strongnotestrongIfYouPreviouslySetAnInteractionsEndpointUrlInTheDeveloperPortalYouCanLeaveItTheLocalBotWillUseGatewayConnectionRegardless">
+																<strong>Note:</strong> If you previously set an
+																Interactions Endpoint URL in the Developer
+																Portal, you can leave it - the local bot will
+																use Gateway connection regardless.
+															</Trans>
+														</p>
 													</AlertDescription>
 												</Alert>
 											</TabsContent>
 										</Tabs>
 									) : (
 										<Alert>
-											<AlertTitle>{t('localSetupGatewayMode', 'Local Setup (Gateway Mode)')}</AlertTitle>
+											<AlertTitle>
+												{t(
+													"localSetupGatewayMode",
+													"Local Setup (Gateway Mode)",
+												)}
+											</AlertTitle>
 											<AlertDescription className="space-y-3">
-												<p className="text-xs"><Trans i18nKey="theBotUsesStrongdiscordGatewaystrong">The bot uses <strong>Discord Gateway</strong></Trans>{" "}
-													{t('websocketModeWhenRunningLocallyNoWebhookSetupIsRequiredTheBotWillAutomaticallyConnectWhenTheEventIsActivated', "(WebSocket) mode when running locally. No webhook setup is required - the bot will automatically connect when the event is activated.")}
+												<p className="text-xs">
+													<Trans i18nKey="theBotUsesStrongdiscordGatewaystrong">
+														The bot uses <strong>Discord Gateway</strong>
+													</Trans>{" "}
+													{t(
+														"websocketModeWhenRunningLocallyNoWebhookSetupIsRequiredTheBotWillAutomaticallyConnectWhenTheEventIsActivated",
+														"(WebSocket) mode when running locally. No webhook setup is required - the bot will automatically connect when the event is activated.",
+													)}
 												</p>
 												<p className="text-xs text-muted-foreground">
-													{t('remoteWebhookModeIsNotAvailableForThisHubConfiguration', "Remote webhook mode is not available for this hub configuration.")}
+													{t(
+														"remoteWebhookModeIsNotAvailableForThisHubConfiguration",
+														"Remote webhook mode is not available for this hub configuration.",
+													)}
 												</p>
 											</AlertDescription>
 										</Alert>
@@ -397,14 +474,14 @@ export function DiscordConfig({
 				<>
 					{/* Bot Metadata */}
 					<div className="space-y-3">
-						<Label htmlFor="bot_name">{t('botName', 'Bot Name')}</Label>
+						<Label htmlFor="bot_name">{t("botName", "Bot Name")}</Label>
 						{isEditing ? (
 							<input
 								type="text"
 								value={botName}
 								onChange={(e) => setValue("bot_name", e.target.value)}
 								id="bot_name"
-								placeholder={t('myDiscordBot', 'My Discord Bot')}
+								placeholder={t("myDiscordBot", "My Discord Bot")}
 								className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 							/>
 						) : (
@@ -415,19 +492,24 @@ export function DiscordConfig({
 					</div>
 
 					<div className="space-y-3">
-						<Label htmlFor="bot_description">{t('botDescriptionOptional', 'Bot Description (Optional)')}</Label>
+						<Label htmlFor="bot_description">
+							{t("botDescriptionOptional", "Bot Description (Optional)")}
+						</Label>
 						{isEditing ? (
 							<textarea
 								value={botDescription}
 								onChange={(e) => setValue("bot_description", e.target.value)}
 								id="bot_description"
-								placeholder={t('aHelpfulBotForMyServer', 'A helpful bot for my server')}
+								placeholder={t(
+									"aHelpfulBotForMyServer",
+									"A helpful bot for my server",
+								)}
 								rows={3}
 								className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 							/>
 						) : (
 							<div className="flex min-h-20 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-								{botDescription || t('noDescription', 'No description')}
+								{botDescription || t("noDescription", "No description")}
 							</div>
 						)}
 					</div>
@@ -439,32 +521,41 @@ export function DiscordConfig({
 				<div className="space-y-3 pt-4 border-t">
 					<div className="flex items-center justify-between">
 						<div>
-							<Label>{t('gatewayIntents', 'Gateway Intents')}</Label>
+							<Label>{t("gatewayIntents", "Gateway Intents")}</Label>
 							<p className="text-sm text-muted-foreground mt-1">
-								{t('selectWhichEventsYourBotShouldReceive', 'Select which events your bot should receive')}
+								{t(
+									"selectWhichEventsYourBotShouldReceive",
+									"Select which events your bot should receive",
+								)}
 							</p>
 						</div>
 						{hasPrivilegedIntents && (
 							<Badge variant="destructive" className="flex items-center gap-1">
 								<Info className="h-3 w-3" />
-								{t('privileged', 'Privileged')}
+								{t("privileged", "Privileged")}
 							</Badge>
 						)}
 					</div>
 
 					{hasPrivilegedIntents && (
 						<div className="rounded-md bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-900 p-3">
-							<p className="text-sm text-yellow-800 dark:text-yellow-200"><Trans i18nKey="strongnotestrongYouveSelectedPrivilegedIntentsTheseMustBeEnabledInYour"><strong>Note:</strong> You've selected privileged intents. These
-								must be enabled in your</Trans>{" "}
+							<p className="text-sm text-yellow-800 dark:text-yellow-200">
+								<Trans i18nKey="strongnotestrongYouveSelectedPrivilegedIntentsTheseMustBeEnabledInYour">
+									<strong>Note:</strong> You've selected privileged intents.
+									These must be enabled in your
+								</Trans>{" "}
 								<a
 									href="https://discord.com/developers/applications"
 									target="_blank"
 									rel="noopener noreferrer"
 									className="underline"
 								>
-									{t('discordDeveloperPortal', 'Discord Developer Portal')}
+									{t("discordDeveloperPortal", "Discord Developer Portal")}
 								</a>{" "}
-								{t('underBotPrivilegedGatewayIntents', 'under Bot → Privileged Gateway Intents.')}
+								{t(
+									"underBotPrivilegedGatewayIntents",
+									"under Bot → Privileged Gateway Intents.",
+								)}
 							</p>
 						</div>
 					)}
@@ -473,8 +564,12 @@ export function DiscordConfig({
 						<AccordionItem value="intents">
 							<AccordionTrigger>
 								<div className="flex items-center gap-2">
-									<span>{t('configureIntents', 'Configure Intents')}</span>
-									<Badge variant="secondary">{t('lengthSelected', '{{length}} selected', { length: selectedIntents.length })}</Badge>
+									<span>{t("configureIntents", "Configure Intents")}</span>
+									<Badge variant="secondary">
+										{t("lengthSelected", "{{length}} selected", {
+											length: selectedIntents.length,
+										})}
+									</Badge>
 								</div>
 							</AccordionTrigger>
 							<AccordionContent>
@@ -513,7 +608,7 @@ export function DiscordConfig({
 														</Label>
 														{isPrivileged && (
 															<Badge variant="outline" className="text-xs">
-																{t('privileged', 'Privileged')}
+																{t("privileged", "Privileged")}
 															</Badge>
 														)}
 													</div>
@@ -534,7 +629,7 @@ export function DiscordConfig({
 			{/* Bot Behavior */}
 			{shows("behaviour") && (
 				<div className="space-y-4 pt-4 border-t">
-					<Label>{t('botBehavior', 'Bot Behavior')}</Label>
+					<Label>{t("botBehavior", "Bot Behavior")}</Label>
 
 					<div className="flex items-center space-x-2">
 						{isEditing ? (
@@ -553,7 +648,7 @@ export function DiscordConfig({
 							</div>
 						)}
 						<Label htmlFor="respond_to_mentions">
-							{t('respondOnlyToMentions', 'Respond only to Mentions')}
+							{t("respondOnlyToMentions", "Respond only to Mentions")}
 						</Label>
 					</div>
 
@@ -573,11 +668,15 @@ export function DiscordConfig({
 								<div className="h-4 w-4 rounded-full bg-white" />
 							</div>
 						)}
-						<Label htmlFor="respond_to_dms">{t('respondToDirectMessages', 'Respond to Direct Messages')}</Label>
+						<Label htmlFor="respond_to_dms">
+							{t("respondToDirectMessages", "Respond to Direct Messages")}
+						</Label>
 					</div>
 
 					<div className="space-y-3">
-						<Label htmlFor="command_prefix">{t('commandPrefix', 'Command Prefix')}</Label>
+						<Label htmlFor="command_prefix">
+							{t("commandPrefix", "Command Prefix")}
+						</Label>
 						{isEditing ? (
 							<input
 								type="text"
@@ -594,7 +693,10 @@ export function DiscordConfig({
 							</div>
 						)}
 						<p className="text-sm text-muted-foreground">
-							{t('prefixForBotCommandsEgHelp', 'Prefix for bot commands (e.g., !help)')}
+							{t(
+								"prefixForBotCommandsEgHelp",
+								"Prefix for bot commands (e.g., !help)",
+							)}
 						</p>
 					</div>
 				</div>
@@ -603,17 +705,24 @@ export function DiscordConfig({
 			{/* Channel Filters */}
 			{shows("channels") && (
 				<div className="space-y-4 pt-4 border-t">
-					<Label>{t('channelFilters', 'Channel Filters')}</Label>
+					<Label>{t("channelFilters", "Channel Filters")}</Label>
 					<p className="text-sm text-muted-foreground">
-						{t('controlWhichChannelsTheBotMonitorsIfWhitelistIsSetOnlyThoseChannelsAreMonitored', "Control which channels the bot monitors. If whitelist is set, only those channels are monitored.")}
+						{t(
+							"controlWhichChannelsTheBotMonitorsIfWhitelistIsSetOnlyThoseChannelsAreMonitored",
+							"Control which channels the bot monitors. If whitelist is set, only those channels are monitored.",
+						)}
 					</p>
 
 					<Accordion type="single" collapsible className="w-full">
 						<AccordionItem value="whitelist">
 							<AccordionTrigger>
 								<div className="flex items-center gap-2">
-									<span>{t('channelWhitelist', 'Channel Whitelist')}</span>
-									<Badge variant="secondary">{t('lengthChannels', '{{length}} channels', { length: channelWhitelist.length })}</Badge>
+									<span>{t("channelWhitelist", "Channel Whitelist")}</span>
+									<Badge variant="secondary">
+										{t("lengthChannels", "{{length}} channels", {
+											length: channelWhitelist.length,
+										})}
+									</Badge>
 								</div>
 							</AccordionTrigger>
 							<AccordionContent>
@@ -622,7 +731,7 @@ export function DiscordConfig({
 										<div className="flex gap-2">
 											<input
 												type="text"
-												placeholder={t('channelId', 'Channel ID')}
+												placeholder={t("channelId", "Channel ID")}
 												id="whitelist-input"
 												className="flex h-10 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 												onKeyDown={(e) => {
@@ -645,14 +754,17 @@ export function DiscordConfig({
 													}
 												}}
 											>
-												{t('add', 'Add')}
+												{t("add", "Add")}
 											</Button>
 										</div>
 									)}
 									<div className="space-y-2">
 										{channelWhitelist.length === 0 ? (
 											<p className="text-sm text-muted-foreground">
-												{t('noChannelsInWhitelistAllChannelsAllowed', 'No channels in whitelist (all channels allowed)')}
+												{t(
+													"noChannelsInWhitelistAllChannelsAllowed",
+													"No channels in whitelist (all channels allowed)",
+												)}
 											</p>
 										) : (
 											channelWhitelist.map((channelId) => (
@@ -667,7 +779,7 @@ export function DiscordConfig({
 															size="sm"
 															onClick={() => removeFromWhitelist(channelId)}
 														>
-															{t('remove', 'Remove')}
+															{t("remove", "Remove")}
 														</Button>
 													)}
 												</div>
@@ -681,8 +793,12 @@ export function DiscordConfig({
 						<AccordionItem value="blacklist">
 							<AccordionTrigger>
 								<div className="flex items-center gap-2">
-									<span>{t('channelBlacklist', 'Channel Blacklist')}</span>
-									<Badge variant="secondary">{t('lengthChannels', '{{length}} channels', { length: channelBlacklist.length })}</Badge>
+									<span>{t("channelBlacklist", "Channel Blacklist")}</span>
+									<Badge variant="secondary">
+										{t("lengthChannels", "{{length}} channels", {
+											length: channelBlacklist.length,
+										})}
+									</Badge>
 								</div>
 							</AccordionTrigger>
 							<AccordionContent>
@@ -691,7 +807,7 @@ export function DiscordConfig({
 										<div className="flex gap-2">
 											<input
 												type="text"
-												placeholder={t('channelId', 'Channel ID')}
+												placeholder={t("channelId", "Channel ID")}
 												id="blacklist-input"
 												className="flex h-10 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 												onKeyDown={(e) => {
@@ -714,14 +830,14 @@ export function DiscordConfig({
 													}
 												}}
 											>
-												{t('add', 'Add')}
+												{t("add", "Add")}
 											</Button>
 										</div>
 									)}
 									<div className="space-y-2">
 										{channelBlacklist.length === 0 ? (
 											<p className="text-sm text-muted-foreground">
-												{t('noChannelsInBlacklist', 'No channels in blacklist')}
+												{t("noChannelsInBlacklist", "No channels in blacklist")}
 											</p>
 										) : (
 											channelBlacklist.map((channelId) => (
@@ -736,7 +852,7 @@ export function DiscordConfig({
 															size="sm"
 															onClick={() => removeFromBlacklist(channelId)}
 														>
-															{t('remove', 'Remove')}
+															{t("remove", "Remove")}
 														</Button>
 													)}
 												</div>
@@ -753,51 +869,78 @@ export function DiscordConfig({
 			{/* Setup Instructions — belongs with the credentials they produce */}
 			{shows("connection") && (
 				<div className="space-y-3 pt-4 border-t">
-					<Label>{t('setupInstructions', 'Setup Instructions')}</Label>
+					<Label>{t("setupInstructions", "Setup Instructions")}</Label>
 					<Accordion type="single" collapsible className="w-full">
 						<AccordionItem value="setup">
-							<AccordionTrigger>{t('howToCreateADiscordBot', 'How to create a Discord bot')}</AccordionTrigger>
+							<AccordionTrigger>
+								{t("howToCreateADiscordBot", "How to create a Discord bot")}
+							</AccordionTrigger>
 							<AccordionContent className="space-y-3 text-sm">
 								<ol className="list-decimal list-inside space-y-2">
 									<li>
-										{t('goToThe', 'Go to the')}{" "}
+										{t("goToThe", "Go to the")}{" "}
 										<a
 											href="https://discord.com/developers/applications"
 											target="_blank"
 											rel="noopener noreferrer"
 											className="text-primary hover:underline"
 										>
-											{t('discordDeveloperPortal', 'Discord Developer Portal')}
+											{t("discordDeveloperPortal", "Discord Developer Portal")}
 										</a>
 									</li>
-									<li>{t('clickNewApplicationAndGiveItAName', 'Click "New Application" and give it a name')}</li>
-									<li>{t('goToTheBotSectionAndClickAddBot', 'Go to the "Bot" section and click "Add Bot"')}</li>
 									<li>
-										{t('underTokenClickResetTokenToGetYourBotToken', 'Under "Token", click "Reset Token" to get your bot token')}
+										{t(
+											"clickNewApplicationAndGiveItAName",
+											'Click "New Application" and give it a name',
+										)}
 									</li>
 									<li>
-										{t('enableTheRequiredPrivilegedGatewayIntentsIfNeeded', 'Enable the required Privileged Gateway Intents if needed')}
+										{t(
+											"goToTheBotSectionAndClickAddBot",
+											'Go to the "Bot" section and click "Add Bot"',
+										)}
 									</li>
 									<li>
-										{t('goToOauth2UrlGenerator', 'Go to "OAuth2" → "URL Generator"')}
+										{t(
+											"underTokenClickResetTokenToGetYourBotToken",
+											'Under "Token", click "Reset Token" to get your bot token',
+										)}
+									</li>
+									<li>
+										{t(
+											"enableTheRequiredPrivilegedGatewayIntentsIfNeeded",
+											"Enable the required Privileged Gateway Intents if needed",
+										)}
+									</li>
+									<li>
+										{t(
+											"goToOauth2UrlGenerator",
+											'Go to "OAuth2" → "URL Generator"',
+										)}
 										<ul className="list-disc list-inside ml-4 mt-1">
 											<li>
-												{t('selectScope', 'Select scope:')}{" "}
+												{t("selectScope", "Select scope:")}{" "}
 												<code className="bg-muted px-1 rounded">bot</code>
 											</li>
 											<li>
-												{t('selectPermissions', 'Select permissions:')}{" "}<Trans i18nKey="codeClassnamebgmutedPx1RoundedSendMessagesCode"><code className="bg-muted px-1 rounded">
-													Send Messages
-												</code>
-												,</Trans>{" "}
+												{t("selectPermissions", "Select permissions:")}{" "}
+												<Trans i18nKey="codeClassnamebgmutedPx1RoundedSendMessagesCode">
+													<code className="bg-muted px-1 rounded">
+														Send Messages
+													</code>
+													,
+												</Trans>{" "}
 												<code className="bg-muted px-1 rounded">
-													{t('readMessages', 'Read Messages')}
+													{t("readMessages", "Read Messages")}
 												</code>
 											</li>
 										</ul>
 									</li>
 									<li>
-										{t('copyTheGeneratedUrlAndInviteTheBotToYourServer', 'Copy the generated URL and invite the bot to your server')}
+										{t(
+											"copyTheGeneratedUrlAndInviteTheBotToYourServer",
+											"Copy the generated URL and invite the bot to your server",
+										)}
 									</li>
 								</ol>
 							</AccordionContent>

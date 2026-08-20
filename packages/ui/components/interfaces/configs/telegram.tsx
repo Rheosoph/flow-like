@@ -71,7 +71,8 @@ export function TelegramConfig({
 	};
 
 	const botToken = (config?.bot_token as string) ?? "";
-	const botName = (config?.bot_name as string) ?? t('myTelegramBot', 'My Telegram Bot');
+	const botName =
+		(config?.bot_name as string) ?? t("myTelegramBot", "My Telegram Bot");
 	const botDescription = (config?.bot_description as string) ?? "";
 	const chatWhitelist: string[] = (config?.chat_whitelist as string[]) ?? [];
 	const chatBlacklist: string[] = (config?.chat_blacklist as string[]) ?? [];
@@ -109,7 +110,10 @@ export function TelegramConfig({
 			params?: Record<string, unknown>,
 		): Promise<TelegramApiResponse<T>> => {
 			if (!botToken) {
-				return { ok: false, description: t('botTokenIsRequired', 'Bot token is required') };
+				return {
+					ok: false,
+					description: t("botTokenIsRequired", "Bot token is required"),
+				};
 			}
 
 			try {
@@ -127,8 +131,7 @@ export function TelegramConfig({
 				// If CORS fails, we need to show manual instructions
 				return {
 					ok: false,
-					description:
-						`CORS blocked - use the manual commands below or run from desktop app`,
+					description: `CORS blocked - use the manual commands below or run from desktop app`,
 				};
 			}
 		},
@@ -261,30 +264,34 @@ export function TelegramConfig({
 				<>
 					{/* Bot Token */}
 					<div className="space-y-3">
-						<Label htmlFor="bot_token">{t('botToken', 'Bot Token')}</Label>
+						<Label htmlFor="bot_token">{t("botToken", "Bot Token")}</Label>
 						{isEditing ? (
 							<Input
 								type="password"
 								value={botToken}
 								onChange={(e) => setValue("bot_token", e.target.value)}
 								id="bot_token"
-								placeholder={t('enterYourTelegramBotToken', 'Enter your Telegram bot token')}
+								placeholder={t(
+									"enterYourTelegramBotToken",
+									"Enter your Telegram bot token",
+								)}
 								className="font-mono"
 							/>
 						) : (
 							<div className="text-sm text-muted-foreground font-mono">
-								{botToken ? "••••••••••••••••" : t('notSet', 'Not set')}
+								{botToken ? "••••••••••••••••" : t("notSet", "Not set")}
 							</div>
 						)}
 						<p className="text-xs text-muted-foreground">
-							{t('getYourBotTokenFrom', 'Get your bot token from')}{" "}
+							{t("getYourBotTokenFrom", "Get your bot token from")}{" "}
 							<a
 								href="https://t.me/BotFather"
 								target="_blank"
 								rel="noopener noreferrer"
 								className="text-primary hover:underline inline-flex items-center gap-1"
 							>
-								{t('botfather', '@BotFather')} <ExternalLink className="h-3 w-3" />
+								{t("botfather", "@BotFather")}{" "}
+								<ExternalLink className="h-3 w-3" />
 							</a>
 						</p>
 					</div>
@@ -296,13 +303,15 @@ export function TelegramConfig({
 								<AccordionTrigger className="hover:no-underline">
 									<div className="flex items-center gap-2">
 										<Cloud className="h-4 w-4" />
-										<span>{t('webhookSetup', 'Webhook Setup')}</span>
+										<span>{t("webhookSetup", "Webhook Setup")}</span>
 										{webhookStatus && (
 											<Badge
 												variant={webhookStatus.url ? "default" : "secondary"}
 												className="ml-2"
 											>
-												{webhookStatus.url ? t('webhookActive', 'Webhook Active') : "Polling Mode"}
+												{webhookStatus.url
+													? t("webhookActive", "Webhook Active")
+													: "Polling Mode"}
 											</Badge>
 										)}
 									</div>
@@ -312,7 +321,7 @@ export function TelegramConfig({
 									{botToken && (
 										<div className="space-y-3">
 											<div className="flex items-center justify-between">
-												<Label>{t('currentMode', 'Current Mode')}</Label>
+												<Label>{t("currentMode", "Current Mode")}</Label>
 												<Button
 													type="button"
 													variant="ghost"
@@ -334,14 +343,14 @@ export function TelegramConfig({
 															<>
 																<Cloud className="h-4 w-4 text-green-500" />
 																<span className="text-green-600 dark:text-green-400 font-medium">
-																	{t('remoteWebhook', 'Remote (Webhook)')}
+																	{t("remoteWebhook", "Remote (Webhook)")}
 																</span>
 															</>
 														) : (
 															<>
 																<Laptop className="h-4 w-4 text-blue-500" />
 																<span className="text-blue-600 dark:text-blue-400 font-medium">
-																	{t('localPolling', 'Local (Polling)')}
+																	{t("localPolling", "Local (Polling)")}
 																</span>
 															</>
 														)}
@@ -352,15 +361,33 @@ export function TelegramConfig({
 														</p>
 													)}
 													{webhookStatus.pending_update_count > 0 && (
-														<p className="text-xs text-amber-600">{t('pending_update_countPendingUpdates', "{{pending_update_count}} pending updates", { pending_update_count: webhookStatus.pending_update_count })}</p>
+														<p className="text-xs text-amber-600">
+															{t(
+																"pending_update_countPendingUpdates",
+																"{{pending_update_count}} pending updates",
+																{
+																	pending_update_count:
+																		webhookStatus.pending_update_count,
+																},
+															)}
+														</p>
 													)}
 													{webhookStatus.last_error_message && (
-														<p className="text-xs text-red-600">{t('lastErrorLast_error_message', 'Last error: {{last_error_message}}', { last_error_message: webhookStatus.last_error_message })}</p>
+														<p className="text-xs text-red-600">
+															{t(
+																"lastErrorLast_error_message",
+																"Last error: {{last_error_message}}",
+																{
+																	last_error_message:
+																		webhookStatus.last_error_message,
+																},
+															)}
+														</p>
 													)}
 												</div>
 											) : webhookLoading ? (
 												<div className="text-sm text-muted-foreground">
-													{t('checkingStatus', 'Checking status...')}
+													{t("checkingStatus", "Checking status...")}
 												</div>
 											) : null}
 
@@ -385,17 +412,17 @@ export function TelegramConfig({
 											<TabsList className="grid w-full grid-cols-2">
 												<TabsTrigger value="remote">
 													<Cloud className="h-3 w-3 mr-1" />
-													{t('remoteServer', 'Remote (Server)')}
+													{t("remoteServer", "Remote (Server)")}
 												</TabsTrigger>
 												<TabsTrigger value="local">
 													<Laptop className="h-3 w-3 mr-1" />
-													{t('localDesktop', 'Local (Desktop)')}
+													{t("localDesktop", "Local (Desktop)")}
 												</TabsTrigger>
 											</TabsList>
 											<TabsContent value="remote" className="space-y-4 pt-2">
 												{/* Webhook Secret */}
 												<div className="space-y-2">
-													<Label>{t('webhookSecret', 'Webhook Secret')}</Label>
+													<Label>{t("webhookSecret", "Webhook Secret")}</Label>
 													<div className="flex gap-2">
 														<Input
 															type={showSecret ? "text" : "password"}
@@ -403,7 +430,10 @@ export function TelegramConfig({
 															onChange={(e) =>
 																setValue("webhook_secret", e.target.value)
 															}
-															placeholder={t('webhookVerificationSecret', 'Webhook verification secret')}
+															placeholder={t(
+																"webhookVerificationSecret",
+																"Webhook verification secret",
+															)}
 															disabled={!isEditing}
 															className="font-mono text-xs"
 														/>
@@ -421,17 +451,25 @@ export function TelegramConfig({
 																variant="secondary"
 																onClick={generateWebhookSecret}
 															>
-																{t('generate', 'Generate')}
+																{t("generate", "Generate")}
 															</Button>
 														)}
 													</div>
 													<p className="text-xs text-muted-foreground">
-														{t('thisSecretIsSentByTelegramInThe', 'This secret is sent by Telegram in the')}{" "}<Trans i18nKey="codextelegrambotapisecrettokencodeHeader"><code>X-Telegram-Bot-Api-Secret-Token</code> header.</Trans></p>
+														{t(
+															"thisSecretIsSentByTelegramInThe",
+															"This secret is sent by Telegram in the",
+														)}{" "}
+														<Trans i18nKey="codextelegrambotapisecrettokencodeHeader">
+															<code>X-Telegram-Bot-Api-Secret-Token</code>{" "}
+															header.
+														</Trans>
+													</p>
 												</div>
 
 												{/* Webhook URL */}
 												<div className="space-y-2">
-													<Label>{t('webhookUrl', 'Webhook URL')}</Label>
+													<Label>{t("webhookUrl", "Webhook URL")}</Label>
 													<div className="relative">
 														<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm font-mono break-all">
 															{remoteWebhookUrl}
@@ -445,7 +483,7 @@ export function TelegramConfig({
 																navigator.clipboard.writeText(remoteWebhookUrl)
 															}
 														>
-															{t('copy', 'Copy')}
+															{t("copy", "Copy")}
 														</Button>
 													</div>
 												</div>
@@ -463,7 +501,7 @@ export function TelegramConfig({
 														) : (
 															<Cloud className="h-4 w-4 mr-2" />
 														)}
-														{t('enableRemoteMode', 'Enable Remote Mode')}
+														{t("enableRemoteMode", "Enable Remote Mode")}
 													</Button>
 												</div>
 
@@ -471,13 +509,19 @@ export function TelegramConfig({
 												<Accordion type="single" collapsible className="w-full">
 													<AccordionItem value="manual" className="border-0">
 														<AccordionTrigger className="text-xs text-muted-foreground py-2">
-															{t('manualSetupIfAutomaticFails', 'Manual Setup (if automatic fails)')}
+															{t(
+																"manualSetupIfAutomaticFails",
+																"Manual Setup (if automatic fails)",
+															)}
 														</AccordionTrigger>
 														<AccordionContent>
 															<Alert>
 																<AlertDescription className="space-y-3">
 																	<p className="text-xs">
-																		{t('configureYourTelegramBotWebhookUsingThisCommand', "Configure your Telegram bot webhook using this command:")}
+																		{t(
+																			"configureYourTelegramBotWebhookUsingThisCommand",
+																			"Configure your Telegram bot webhook using this command:",
+																		)}
 																	</p>
 																	<pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto">
 																		{`curl -X POST "https://api.telegram.org/bot${botToken || "<YOUR_BOT_TOKEN>"}/setWebhook" \\
@@ -496,7 +540,7 @@ export function TelegramConfig({
 																			navigator.clipboard.writeText(cmd);
 																		}}
 																	>
-																		{t('copyCommand', 'Copy Command')}
+																		{t("copyCommand", "Copy Command")}
 																	</Button>
 																</AlertDescription>
 															</Alert>
@@ -506,8 +550,15 @@ export function TelegramConfig({
 											</TabsContent>
 											<TabsContent value="local" className="space-y-4 pt-2">
 												<p className="text-sm text-muted-foreground">
-													{t('whenRunningLocallyDesktopAppTheBotUses', 'When running locally (desktop app), the bot uses')}{" "}<Trans i18nKey="stronglongPollingstrongInsteadOfWebhooksNoAdditionalSetupIsRequired"><strong>long polling</strong> instead of webhooks. No
-													additional setup is required.</Trans></p>
+													{t(
+														"whenRunningLocallyDesktopAppTheBotUses",
+														"When running locally (desktop app), the bot uses",
+													)}{" "}
+													<Trans i18nKey="stronglongPollingstrongInsteadOfWebhooksNoAdditionalSetupIsRequired">
+														<strong>long polling</strong> instead of webhooks.
+														No additional setup is required.
+													</Trans>
+												</p>
 
 												{/* Quick Setup Button */}
 												<Button
@@ -522,20 +573,29 @@ export function TelegramConfig({
 													) : (
 														<Laptop className="h-4 w-4 mr-2" />
 													)}
-													{t('enableLocalModeDeleteWebhook', 'Enable Local Mode (Delete Webhook)')}
+													{t(
+														"enableLocalModeDeleteWebhook",
+														"Enable Local Mode (Delete Webhook)",
+													)}
 												</Button>
 
 												{/* Manual Instructions (collapsed) */}
 												<Accordion type="single" collapsible className="w-full">
 													<AccordionItem value="manual" className="border-0">
 														<AccordionTrigger className="text-xs text-muted-foreground py-2">
-															{t('manualSetupIfAutomaticFails', 'Manual Setup (if automatic fails)')}
+															{t(
+																"manualSetupIfAutomaticFails",
+																"Manual Setup (if automatic fails)",
+															)}
 														</AccordionTrigger>
 														<AccordionContent>
 															<Alert>
 																<AlertDescription className="space-y-3">
 																	<p className="text-xs">
-																		{t('deleteTheWebhookToEnablePollingMode', 'Delete the webhook to enable polling mode:')}
+																		{t(
+																			"deleteTheWebhookToEnablePollingMode",
+																			"Delete the webhook to enable polling mode:",
+																		)}
 																	</p>
 																	<pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto">
 																		{`curl -X POST "https://api.telegram.org/bot${botToken || "<YOUR_BOT_TOKEN>"}/deleteWebhook"`}
@@ -549,7 +609,7 @@ export function TelegramConfig({
 																			navigator.clipboard.writeText(cmd);
 																		}}
 																	>
-																		{t('copyCommand', 'Copy Command')}
+																		{t("copyCommand", "Copy Command")}
 																	</Button>
 																</AlertDescription>
 															</Alert>
@@ -560,14 +620,26 @@ export function TelegramConfig({
 										</Tabs>
 									) : (
 										<Alert>
-											<AlertTitle>{t('localSetupPollingMode', 'Local Setup (Polling Mode)')}</AlertTitle>
+											<AlertTitle>
+												{t(
+													"localSetupPollingMode",
+													"Local Setup (Polling Mode)",
+												)}
+											</AlertTitle>
 											<AlertDescription className="space-y-3">
-												<p className="text-xs"><Trans i18nKey="theBotUsesStronglongPollingstrongModeWhenRunningLocallyNoWebhookSetupIsRequiredTheBotWillAutomaticallyStartPollingWhenTheEventIsActivated">The bot uses <strong>long polling</strong> mode when
-													running locally. No webhook setup is required - the
-													bot will automatically start polling when the event is
-													activated.</Trans></p>
+												<p className="text-xs">
+													<Trans i18nKey="theBotUsesStronglongPollingstrongModeWhenRunningLocallyNoWebhookSetupIsRequiredTheBotWillAutomaticallyStartPollingWhenTheEventIsActivated">
+														The bot uses <strong>long polling</strong> mode when
+														running locally. No webhook setup is required - the
+														bot will automatically start polling when the event
+														is activated.
+													</Trans>
+												</p>
 												<p className="text-xs text-muted-foreground">
-													{t('remoteWebhookModeIsNotAvailableForThisHubConfiguration', "Remote webhook mode is not available for this hub configuration.")}
+													{t(
+														"remoteWebhookModeIsNotAvailableForThisHubConfiguration",
+														"Remote webhook mode is not available for this hub configuration.",
+													)}
 												</p>
 											</AlertDescription>
 										</Alert>
@@ -586,18 +658,18 @@ export function TelegramConfig({
 						<AccordionTrigger className="hover:no-underline">
 							<div className="flex items-center gap-2">
 								<Info className="h-4 w-4" />
-								<span>{t('botIdentity', 'Bot Identity')}</span>
+								<span>{t("botIdentity", "Bot Identity")}</span>
 							</div>
 						</AccordionTrigger>
 						<AccordionContent className="space-y-4 pt-2">
 							<div className="space-y-2">
-								<Label htmlFor="bot_name">{t('botName', 'Bot Name')}</Label>
+								<Label htmlFor="bot_name">{t("botName", "Bot Name")}</Label>
 								{isEditing ? (
 									<Input
 										value={botName}
 										onChange={(e) => setValue("bot_name", e.target.value)}
 										id="bot_name"
-										placeholder={t('myTelegramBot', 'My Telegram Bot')}
+										placeholder={t("myTelegramBot", "My Telegram Bot")}
 									/>
 								) : (
 									<div className="text-sm text-muted-foreground">{botName}</div>
@@ -605,7 +677,9 @@ export function TelegramConfig({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="bot_description">{t('botDescription', 'Bot Description')}</Label>
+								<Label htmlFor="bot_description">
+									{t("botDescription", "Bot Description")}
+								</Label>
 								{isEditing ? (
 									<Input
 										value={botDescription}
@@ -613,11 +687,14 @@ export function TelegramConfig({
 											setValue("bot_description", e.target.value)
 										}
 										id="bot_description"
-										placeholder={t('aHelpfulBotPoweredByFlowlike', 'A helpful bot powered by Flow-Like')}
+										placeholder={t(
+											"aHelpfulBotPoweredByFlowlike",
+											"A helpful bot powered by Flow-Like",
+										)}
 									/>
 								) : (
 									<div className="text-sm text-muted-foreground">
-										{botDescription || t('notSet', 'Not set')}
+										{botDescription || t("notSet", "Not set")}
 									</div>
 								)}
 							</div>
@@ -633,15 +710,18 @@ export function TelegramConfig({
 						<AccordionTrigger className="hover:no-underline">
 							<div className="flex items-center gap-2">
 								<Info className="h-4 w-4" />
-								<span>{t('responseSettings', 'Response Settings')}</span>
+								<span>{t("responseSettings", "Response Settings")}</span>
 							</div>
 						</AccordionTrigger>
 						<AccordionContent className="space-y-4 pt-2">
 							<div className="flex items-center justify-between">
 								<div className="space-y-0.5">
-									<Label>{t('respondToMentions', 'Respond to Mentions')}</Label>
+									<Label>{t("respondToMentions", "Respond to Mentions")}</Label>
 									<p className="text-xs text-muted-foreground">
-										{t('botWillRespondWhenMentionedInGroupChats', 'Bot will respond when mentioned in group chats')}
+										{t(
+											"botWillRespondWhenMentionedInGroupChats",
+											"Bot will respond when mentioned in group chats",
+										)}
 									</p>
 								</div>
 								<Switch
@@ -655,9 +735,17 @@ export function TelegramConfig({
 
 							<div className="flex items-center justify-between">
 								<div className="space-y-0.5">
-									<Label>{t('respondToPrivateMessages', 'Respond to Private Messages')}</Label>
+									<Label>
+										{t(
+											"respondToPrivateMessages",
+											"Respond to Private Messages",
+										)}
+									</Label>
 									<p className="text-xs text-muted-foreground">
-										{t('botWillRespondToDirectMessages', 'Bot will respond to direct messages')}
+										{t(
+											"botWillRespondToDirectMessages",
+											"Bot will respond to direct messages",
+										)}
 									</p>
 								</div>
 								<Switch
@@ -670,7 +758,9 @@ export function TelegramConfig({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="command_prefix">{t('commandPrefix', 'Command Prefix')}</Label>
+								<Label htmlFor="command_prefix">
+									{t("commandPrefix", "Command Prefix")}
+								</Label>
 								{isEditing ? (
 									<Input
 										value={commandPrefix}
@@ -685,7 +775,10 @@ export function TelegramConfig({
 									</div>
 								)}
 								<p className="text-xs text-muted-foreground">
-									{t('prefixForBotCommandsDefault', 'Prefix for bot commands (default: /)')}
+									{t(
+										"prefixForBotCommandsDefault",
+										"Prefix for bot commands (default: /)",
+									)}
 								</p>
 							</div>
 						</AccordionContent>
@@ -700,7 +793,7 @@ export function TelegramConfig({
 						<AccordionTrigger className="hover:no-underline">
 							<div className="flex items-center gap-2">
 								<Info className="h-4 w-4" />
-								<span>{t('chatFilters', 'Chat Filters')}</span>
+								<span>{t("chatFilters", "Chat Filters")}</span>
 								{(chatWhitelist.length > 0 || chatBlacklist.length > 0) && (
 									<Badge variant="secondary" className="ml-2">
 										{chatWhitelist.length + chatBlacklist.length} configured
@@ -711,16 +804,22 @@ export function TelegramConfig({
 						<AccordionContent className="space-y-4 pt-2">
 							{/* Whitelist */}
 							<div className="space-y-2">
-								<Label>{t('chatWhitelist', 'Chat Whitelist')}</Label>
+								<Label>{t("chatWhitelist", "Chat Whitelist")}</Label>
 								<p className="text-xs text-muted-foreground">
-									{t('ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll', "If set, bot will only respond in these chats. Leave empty to allow all.")}
+									{t(
+										"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll",
+										"If set, bot will only respond in these chats. Leave empty to allow all.",
+									)}
 								</p>
 								{isEditing && (
 									<div className="flex gap-2">
 										<Input
 											value={newWhitelistId}
 											onChange={(e) => setNewWhitelistId(e.target.value)}
-											placeholder={t('chatIdEg1001234567890', 'Chat ID (e.g., -1001234567890)')}
+											placeholder={t(
+												"chatIdEg1001234567890",
+												"Chat ID (e.g., -1001234567890)",
+											)}
 											className="font-mono"
 										/>
 										<Button
@@ -754,7 +853,10 @@ export function TelegramConfig({
 									))}
 									{chatWhitelist.length === 0 && (
 										<span className="text-xs text-muted-foreground">
-											{t('noWhitelistConfiguredAllChatsAllowed', 'No whitelist configured (all chats allowed)')}
+											{t(
+												"noWhitelistConfiguredAllChatsAllowed",
+												"No whitelist configured (all chats allowed)",
+											)}
 										</span>
 									)}
 								</div>
@@ -762,16 +864,22 @@ export function TelegramConfig({
 
 							{/* Blacklist */}
 							<div className="space-y-2">
-								<Label>{t('chatBlacklist', 'Chat Blacklist')}</Label>
+								<Label>{t("chatBlacklist", "Chat Blacklist")}</Label>
 								<p className="text-xs text-muted-foreground">
-									{t('botWillNeverRespondInTheseChats', 'Bot will never respond in these chats')}
+									{t(
+										"botWillNeverRespondInTheseChats",
+										"Bot will never respond in these chats",
+									)}
 								</p>
 								{isEditing && (
 									<div className="flex gap-2">
 										<Input
 											value={newBlacklistId}
 											onChange={(e) => setNewBlacklistId(e.target.value)}
-											placeholder={t('chatIdEg1001234567890', 'Chat ID (e.g., -1001234567890)')}
+											placeholder={t(
+												"chatIdEg1001234567890",
+												"Chat ID (e.g., -1001234567890)",
+											)}
 											className="font-mono"
 										/>
 										<Button
@@ -805,14 +913,18 @@ export function TelegramConfig({
 									))}
 									{chatBlacklist.length === 0 && (
 										<span className="text-xs text-muted-foreground">
-											{t('noBlacklistConfigured', 'No blacklist configured')}
+											{t("noBlacklistConfigured", "No blacklist configured")}
 										</span>
 									)}
 								</div>
 							</div>
 
-							<p className="text-xs text-muted-foreground bg-muted p-2 rounded"><Trans i18nKey="strongtipstrongToGetAChatIdForwardAMessageFromTheChatToUserinfobotOrUseTheTelegramApi"><strong>Tip:</strong> To get a chat ID, forward a message from
-								the chat to @userinfobot or use the Telegram API.</Trans></p>
+							<p className="text-xs text-muted-foreground bg-muted p-2 rounded">
+								<Trans i18nKey="strongtipstrongToGetAChatIdForwardAMessageFromTheChatToUserinfobotOrUseTheTelegramApi">
+									<strong>Tip:</strong> To get a chat ID, forward a message from
+									the chat to @userinfobot or use the Telegram API.
+								</Trans>
+							</p>
 						</AccordionContent>
 					</AccordionItem>
 				</Accordion>

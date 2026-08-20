@@ -14,6 +14,9 @@ use axum::{
 use flow_like::bit::Metadata;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
+/// One template per entry as (template id, board id, localized metadata).
+pub type TemplateListing = Vec<(String, String, Metadata)>;
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/templates",
@@ -42,7 +45,7 @@ pub async fn get_templates(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Query(query): Query<LanguageParams>,
-) -> Result<Json<Vec<(String, String, Metadata)>>, ApiError> {
+) -> Result<Json<TemplateListing>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadTemplates);
 
     let language = query.language.as_deref().unwrap_or("en");

@@ -195,7 +195,7 @@ export function Comment(
 					<span className="mr-1">
 						{formatCommentDate(new Date(comment.createdAt))}
 					</span>
-					{comment.isEdited && <span>{t('edited', '(edited)')}</span>}
+					{comment.isEdited && <span>{t("edited", "(edited)")}</span>}
 				</div>
 
 				{isMyComment && (hovering || dropdownOpen) && (
@@ -380,11 +380,11 @@ function CommentMoreDropdown(props: {
 				<DropdownMenuGroup>
 					<DropdownMenuItem onClick={onEditComment}>
 						<PencilIcon className="size-4" />
-						{t('editComment', 'Edit comment')}
+						{t("editComment", "Edit comment")}
 					</DropdownMenuItem>
 					<DropdownMenuItem onClick={onDeleteComment}>
 						<TrashIcon className="size-4" />
-						{t('deleteComment', 'Delete comment')}
+						{t("deleteComment", "Delete comment")}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

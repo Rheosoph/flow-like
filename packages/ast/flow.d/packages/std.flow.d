@@ -3186,8 +3186,8 @@ declare function utilsUserGetCurrentUserInfo(): { userInfo: Struct, success: boo
 declare function utilsUserGetEffectiveUserPermissions({ appId?: string, userId?: string }): { userPermissions: Struct, found: bool, success: bool, statusCode: int, error: string };
 
 /**
- * Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and technical user info. Use 'Break Struct' to access individual fields.
- * @returns userContext — The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), is_technical_user, key_id
+ * Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and details of the calling principal. Use 'Break Struct' to access individual fields.
+ * @returns userContext — The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), isTechnicalUser, keyId, principal, originAppId, onBehalfOf
  * @returns hasUser — True if user context is available
  */
 declare function utilsUserGetExecutingUser(): { userContext: Struct, hasUser: bool };
@@ -3258,11 +3258,14 @@ declare function utilsUserHasAttribute({ attribute?: string }): bool;
 declare function utilsUserHasPermission({ permission?: string }): bool;
 
 /**
- * Checks if the current execution is triggered by a technical user (API key) rather than a human user. Technical users don't have a human identity (sub) but do have a key_id.
- * @returns isTechnical — True if the execution is by a technical user (API key), false otherwise
- * @returns keyId — The API key identifier for technical users, empty string for human users
+ * Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.
+ * @returns isTechnical — True if a machine triggered the run (API key or app connection), false for a person
+ * @returns keyId — The API key identifier, empty for every other caller
+ * @returns principal — How the caller authenticated: 'user', 'apiKey' or 'connectedApp'
+ * @returns originAppId — The app that made the call when the principal is 'connectedApp', empty otherwise
+ * @returns onBehalfOf — The user the caller reported as the initiator: an API key's creator, or the user an app connection passed through. Attribution only — never authorize against it
  */
-declare function utilsUserIsTechnicalUser(): { isTechnical: bool, keyId: string };
+declare function utilsUserIsTechnicalUser(): { isTechnical: bool, keyId: string, principal: string, originAppId: string, onBehalfOf: string };
 
 /**
  * Lists project users with pagination.

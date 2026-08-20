@@ -1,5 +1,3 @@
-// dnd-kit imports
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -15,6 +13,8 @@ import {
 	useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+// dnd-kit imports
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	type ColumnDef,
 	type ColumnFiltersState,

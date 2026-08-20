@@ -153,6 +153,7 @@ pub async fn create_app(
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_board(
     app_handle: AppHandle,
     app_id: String,
@@ -391,6 +392,8 @@ pub enum MediaItem {
 pub struct MediaQuery {
     pub language: Option<String>,
     pub template_id: Option<String>,
+    #[allow(dead_code)]
+    // wire field of the push_app_media/remove_app_media command payload; meta scoping does not consume it yet
     pub course_id: Option<String>,
     pub item: MediaItem,
     pub extension: String,

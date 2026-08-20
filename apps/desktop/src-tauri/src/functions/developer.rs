@@ -28,6 +28,7 @@ fn wasm_file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+#[allow(dead_code)] // manual flush for INSPECTION_CACHE; invalidation currently rides on stored mtimes
 pub fn clear_inspection_cache() {
     INSPECTION_CACHE.clear();
 }

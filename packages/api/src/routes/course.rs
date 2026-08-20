@@ -7,7 +7,6 @@ use axum::{
 pub mod access;
 pub mod app_links;
 pub mod app_refs;
-pub mod asset_references;
 pub mod assets;
 pub mod attempts;
 pub mod certificates;

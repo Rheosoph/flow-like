@@ -105,6 +105,7 @@ pub async fn capture_region(
     }
 }
 
+#[allow(dead_code)] // full-screen RPA capture, implemented but not wired to any command or recording setting
 pub async fn capture_full_screen(store: &FlowLikeStore) -> Result<String, TauriFunctionError> {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {

@@ -21,6 +21,7 @@ struct Jwks {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // JWKS wire contract: both fields are required for the key document to parse
 struct Jwk {
     kty: String,
     crv: String,

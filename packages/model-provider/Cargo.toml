@@ -26,7 +26,9 @@ coreml = ["ort/coreml"]
 directml = ["ort/directml", "fastembed?/directml"]
 # NNAPI is Android-only and uses the device's available accelerator drivers
 nnapi = ["ort/nnapi"]
-# XNNPACK - highly optimized CPU inference for ARM and x86 (great for mobile/edge)
+# XNNPACK - optimized CPU inference for ARM and x86. Off by default: ORT claims Softmax nodes
+# with a dynamic axis for it below opset 13 and then reads past the tensor, so only enable this
+# for a deployment whose models are all exported at opset 13 or later. See `ml/ort_runtime.rs`.
 xnnpack = ["ort/xnnpack"]
 
 [dependencies]
@@ -70,8 +72,9 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24"
 fastembed = { version = "=5.17.2", default-features = false, features = ["image-models"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-# Android's full ORT 1.24.3 runtime includes NNAPI and XNNPACK; registration still falls back
-# cleanly when a device driver or a model operation is unsupported.
+# Android's full ORT 1.24.3 runtime includes NNAPI and XNNPACK. NNAPI registration falls back
+# cleanly when a device driver or a model operation is unsupported; XNNPACK is compiled in but
+# only registered by an explicit `xnnpack` build (see the feature comment above).
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "ndarray", "nnapi", "xnnpack"], optional = true }
 fastembed = { version = "=5.17.2", default-features = false, features = ["image-models"], optional = true }
 ndk-sys = "0.6"

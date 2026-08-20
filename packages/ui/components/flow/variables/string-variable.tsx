@@ -65,7 +65,7 @@ export function StringVariable({
 					onChange={(e) => handleChange(e.target.value)}
 					type="password"
 					id="default_value"
-					placeholder={t('enterSecretValue', 'Enter secret value...')}
+					placeholder={t("enterSecretValue", "Enter secret value...")}
 					className="font-mono"
 				/>
 			</div>
@@ -89,7 +89,7 @@ export function StringVariable({
 					onChange={(e) => handleChange(e.target.value)}
 					onFocus={() => setIsFocused(true)}
 					onBlur={() => setIsFocused(false)}
-					placeholder={t('enterText', 'Enter text...')}
+					placeholder={t("enterText", "Enter text...")}
 					autoComplete="off"
 					spellCheck="false"
 					autoCorrect="off"
@@ -112,7 +112,23 @@ export function StringVariable({
 
 				{/* Character count */}
 				{(value?.length ?? 0) > 0 && (
-					<div className="absolute bottom-1 right-2 text-[10px] text-muted-foreground/60 font-mono select-none pointer-events-none">{t('countCharacters', { defaultValue_one: '{{count}} character', defaultValue_other: '{{count}} characters', count: value.length })}{value.includes("\n") && <> · {t('countLines', { defaultValue_one: '{{count}} line', defaultValue_other: '{{count}} lines', count: value.split("\n").length })}</>}
+					<div className="absolute bottom-1 right-2 text-[10px] text-muted-foreground/60 font-mono select-none pointer-events-none">
+						{t("countCharacters", {
+							defaultValue_one: "{{count}} character",
+							defaultValue_other: "{{count}} characters",
+							count: value.length,
+						})}
+						{value.includes("\n") && (
+							<>
+								{" "}
+								·{" "}
+								{t("countLines", {
+									defaultValue_one: "{{count}} line",
+									defaultValue_other: "{{count}} lines",
+									count: value.split("\n").length,
+								})}
+							</>
+						)}
 					</div>
 				)}
 			</div>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { TextEditor } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { type ChangeEvent, useState } from "react";
 
 export default function MarkdownDebugPage() {
@@ -18,7 +18,10 @@ export default function MarkdownDebugPage() {
 					}
 					className="h-full w-full resize-none bg-muted/50 p-2 font-mono text-sm outline-none"
 					// disabled={!editable}
-					placeholder={t('enterYourMarkdownHere', 'Enter your markdown here...')}
+					placeholder={t(
+						"enterYourMarkdownHere",
+						"Enter your markdown here...",
+					)}
 				/>
 			</div>
 			<TextEditor key={markdown} isMarkdown={true} initialContent={markdown} />

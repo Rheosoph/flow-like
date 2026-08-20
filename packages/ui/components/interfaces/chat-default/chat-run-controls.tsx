@@ -37,7 +37,9 @@ function SteerTrail({ run }: { run: IChatActiveRun }) {
 					<span className="truncate">{truncate(steer.content, 40)}</span>
 					{steer.status === "pending" && <span className="opacity-60">…</span>}
 					{steer.status === "failed" && (
-						<span className="opacity-80">{t('notDelivered', 'not delivered')}</span>
+						<span className="opacity-80">
+							{t("notDelivered", "not delivered")}
+						</span>
 					)}
 				</div>
 			))}
@@ -73,7 +75,7 @@ export function ChatRunControls({
 							)}
 						/>
 						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-							{run.status === "cancelling" ? t('stopping', "Stopping —") : ""}
+							{run.status === "cancelling" ? t("stopping", "Stopping —") : ""}
 							{truncate(run.label)}
 						</span>
 						<Button
@@ -82,8 +84,10 @@ export function ChatRunControls({
 							className="size-6 shrink-0"
 							disabled={run.status === "cancelling"}
 							onClick={() => onStop(run.runId)}
-							title={t('stopThisResponse', 'Stop this response')}
-							aria-label={t('stopResponseVal', 'Stop response: {{val}}', { val: truncate(run.label) })}
+							title={t("stopThisResponse", "Stop this response")}
+							aria-label={t("stopResponseVal", "Stop response: {{val}}", {
+								val: truncate(run.label),
+							})}
 						>
 							<SquareIcon className="size-3 fill-current" />
 						</Button>
@@ -103,7 +107,11 @@ export function ChatRunControls({
 						className="size-6 shrink-0"
 						onClick={() => onRemoveQueued(entry.id)}
 						title={`Remove from the queue`}
-						aria-label={t('removeQueuedMessageVal', 'Remove queued message: {{val}}', { val: truncate(entry.content) })}
+						aria-label={t(
+							"removeQueuedMessageVal",
+							"Remove queued message: {{val}}",
+							{ val: truncate(entry.content) },
+						)}
 					>
 						<XIcon className="size-3" />
 					</Button>
@@ -111,7 +119,10 @@ export function ChatRunControls({
 			))}
 			{atCapacity && (
 				<p className="pl-3.5 text-[11px] text-muted-foreground">
-					{t('allResponseSlotsAreBusyTheNextMessageWillBeQueued', 'All response slots are busy — the next message will be queued.')}
+					{t(
+						"allResponseSlotsAreBusyTheNextMessageWillBeQueued",
+						"All response slots are busy — the next message will be queued.",
+					)}
 				</p>
 			)}
 		</div>

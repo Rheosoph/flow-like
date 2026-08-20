@@ -119,7 +119,11 @@ const writeStacks = async (key: string, stacks: IHistoryStacks) => {
 
 const toastStaleHistory = (action: "Undo" | "Redo") => {
 	toastWarning(
-		i18next.t('actionHistoryWasRecordedAgainstAnOlderVersionOfThisBoardAndHasBeenCleared', '{{action}} history was recorded against an older version of this board and has been cleared', { action }),
+		i18next.t(
+			"actionHistoryWasRecordedAgainstAnOlderVersionOfThisBoardAndHasBeenCleared",
+			"{{action}} history was recorded against an older version of this board and has been cleared",
+			{ action },
+		),
 		<HistoryIcon className="w-4 h-4" />,
 	);
 };

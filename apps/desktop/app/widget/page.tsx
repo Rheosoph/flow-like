@@ -1,12 +1,10 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
 	Input,
 	Label,
-	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -22,11 +20,23 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
-import type { IWidget, Version, VersionType } from "@flow-like/flow-like-ui";
+import type {
+	IWidget,
+	Version,
+	VersionType,
+	WidgetBuilderHandle,
+} from "@flow-like/flow-like-ui";
 import type {
 	SurfaceComponent,
 	WidgetAction,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
+import {
+	type WidgetActionIdIssue,
+	checkWidgetActionId,
+	normalizeWidgetActionId,
+	renameWidgetActionInComponents,
+} from "@flow-like/flow-like-ui/lib/widget-actions";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowLeft,
 	Check,
@@ -75,6 +85,7 @@ export default function WidgetEditorPage() {
 	// Auto-save debounce ref
 	const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const pendingComponentsRef = useRef<SurfaceComponent[] | null>(null);
+	const builderHandleRef = useRef<WidgetBuilderHandle | null>(null);
 
 	const versions = useInvoke(
 		backend.widgetState.getWidgetVersions,
@@ -101,7 +112,7 @@ export default function WidgetEditorPage() {
 			} catch {
 				const newWidget: IWidget = {
 					id: widgetId,
-					name: t('newWidget', 'New Widget'),
+					name: t("newWidget", "New Widget"),
 					rootComponentId: "root",
 					components: [],
 					dataModel: [],
@@ -203,6 +214,30 @@ export default function WidgetEditorPage() {
 		[],
 	);
 
+	// Renaming an event id has to carry the widget's own components along, otherwise every
+	// component still points at the vanished id.
+	const handleRenameAction = useCallback((oldId: string, newId: string) => {
+		const handle = builderHandleRef.current;
+		const components = handle?.getComponents();
+		if (handle && components) {
+			const remapped = renameWidgetActionInComponents(components, oldId, newId);
+			if (remapped !== components) {
+				handle.replaceComponents(remapped);
+			}
+		}
+
+		setWidget((prev) =>
+			prev
+				? {
+						...prev,
+						actions: (prev.actions ?? []).map((action) =>
+							action.id === oldId ? { ...action, id: newId } : action,
+						),
+					}
+				: prev,
+		);
+	}, []);
+
 	const handleSaveMetadata = useCallback(async () => {
 		if (!widget || !appId) return;
 
@@ -267,7 +302,9 @@ export default function WidgetEditorPage() {
 	if (!widgetId) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">{t('widgetNotFound', 'Widget not found')}</p>
+				<p className="text-muted-foreground">
+					{t("widgetNotFound", "Widget not found")}
+				</p>
 			</div>
 		);
 	}
@@ -276,7 +313,9 @@ export default function WidgetEditorPage() {
 		return (
 			<div className="flex items-center justify-center h-full gap-2">
 				<Loader2 className="h-5 w-5 animate-spin" />
-				<p className="text-muted-foreground">{t('loadingWidget', 'Loading widget...')}</p>
+				<p className="text-muted-foreground">
+					{t("loadingWidget", "Loading widget...")}
+				</p>
 			</div>
 		);
 	}
@@ -284,7 +323,9 @@ export default function WidgetEditorPage() {
 	if (!widget) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">{t('widgetNotFound', 'Widget not found')}</p>
+				<p className="text-muted-foreground">
+					{t("widgetNotFound", "Widget not found")}
+				</p>
 			</div>
 		);
 	}
@@ -302,7 +343,8 @@ export default function WidgetEditorPage() {
 					<div>
 						<h1 className="text-lg font-semibold">{widget.name}</h1>
 						<p className="text-sm text-muted-foreground">
-							{widget.description || t('visualWidgetBuilder', 'Visual Widget Builder')}
+							{widget.description ||
+								t("visualWidgetBuilder", "Visual Widget Builder")}
 						</p>
 					</div>
 					{widget.version && (
@@ -320,11 +362,13 @@ export default function WidgetEditorPage() {
 								<span>Saving...</span>
 							</>
 						) : hasUnsavedChanges ? (
-							<span className="text-yellow-500">{t('unsavedChanges', 'Unsaved changes')}</span>
+							<span className="text-yellow-500">
+								{t("unsavedChanges", "Unsaved changes")}
+							</span>
 						) : lastSavedAt ? (
 							<>
 								<Check className="h-3 w-3 text-green-500" />
-								<span>{t('saved', 'Saved')}</span>
+								<span>{t("saved", "Saved")}</span>
 							</>
 						) : null}
 					</div>
@@ -334,7 +378,7 @@ export default function WidgetEditorPage() {
 						onClick={() => setShowSettings(!showSettings)}
 					>
 						<Settings className="h-4 w-4 mr-2" />
-						{t('settings', 'Settings')}
+						{t("settings", "Settings")}
 					</Button>
 					<Button
 						onClick={() => handleSave(widget.components)}
@@ -347,7 +391,7 @@ export default function WidgetEditorPage() {
 						) : (
 							<Save className="h-4 w-4 mr-2" />
 						)}
-						{t('saveNow', 'Save Now')}
+						{t("saveNow", "Save Now")}
 					</Button>
 				</div>
 			</div>
@@ -364,6 +408,7 @@ export default function WidgetEditorPage() {
 						onChange={handleChange}
 						className="h-full"
 						externalAssistant
+						handleRef={builderHandleRef}
 						actionContext={{
 							appId,
 							widgetActions: (widget.actions ?? []).map((a) => ({
@@ -379,7 +424,9 @@ export default function WidgetEditorPage() {
 				{showSettings && (
 					<div className="w-80 border-l bg-background flex flex-col absolute right-0 top-[57px] bottom-0 z-10">
 						<div className="p-4 border-b flex items-center justify-between">
-							<h2 className="font-semibold">{t('widgetSettings', 'Widget Settings')}</h2>
+							<h2 className="font-semibold">
+								{t("widgetSettings", "Widget Settings")}
+							</h2>
 							<Button
 								variant="ghost"
 								size="icon"
@@ -388,19 +435,18 @@ export default function WidgetEditorPage() {
 								<X className="h-4 w-4" />
 							</Button>
 						</div>
-						<ScrollArea className="flex-1">
-							<WidgetSettingsPanel
-								widget={widget}
-								onUpdateWidget={updateWidgetProperty}
-								onSave={handleSaveMetadata}
-								isSaving={isSaving}
-								versions={versions.data ?? []}
-								currentVersion={version}
-								onCreateVersion={handleCreateVersion}
-								onSwitchVersion={handleSwitchVersion}
-								isCreatingVersion={isCreatingVersion}
-							/>
-						</ScrollArea>
+						<WidgetSettingsPanel
+							widget={widget}
+							onUpdateWidget={updateWidgetProperty}
+							onRenameAction={handleRenameAction}
+							onSave={handleSaveMetadata}
+							isSaving={isSaving}
+							versions={versions.data ?? []}
+							currentVersion={version}
+							onCreateVersion={handleCreateVersion}
+							onSwitchVersion={handleSwitchVersion}
+							isCreatingVersion={isCreatingVersion}
+						/>
 					</div>
 				)}
 			</div>
@@ -411,6 +457,7 @@ export default function WidgetEditorPage() {
 function WidgetSettingsPanel({
 	widget,
 	onUpdateWidget,
+	onRenameAction,
 	onSave,
 	isSaving,
 	versions,
@@ -421,6 +468,7 @@ function WidgetSettingsPanel({
 }: Readonly<{
 	widget: IWidget;
 	onUpdateWidget: <K extends keyof IWidget>(key: K, value: IWidget[K]) => void;
+	onRenameAction: (oldId: string, newId: string) => void;
 	onSave: () => void;
 	isSaving: boolean;
 	versions: Version[];
@@ -450,14 +498,20 @@ function WidgetSettingsPanel({
 	const versionKey = (v: Version) => `${v[0]}_${v[1]}_${v[2]}`;
 
 	return (
-		<Tabs defaultValue="general" className="w-full">
-			<TabsList className="w-full justify-start px-4 pt-2">
-				<TabsTrigger value="general">{t('general', 'General')}</TabsTrigger>
-				<TabsTrigger value="events">{t('events', 'Events')}</TabsTrigger>
-				<TabsTrigger value="versions">{t('versions', 'Versions')}</TabsTrigger>
-				<TabsTrigger value="advanced">{t('advanced', 'Advanced')}</TabsTrigger>
+		<Tabs
+			defaultValue="general"
+			className="flex min-h-0 w-full flex-1 flex-col gap-0"
+		>
+			<TabsList className="w-full shrink-0 justify-start px-4 pt-2">
+				<TabsTrigger value="general">{t("general", "General")}</TabsTrigger>
+				<TabsTrigger value="events">{t("events", "Events")}</TabsTrigger>
+				<TabsTrigger value="versions">{t("versions", "Versions")}</TabsTrigger>
+				<TabsTrigger value="advanced">{t("advanced", "Advanced")}</TabsTrigger>
 			</TabsList>
-			<TabsContent value="general" className="p-4 space-y-4">
+			<TabsContent
+				value="general"
+				className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4"
+			>
 				<div className="space-y-2">
 					<Label htmlFor="name">Name</Label>
 					<Input
@@ -467,7 +521,7 @@ function WidgetSettingsPanel({
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="description">{t('description', 'Description')}</Label>
+					<Label htmlFor="description">{t("description", "Description")}</Label>
 					<Textarea
 						id="description"
 						value={widget.description || ""}
@@ -475,12 +529,15 @@ function WidgetSettingsPanel({
 							onUpdateWidget("description", e.target.value || undefined)
 						}
 						className="min-h-20"
-						placeholder={t('describeWhatThisWidgetDoes', 'Describe what this widget does...')}
+						placeholder={t(
+							"describeWhatThisWidgetDoes",
+							"Describe what this widget does...",
+						)}
 					/>
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('tags', 'Tags')}</Label>
+					<Label>{t("tags", "Tags")}</Label>
 					<div className="flex flex-wrap gap-1 mb-2">
 						{widget.tags.map((tag) => (
 							<Badge
@@ -491,18 +548,20 @@ function WidgetSettingsPanel({
 							>{`${tag} ×`}</Badge>
 						))}
 						{widget.tags.length === 0 && (
-							<span className="text-sm text-muted-foreground">{t('noTags', 'No tags')}</span>
+							<span className="text-sm text-muted-foreground">
+								{t("noTags", "No tags")}
+							</span>
 						)}
 					</div>
 					<div className="flex gap-2">
 						<Input
-							placeholder={t('addATag', 'Add a tag...')}
+							placeholder={t("addATag", "Add a tag...")}
 							value={newTag}
 							onChange={(e) => setNewTag(e.target.value)}
 							onKeyDown={(e) => e.key === "Enter" && handleAddTag()}
 						/>
 						<Button variant="outline" size="sm" onClick={handleAddTag}>
-							{t('add', 'Add')}
+							{t("add", "Add")}
 						</Button>
 					</div>
 				</div>
@@ -513,12 +572,15 @@ function WidgetSettingsPanel({
 					) : (
 						<Save className="h-4 w-4 mr-2" />
 					)}
-					{t('saveMetadata', 'Save Metadata')}
+					{t("saveMetadata", "Save Metadata")}
 				</Button>
 			</TabsContent>
-			<TabsContent value="versions" className="p-4 space-y-4">
+			<TabsContent
+				value="versions"
+				className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4"
+			>
 				<div className="space-y-2">
-					<Label>{t('currentVersion', 'Current Version')}</Label>
+					<Label>{t("currentVersion", "Current Version")}</Label>
 					{versions.length > 0 ? (
 						<Select
 							value={
@@ -531,7 +593,9 @@ function WidgetSettingsPanel({
 							onValueChange={onSwitchVersion}
 						>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectVersion', 'Select version')} />
+								<SelectValue
+									placeholder={t("selectVersion", "Select version")}
+								/>
 							</SelectTrigger>
 							<SelectContent>
 								{versions.map((v) => (
@@ -543,15 +607,18 @@ function WidgetSettingsPanel({
 						</Select>
 					) : (
 						<p className="text-sm text-muted-foreground">
-							{t('noVersionsCreatedYet', 'No versions created yet')}
+							{t("noVersionsCreatedYet", "No versions created yet")}
 						</p>
 					)}
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('createNewVersion', 'Create New Version')}</Label>
+					<Label>{t("createNewVersion", "Create New Version")}</Label>
 					<p className="text-xs text-muted-foreground mb-2">
-						{t('creatingAVersionWillSaveCurrentChangesAndCreateASnapshot', 'Creating a version will save current changes and create a snapshot')}
+						{t(
+							"creatingAVersionWillSaveCurrentChangesAndCreateASnapshot",
+							"Creating a version will save current changes and create a snapshot",
+						)}
 					</p>
 					<div className="flex gap-2">
 						<Button
@@ -562,7 +629,7 @@ function WidgetSettingsPanel({
 							className="flex-1"
 						>
 							<TagIcon className="h-3 w-3 mr-1" />
-							{t('patch', 'Patch')}
+							{t("patch", "Patch")}
 						</Button>
 						<Button
 							variant="outline"
@@ -572,7 +639,7 @@ function WidgetSettingsPanel({
 							className="flex-1"
 						>
 							<TagIcon className="h-3 w-3 mr-1" />
-							{t('minor', 'Minor')}
+							{t("minor", "Minor")}
 						</Button>
 						<Button
 							variant="outline"
@@ -582,19 +649,19 @@ function WidgetSettingsPanel({
 							className="flex-1"
 						>
 							<TagIcon className="h-3 w-3 mr-1" />
-							{t('major', 'Major')}
+							{t("major", "Major")}
 						</Button>
 					</div>
 					{isCreatingVersion && (
 						<div className="flex items-center gap-2 text-sm text-muted-foreground">
 							<Loader2 className="h-4 w-4 animate-spin" />
-							{t('creatingVersion', 'Creating version...')}
+							{t("creatingVersion", "Creating version...")}
 						</div>
 					)}
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('versionHistory', 'Version History')}</Label>
+					<Label>{t("versionHistory", "Version History")}</Label>
 					{versions.length > 0 ? (
 						<div className="space-y-1 max-h-40 overflow-y-auto">
 							{versions.map((v) => (
@@ -611,70 +678,89 @@ function WidgetSettingsPanel({
 										className="h-6 px-2 text-xs"
 										onClick={() => onSwitchVersion(versionKey(v))}
 									>
-										{t('load', 'Load')}
+										{t("load", "Load")}
 									</Button>
 								</div>
 							))}
 						</div>
 					) : (
 						<p className="text-sm text-muted-foreground">
-							{t('noVersionsInHistory', 'No versions in history')}
+							{t("noVersionsInHistory", "No versions in history")}
 						</p>
 					)}
 				</div>
 			</TabsContent>
-			<TabsContent value="events" className="p-4 space-y-4">
-				<WidgetEventsEditor
-					actions={widget.actions ?? []}
-					onChange={(actions) => onUpdateWidget("actions", actions)}
-				/>
-				<Separator />
-				<Button onClick={onSave} disabled={isSaving} className="w-full">
-					{isSaving ? (
-						<Loader2 className="h-4 w-4 mr-2 animate-spin" />
-					) : (
-						<Save className="h-4 w-4 mr-2" />
-					)}
-					{t('saveEvents', 'Save Events')}
-				</Button>
+			<TabsContent
+				value="events"
+				className="flex min-h-0 flex-1 flex-col gap-0 p-0"
+			>
+				<div className="min-h-0 flex-1 overflow-y-auto p-4">
+					<WidgetEventsEditor
+						actions={widget.actions ?? []}
+						onChange={(actions) => onUpdateWidget("actions", actions)}
+						onRenameAction={onRenameAction}
+					/>
+				</div>
+				<div className="border-t bg-background p-4">
+					<Button onClick={onSave} disabled={isSaving} className="w-full">
+						{isSaving ? (
+							<Loader2 className="h-4 w-4 mr-2 animate-spin" />
+						) : (
+							<Save className="h-4 w-4 mr-2" />
+						)}
+						{t("saveEvents", "Save Events")}
+					</Button>
+				</div>
 			</TabsContent>
-			<TabsContent value="advanced" className="p-4 space-y-4">
+			<TabsContent
+				value="advanced"
+				className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4"
+			>
 				<div className="space-y-2">
-					<Label>{t('widgetId', 'Widget ID')}</Label>
+					<Label>{t("widgetId", "Widget ID")}</Label>
 					<Input value={widget.id} disabled />
 				</div>
 				<div className="space-y-2">
-					<Label>{t('rootComponentId', 'Root Component ID')}</Label>
+					<Label>{t("rootComponentId", "Root Component ID")}</Label>
 					<Input value={widget.rootComponentId} disabled />
 				</div>
 				<div className="space-y-2">
-					<Label>{t('version', 'Version')}</Label>
+					<Label>{t("version", "Version")}</Label>
 					<Input
 						value={
 							widget.version
 								? `${widget.version[0]}.${widget.version[1]}.${widget.version[2]}`
-								: t('notVersioned', 'Not versioned')
+								: t("notVersioned", "Not versioned")
 						}
 						disabled
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label>{t('created', 'Created')}</Label>
+					<Label>{t("created", "Created")}</Label>
 					<Input value={new Date(widget.createdAt).toLocaleString()} disabled />
 				</div>
 				<div className="space-y-2">
-					<Label>{t('lastUpdated', 'Last Updated')}</Label>
+					<Label>{t("lastUpdated", "Last Updated")}</Label>
 					<Input value={new Date(widget.updatedAt).toLocaleString()} disabled />
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('components', 'Components')}</Label>
-					<p className="text-sm text-muted-foreground">{t('countComponents', { defaultValue_one: '{{count}} component', defaultValue_other: '{{count}} components', count: widget.components.length })}
+					<Label>{t("components", "Components")}</Label>
+					<p className="text-sm text-muted-foreground">
+						{t("countComponents", {
+							defaultValue_one: "{{count}} component",
+							defaultValue_other: "{{count}} components",
+							count: widget.components.length,
+						})}
 					</p>
 				</div>
 				<div className="space-y-2">
-					<Label>{t('dataModelEntries', 'Data Model Entries')}</Label>
-					<p className="text-sm text-muted-foreground">{t('lengthEntr', '{{length}} entr', { length: widget.dataModel.length })}{widget.dataModel.length !== 1 ? "ies" : "y"}
+					<Label>{t("dataModelEntries", "Data Model Entries")}</Label>
+					<p className="text-sm text-muted-foreground">
+						{t("lengthEntr", "{{length}} entr", {
+							length: widget.dataModel.length,
+						})}
+						{widget.dataModel.length !== 1 ? "ies" : "y"}
 					</p>
 				</div>
 			</TabsContent>
@@ -685,14 +771,19 @@ function WidgetSettingsPanel({
 function WidgetEventsEditor({
 	actions,
 	onChange,
+	onRenameAction,
 }: Readonly<{
 	actions: WidgetAction[];
 	onChange: (actions: WidgetAction[]) => void;
+	onRenameAction: (oldId: string, newId: string) => void;
 }>) {
 	const { t } = useTranslation("common");
 	const addAction = () => {
 		const id = `action_${Date.now()}`;
-		onChange([...actions, { id, label: t('newEvent', 'New Event'), contextSchema: [] }]);
+		onChange([
+			...actions,
+			{ id, label: t("newEvent", "New Event"), contextSchema: [] },
+		]);
 	};
 
 	const updateAction = (index: number, updates: Partial<WidgetAction>) => {
@@ -709,53 +800,140 @@ function WidgetEventsEditor({
 	return (
 		<div className="space-y-3">
 			<div className="flex items-center justify-between">
-				<Label>{t('widgetEvents', 'Widget Events')}</Label>
+				<Label>{t("widgetEvents", "Widget Events")}</Label>
 				<Button variant="outline" size="sm" onClick={addAction}>
 					<Plus className="h-3 w-3 mr-1" />
-					{t('addEvent', 'Add Event')}
+					{t("addEvent", "Add Event")}
 				</Button>
 			</div>
 			<p className="text-xs text-muted-foreground">
-				{t('defineNamedEventsThatThisWidgetCanTriggerEgOnButtonPressTheseCanBeBoundToWorkflowsWhenTheWidgetIsInstantiated', "Define named events that this widget can trigger (e.g. on button press). These can be bound to workflows when the widget is instantiated.")}
+				{t(
+					"defineNamedEventsThatThisWidgetCanTriggerEgOnButtonPressTheseCanBeBoundToWorkflowsWhenTheWidgetIsInstantiated",
+					"Define named events that this widget can trigger (e.g. on button press). These can be bound to workflows when the widget is instantiated.",
+				)}
 			</p>
 			{actions.length === 0 && (
 				<p className="text-sm text-muted-foreground text-center py-4">
-					{t('noEventsDefined', 'No events defined')}
+					{t("noEventsDefined", "No events defined")}
 				</p>
 			)}
 			{actions.map((action, index) => (
-				<div key={action.id} className="border rounded-md p-3 space-y-2">
-					<div className="flex items-start justify-between gap-2">
-						<div className="flex-1 space-y-2">
-							<Input
-								placeholder={t('eventLabelEgOnButtonPress', 'Event label (e.g. On Button Press)')}
-								value={action.label}
-								onChange={(e) => updateAction(index, { label: e.target.value })}
-								className="h-8 text-sm"
-							/>
-							<Input
-								placeholder={t('descriptionOptional', 'Description (optional)')}
-								value={action.description ?? ""}
-								onChange={(e) =>
-									updateAction(index, {
-										description: e.target.value || undefined,
-									})
-								}
-								className="h-8 text-sm"
-							/>
-						</div>
-						<Button
-							variant="ghost"
-							size="icon"
-							className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-							onClick={() => removeAction(index)}
-						>
-							<Trash2 className="h-4 w-4" />
-						</Button>
-					</div>
-					<div className="text-xs text-muted-foreground font-mono">{t('idId', 'ID: {{id}}', { id: action.id })}</div>
-				</div>
+				<WidgetEventRow
+					key={action.id}
+					action={action}
+					takenIds={actions
+						.filter((_, i) => i !== index)
+						.map((other) => other.id)}
+					onUpdate={(updates) => updateAction(index, updates)}
+					onRename={(newId) => onRenameAction(action.id, newId)}
+					onRemove={() => removeAction(index)}
+				/>
 			))}
+		</div>
+	);
+}
+
+function WidgetEventRow({
+	action,
+	takenIds,
+	onUpdate,
+	onRename,
+	onRemove,
+}: Readonly<{
+	action: WidgetAction;
+	takenIds: string[];
+	onUpdate: (updates: Partial<WidgetAction>) => void;
+	onRename: (newId: string) => void;
+	onRemove: () => void;
+}>) {
+	const { t } = useTranslation("common");
+	const [idDraft, setIdDraft] = useState(action.id);
+
+	const normalizedId = normalizeWidgetActionId(idDraft);
+	const isRenaming = normalizedId !== action.id;
+	const issue = isRenaming ? checkWidgetActionId(normalizedId, takenIds) : null;
+
+	const issueMessages: Record<WidgetActionIdIssue, string> = {
+		empty: t("idCannotBeEmpty", "ID cannot be empty"),
+		invalid: t(
+			"useLettersNumbersDashUnderscoreDotOrColon",
+			"Use letters, numbers, dash, underscore, dot or colon",
+		),
+		duplicate: t(
+			"anotherEventAlreadyUsesThisId",
+			"Another event already uses this ID",
+		),
+	};
+
+	const commitId = () => {
+		if (issue) {
+			setIdDraft(action.id);
+			return;
+		}
+		if (isRenaming) onRename(normalizedId);
+	};
+
+	return (
+		<div className="border rounded-md p-3 space-y-2">
+			<div className="flex items-start justify-between gap-2">
+				<div className="flex-1 min-w-0 space-y-2">
+					<Input
+						placeholder={t(
+							"eventLabelEgOnButtonPress",
+							"Event label (e.g. On Button Press)",
+						)}
+						value={action.label}
+						onChange={(e) => onUpdate({ label: e.target.value })}
+						className="h-8 text-sm"
+					/>
+					<Input
+						placeholder={t("descriptionOptional", "Description (optional)")}
+						value={action.description ?? ""}
+						onChange={(e) =>
+							onUpdate({ description: e.target.value || undefined })
+						}
+						className="h-8 text-sm"
+					/>
+				</div>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+					onClick={onRemove}
+				>
+					<Trash2 className="h-4 w-4" />
+				</Button>
+			</div>
+			<div className="space-y-1">
+				<div className="flex items-center gap-2">
+					<span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+						{t("eventId", "Event ID")}
+					</span>
+					<Input
+						value={idDraft}
+						onChange={(e) => setIdDraft(e.target.value)}
+						onBlur={commitId}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.currentTarget.blur();
+							if (e.key === "Escape") setIdDraft(action.id);
+						}}
+						aria-invalid={issue !== null}
+						spellCheck={false}
+						className="h-7 flex-1 font-mono text-xs"
+					/>
+				</div>
+				{issue && (
+					<p className="text-xs text-destructive">{issueMessages[issue]}</p>
+				)}
+				{isRenaming && !issue && (
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"placesWhereThisWidgetIsAlreadyEmbeddedKeepTheOldIdAndMustBeRebound",
+							"Places where this widget is already embedded keep the old ID and must be re-bound.",
+						)}
+					</p>
+				)}
+			</div>
 		</div>
 	);
 }

@@ -126,7 +126,7 @@ function normalizeAuthType(value: unknown): string {
 
 function authLabel(config: Record<string, any> | undefined) {
 	const type = normalizeAuthType(config?.type);
-	if (type === "api_key") return i18next.t('apiKey', 'API key');
+	if (type === "api_key") return i18next.t("apiKey", "API key");
 	if (type === "bearer_token") return "Bearer token";
 	if (type === "basic_auth") return "Basic auth";
 	if (type === "hmac_sha256") return "HMAC SHA-256";
@@ -736,11 +736,21 @@ function McpInspectorPanel({
 			);
 			setResult(nextResult);
 			toast.success(
-				t('inspectionCompleteLengthToolsLength2ResourcesLength3Prompts', 'Inspection complete ({{length}} tools, {{length2}} resources, {{length3}} prompts)', { length: nextResult.tools.length, length2: nextResult.resources.length, length3: nextResult.prompts.length }),
+				t(
+					"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts",
+					"Inspection complete ({{length}} tools, {{length2}} resources, {{length3}} prompts)",
+					{
+						length: nextResult.tools.length,
+						length2: nextResult.resources.length,
+						length3: nextResult.prompts.length,
+					},
+				),
 			);
 		} catch (err) {
 			const message =
-				err instanceof Error ? err.message : t('mcpInspectionFailed', 'MCP inspection failed');
+				err instanceof Error
+					? err.message
+					: t("mcpInspectionFailed", "MCP inspection failed");
 			setError(message);
 			toast.error(message);
 		} finally {
@@ -760,7 +770,7 @@ function McpInspectorPanel({
 	return (
 		<InspectorSurface>
 			<InspectorHeader
-				title={t('liveMcpInspector', 'Live MCP Inspector')}
+				title={t("liveMcpInspector", "Live MCP Inspector")}
 				subtitle="Inspect server shape, call tools, read resources, and render prompt output."
 				icon={<Terminal className="h-4 w-4" />}
 				actions={
@@ -780,7 +790,7 @@ function McpInspectorPanel({
 							) : (
 								<Play className="h-3 w-3" />
 							)}
-							<span className="ml-1 text-xs">{t('inspect', 'Inspect')}</span>
+							<span className="ml-1 text-xs">{t("inspect", "Inspect")}</span>
 						</Button>
 					</div>
 				}
@@ -791,7 +801,7 @@ function McpInspectorPanel({
 					<div className="space-y-1.5">
 						<Label className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">
 							<Link2 className="h-3 w-3" />
-							{t('endpoint', 'Endpoint')}
+							{t("endpoint", "Endpoint")}
 						</Label>
 						<div className="flex items-center gap-2">
 							<Input readOnly value={targetUrl} className="font-mono text-xs" />
@@ -812,7 +822,7 @@ function McpInspectorPanel({
 					</div>
 					<div className="space-y-1.5">
 						<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-							{t('header', 'Header')}
+							{t("header", "Header")}
 						</Label>
 						<Input
 							value={headerName}
@@ -823,7 +833,7 @@ function McpInspectorPanel({
 					</div>
 					<div className="space-y-1.5">
 						<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-							{t('value', 'Value')}
+							{t("value", "Value")}
 						</Label>
 						<Input
 							value={headerValue}
@@ -848,7 +858,7 @@ function McpInspectorPanel({
 							onClick={() => setTarget("event")}
 							className="h-7 text-xs"
 						>
-							{t('eventId', 'Event ID')}
+							{t("eventId", "Event ID")}
 						</Button>
 						<Button
 							type="button"
@@ -857,7 +867,7 @@ function McpInspectorPanel({
 							onClick={() => setTarget("alias")}
 							className="h-7 text-xs"
 						>
-							{t('alias', 'Alias')}
+							{t("alias", "Alias")}
 						</Button>
 					</div>
 				)}
@@ -891,7 +901,7 @@ function McpInspectorResults({
 	const serverName =
 		typeof result.serverInfo?.name === "string"
 			? result.serverInfo.name
-			: t('mcpServer', 'MCP server');
+			: t("mcpServer", "MCP server");
 	const serverVersion =
 		typeof result.serverInfo?.version === "string"
 			? result.serverInfo.version
@@ -908,32 +918,36 @@ function McpInspectorResults({
 				<InspectorTinyStat label="Protocol" value={result.protocolVersion} />
 				<InspectorTinyStat
 					label="Latency"
-					value={t('totaldurationmsMs', '{{totalDurationMs}} ms', { totalDurationMs: result.totalDurationMs })}
+					value={t("totaldurationmsMs", "{{totalDurationMs}} ms", {
+						totalDurationMs: result.totalDurationMs,
+					})}
 				/>
 			</div>
 
 			<Tabs defaultValue="tools" className="space-y-2">
 				<TabsList className="grid w-full grid-cols-4">
 					<TabsTrigger value="tools" className="gap-2 text-xs">
-						<span className="hidden sm:inline">{t('tools', 'Tools')}</span>
+						<span className="hidden sm:inline">{t("tools", "Tools")}</span>
 						<Badge variant="outline" className="ml-1 h-5 px-1.5 text-[10px]">
 							{result.tools.length}
 						</Badge>
 					</TabsTrigger>
 					<TabsTrigger value="resources" className="gap-2 text-xs">
-						<span className="hidden sm:inline">{t('resources', 'Resources')}</span>
+						<span className="hidden sm:inline">
+							{t("resources", "Resources")}
+						</span>
 						<Badge variant="outline" className="ml-1 h-5 px-1.5 text-[10px]">
 							{result.resources.length}
 						</Badge>
 					</TabsTrigger>
 					<TabsTrigger value="prompts" className="gap-2 text-xs">
-						<span className="hidden sm:inline">{t('prompts', 'Prompts')}</span>
+						<span className="hidden sm:inline">{t("prompts", "Prompts")}</span>
 						<Badge variant="outline" className="ml-1 h-5 px-1.5 text-[10px]">
 							{result.prompts.length}
 						</Badge>
 					</TabsTrigger>
 					<TabsTrigger value="raw" className="gap-2 text-xs">
-						<span className="hidden sm:inline">{t('raw', 'Raw')}</span>
+						<span className="hidden sm:inline">{t("raw", "Raw")}</span>
 					</TabsTrigger>
 				</TabsList>
 				<TabsContent value="tools" className="mt-0">
@@ -1285,7 +1299,9 @@ function ResourcePreview({ result }: { result: Record<string, unknown> }) {
 								download={filename}
 								className="inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs hover:bg-muted"
 							>
-								<Download className="h-3 w-3" />{t('downloadFilename', 'Download {{filename}}', { filename })}</a>
+								<Download className="h-3 w-3" />
+								{t("downloadFilename", "Download {{filename}}", { filename })}
+							</a>
 						) : (
 							<pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">
 								{prettyJson(content)}
@@ -1296,7 +1312,7 @@ function ResourcePreview({ result }: { result: Record<string, unknown> }) {
 			})}
 			<details>
 				<summary className="cursor-pointer text-xs text-muted-foreground">
-					{t('rawResourceResponse', 'Raw resource response')}
+					{t("rawResourceResponse", "Raw resource response")}
 				</summary>
 				<pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">
 					{prettyJson(result)}
@@ -1340,7 +1356,11 @@ function JsonValuePreview({
 
 	if (Array.isArray(value)) {
 		if (value.length === 0) {
-			return <span className="text-xs text-muted-foreground">{t('emptyArray', 'Empty array')}</span>;
+			return (
+				<span className="text-xs text-muted-foreground">
+					{t("emptyArray", "Empty array")}
+				</span>
+			);
 		}
 		const objectRows = value.filter(isJsonObject);
 		const tableKeys = Array.from(
@@ -1388,7 +1408,7 @@ function JsonValuePreview({
 				{value.map((item, index) => (
 					<div key={index} className="rounded-md border bg-background p-2">
 						<div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-							{t('item', 'Item')} {index + 1}
+							{t("item", "Item")} {index + 1}
 						</div>
 						<JsonValuePreview value={item} depth={depth + 1} />
 					</div>
@@ -1401,7 +1421,9 @@ function JsonValuePreview({
 		const entries = Object.entries(value);
 		if (entries.length === 0) {
 			return (
-				<span className="text-xs text-muted-foreground">{t('emptyObject', 'Empty object')}</span>
+				<span className="text-xs text-muted-foreground">
+					{t("emptyObject", "Empty object")}
+				</span>
 			);
 		}
 		return (
@@ -1421,7 +1443,9 @@ function JsonValuePreview({
 									<details>
 										<summary className="cursor-pointer text-xs text-muted-foreground">
 											{Array.isArray(field)
-												? t('arrayLength', 'Array ({{length}})', { length: field.length })
+												? t("arrayLength", "Array ({{length}})", {
+														length: field.length,
+													})
 												: "Object"}
 										</summary>
 										<div className="mt-2">
@@ -1454,12 +1478,12 @@ function SmartTextPreview({ text }: { text: string }) {
 			<div className="space-y-2 rounded-md border bg-muted/20 p-2">
 				<div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
 					<Braces className="h-3 w-3" />
-					{t('parsedJson', 'Parsed JSON')}
+					{t("parsedJson", "Parsed JSON")}
 				</div>
 				<JsonValuePreview value={parsed} />
 				<details>
 					<summary className="cursor-pointer text-xs text-muted-foreground">
-						{t('rawText', 'Raw text')}
+						{t("rawText", "Raw text")}
 					</summary>
 					<pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">
 						{text}
@@ -1553,14 +1577,14 @@ function ToolResultPreview({ result }: { result: Record<string, unknown> }) {
 			{isError && (
 				<div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
 					<AlertCircle className="h-3 w-3" />
-					{t('toolReportedAnErrorResult', 'Tool reported an error result.')}
+					{t("toolReportedAnErrorResult", "Tool reported an error result.")}
 				</div>
 			)}
 			{structured !== undefined && (
 				<div className="space-y-2 rounded-md border bg-muted/20 p-2">
 					<div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
 						<Database className="h-3 w-3" />
-						{t('structuredContent', 'Structured content')}
+						{t("structuredContent", "Structured content")}
 					</div>
 					<JsonValuePreview value={structured} />
 				</div>
@@ -1576,7 +1600,7 @@ function ToolResultPreview({ result }: { result: Record<string, unknown> }) {
 			) : null}
 			<details>
 				<summary className="cursor-pointer text-xs text-muted-foreground">
-					{t('rawToolResult', 'Raw tool result')}
+					{t("rawToolResult", "Raw tool result")}
 				</summary>
 				<pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">
 					{prettyJson(result)}
@@ -1596,7 +1620,7 @@ function PromptResultPreview({ result }: { result: Record<string, unknown> }) {
 				const role =
 					isJsonObject(message) && typeof message.role === "string"
 						? message.role
-						: t('messageVal', 'message {{val}}', { val: index + 1 });
+						: t("messageVal", "message {{val}}", { val: index + 1 });
 				const content = isJsonObject(message) ? message.content : message;
 				return (
 					<div
@@ -1615,7 +1639,7 @@ function PromptResultPreview({ result }: { result: Record<string, unknown> }) {
 			})}
 			<details>
 				<summary className="cursor-pointer text-xs text-muted-foreground">
-					{t('rawPromptResult', 'Raw prompt result')}
+					{t("rawPromptResult", "Raw prompt result")}
 				</summary>
 				<pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">
 					{prettyJson(result)}
@@ -1694,7 +1718,7 @@ function SchemaArgumentForm({
 	if (entries.length === 0) {
 		return (
 			<div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-				{t('noDeclaredInputFields', 'No declared input fields.')}
+				{t("noDeclaredInputFields", "No declared input fields.")}
 			</div>
 		);
 	}
@@ -1764,10 +1788,12 @@ function SchemaArgumentField({
 					}
 				>
 					<SelectTrigger className="h-8 text-xs">
-						<SelectValue placeholder={t('selectValue', 'Select value')} />
+						<SelectValue placeholder={t("selectValue", "Select value")} />
 					</SelectTrigger>
 					<SelectContent>
-						{!required && <SelectItem value="__empty__">{t('empty', 'Empty')}</SelectItem>}
+						{!required && (
+							<SelectItem value="__empty__">{t("empty", "Empty")}</SelectItem>
+						)}
 						{enumValues.map((option) => (
 							<SelectItem key={option} value={option}>
 								{option}
@@ -1823,7 +1849,7 @@ function PromptArgumentForm({
 	if (specs.length === 0) {
 		return (
 			<div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-				{t('noPromptArguments', 'No prompt arguments.')}
+				{t("noPromptArguments", "No prompt arguments.")}
 			</div>
 		);
 	}
@@ -1940,7 +1966,10 @@ function InspectorItemCard({
 			const nextExecution = await onExecute(method, params);
 			setExecution(nextExecution);
 		} catch (err) {
-			const message = err instanceof Error ? err.message : t('mcpRequestFailed', 'MCP request failed');
+			const message =
+				err instanceof Error
+					? err.message
+					: t("mcpRequestFailed", "MCP request failed");
 			setError(message);
 			toast.error(message);
 		} finally {
@@ -1996,7 +2025,7 @@ function InspectorItemCard({
 								) : (
 									<Braces className="h-3 w-3" />
 								)}
-								{t('arguments', 'Arguments')}
+								{t("arguments", "Arguments")}
 							</div>
 							<Button
 								type="button"
@@ -2005,7 +2034,7 @@ function InspectorItemCard({
 								onClick={() => setRawMode((current) => !current)}
 								className="h-7 text-xs"
 							>
-								{rawMode ? "Use form" : t('editJson', 'Edit JSON')}
+								{rawMode ? "Use form" : t("editJson", "Edit JSON")}
 							</Button>
 						</div>
 						{rawMode ? (
@@ -2057,7 +2086,11 @@ function InspectorItemCard({
 							<Badge variant="outline" className="font-normal">
 								{execution.method}
 							</Badge>
-							<span className="text-xs text-muted-foreground">{t('totaldurationmsMs', '{{totalDurationMs}} ms', { totalDurationMs: execution.totalDurationMs })}</span>
+							<span className="text-xs text-muted-foreground">
+								{t("totaldurationmsMs", "{{totalDurationMs}} ms", {
+									totalDurationMs: execution.totalDurationMs,
+								})}
+							</span>
 						</div>
 						<ExecutionResultPreview execution={execution} />
 					</div>
@@ -2169,13 +2202,19 @@ export function McpConfig({
 					true,
 				);
 				toast.success(
-					t('setupRefreshedRegistrations_writtenRegistrations', 'Setup refreshed ({{registrations_written}} registrations)', { registrations_written: response.registrations_written }),
+					t(
+						"setupRefreshedRegistrations_writtenRegistrations",
+						"Setup refreshed ({{registrations_written}} registrations)",
+						{ registrations_written: response.registrations_written },
+					),
 				);
 			}
 			await Promise.all([registrations.refetch(), aliases.refetch()]);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : t('failedToRefreshSetup', 'Failed to refresh setup');
+				error instanceof Error
+					? error.message
+					: t("failedToRefreshSetup", "Failed to refresh setup");
 			toast.error(message);
 			await Promise.allSettled([registrations.refetch(), aliases.refetch()]);
 		} finally {
@@ -2195,7 +2234,9 @@ export function McpConfig({
 			await aliases.refetch();
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : t('failedToSaveAlias', 'Failed to save alias');
+				error instanceof Error
+					? error.message
+					: t("failedToSaveAlias", "Failed to save alias");
 			setAliasError(message);
 			toast.error(message);
 		} finally {
@@ -2219,7 +2260,9 @@ export function McpConfig({
 			await aliases.refetch();
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : t('failedToRemoveAlias', 'Failed to remove alias');
+				error instanceof Error
+					? error.message
+					: t("failedToRemoveAlias", "Failed to remove alias");
 			setAliasError(message);
 			toast.error(message);
 		} finally {
@@ -2238,27 +2281,31 @@ export function McpConfig({
 					<Alert>
 						<Server className="h-4 w-4" />
 						<AlertTitle className="flex items-center gap-2">
-							{t('mcpServer2', 'MCP Server')}
+							{t("mcpServer2", "MCP Server")}
 							<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
-								<Cloud className="h-3 w-3" /> {t('remoteOnly', 'Remote only')}
+								<Cloud className="h-3 w-3" /> {t("remoteOnly", "Remote only")}
 							</span>
 						</AlertTitle>
-						<AlertDescription><Trans i18nKey="exposesTheWorkflowAsARemoteModelContextProtocolServerToolsResourcesPromptsAndAuthenticationAreDeclaredInsideTheBoardAndMountedAtCodem123event_id125code">Exposes the workflow as a remote Model Context Protocol server.
-							Tools, resources, prompts and authentication are declared inside
-							the board and mounted at <code>/m/&#123;event_id&#125;</code>.</Trans></AlertDescription>
+						<AlertDescription>
+							<Trans i18nKey="exposesTheWorkflowAsARemoteModelContextProtocolServerToolsResourcesPromptsAndAuthenticationAreDeclaredInsideTheBoardAndMountedAtCodem123event_id125code">
+								Exposes the workflow as a remote Model Context Protocol server.
+								Tools, resources, prompts and authentication are declared inside
+								the board and mounted at <code>/m/&#123;event_id&#125;</code>.
+							</Trans>
+						</AlertDescription>
 					</Alert>
 
 					{endpointUrl ? (
 						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
 							<EndpointField
-								label={t('streamableHttp', 'Streamable HTTP')}
+								label={t("streamableHttp", "Streamable HTTP")}
 								value={endpointUrl}
 								copyKey="streamable"
 								copied={copied}
 								onCopy={copy}
 							/>
 							<EndpointField
-								label={t('legacySse', 'Legacy SSE')}
+								label={t("legacySse", "Legacy SSE")}
 								value={endpointUrl}
 								copyKey="sse"
 								copied={copied}
@@ -2267,14 +2314,17 @@ export function McpConfig({
 						</div>
 					) : (
 						<p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-							{t('saveTheEventToSeeItsEndpointUrl', 'Save the event to see its endpoint URL.')}
+							{t(
+								"saveTheEventToSeeItsEndpointUrl",
+								"Save the event to see its endpoint URL.",
+							)}
 						</p>
 					)}
 
 					{eventId && appId && backend.eventState.listEventAliases && (
 						<InspectorSurface>
 							<InspectorHeader
-								title={t('publicAlias', 'Public Alias')}
+								title={t("publicAlias", "Public Alias")}
 								subtitle="Give this MCP server a stable, readable mount path."
 								icon={<Link2 className="h-4 w-4" />}
 							/>
@@ -2307,7 +2357,7 @@ export function McpConfig({
 										) : (
 											<Check className="h-4 w-4" />
 										)}
-										{t('save', 'Save')}
+										{t("save", "Save")}
 									</Button>
 									<Button
 										type="button"
@@ -2319,7 +2369,7 @@ export function McpConfig({
 											!currentAlias ||
 											!backend.eventState.deleteEventAlias
 										}
-										title={t('removeAlias', 'Remove alias')}
+										title={t("removeAlias", "Remove alias")}
 									>
 										<Trash2 className="h-4 w-4" />
 									</Button>
@@ -2383,7 +2433,10 @@ export function McpConfig({
 
 			<p className="flex items-center gap-1 text-xs text-muted-foreground">
 				<Info className="h-3 w-3" />
-				{t('saveTheEventToTriggerRemoteSetupAndRefreshTheRegisteredMcpServerShape', "Save the event to trigger remote setup and refresh the registered MCP server shape.")}
+				{t(
+					"saveTheEventToTriggerRemoteSetupAndRefreshTheRegisteredMcpServerShape",
+					"Save the event to trigger remote setup and refresh the registered MCP server shape.",
+				)}
 			</p>
 		</div>
 	);
@@ -2445,7 +2498,7 @@ function McpSetupPanel({
 	return (
 		<InspectorSurface>
 			<InspectorHeader
-				title={t('currentMcpSetup', 'Current MCP Setup')}
+				title={t("currentMcpSetup", "Current MCP Setup")}
 				subtitle="The registered server shape generated from the board."
 				icon={<Server className="h-4 w-4" />}
 				actions={
@@ -2461,7 +2514,7 @@ function McpSetupPanel({
 						) : (
 							<RefreshCw className="h-3 w-3" />
 						)}
-						<span className="ml-1 text-xs">{t('refresh', 'Refresh')}</span>
+						<span className="ml-1 text-xs">{t("refresh", "Refresh")}</span>
 					</Button>
 				}
 			/>
@@ -2476,26 +2529,38 @@ function McpSetupPanel({
 				<div className="grid gap-2 lg:grid-cols-4">
 					<SetupMetric
 						label="Version"
-						value={version ?? t('notRegistered', 'not registered')}
+						value={version ?? t("notRegistered", "not registered")}
 						mono
 					/>
 					<SetupMetric
-						label={t('authentication', 'Authentication')}
-						value={t('countConfigured', { defaultValue_zero: 'none', defaultValue_other: '{{count}} configured', count: authCount })}
+						label={t("authentication", "Authentication")}
+						value={t("countConfigured", {
+							defaultValue_zero: "none",
+							defaultValue_other: "{{count}} configured",
+							count: authCount,
+						})}
 					/>
 					<SetupMetric
 						label="Tools"
-						value={loading ? "loading" : t('toolcountRegistered', '{{toolCount}} registered', { toolCount })}
+						value={
+							loading
+								? "loading"
+								: t("toolcountRegistered", "{{toolCount}} registered", {
+										toolCount,
+									})
+						}
 					/>
 					<SetupMetric
-						label={t('resourcesPrompts', 'Resources / Prompts')}
+						label={t("resourcesPrompts", "Resources / Prompts")}
 						value={loading ? "loading" : `${resourceCount} / ${promptCount}`}
 					/>
 				</div>
 
 				{authCount > 0 && (
 					<div className="space-y-2">
-						<div className="text-xs font-semibold">{t('authentication', 'Authentication')}</div>
+						<div className="text-xs font-semibold">
+							{t("authentication", "Authentication")}
+						</div>
 						{auths.map((auth) => (
 							<div
 								key={auth.id}
@@ -2528,7 +2593,10 @@ function McpSetupPanel({
 								className="flex items-center justify-between gap-2 rounded-md border bg-background p-2 text-xs"
 							>
 								<span className="text-muted-foreground">
-									{t('authIsLinkedToMcpEntriesButDetailsAreNotAvailable', 'Auth is linked to MCP entries, but details are not available.')}
+									{t(
+										"authIsLinkedToMcpEntriesButDetailsAreNotAvailable",
+										"Auth is linked to MCP entries, but details are not available.",
+									)}
 								</span>
 								<code className="truncate">{authId}</code>
 							</div>
@@ -2537,22 +2605,26 @@ function McpSetupPanel({
 				)}
 
 				<div className="space-y-2">
-					<div className="text-xs font-semibold">{t('mcpEntries', 'MCP Entries')}</div>
+					<div className="text-xs font-semibold">
+						{t("mcpEntries", "MCP Entries")}
+					</div>
 					{loading ? (
 						<div className="flex items-center gap-2 rounded-md border bg-background p-2 text-xs text-muted-foreground">
 							<Loader2 className="h-3 w-3 animate-spin" />
-							{t('loadingSetup2', 'Loading setup...')}
+							{t("loadingSetup2", "Loading setup...")}
 						</div>
 					) : groups.length === 0 && fallbackFunctionRefs.length === 0 ? (
 						<div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-							{t('noMcpSetupRegisteredYet', 'No MCP setup registered yet.')}
+							{t("noMcpSetupRegisteredYet", "No MCP setup registered yet.")}
 						</div>
 					) : (
 						<div className="space-y-2">
 							{fallbackFunctionRefs.length > 0 && (
 								<div className="rounded-md border bg-background">
 									<div className="flex items-center justify-between border-b px-2 py-1.5">
-										<span className="text-xs font-medium">{t('toolReferences', 'Tool References')}</span>
+										<span className="text-xs font-medium">
+											{t("toolReferences", "Tool References")}
+										</span>
 										<Badge variant="outline" className="font-mono text-[10px]">
 											{fallbackFunctionRefs.length}
 										</Badge>
@@ -2606,7 +2678,11 @@ function McpSetupPanel({
 																registration.auth_id ? "secondary" : "outline"
 															}
 															className="max-w-full whitespace-normal text-left font-normal leading-tight"
-														>{t('authAuthtext', 'auth: {{authText}}', { authText })}</Badge>
+														>
+															{t("authAuthtext", "auth: {{authText}}", {
+																authText,
+															})}
+														</Badge>
 													</div>
 													{details.length > 0 && (
 														<div className="grid gap-1.5 lg:grid-cols-2">

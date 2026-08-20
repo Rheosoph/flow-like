@@ -177,10 +177,15 @@ export const FlowLayerIndicators = memo(function FlowLayerIndicators({
 							</TooltipTrigger>
 							<TooltipContent side="top" className="text-xs">
 								<div className="flex flex-col gap-0.5">
-									<span className="font-medium">{t('countUsersInThisLayer', { defaultValue_one: '{{count}} user in this layer', defaultValue_other: '{{count}} users in this layer', count: indicator.peers.length })}
+									<span className="font-medium">
+										{t("countUsersInThisLayer", {
+											defaultValue_one: "{{count}} user in this layer",
+											defaultValue_other: "{{count}} users in this layer",
+											count: indicator.peers.length,
+										})}
 									</span>
 									<span className="text-muted-foreground">
-										{t('clickToJumpIn', 'Click to jump in')}
+										{t("clickToJumpIn", "Click to jump in")}
 									</span>
 								</div>
 							</TooltipContent>

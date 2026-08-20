@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -22,6 +21,7 @@ import type {
 	SearchFilters,
 	SearchResults,
 } from "@flow-like/flow-like-ui/lib/schema/wasm";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Check,
 	Download,
@@ -137,7 +137,9 @@ function PackageItem({
 				{isInstalled ? (
 					<div className="flex items-center gap-2">
 						<span className="text-[11px] text-muted-foreground/60 flex items-center gap-1">
-							<Check className="h-3 w-3 text-green-500/70" />{`v${installedVersion}`}</span>
+							<Check className="h-3 w-3 text-green-500/70" />
+							{`v${installedVersion}`}
+						</span>
 						<Button
 							size="sm"
 							variant="ghost"
@@ -171,7 +173,7 @@ function PackageItem({
 						) : (
 							<>
 								<Download className="h-3.5 w-3.5" />
-								{t('install', 'Install')}
+								{t("install", "Install")}
 							</>
 						)}
 					</Button>
@@ -328,7 +330,7 @@ export default function ExplorePackagesPage() {
 				<div className="flex flex-col items-center gap-3">
 					<Loader2 className="h-5 w-5 animate-spin text-muted-foreground/50" />
 					<p className="text-xs text-muted-foreground/50">
-						{t('initializingRegistry', 'Initializing registry…')}
+						{t("initializingRegistry", "Initializing registry…")}
 					</p>
 				</div>
 			</div>
@@ -371,7 +373,7 @@ export default function ExplorePackagesPage() {
 				<div className="relative flex-1 max-w-lg">
 					<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder={t('searchPackages2', 'Search packages…')}
+						placeholder={t("searchPackages2", "Search packages…")}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && fetchPackages()}
@@ -410,7 +412,12 @@ export default function ExplorePackagesPage() {
 			</div>
 
 			{searchResults && (
-				<p className="text-xs text-muted-foreground/50">{t('countPackagesFound', { defaultValue_one: '{{count}} package found', defaultValue_other: '{{count}} packages found', count: searchResults.totalCount })}
+				<p className="text-xs text-muted-foreground/50">
+					{t("countPackagesFound", {
+						defaultValue_one: "{{count}} package found",
+						defaultValue_other: "{{count}} packages found",
+						count: searchResults.totalCount,
+					})}
 				</p>
 			)}
 
@@ -451,10 +458,10 @@ export default function ExplorePackagesPage() {
 					<div className="flex flex-col items-center justify-center py-20 text-center">
 						<Package className="h-8 w-8 text-muted-foreground/30 mb-3" />
 						<p className="text-sm text-muted-foreground/50">
-							{t('noPackagesFound', 'No packages found')}
+							{t("noPackagesFound", "No packages found")}
 						</p>
 						<p className="text-xs text-muted-foreground/30 mt-1">
-							{t('tryADifferentSearchTerm', 'Try a different search term')}
+							{t("tryADifferentSearchTerm", "Try a different search term")}
 						</p>
 					</div>
 				)}

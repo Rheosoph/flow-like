@@ -19,10 +19,13 @@ export default function RegistryLayout({
 			<div className="px-4 sm:px-8 pt-5 space-y-4">
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">
-						{t('customNodes', 'Custom Nodes')}
+						{t("customNodes", "Custom Nodes")}
 					</h1>
 					<p className="text-sm text-muted-foreground/70">
-						{t('browseAndManageNodePackages', 'Browse and manage node packages')}
+						{t(
+							"browseAndManageNodePackages",
+							"Browse and manage node packages",
+						)}
 					</p>
 				</div>
 
@@ -36,7 +39,7 @@ export default function RegistryLayout({
 							}`}
 						>
 							<Download className="h-3.5 w-3.5" />
-							{t('owned', 'Owned')}
+							{t("owned", "Owned")}
 						</div>
 					</Link>
 					<Link href="/settings/registry/explore">
@@ -48,7 +51,7 @@ export default function RegistryLayout({
 							}`}
 						>
 							<Search className="h-3.5 w-3.5" />
-							{t('explore', 'Explore')}
+							{t("explore", "Explore")}
 						</div>
 					</Link>
 				</div>

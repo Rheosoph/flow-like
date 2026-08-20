@@ -141,7 +141,7 @@ function EmptyStudioState({
 				{description}
 			</p>
 			<Button className="mt-5" onClick={onCreate}>
-				<Plus className="h-4 w-4" /> {t('setUpOntology', 'Set up ontology')}
+				<Plus className="h-4 w-4" /> {t("setUpOntology", "Set up ontology")}
 			</Button>
 		</div>
 	);
@@ -177,11 +177,23 @@ export function DataStudioOverview({
 		<div className="space-y-6">
 			<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
 				{[
-					{ label: t('ontologies', 'Ontologies'), value: ontologies.length, icon: Layers3 },
-					{ label: t('objectTypes', 'Object types'), value: objectCount, icon: Box },
-					{ label: t('actions', 'Actions'), value: actionCount, icon: Workflow },
-					{ label: t('shared', 'Shared'), value: exposedCount, icon: Share2 },
-					{ label: t('remote', 'Remote'), value: remoteCount, icon: Cloud },
+					{
+						label: t("ontologies", "Ontologies"),
+						value: ontologies.length,
+						icon: Layers3,
+					},
+					{
+						label: t("objectTypes", "Object types"),
+						value: objectCount,
+						icon: Box,
+					},
+					{
+						label: t("actions", "Actions"),
+						value: actionCount,
+						icon: Workflow,
+					},
+					{ label: t("shared", "Shared"), value: exposedCount, icon: Share2 },
+					{ label: t("remote", "Remote"), value: remoteCount, icon: Cloud },
 				].map(({ label, value, icon: Icon }) => (
 					<Card key={label}>
 						<CardContent className="flex items-center justify-between p-4">
@@ -203,23 +215,36 @@ export function DataStudioOverview({
 				<Card>
 					<CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
 						<div>
-							<CardTitle className="text-base">{t('yourSemanticLayer', 'Your semantic layer')}</CardTitle>
-							<p className="mt-1 text-sm text-muted-foreground">{t('objectsRelationshipsViewsAndOperationsOverTablecount', 'Objects, relationships, views, and operations over {{tableCount}}', { tableCount })}{" "}
+							<CardTitle className="text-base">
+								{t("yourSemanticLayer", "Your semantic layer")}
+							</CardTitle>
+							<p className="mt-1 text-sm text-muted-foreground">
+								{t(
+									"objectsRelationshipsViewsAndOperationsOverTablecount",
+									"Objects, relationships, views, and operations over {{tableCount}}",
+									{ tableCount },
+								)}{" "}
 								tables.
 							</p>
 						</div>
 						<Button size="sm" onClick={onCreateOntology}>
-							<Plus className="h-4 w-4" /> {t('newOntology', 'New ontology')}
+							<Plus className="h-4 w-4" /> {t("newOntology", "New ontology")}
 						</Button>
 					</CardHeader>
 					<CardContent>
 						{ontologies.length === 0 ? (
 							<div className="rounded-xl border border-dashed p-8 text-center">
 								<p className="text-sm font-medium">
-									{t('modelYourFirstBusinessObject', 'Model your first business object')}
+									{t(
+										"modelYourFirstBusinessObject",
+										"Model your first business object",
+									)}
 								</p>
 								<p className="mt-1 text-xs text-muted-foreground">
-									{t('selectTablesAndDataStudioWillInferObjectIdsDisplayFieldsAndRelationships', "Select tables and Data Studio will infer object IDs, display fields, and relationships.")}
+									{t(
+										"selectTablesAndDataStudioWillInferObjectIdsDisplayFieldsAndRelationships",
+										"Select tables and Data Studio will infer object IDs, display fields, and relationships.",
+									)}
 								</p>
 							</div>
 						) : (
@@ -238,10 +263,19 @@ export function DataStudioOverview({
 											<p className="truncate text-sm font-medium">
 												{ontology.name}
 											</p>
-											<p className="text-xs text-muted-foreground">{t('lengthObjects', '{{length}} objects ·', { length: ontology.nodes.length })}{" "}{t('lengthRelationships', '{{length}} relationships', { length: ontology.edges.length })}</p>
+											<p className="text-xs text-muted-foreground">
+												{t("lengthObjects", "{{length}} objects ·", {
+													length: ontology.nodes.length,
+												})}{" "}
+												{t("lengthRelationships", "{{length}} relationships", {
+													length: ontology.edges.length,
+												})}
+											</p>
 										</div>
 										{ontology.bindings_enabled && (
-											<Badge variant="secondary">{t('bindings', 'Bindings')}</Badge>
+											<Badge variant="secondary">
+												{t("bindings", "Bindings")}
+											</Badge>
 										)}
 										<ChevronRight className="h-4 w-4 text-muted-foreground" />
 									</button>
@@ -252,7 +286,11 @@ export function DataStudioOverview({
 										size="sm"
 										className="w-full justify-center text-muted-foreground"
 										onClick={() => onNavigate("model")}
-									>{t('viewAllLength', 'View all ({{length}})', { length: ontologies.length })}</Button>
+									>
+										{t("viewAllLength", "View all ({{length}})", {
+											length: ontologies.length,
+										})}
+									</Button>
 								)}
 							</div>
 						)}
@@ -261,32 +299,46 @@ export function DataStudioOverview({
 
 				<Card>
 					<CardHeader className="pb-3">
-						<CardTitle className="text-base">{t('startWithATask', 'Start with a task')}</CardTitle>
+						<CardTitle className="text-base">
+							{t("startWithATask", "Start with a task")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-2">
 						{[
 							{
 								view: "objects",
-								title: t('exploreBusinessObjects', 'Explore business objects'),
-								description: t('searchAndInspectGeneratedObjectViews', 'Search and inspect generated object views'),
+								title: t("exploreBusinessObjects", "Explore business objects"),
+								description: t(
+									"searchAndInspectGeneratedObjectViews",
+									"Search and inspect generated object views",
+								),
 								icon: Search,
 							},
 							{
 								view: "model",
-								title: t('shapeTheModel', 'Shape the model'),
-								description: t('reviewTypesLinksMappingsAndHealth', 'Review types, links, mappings, and health'),
+								title: t("shapeTheModel", "Shape the model"),
+								description: t(
+									"reviewTypesLinksMappingsAndHealth",
+									"Review types, links, mappings, and health",
+								),
 								icon: GitBranch,
 							},
 							{
 								view: "actions",
-								title: t('connectAnAction', 'Connect an action'),
-								description: t('bindAnOperationToATypedBoardEntry', 'Bind an operation to a typed board entry'),
+								title: t("connectAnAction", "Connect an action"),
+								description: t(
+									"bindAnOperationToATypedBoardEntry",
+									"Bind an operation to a typed board entry",
+								),
 								icon: Workflow,
 							},
 							{
 								view: "sharing",
-								title: t('exposeAContract', 'Expose a contract'),
-								description: t('shareWithProjectsThroughAppConnections', 'Share with projects through app connections'),
+								title: t("exposeAContract", "Expose a contract"),
+								description: t(
+									"shareWithProjectsThroughAppConnections",
+									"Share with projects through app connections",
+								),
 								icon: Share2,
 							},
 						].map(({ view, title, description, icon: Icon }) => (
@@ -464,7 +516,7 @@ export function ObjectExplorerPanel({
 			setError(
 				loadError instanceof Error
 					? loadError.message
-					: t('couldNotLoadObjects', 'Could not load objects.'),
+					: t("couldNotLoadObjects", "Could not load objects."),
 			);
 			setRows([]);
 		} finally {
@@ -499,8 +551,11 @@ export function ObjectExplorerPanel({
 	if (sources.length === 0) {
 		return (
 			<EmptyStudioState
-				title={t('noObjectsToExplore', 'No objects to explore')}
-				description={t('setUpAnOntologyToTurnNativeTablesIntoSearchableBusinessObjectsAndStandardObjectViews', 'Set up an ontology to turn native tables into searchable business objects and standard object views.')}
+				title={t("noObjectsToExplore", "No objects to explore")}
+				description={t(
+					"setUpAnOntologyToTurnNativeTablesIntoSearchableBusinessObjectsAndStandardObjectViews",
+					"Set up an ontology to turn native tables into searchable business objects and standard object views.",
+				)}
 				onCreate={onCreateOntology}
 			/>
 		);
@@ -519,7 +574,7 @@ export function ObjectExplorerPanel({
 					>
 						<SelectTrigger
 							className="bg-background"
-							aria-label={t('selectOntology', 'Select ontology')}
+							aria-label={t("selectOntology", "Select ontology")}
 						>
 							<SelectValue />
 						</SelectTrigger>
@@ -530,7 +585,7 @@ export function ObjectExplorerPanel({
 										<span className="truncate">{item.name}</span>
 										{item.remoteImportId && (
 											<Badge variant="outline" className="gap-1 text-[10px]">
-												<Cloud className="h-3 w-3" /> {t('remote', 'Remote')}
+												<Cloud className="h-3 w-3" /> {t("remote", "Remote")}
 											</Badge>
 										)}
 									</span>
@@ -542,7 +597,7 @@ export function ObjectExplorerPanel({
 				<ScrollArea className="h-[180px] lg:h-[calc(100%-61px)]">
 					<div className="space-y-1 p-2">
 						<p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-							{t('objectTypes', 'Object types')}
+							{t("objectTypes", "Object types")}
 						</p>
 						{ontology?.nodes.map((object) => {
 							const active =
@@ -568,17 +623,25 @@ export function ObjectExplorerPanel({
 					<div>
 						<div className="flex items-center gap-2">
 							<h2 className="font-semibold">{objectType?.label}</h2>
-							<Badge variant="outline">{t('lengthPreview', '{{length}} preview', { length: visibleRows.length })}</Badge>
+							<Badge variant="outline">
+								{t("lengthPreview", "{{length}} preview", {
+									length: visibleRows.length,
+								})}
+							</Badge>
 							{source?.remoteImportId && (
 								<Badge variant="outline" className="gap-1">
-									<Cloud className="h-3 w-3" />{t('remoteSourcelabel', 'Remote · {{sourceLabel}}', { sourceLabel: source.sourceLabel })}</Badge>
+									<Cloud className="h-3 w-3" />
+									{t("remoteSourcelabel", "Remote · {{sourceLabel}}", {
+										sourceLabel: source.sourceLabel,
+									})}
+								</Badge>
 							)}
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{source?.remoteImportId
-								? t('remoteObjectReadonly', 'Remote object · read-only')
-								: t('standardObjectView', 'Standard object view')}{" "}
-							{t('source2', '· source')} {objectType?.table}
+								? t("remoteObjectReadonly", "Remote object · read-only")
+								: t("standardObjectView", "Standard object view")}{" "}
+							{t("source2", "· source")} {objectType?.table}
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -587,8 +650,8 @@ export function ObjectExplorerPanel({
 							<Input
 								value={query}
 								onChange={(event) => setQuery(event.target.value)}
-								placeholder={t('filterLoadedObjects', 'Filter loaded objects')}
-								aria-label={t('filterLoadedObjects', 'Filter loaded objects')}
+								placeholder={t("filterLoadedObjects", "Filter loaded objects")}
+								aria-label={t("filterLoadedObjects", "Filter loaded objects")}
 								className="pl-8"
 							/>
 							{query && (
@@ -597,7 +660,7 @@ export function ObjectExplorerPanel({
 									size="icon"
 									className="absolute right-0 top-0 h-9 w-9"
 									onClick={() => setQuery("")}
-									aria-label={t('clearObjectFilter', 'Clear object filter')}
+									aria-label={t("clearObjectFilter", "Clear object filter")}
 								>
 									<X className="h-3.5 w-3.5" />
 								</Button>
@@ -608,7 +671,7 @@ export function ObjectExplorerPanel({
 							size="icon"
 							onClick={loadObjects}
 							disabled={loading}
-							aria-label={t('refreshObjects', 'Refresh objects')}
+							aria-label={t("refreshObjects", "Refresh objects")}
 						>
 							<RefreshCw
 								className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
@@ -631,7 +694,7 @@ export function ObjectExplorerPanel({
 						</div>
 					) : visibleRows.length === 0 ? (
 						<div className="flex h-full items-center justify-center p-8 text-sm text-muted-foreground">
-							{t('noObjectsInThisPreview', 'No objects in this preview.')}
+							{t("noObjectsInThisPreview", "No objects in this preview.")}
 						</div>
 					) : (
 						<table className="w-full text-sm">
@@ -646,7 +709,9 @@ export function ObjectExplorerPanel({
 										</th>
 									))}
 									<th className="w-10">
-										<span className="sr-only">{t('openObject', 'Open object')}</span>
+										<span className="sr-only">
+											{t("openObject", "Open object")}
+										</span>
 									</th>
 								</tr>
 							</thead>
@@ -672,11 +737,14 @@ export function ObjectExplorerPanel({
 												size="icon"
 												className="h-8 w-8"
 												onClick={() => setSelectedRow(row)}
-												aria-label={t('openValVal2', 'Open {{val}} {{val2}}', { val: objectType?.label ?? "object", val2: String(
-													row[objectType?.display_column ?? ""] ??
-														row[objectType?.id_column ?? ""] ??
-														index + 1,
-												) })}
+												aria-label={t("openValVal2", "Open {{val}} {{val2}}", {
+													val: objectType?.label ?? "object",
+													val2: String(
+														row[objectType?.display_column ?? ""] ??
+															row[objectType?.id_column ?? ""] ??
+															index + 1,
+													),
+												})}
 											>
 												<ChevronRight className="h-4 w-4 text-muted-foreground" />
 											</Button>
@@ -863,7 +931,7 @@ function ObjectViewSheet({
 									<section>
 										<p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
 											<Workflow className="h-3.5 w-3.5" />
-											{t('actions', 'Actions')}
+											{t("actions", "Actions")}
 										</p>
 										<div className="space-y-1.5">
 											{actions.map((action) => (
@@ -896,7 +964,7 @@ function ObjectViewSheet({
 								{hasProminent && (
 									<section>
 										<p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-											{t('highlights', 'Highlights')}
+											{t("highlights", "Highlights")}
 										</p>
 										<div className="grid grid-cols-2 gap-2.5">
 											{prominentEntries.map(([key, value]) => (
@@ -916,7 +984,11 @@ function ObjectViewSheet({
 											<p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
 												{hasProminent ? "More properties" : "Properties"}
 											</p>
-											<span className="text-[10px] text-muted-foreground">{t('totalfieldsFields', '{{totalFields}} fields', { totalFields })}</span>
+											<span className="text-[10px] text-muted-foreground">
+												{t("totalfieldsFields", "{{totalFields}} fields", {
+													totalFields,
+												})}
+											</span>
 										</div>
 										{!restCollapsed && (
 											<div className="space-y-1.5">
@@ -943,7 +1015,11 @@ function ObjectViewSheet({
 												/>
 												{showAllProperties
 													? "Show fewer"
-													: t('showAllLengthFields', 'Show all {{length}} fields', { length: restEntries.length })}
+													: t(
+															"showAllLengthFields",
+															"Show all {{length}} fields",
+															{ length: restEntries.length },
+														)}
 											</Button>
 										)}
 									</section>
@@ -951,7 +1027,10 @@ function ObjectViewSheet({
 
 								{totalFields === 0 && (
 									<p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-										{t('thisObjectHasNoPropertiesToDisplay', 'This object has no properties to display.')}
+										{t(
+											"thisObjectHasNoPropertiesToDisplay",
+											"This object has no properties to display.",
+										)}
 									</p>
 								)}
 							</div>
@@ -968,7 +1047,7 @@ function ObjectViewSheet({
 								</div>
 								<CopyChip
 									text={JSON.stringify(row, null, 2)}
-									label={t('copyJson', 'Copy JSON')}
+									label={t("copyJson", "Copy JSON")}
 								/>
 							</div>
 						</div>
@@ -1101,9 +1180,12 @@ export function OntologyActionParameterForm({
 	return (
 		<div className="space-y-3">
 			<div>
-				<Label>{t('parameters', 'Parameters')}</Label>
+				<Label>{t("parameters", "Parameters")}</Label>
 				<p className="text-xs text-muted-foreground">
-					{t('valuesAreValidatedAgainstTheSavedActionContract', 'Values are validated against the saved action contract.')}
+					{t(
+						"valuesAreValidatedAgainstTheSavedActionContract",
+						"Values are validated against the saved action contract.",
+					)}
 				</p>
 			</div>
 			<div className="space-y-3 rounded-lg border p-3">
@@ -1138,7 +1220,9 @@ export function OntologyActionParameterForm({
 								>
 									<SelectTrigger id={fieldId}>
 										<SelectValue
-											placeholder={t('chooseVal', 'Choose {{val}}', { val: label.toLowerCase() })}
+											placeholder={t("chooseVal", "Choose {{val}}", {
+												val: label.toLowerCase(),
+											})}
 										/>
 									</SelectTrigger>
 									<SelectContent>
@@ -1223,7 +1307,7 @@ export function OntologyActionParameterForm({
 								/>
 								{jsonErrors[name] ? (
 									<p role="alert" className="text-xs text-destructive">
-										{t('enterValidJson', 'Enter valid JSON.')}
+										{t("enterValidJson", "Enter valid JSON.")}
 									</p>
 								) : (
 									property.description && (
@@ -1280,7 +1364,10 @@ export function OntologyActionParameterForm({
 			</div>
 			{missingRequired && (
 				<p role="alert" className="text-xs text-destructive">
-					{t('completeAllRequiredParameters', 'Complete all required parameters.')}
+					{t(
+						"completeAllRequiredParameters",
+						"Complete all required parameters.",
+					)}
 				</p>
 			)}
 		</div>
@@ -1359,7 +1446,11 @@ function OntologyActionDialog({
 			if (!actionSucceeded(result.status)) {
 				setError(
 					result.error_message ??
-						t('theActionEndedWithStatusVal', 'The action ended with status {{val}}.', { val: result.status.toLowerCase() }),
+						t(
+							"theActionEndedWithStatusVal",
+							"The action ended with status {{val}}.",
+							{ val: result.status.toLowerCase() },
+						),
 				);
 				return;
 			}
@@ -1373,7 +1464,7 @@ function OntologyActionDialog({
 			setError(
 				invokeError instanceof Error
 					? invokeError.message
-					: t('theActionCouldNotBeStarted', 'The action could not be started.'),
+					: t("theActionCouldNotBeStarted", "The action could not be started."),
 			);
 		} finally {
 			setSubmitting(false);
@@ -1400,17 +1491,20 @@ function OntologyActionDialog({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<Workflow className="h-4 w-4 text-primary" />
-						{action?.name ?? t('applyAction', 'Apply action')}
+						{action?.name ?? t("applyAction", "Apply action")}
 					</DialogTitle>
 					<DialogDescription>
 						{action?.description ??
-							t('runThisGovernedOperationThroughItsSavedWorkflowBinding', 'Run this governed operation through its saved workflow binding.')}
+							t(
+								"runThisGovernedOperationThroughItsSavedWorkflowBinding",
+								"Run this governed operation through its saved workflow binding.",
+							)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="space-y-4 py-1" aria-busy={submitting}>
 					<div className="rounded-lg border bg-muted/30 p-3">
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-							{t('target2', 'Target')} {objectType?.label ?? "object"}
+							{t("target2", "Target")} {objectType?.label ?? "object"}
 						</p>
 						<p className="mt-1 font-medium">
 							{String(row?.[titleProperty ?? ""] ?? objectId ?? "Object")}
@@ -1429,10 +1523,13 @@ function OntologyActionDialog({
 					/>
 					<div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
 						<p className="font-medium text-foreground">
-							{t('confirmBeforeApplying', 'Confirm before applying')}
+							{t("confirmBeforeApplying", "Confirm before applying")}
 						</p>
 						<p className="mt-1">
-							{t('theServerReloadsThisObjectValidatesTheSavedContractAndRunsOnlyThePinnedActionImplementation', "The server reloads this object, validates the saved contract, and runs only the pinned action implementation.")}
+							{t(
+								"theServerReloadsThisObjectValidatesTheSavedContractAndRunsOnlyThePinnedActionImplementation",
+								"The server reloads this object, validates the saved contract, and runs only the pinned action implementation.",
+							)}
 						</p>
 					</div>
 					<div aria-live="polite">
@@ -1442,11 +1539,13 @@ function OntologyActionDialog({
 								<div>
 									<p>
 										{run?.status === "Running"
-											? t('actionRunning', 'Action running…')
-											: t('submittingAction', 'Submitting action…')}
+											? t("actionRunning", "Action running…")
+											: t("submittingAction", "Submitting action…")}
 									</p>
 									{run?.run_id && (
-										<p className="font-mono text-[10px] text-muted-foreground">{t('runRun_id', 'Run {{run_id}}', { run_id: run.run_id })}</p>
+										<p className="font-mono text-[10px] text-muted-foreground">
+											{t("runRun_id", "Run {{run_id}}", { run_id: run.run_id })}
+										</p>
 									)}
 								</div>
 							</div>
@@ -1457,11 +1556,13 @@ function OntologyActionDialog({
 								<div>
 									<p className="font-medium">
 										{succeeded
-											? t('actionApplied', 'Action applied')
+											? t("actionApplied", "Action applied")
 											: humanizeIdentifier(run.status)}
 									</p>
 									{run.run_id && (
-										<p className="font-mono text-[10px] text-muted-foreground">{t('runRun_id', 'Run {{run_id}}', { run_id: run.run_id })}</p>
+										<p className="font-mono text-[10px] text-muted-foreground">
+											{t("runRun_id", "Run {{run_id}}", { run_id: run.run_id })}
+										</p>
 									)}
 								</div>
 							</div>
@@ -1473,7 +1574,9 @@ function OntologyActionDialog({
 							>
 								{error}
 								{run?.run_id && (
-									<p className="mt-1 font-mono text-[10px]">{t('runRun_id', 'Run {{run_id}}', { run_id: run.run_id })}</p>
+									<p className="mt-1 font-mono text-[10px]">
+										{t("runRun_id", "Run {{run_id}}", { run_id: run.run_id })}
+									</p>
 								)}
 							</div>
 						)}
@@ -1499,7 +1602,7 @@ function OntologyActionDialog({
 							) : (
 								<Play className="h-4 w-4" />
 							)}
-							{t('confirm', 'Confirm')} {action?.name ?? "action"}
+							{t("confirm", "Confirm")} {action?.name ?? "action"}
 						</Button>
 					)}
 				</DialogFooter>
@@ -1546,7 +1649,7 @@ function OntologyLifecycleMenu({
 			setError(
 				renameError instanceof Error
 					? renameError.message
-					: t('couldNotRenameTheOntology', 'Could not rename the ontology.'),
+					: t("couldNotRenameTheOntology", "Could not rename the ontology."),
 			);
 		} finally {
 			setBusy(false);
@@ -1564,7 +1667,7 @@ function OntologyLifecycleMenu({
 			setError(
 				deleteError instanceof Error
 					? deleteError.message
-					: t('couldNotDeleteTheOntology', 'Could not delete the ontology.'),
+					: t("couldNotDeleteTheOntology", "Could not delete the ontology."),
 			);
 		} finally {
 			setBusy(false);
@@ -1579,7 +1682,9 @@ function OntologyLifecycleMenu({
 						variant="ghost"
 						size="icon"
 						className="h-7 w-7"
-						aria-label={t('manageName', 'Manage {{name}}', { name: ontology.name })}
+						aria-label={t("manageName", "Manage {{name}}", {
+							name: ontology.name,
+						})}
 					>
 						<MoreVertical className="h-4 w-4" />
 					</Button>
@@ -1593,7 +1698,7 @@ function OntologyLifecycleMenu({
 							setRenameOpen(true);
 						}}
 					>
-						<Pencil className="h-4 w-4" /> {t('rename', 'Rename')}
+						<Pencil className="h-4 w-4" /> {t("rename", "Rename")}
 					</DropdownMenuItem>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem
@@ -1604,7 +1709,7 @@ function OntologyLifecycleMenu({
 							setDeleteOpen(true);
 						}}
 					>
-						<Trash2 className="h-4 w-4" /> {t('delete', 'Delete')}
+						<Trash2 className="h-4 w-4" /> {t("delete", "Delete")}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -1619,9 +1724,12 @@ function OntologyLifecycleMenu({
 			>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>{t('renameOntology', 'Rename ontology')}</DialogTitle>
+						<DialogTitle>{t("renameOntology", "Rename ontology")}</DialogTitle>
 						<DialogDescription>
-							{t('updateTheDisplayNameOfThisSemanticLayer', 'Update the display name of this semantic layer.')}
+							{t(
+								"updateTheDisplayNameOfThisSemanticLayer",
+								"Update the display name of this semantic layer.",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="grid gap-1.5 py-1">
@@ -1650,14 +1758,14 @@ function OntologyLifecycleMenu({
 							disabled={busy}
 							onClick={() => setRenameOpen(false)}
 						>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={() => void rename()}
 							disabled={busy || !nameDraft.trim()}
 						>
 							{busy && <Loader2 className="h-4 w-4 animate-spin" />}
-							{t('saveName', 'Save name')}
+							{t("saveName", "Save name")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -1675,7 +1783,10 @@ function OntologyLifecycleMenu({
 					<AlertDialogHeader>
 						<AlertDialogTitle>{`Delete ${ontology.name}?`}</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('thisRemovesTheSemanticLayerItsObjectViewsAndActionBindingsYourUnderlyingDataTablesAreNotDeletedOnlyThisOntologyDefinition', "This removes the semantic layer, its object views, and action bindings. Your underlying data tables are not deleted — only this ontology definition.")}
+							{t(
+								"thisRemovesTheSemanticLayerItsObjectViewsAndActionBindingsYourUnderlyingDataTablesAreNotDeletedOnlyThisOntologyDefinition",
+								"This removes the semantic layer, its object views, and action bindings. Your underlying data tables are not deleted — only this ontology definition.",
+							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					{error && (
@@ -1684,7 +1795,9 @@ function OntologyLifecycleMenu({
 						</p>
 					)}
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={busy}>{t('keepOntology', 'Keep ontology')}</AlertDialogCancel>
+						<AlertDialogCancel disabled={busy}>
+							{t("keepOntology", "Keep ontology")}
+						</AlertDialogCancel>
 						<AlertDialogAction
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 							disabled={busy}
@@ -1694,7 +1807,7 @@ function OntologyLifecycleMenu({
 							}}
 						>
 							{busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-							{t('deleteOntology', 'Delete ontology')}
+							{t("deleteOntology", "Delete ontology")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -1775,10 +1888,10 @@ function RelationshipRow({
 							htmlFor={`edge-containment-${rowId}`}
 							className="text-xs font-medium"
 						>
-							{t('hierarchy', 'Hierarchy')}
+							{t("hierarchy", "Hierarchy")}
 						</Label>
 						<p className="text-[10px] text-muted-foreground">
-							{t('drilldownParentChild', 'Drill-down parent → child')}
+							{t("drilldownParentChild", "Drill-down parent → child")}
 						</p>
 					</div>
 				</div>
@@ -1789,19 +1902,25 @@ function RelationshipRow({
 					>
 						<SelectTrigger
 							className="h-8 w-full text-xs sm:w-64"
-							aria-label={t('childObjectLocation', 'Child object location')}
+							aria-label={t("childObjectLocation", "Child object location")}
 						>
-							<SelectValue placeholder={t('childLocation', 'Child location')} />
+							<SelectValue placeholder={t("childLocation", "Child location")} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="self">{t('thisOntology', 'This ontology')}</SelectItem>
+							<SelectItem value="self">
+								{t("thisOntology", "This ontology")}
+							</SelectItem>
 							{otherOntologies.map((ontology) => (
 								<SelectItem key={ontology.id} value={`local:${ontology.id}`}>
 									{ontology.name}
 								</SelectItem>
 							))}
 							{installedOntologies.map((imported) => (
-								<SelectItem key={imported.id} value={`remote:${imported.id}`}>{t('remoteName', 'Remote: {{name}}', { name: imported.contract.name })}</SelectItem>
+								<SelectItem key={imported.id} value={`remote:${imported.id}`}>
+									{t("remoteName", "Remote: {{name}}", {
+										name: imported.contract.name,
+									})}
+								</SelectItem>
 							))}
 						</SelectContent>
 					</Select>
@@ -1925,8 +2044,15 @@ export function OntologyModelPanel({
 							}
 							toast.error(
 								error instanceof Error
-									? t('failedToSaveRelationshipMessage', 'Failed to save relationship: {{message}}', { message: error.message })
-									: t('failedToSaveRelationship', 'Failed to save relationship'),
+									? t(
+											"failedToSaveRelationshipMessage",
+											"Failed to save relationship: {{message}}",
+											{ message: error.message },
+										)
+									: t(
+											"failedToSaveRelationship",
+											"Failed to save relationship",
+										),
 							);
 						}
 					}
@@ -1942,8 +2068,11 @@ export function OntologyModelPanel({
 	if (ontologies.length === 0)
 		return (
 			<EmptyStudioState
-				title={t('buildTheSharedModel', 'Build the shared model')}
-				description={t('chooseNativeTablesAndDataStudioWillInferStableObjectIdentitiesDisplayFieldsAndForeignkeyRelationships', 'Choose native tables and Data Studio will infer stable object identities, display fields, and foreign-key relationships.')}
+				title={t("buildTheSharedModel", "Build the shared model")}
+				description={t(
+					"chooseNativeTablesAndDataStudioWillInferStableObjectIdentitiesDisplayFieldsAndForeignkeyRelationships",
+					"Choose native tables and Data Studio will infer stable object identities, display fields, and foreign-key relationships.",
+				)}
 				onCreate={onCreateOntology}
 			/>
 		);
@@ -1952,13 +2081,13 @@ export function OntologyModelPanel({
 			<div className="space-y-3">
 				<div className="flex items-center justify-between">
 					<div>
-						<h3 className="font-semibold">{t('ontologies', 'Ontologies')}</h3>
+						<h3 className="font-semibold">{t("ontologies", "Ontologies")}</h3>
 						<p className="text-xs text-muted-foreground">
-							{t('savedSemanticContracts', 'Saved semantic contracts')}
+							{t("savedSemanticContracts", "Saved semantic contracts")}
 						</p>
 					</div>
 					<Button size="sm" onClick={onCreateOntology}>
-						<Plus className="h-4 w-4" /> {t('new', 'New')}
+						<Plus className="h-4 w-4" /> {t("new", "New")}
 					</Button>
 				</div>
 				{ontologies.map((ontology) => (
@@ -1973,19 +2102,28 @@ export function OntologyModelPanel({
 						>
 							<p className="truncate font-medium">{ontology.name}</p>
 							<p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-								{ontology.description ?? t('noDescriptionYet', 'No description yet')}
+								{ontology.description ??
+									t("noDescriptionYet", "No description yet")}
 							</p>
 							<div className="mt-3 flex gap-2 text-xs text-muted-foreground">
-								<span>{t('lengthObjects2', '{{length}} objects', { length: ontology.nodes.length })}</span>
+								<span>
+									{t("lengthObjects2", "{{length}} objects", {
+										length: ontology.nodes.length,
+									})}
+								</span>
 								<span>·</span>
-								<span>{t('lengthLinks', '{{length}} links', { length: ontology.edges.length })}</span>
+								<span>
+									{t("lengthLinks", "{{length}} links", {
+										length: ontology.edges.length,
+									})}
+								</span>
 							</div>
 						</button>
 						<div className="absolute right-3 top-3 flex items-center gap-1">
 							{ontology.exposed ? (
-								<Badge variant="secondary">{t('shared', 'Shared')}</Badge>
+								<Badge variant="secondary">{t("shared", "Shared")}</Badge>
 							) : (
-								<Badge variant="outline">{t('private', 'Private')}</Badge>
+								<Badge variant="outline">{t("private", "Private")}</Badge>
 							)}
 							{appId && (
 								<OntologyLifecycleMenu appId={appId} ontology={ontology} />
@@ -2003,19 +2141,24 @@ export function OntologyModelPanel({
 								{selected.bindings_enabled && (
 									<Badge className="gap-1">
 										<Braces className="h-3 w-3" />
-										{t('bindingsGenerated', 'Bindings generated')}
+										{t("bindingsGenerated", "Bindings generated")}
 									</Badge>
 								)}
 							</div>
 							<p className="mt-1 text-sm text-muted-foreground">
-								{selected.description ?? t('aSemanticModelOverProjectData', 'A semantic model over project data.')}
+								{selected.description ??
+									t(
+										"aSemanticModelOverProjectData",
+										"A semantic model over project data.",
+									)}
 							</p>
 						</div>
 						<Button
 							variant="outline"
 							onClick={() => onOpenOntology(selected.id)}
 						>
-							<Network className="h-4 w-4" /> {t('exploreDataGraph', 'Explore data graph')}{" "}
+							<Network className="h-4 w-4" />{" "}
+							{t("exploreDataGraph", "Explore data graph")}{" "}
 							<ExternalLink className="h-3.5 w-3.5" />
 						</Button>
 					</div>
@@ -2023,7 +2166,9 @@ export function OntologyModelPanel({
 					<div>
 						<div className="mb-3 flex items-center justify-between">
 							<div>
-								<h3 className="text-sm font-medium">{t('objectTypes', 'Object types')}</h3>
+								<h3 className="text-sm font-medium">
+									{t("objectTypes", "Object types")}
+								</h3>
 								<p className="text-xs text-muted-foreground">
 									{`Business objects compiled from native tables`}
 								</p>
@@ -2071,16 +2216,24 @@ export function OntologyModelPanel({
 					<div>
 						<div className="mb-3 flex items-center justify-between">
 							<div>
-								<h3 className="text-sm font-medium">{t('relationships', 'Relationships')}</h3>
+								<h3 className="text-sm font-medium">
+									{t("relationships", "Relationships")}
+								</h3>
 								<p className="text-xs text-muted-foreground">
-									{t('inferredLinksCanBeRefinedInTheGraphEditor', 'Inferred links can be refined in the graph editor')}
+									{t(
+										"inferredLinksCanBeRefinedInTheGraphEditor",
+										"Inferred links can be refined in the graph editor",
+									)}
 								</p>
 							</div>
 							<Badge variant="secondary">{selected.edges.length}</Badge>
 						</div>
 						{selected.edges.length === 0 ? (
 							<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
-								{t('noRelationshipsInferredYet', 'No relationships inferred yet.')}
+								{t(
+									"noRelationshipsInferredYet",
+									"No relationships inferred yet.",
+								)}
 							</div>
 						) : (
 							<div className="space-y-2">
@@ -2291,7 +2444,10 @@ export function OntologyActionsPanel({
 			setSaveError(
 				error instanceof Error
 					? error.message
-					: t('theBoardVersionCouldNotBePublished', 'The board version could not be published.'),
+					: t(
+							"theBoardVersionCouldNotBePublished",
+							"The board version could not be published.",
+						),
 			);
 		} finally {
 			setPublishingVersion(false);
@@ -2366,7 +2522,10 @@ export function OntologyActionsPanel({
 			setSaveError(
 				error instanceof Error
 					? error.message
-					: t('theOntologyActionCouldNotBeSaved', 'The ontology action could not be saved.'),
+					: t(
+							"theOntologyActionCouldNotBeSaved",
+							"The ontology action could not be saved.",
+						),
 			);
 		} finally {
 			setSaving(false);
@@ -2400,7 +2559,10 @@ export function OntologyActionsPanel({
 				setRepairError(
 					error instanceof Error
 						? error.message
-						: t('theActionBindingCouldNotBeRefreshed', 'The action binding could not be refreshed.'),
+						: t(
+								"theActionBindingCouldNotBeRefreshed",
+								"The action binding could not be refreshed.",
+							),
 				);
 			} finally {
 				setRepairingOntologyId(null);
@@ -2421,7 +2583,10 @@ export function OntologyActionsPanel({
 				setRepairError(
 					error instanceof Error
 						? error.message
-						: t('theActionCouldNotBeRemoved', 'The action could not be removed.'),
+						: t(
+								"theActionCouldNotBeRemoved",
+								"The action could not be removed.",
+							),
 				);
 			} finally {
 				setRepairingOntologyId(null);
@@ -2433,8 +2598,11 @@ export function OntologyActionsPanel({
 	if (ontologies.length === 0)
 		return (
 			<EmptyStudioState
-				title={t('actionsStartWithObjects', 'Actions start with objects')}
-				description={t('createAnOntologyFirstThenBindObjectlevelOperationsToTypedBoardEntryNodes', 'Create an ontology first, then bind object-level operations to typed board entry nodes.')}
+				title={t("actionsStartWithObjects", "Actions start with objects")}
+				description={t(
+					"createAnOntologyFirstThenBindObjectlevelOperationsToTypedBoardEntryNodes",
+					"Create an ontology first, then bind object-level operations to typed board entry nodes.",
+				)}
 				onCreate={onCreateOntology}
 			/>
 		);
@@ -2442,13 +2610,18 @@ export function OntologyActionsPanel({
 		<div className="space-y-5">
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div>
-					<h3 className="font-semibold">{t('ontologyActions', 'Ontology actions')}</h3>
+					<h3 className="font-semibold">
+						{t("ontologyActions", "Ontology actions")}
+					</h3>
 					<p className="text-sm text-muted-foreground">
-						{t('governedObjectOperationsBackedByAPinnedBoardAndStartNode', 'Governed object operations backed by a pinned board and start node.')}
+						{t(
+							"governedObjectOperationsBackedByAPinnedBoardAndStartNode",
+							"Governed object operations backed by a pinned board and start node.",
+						)}
 					</p>
 				</div>
 				<Button onClick={() => openActionEditor()}>
-					<Plus className="h-4 w-4" /> {t('defineAction', 'Define action')}
+					<Plus className="h-4 w-4" /> {t("defineAction", "Define action")}
 				</Button>
 			</div>
 			{allActions.length === 0 ? (
@@ -2456,9 +2629,14 @@ export function OntologyActionsPanel({
 					<div className="mx-auto mb-3 w-fit rounded-xl bg-primary/10 p-3 text-primary">
 						<Workflow className="h-5 w-5" />
 					</div>
-					<p className="font-medium">{t('noActionsDefined', 'No actions defined')}</p>
+					<p className="font-medium">
+						{t("noActionsDefined", "No actions defined")}
+					</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						{t('bindAnObjectOperationToAnExistingBoardEntryNode', 'Bind an object operation to an existing board entry node.')}
+						{t(
+							"bindAnObjectOperationToAnExistingBoardEntryNode",
+							"Bind an object operation to an existing board entry node.",
+						)}
 					</p>
 				</div>
 			) : (
@@ -2479,7 +2657,8 @@ export function OntologyActionsPanel({
 											</div>
 											<div>
 												<p className="font-medium">{action.name}</p>
-												<p className="text-xs text-muted-foreground">{`${owner.name} ·`}{" "}
+												<p className="text-xs text-muted-foreground">
+													{`${owner.name} ·`}{" "}
 													{owner.nodes.find(
 														(item) => objectKey(item) === action.object_type,
 													)?.label ?? action.object_type}
@@ -2497,16 +2676,20 @@ export function OntologyActionsPanel({
 									)}
 									<div className="mt-4 grid grid-cols-2 gap-2 text-xs">
 										<div className="rounded-lg bg-muted/40 p-2">
-											<span className="text-muted-foreground">{t('board2', 'Board')}</span>
+											<span className="text-muted-foreground">
+												{t("board2", "Board")}
+											</span>
 											<p className="mt-0.5 truncate font-medium">
 												{boards.find((item) => item.id === action.board_id)
 													?.name ?? action.board_id}
 											</p>
 										</div>
 										<div className="rounded-lg bg-muted/40 p-2">
-											<span className="text-muted-foreground">{t('binding', 'Binding')}</span>
+											<span className="text-muted-foreground">
+												{t("binding", "Binding")}
+											</span>
 											<p className="mt-0.5 truncate font-mono text-[10px]">
-												{action.start_node_id ?? t('notSet', 'Not set')}
+												{action.start_node_id ?? t("notSet", "Not set")}
 											</p>
 										</div>
 									</div>
@@ -2517,7 +2700,7 @@ export function OntologyActionsPanel({
 											disabled={repairingOntologyId === owner.id}
 											onClick={() => openActionEditor(owner, action)}
 										>
-											{t('edit', 'Edit')}
+											{t("edit", "Edit")}
 										</Button>
 										<Button
 											variant="ghost"
@@ -2538,23 +2721,32 @@ export function OntologyActionsPanel({
 													disabled={repairingOntologyId === owner.id}
 													className="text-destructive hover:text-destructive"
 												>
-													{t('remove', 'Remove')}
+													{t("remove", "Remove")}
 												</Button>
 											</AlertDialogTrigger>
 											<AlertDialogContent>
 												<AlertDialogHeader>
-													<AlertDialogTitle>{t('removeName', 'Remove {{name}}?', { name: action.name })}</AlertDialogTitle>
+													<AlertDialogTitle>
+														{t("removeName", "Remove {{name}}?", {
+															name: action.name,
+														})}
+													</AlertDialogTitle>
 													<AlertDialogDescription>
-														{t('theGeneratedProjectBindingAndItsManagedEventWillBeRemovedBoardsAlreadyUsingTheBindingWillNeedToBeUpdated', "The generated project binding and its managed event will be removed. Boards already using the binding will need to be updated.")}
+														{t(
+															"theGeneratedProjectBindingAndItsManagedEventWillBeRemovedBoardsAlreadyUsingTheBindingWillNeedToBeUpdated",
+															"The generated project binding and its managed event will be removed. Boards already using the binding will need to be updated.",
+														)}
 													</AlertDialogDescription>
 												</AlertDialogHeader>
 												<AlertDialogFooter>
-													<AlertDialogCancel>{t('keepAction', 'Keep action')}</AlertDialogCancel>
+													<AlertDialogCancel>
+														{t("keepAction", "Keep action")}
+													</AlertDialogCancel>
 													<AlertDialogAction
 														className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 														onClick={() => void removeAction(owner, action.id)}
 													>
-														{t('removeAction', 'Remove action')}
+														{t("removeAction", "Remove action")}
 													</AlertDialogAction>
 												</AlertDialogFooter>
 											</AlertDialogContent>
@@ -2579,16 +2771,19 @@ export function OntologyActionsPanel({
 					<DialogHeader>
 						<DialogTitle>
 							{editingActionId
-								? t('editOntologyAction', 'Edit ontology action')
-								: t('defineAnOntologyAction', 'Define an ontology action')}
+								? t("editOntologyAction", "Edit ontology action")
+								: t("defineAnOntologyAction", "Define an ontology action")}
 						</DialogTitle>
 						<DialogDescription>
-							{t('chooseTheObjectAndTheExactBoardEntryThatImplementsThisOperation', "Choose the object and the exact board entry that implements this operation.")}
+							{t(
+								"chooseTheObjectAndTheExactBoardEntryThatImplementsThisOperation",
+								"Choose the object and the exact board entry that implements this operation.",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="grid gap-4 py-2">
 						<div className="grid gap-1.5">
-							<Label>{t('ontology', 'Ontology')}</Label>
+							<Label>{t("ontology", "Ontology")}</Label>
 							<Select
 								value={ontology?.id}
 								disabled={Boolean(editingActionId)}
@@ -2610,10 +2805,12 @@ export function OntologyActionsPanel({
 							</Select>
 						</div>
 						<div className="grid gap-1.5">
-							<Label>{t('objectType', 'Object type')}</Label>
+							<Label>{t("objectType", "Object type")}</Label>
 							<Select value={objectType} onValueChange={setObjectType}>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectObject', 'Select object')} />
+									<SelectValue
+										placeholder={t("selectObject", "Select object")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{ontology?.nodes.map((item) => (
@@ -2625,24 +2822,27 @@ export function OntologyActionsPanel({
 							</Select>
 						</div>
 						<div className="grid gap-1.5">
-							<Label>{t('actionName', 'Action name')}</Label>
+							<Label>{t("actionName", "Action name")}</Label>
 							<Input
 								value={name}
 								onChange={(event) => setName(event.target.value)}
-								placeholder={t('approveOrder', 'Approve order')}
+								placeholder={t("approveOrder", "Approve order")}
 							/>
 						</div>
 						<div className="grid gap-1.5">
-							<Label>{t('description', 'Description')}</Label>
+							<Label>{t("description", "Description")}</Label>
 							<Textarea
 								value={description}
 								onChange={(event) => setDescription(event.target.value)}
-								placeholder={t('whatChangesWhenThisActionSucceeds', 'What changes when this action succeeds?')}
+								placeholder={t(
+									"whatChangesWhenThisActionSucceeds",
+									"What changes when this action succeeds?",
+								)}
 							/>
 						</div>
 						<div className="grid gap-3 sm:grid-cols-2">
 							<div className="grid gap-1.5">
-								<Label>{t('board2', 'Board')}</Label>
+								<Label>{t("board2", "Board")}</Label>
 								<Select
 									value={boardId}
 									onValueChange={(value) => {
@@ -2652,7 +2852,9 @@ export function OntologyActionsPanel({
 									}}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder={t('selectBoard', 'Select board')} />
+										<SelectValue
+											placeholder={t("selectBoard", "Select board")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										{boards.map((item) => (
@@ -2664,14 +2866,16 @@ export function OntologyActionsPanel({
 								</Select>
 							</div>
 							<div className="grid gap-1.5">
-								<Label>{t('startNode', 'Start node')}</Label>
+								<Label>{t("startNode", "Start node")}</Label>
 								<Select
 									value={startNodeId}
 									onValueChange={setStartNodeId}
 									disabled={!boardId}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder={t('selectEntry', 'Select entry')} />
+										<SelectValue
+											placeholder={t("selectEntry", "Select entry")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										{startNodes.map((node) => (
@@ -2685,7 +2889,7 @@ export function OntologyActionsPanel({
 						</div>
 						<div className="grid gap-1.5">
 							<div className="flex items-center justify-between">
-								<Label>{t('boardVersion', 'Board version')}</Label>
+								<Label>{t("boardVersion", "Board version")}</Label>
 								{boardId && appId && (
 									<button
 										type="button"
@@ -2696,7 +2900,7 @@ export function OntologyActionsPanel({
 										{publishingVersion ? (
 											<span className="flex items-center gap-1">
 												<Loader2 className="h-3 w-3 animate-spin" />
-												{t('publishing', 'Publishing…')}
+												{t("publishing", "Publishing…")}
 											</span>
 										) : (
 											`Publish current as new version`
@@ -2725,12 +2929,16 @@ export function OntologyActionsPanel({
 								disabled={!boardId}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectVersion', 'Select version')} />
+									<SelectValue
+										placeholder={t("selectVersion", "Select version")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value={CURRENT_DRAFT_VERSION}>
 										{board?.version
-											? t('currentDraftVval', 'Current draft (v{{val}})', { val: versionKey(board.version) })
+											? t("currentDraftVval", "Current draft (v{{val}})", {
+													val: versionKey(board.version),
+												})
 											: "Current draft"}
 									</SelectItem>
 									{publishedVersions.map((version) => (
@@ -2744,16 +2952,22 @@ export function OntologyActionsPanel({
 								</SelectContent>
 							</Select>
 							<p className="text-[11px] text-muted-foreground">
-								{t('pinAPublishedVersionForAReproducibleActionOrKeepTheCurrentDraftItIsPublishedAutomaticallyWhenYouSave', "Pin a published version for a reproducible action, or keep the current draft — it is published automatically when you save.")}
+								{t(
+									"pinAPublishedVersionForAReproducibleActionOrKeepTheCurrentDraftItIsPublishedAutomaticallyWhenYouSave",
+									"Pin a published version for a reproducible action, or keep the current draft — it is published automatically when you save.",
+								)}
 							</p>
 						</div>
 						<div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
 							<div className="flex items-center gap-1.5 font-medium text-foreground">
 								<ShieldCheck className="h-3.5 w-3.5" />
-								{t('pinnedImplementation', 'Pinned implementation')}
+								{t("pinnedImplementation", "Pinned implementation")}
 							</div>
 							<p className="mt-1">
-								{t('theActionResolvesThisSavedBindingServersideObjectViewsAndGeneratedProjectNodesNeverTrustAnArbitraryBoardTarget', "The action resolves this saved binding server-side; object views and generated project nodes never trust an arbitrary board target.")}
+								{t(
+									"theActionResolvesThisSavedBindingServersideObjectViewsAndGeneratedProjectNodesNeverTrustAnArbitraryBoardTarget",
+									"The action resolves this saved binding server-side; object views and generated project nodes never trust an arbitrary board target.",
+								)}
 							</p>
 							{inferredParameterSchema && (
 								<p className="mt-2 flex items-center gap-1.5 font-medium text-foreground">
@@ -2774,9 +2988,11 @@ export function OntologyActionsPanel({
 					<div className="grid gap-2 sm:grid-cols-2">
 						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
 							<div>
-								<Label htmlFor="ontology-action-enabled">{t('enabled', 'Enabled')}</Label>
+								<Label htmlFor="ontology-action-enabled">
+									{t("enabled", "Enabled")}
+								</Label>
 								<p className="text-xs text-muted-foreground">
-									{t('visibleInObjectViews', 'Visible in object views')}
+									{t("visibleInObjectViews", "Visible in object views")}
 								</p>
 							</div>
 							<Switch
@@ -2787,9 +3003,11 @@ export function OntologyActionsPanel({
 						</div>
 						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
 							<div>
-								<Label htmlFor="ontology-action-bulk">{t('allowBulk', 'Allow bulk')}</Label>
+								<Label htmlFor="ontology-action-bulk">
+									{t("allowBulk", "Allow bulk")}
+								</Label>
 								<p className="text-xs text-muted-foreground">
-									{t('upTo100ObjectsPerRun', 'Up to 100 objects per run')}
+									{t("upTo100ObjectsPerRun", "Up to 100 objects per run")}
 								</p>
 							</div>
 							<Switch
@@ -2801,7 +3019,10 @@ export function OntologyActionsPanel({
 						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
 							<div>
 								<Label htmlFor="ontology-action-exposed">
-									{t('exposeToConnectedProjects', 'Expose to connected projects')}
+									{t(
+										"exposeToConnectedProjects",
+										"Expose to connected projects",
+									)}
 								</Label>
 								<p className="text-xs text-muted-foreground">
 									{`Off hides this action from connected projects; it still runs locally`}
@@ -2820,7 +3041,7 @@ export function OntologyActionsPanel({
 							onClick={() => setDialogOpen(false)}
 							disabled={saving}
 						>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={saveAction}
@@ -2833,7 +3054,9 @@ export function OntologyActionsPanel({
 							}
 						>
 							{saving && <Loader2 className="h-4 w-4 animate-spin" />}
-							{editingActionId ? t('saveChanges2', 'Save changes') : t('saveAction', 'Save action')}
+							{editingActionId
+								? t("saveChanges2", "Save changes")
+								: t("saveAction", "Save action")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -2861,21 +3084,31 @@ function RemoteOntologyUninstallButton({
 			<AlertDialogTrigger asChild>
 				<Button variant="ghost" size="sm" disabled={disabled}>
 					{loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-					{t('uninstall', 'Uninstall')}
+					{t("uninstall", "Uninstall")}
 				</Button>
 			</AlertDialogTrigger>
 			<AlertDialogContent>
 				<AlertDialogHeader>
-					<AlertDialogTitle>{t('uninstallRemoteOntology', 'Uninstall remote ontology?')}</AlertDialogTitle>
-					<AlertDialogDescription>{t('thisRemovesTheInstalledOntologynameContractFromSourcenameExistingBoardNodesThatUseItsGeneratedBindingsWillStopResolvingUntilTheOntologyIsInstalledAgain', "This removes the installed {{ontologyName}} contract from {{sourceName}}. Existing board nodes that use its generated bindings will stop resolving until the ontology is installed again.", { ontologyName, sourceName })}</AlertDialogDescription>
+					<AlertDialogTitle>
+						{t("uninstallRemoteOntology", "Uninstall remote ontology?")}
+					</AlertDialogTitle>
+					<AlertDialogDescription>
+						{t(
+							"thisRemovesTheInstalledOntologynameContractFromSourcenameExistingBoardNodesThatUseItsGeneratedBindingsWillStopResolvingUntilTheOntologyIsInstalledAgain",
+							"This removes the installed {{ontologyName}} contract from {{sourceName}}. Existing board nodes that use its generated bindings will stop resolving until the ontology is installed again.",
+							{ ontologyName, sourceName },
+						)}
+					</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
-					<AlertDialogCancel>{t('keepInstalled', 'Keep installed')}</AlertDialogCancel>
+					<AlertDialogCancel>
+						{t("keepInstalled", "Keep installed")}
+					</AlertDialogCancel>
 					<AlertDialogAction
 						className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 						onClick={() => void onConfirm()}
 					>
-						{t('uninstallBindings', 'Uninstall bindings')}
+						{t("uninstallBindings", "Uninstall bindings")}
 					</AlertDialogAction>
 				</AlertDialogFooter>
 			</AlertDialogContent>
@@ -2957,7 +3190,10 @@ export function OntologySharingPanel({
 					[ontology.id]:
 						error instanceof Error
 							? error.message
-							: t('couldNotUpdateOntologySharing', 'Could not update ontology sharing.'),
+							: t(
+									"couldNotUpdateOntologySharing",
+									"Could not update ontology sharing.",
+								),
 				}));
 			} finally {
 				savingOntologyIdsRef.current.delete(ontology.id);
@@ -2998,7 +3234,10 @@ export function OntologySharingPanel({
 						[connection.id]:
 							error instanceof Error
 								? error.message
-								: t('couldNotDiscoverRemoteOntologies', 'Could not discover remote ontologies.'),
+								: t(
+										"couldNotDiscoverRemoteOntologies",
+										"Could not discover remote ontologies.",
+									),
 					}));
 				}
 			} finally {
@@ -3029,7 +3268,10 @@ export function OntologySharingPanel({
 				setImportError(
 					error instanceof Error
 						? error.message
-						: t('couldNotUpdateTheRemoteOntologyBinding', 'Could not update the remote ontology binding.'),
+						: t(
+								"couldNotUpdateTheRemoteOntologyBinding",
+								"Could not update the remote ontology binding.",
+							),
 				);
 			} finally {
 				setMutatingImportId(null);
@@ -3041,14 +3283,19 @@ export function OntologySharingPanel({
 		<div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
 			<div className="space-y-3">
 				<div>
-					<h3 className="font-semibold">{t('ontologyContracts', 'Ontology contracts')}</h3>
+					<h3 className="font-semibold">
+						{t("ontologyContracts", "Ontology contracts")}
+					</h3>
 					<p className="text-sm text-muted-foreground">
-						{t('exposureControlsDiscoveryExistingConnectionRolesStillGovernEveryDataReadAndAction', "Exposure controls discovery; existing connection roles still govern every data read and action.")}
+						{t(
+							"exposureControlsDiscoveryExistingConnectionRolesStillGovernEveryDataReadAndAction",
+							"Exposure controls discovery; existing connection roles still govern every data read and action.",
+						)}
 					</p>
 				</div>
 				{ontologies.length === 0 && (
 					<EmptyStudioState
-						title={t('nothingToExposeYet', 'Nothing to expose yet')}
+						title={t("nothingToExposeYet", "Nothing to expose yet")}
 						description={`Set up a local ontology, or install a contract from a connected project.`}
 						onCreate={onCreateOntology}
 					/>
@@ -3063,7 +3310,12 @@ export function OntologySharingPanel({
 									</div>
 									<div>
 										<p className="font-medium">{ontology.name}</p>
-										<p className="text-xs text-muted-foreground">{t('lengthObjectContracts', '{{length}} object contracts ·', { length: ontology.nodes.length })}{" "}
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"lengthObjectContracts",
+												"{{length}} object contracts ·",
+												{ length: ontology.nodes.length },
+											)}{" "}
 											{ontology.actions?.length ?? 0} actions
 										</p>
 									</div>
@@ -3084,10 +3336,16 @@ export function OntologySharingPanel({
 							<div className="flex items-center justify-between gap-4">
 								<div>
 									<Label htmlFor={`expose-${ontology.id}`}>
-										{t('exposeToConnectedProjects', 'Expose to connected projects')}
+										{t(
+											"exposeToConnectedProjects",
+											"Expose to connected projects",
+										)}
 									</Label>
 									<p className="text-xs text-muted-foreground">
-										{t('allowsPermittedProjectsToDiscoverThisContract', 'Allows permitted projects to discover this contract.')}
+										{t(
+											"allowsPermittedProjectsToDiscoverThisContract",
+											"Allows permitted projects to discover this contract.",
+										)}
 									</p>
 								</div>
 								<Switch
@@ -3102,10 +3360,13 @@ export function OntologySharingPanel({
 							<div className="flex items-center justify-between gap-4">
 								<div>
 									<Label htmlFor={`bindings-${ontology.id}`}>
-										{t('generateBoardBindings', 'Generate board bindings')}
+										{t("generateBoardBindings", "Generate board bindings")}
 									</Label>
 									<p className="text-xs text-muted-foreground">
-										{t('addsObjectAndActionBindingsToThisProjectapossNodeCatalog', "Adds object and action bindings to this project's node catalog.")}
+										{t(
+											"addsObjectAndActionBindingsToThisProjectapossNodeCatalog",
+											"Adds object and action bindings to this project's node catalog.",
+										)}
 									</p>
 								</div>
 								<Switch
@@ -3126,7 +3387,7 @@ export function OntologySharingPanel({
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2 text-base">
 							<FileKey className="h-4 w-4" />
-							{t('connectedProjects', 'Connected projects')}
+							{t("connectedProjects", "Connected projects")}
 						</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-3">
@@ -3161,9 +3422,14 @@ export function OntologySharingPanel({
 								))
 						)}
 						<div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">
-							<p className="font-medium text-foreground">{t('defenseInDepth', 'Defense in depth')}</p>
+							<p className="font-medium text-foreground">
+								{t("defenseInDepth", "Defense in depth")}
+							</p>
 							<p className="mt-1">
-								{t('readdatabaseControlsObjectAccessAnyEventExecutionRemainsSeparatelyPermissionedExposureNeverWidensTheAssignedRole', "ReadDatabase controls object access. Any event execution remains separately permissioned; exposure never widens the assigned role.")}
+								{t(
+									"readdatabaseControlsObjectAccessAnyEventExecutionRemainsSeparatelyPermissionedExposureNeverWidensTheAssignedRole",
+									"ReadDatabase controls object access. Any event execution remains separately permissioned; exposure never widens the assigned role.",
+								)}
 							</p>
 						</div>
 					</CardContent>
@@ -3183,7 +3449,10 @@ export function OntologySharingPanel({
 							aria-live="polite"
 						>
 							<Loader2 className="h-4 w-4 animate-spin" />
-							{t('loadingInstalledOntologyBindings', 'Loading installed ontology bindings…')}
+							{t(
+								"loadingInstalledOntologyBindings",
+								"Loading installed ontology bindings…",
+							)}
 						</CardContent>
 					</Card>
 				)}
@@ -3194,7 +3463,10 @@ export function OntologySharingPanel({
 								role="alert"
 								className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
 							>
-								{t('couldNotLoadInstalledOntologyBindings', 'Could not load installed ontology bindings:')}{" "}
+								{t(
+									"couldNotLoadInstalledOntologyBindings",
+									"Could not load installed ontology bindings:",
+								)}{" "}
 								{installedOntologiesError}
 							</p>
 						</CardContent>
@@ -3205,7 +3477,7 @@ export function OntologySharingPanel({
 						<CardHeader>
 							<CardTitle className="flex items-center gap-2 text-base">
 								<Layers3 className="h-4 w-4" />
-								{t('installedBindings', 'Installed bindings')}
+								{t("installedBindings", "Installed bindings")}
 							</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-2">
@@ -3225,9 +3497,18 @@ export function OntologySharingPanel({
 											<p className="truncate text-sm font-medium">
 												{installed.contract.name}
 											</p>
-											<p className="truncate text-xs text-muted-foreground">{t('remoteSourcename', 'Remote · {{sourceName}} ·', { sourceName })}{" "}{t('lengthObjects2', '{{length}} objects', { length: installed.contract.nodes.length })}</p>
+											<p className="truncate text-xs text-muted-foreground">
+												{t("remoteSourcename", "Remote · {{sourceName}} ·", {
+													sourceName,
+												})}{" "}
+												{t("lengthObjects2", "{{length}} objects", {
+													length: installed.contract.nodes.length,
+												})}
+											</p>
 										</div>
-										<Badge variant="secondary">{t('installed', 'Installed')}</Badge>
+										<Badge variant="secondary">
+											{t("installed", "Installed")}
+										</Badge>
 										<RemoteOntologyUninstallButton
 											ontologyName={installed.contract.name}
 											sourceName={sourceName}
@@ -3251,7 +3532,7 @@ export function OntologySharingPanel({
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2 text-base">
 							<Network className="h-4 w-4" />
-							{t('availableRemoteOntologies', 'Available remote ontologies')}
+							{t("availableRemoteOntologies", "Available remote ontologies")}
 						</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-3">
@@ -3259,7 +3540,10 @@ export function OntologySharingPanel({
 							(connection) => connection.status === "ACTIVE",
 						).length === 0 ? (
 							<p className="text-sm text-muted-foreground">
-								{t('noOutgoingProjectConnectionsCanExposeContractsYet', 'No outgoing project connections can expose contracts yet.')}
+								{t(
+									"noOutgoingProjectConnectionsCanExposeContractsYet",
+									"No outgoing project connections can expose contracts yet.",
+								)}
 							</p>
 						) : (
 							remoteConnections
@@ -3275,7 +3559,10 @@ export function OntologySharingPanel({
 														{connection.app_name ?? connection.target_app_id}
 													</p>
 													<p className="text-xs text-muted-foreground">
-														{t('onlyExplicitlyExposedContractsAreReturned', 'Only explicitly exposed contracts are returned.')}
+														{t(
+															"onlyExplicitlyExposedContractsAreReturned",
+															"Only explicitly exposed contracts are returned.",
+														)}
 													</p>
 												</div>
 												<Button
@@ -3299,7 +3586,10 @@ export function OntologySharingPanel({
 												<div className="mt-3 space-y-2 border-t pt-3">
 													{contracts.length === 0 ? (
 														<p className="text-xs text-muted-foreground">
-															{t('noContractsAreExposedByThisProject', 'No contracts are exposed by this project.')}
+															{t(
+																"noContractsAreExposedByThisProject",
+																"No contracts are exposed by this project.",
+															)}
 														</p>
 													) : (
 														contracts.map((contract) => {
@@ -3328,7 +3618,13 @@ export function OntologySharingPanel({
 																			<p className="truncate text-xs font-medium">
 																				{contract.name}
 																			</p>
-																			<p className="text-[10px] text-muted-foreground">{t('lengthObjectTypesBindingsOnly', "{{length}} object types · bindings only", { length: contract.nodes.length })}</p>
+																			<p className="text-[10px] text-muted-foreground">
+																				{t(
+																					"lengthObjectTypesBindingsOnly",
+																					"{{length}} object types · bindings only",
+																					{ length: contract.nodes.length },
+																				)}
+																			</p>
 																		</div>
 																		<Badge
 																			variant={
@@ -3340,7 +3636,10 @@ export function OntologySharingPanel({
 																				: installedOntologiesError
 																					? "Unavailable"
 																					: updateAvailable
-																						? t('updateAvailable', 'Update available')
+																						? t(
+																								"updateAvailable",
+																								"Update available",
+																							)
 																						: installed
 																							? "Installed"
 																							: "Remote"}

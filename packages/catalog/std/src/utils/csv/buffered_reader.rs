@@ -446,7 +446,7 @@ mod tests {
             .create_reader(cursor);
 
         let headers = rdr.byte_headers().await.unwrap().clone();
-        let headers: Vec<String> = headers
+        let _headers: Vec<String> = headers
             .iter()
             .map(|h| String::from_utf8_lossy(h).to_string())
             .collect();

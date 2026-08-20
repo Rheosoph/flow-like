@@ -1,6 +1,6 @@
-use crate::data::datafusion::params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -30,7 +30,7 @@ impl NodeLogic for SqlQueryNode {
         let mut node = Node::new(
             "df_sql_query",
             "SQL Query",
-            "Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
+            "Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused, as are subqueries and multi-table forms; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -59,7 +59,7 @@ impl NodeLogic for SqlQueryNode {
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_output_pin(
             "exec_out",
@@ -105,7 +105,7 @@ impl NodeLogic for SqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -113,7 +113,14 @@ impl NodeLogic for SqlQueryNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+
+        // UPDATE/DELETE with subqueries or joined tables cannot be forwarded to
+        // Lance faithfully (DataFusion only hands the table plain WHERE
+        // conjuncts) — refuse those shapes before planning can mangle them.
+        flow_like_storage::databases::sql_guard::validate_lance_dml_sql(&query)?;
+
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
 
         let cached_session = session.load(context).await?;
 
@@ -282,9 +289,13 @@ fn array_value_to_json(
         DataType::Date32 => {
             let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
             let days = arr.value(idx);
-            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-            let date = epoch + chrono::Duration::days(days as i64);
-            JsonValue::String(date.format("%Y-%m-%d").to_string())
+            let epoch = chrono::DateTime::UNIX_EPOCH.date_naive();
+            match chrono::TimeDelta::try_days(days as i64)
+                .and_then(|offset| epoch.checked_add_signed(offset))
+            {
+                Some(date) => JsonValue::String(date.format("%Y-%m-%d").to_string()),
+                None => JsonValue::Null,
+            }
         }
         DataType::Date64 => {
             let arr = array.as_any().downcast_ref::<Date64Array>().unwrap();
@@ -408,6 +419,7 @@ fn timestamp_to_json(
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use flow_like_storage::datafusion::arrow::array::*;
@@ -436,6 +448,20 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn date32_values_out_of_range_read_back_as_null() {
+        let schema = Arc::new(Schema::new(vec![Field::new("day", DataType::Date32, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![20_675, i32::MAX]))],
+        )
+        .unwrap();
+
+        let rows = batches_to_rows(&[batch]).unwrap();
+        assert_eq!(rows[0].get("day"), Some(&json!("2026-08-10")));
+        assert_eq!(rows[1].get("day"), Some(&Value::Null));
     }
 
     #[tokio::test]

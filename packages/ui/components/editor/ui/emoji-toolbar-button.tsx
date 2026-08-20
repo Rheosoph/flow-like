@@ -373,7 +373,7 @@ function EmojiPickerSearchBar({
 					value={searchValue}
 					onChange={(event) => setSearch(event.target.value)}
 					placeholder={i18n.search}
-					aria-label={t('search2', 'Search')}
+					aria-label={t("search2", "Search")}
 					autoComplete="off"
 					type="text"
 					autoFocus
@@ -408,7 +408,7 @@ function EmojiPickerSearchAndClear({
 					)}
 					onClick={clearSearch}
 					title={i18n.clear}
-					aria-label={t('clear', 'Clear')}
+					aria-label={t("clear", "Clear")}
 					type="button"
 				>
 					{emojiSearchIcons.delete}

@@ -26,6 +26,7 @@ const ATTRIBUTE_GENERATION: &str = "objectGeneration";
 #[derive(Clone, Debug)]
 pub struct GcsEvent {
     /// `<bucket>/<object>/<generation>`, the identity GCS itself assigns.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub id: String,
     pub event_type: String,
     pub bucket: String,

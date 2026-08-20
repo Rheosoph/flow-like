@@ -1,105 +1,66 @@
 import {
+	type BulkUploadProgressCallback,
 	type IStorageItem,
 	type IStorageState,
-	isAzureBlobStorageUrl,
+	type IStorageUploadOptions,
+	assertBulkUploadSucceeded,
+	requestPrefixesInBatches,
+	runBulkUpload,
+	toUploadTasks,
+	uploadToSignedUrl,
 } from "@flow-like/flow-like-ui";
 import { stabilizeSignedUrls } from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
-import { type WebBackendRef, apiDelete, apiPost, apiPut } from "./api-utils";
+import { type WebBackendRef, apiDelete, apiFetch, apiPost } from "./api-utils";
 
 export class WebStorageState implements IStorageState {
 	constructor(private readonly backend: WebBackendRef) {}
 
-	private buildFilePath(prefix: string, file: File): string {
-		const path =
-			(file.webkitRelativePath ?? "") === ""
-				? file.name
-				: file.webkitRelativePath;
-		return prefix ? `${prefix}/${path}` : path;
-	}
-
+	/**
+	 * Uploads run against presigned URLs, which the API mints in batches — see
+	 * `MAX_PREFIXES` in `packages/api/src/routes/app/data/upload_files.rs`.
+	 * Asking for every URL up front puts a folder's worth of paths into one
+	 * request body and exceeds the limit, so the orchestrator resolves them a
+	 * batch at a time while transfers for earlier batches are still running.
+	 */
 	private async uploadWithEndpoint(
 		endpoint: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
-		const totalFiles = files.length;
-		let completedFiles = 0;
-
-		const fileLookup = new Map(
-			files.map((file) => [this.buildFilePath(prefix, file), file]),
-		);
-
-		const signedUrls = await apiPut<IStorageItemActionResult[]>(
-			endpoint,
-			{ prefixes: files.map((file) => this.buildFilePath(prefix, file)) },
-			this.backend.auth,
-		);
-
-		for (const urlInfo of signedUrls) {
-			const signedUrl = urlInfo.url;
-			if (urlInfo.error || !signedUrl) {
-				console.warn(
-					`Failed to get signed URL for ${urlInfo.prefix}: ${urlInfo.error}`,
-				);
-				completedFiles++;
-				continue;
-			}
-
-			const file = fileLookup.get(urlInfo.prefix);
-			if (!file) {
-				console.warn(`File not found for prefix: ${urlInfo.prefix}`);
-				completedFiles++;
-				continue;
-			}
-
-			await new Promise<void>((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-
-				xhr.upload.addEventListener("progress", (event) => {
-					if (event.lengthComputable) {
-						const fileProgress = event.loaded / event.total;
-						const totalProgress =
-							((completedFiles + fileProgress) / totalFiles) * 100;
-						onProgress?.(totalProgress);
-					}
-				});
-
-				xhr.addEventListener("load", () => {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						completedFiles++;
-						resolve();
-					} else {
-						reject(
-							new Error(
-								`Upload failed with status ${xhr.status}: ${xhr.statusText}`,
-							),
-						);
-					}
-				});
-
-				xhr.addEventListener("error", () => {
-					reject(
-						new Error("Upload failed: Network error (possible CORS issue)"),
+		const result = await runBulkUpload<string>(
+			toUploadTasks(prefix, files),
+			{
+				prepare: async (paths, signal) => {
+					const signed = await apiFetch<IStorageItemActionResult[]>(
+						endpoint,
+						{
+							method: "PUT",
+							body: JSON.stringify({ prefixes: paths }),
+							signal,
+						},
+						this.backend.auth,
 					);
-				});
+					const targets = new Map<string, string>();
+					for (const entry of signed) {
+						if (entry.url) targets.set(entry.prefix, entry.url);
+						else if (entry.error) {
+							console.warn(
+								`Failed to get signed URL for ${entry.prefix}: ${entry.error}`,
+							);
+						}
+					}
+					return targets;
+				},
+				send: (signedUrl, task, onBytes, signal) =>
+					uploadToSignedUrl(signedUrl, task.file, { onBytes, signal }),
+			},
+			{ onProgress, signal: options?.signal },
+		);
 
-				xhr.open("PUT", signedUrl);
-				xhr.setRequestHeader(
-					"Content-Type",
-					file.type || "application/octet-stream",
-				);
-
-				if (isAzureBlobStorageUrl(signedUrl)) {
-					xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
-				}
-
-				xhr.send(file);
-			});
-		}
-
-		onProgress?.(100);
+		assertBulkUploadSucceeded(result);
 	}
 
 	// Failures propagate: swallowing them into an empty array makes a denied or
@@ -137,51 +98,57 @@ export class WebStorageState implements IStorageState {
 		await apiDelete(`apps/${appId}/data/user`, this.backend.auth, { prefixes });
 	}
 
+	// Batched: the route caps a request at MAX_PREFIXES and now rejects
+	// anything larger, and callers (an a2ui surface resolving its images, a
+	// multi-file selection) legitimately ask for more than that.
+	private downloadWithEndpoint(
+		endpoint: string,
+		prefixes: string[],
+	): Promise<IStorageItemActionResult[]> {
+		return requestPrefixesInBatches(
+			prefixes,
+			async (batch) =>
+				stabilizeSignedUrls(
+					await apiPost<IStorageItemActionResult[]>(
+						endpoint,
+						{ prefixes: batch },
+						this.backend.auth,
+					),
+				),
+			{ errorMessage: "Download failed" },
+		);
+	}
+
 	async downloadStorageItems(
 		appId: string,
 		prefixes: string[],
 	): Promise<IStorageItemActionResult[]> {
-		try {
-			return stabilizeSignedUrls(
-				await apiPost<IStorageItemActionResult[]>(
-					`apps/${appId}/data/download`,
-					{ prefixes },
-					this.backend.auth,
-				),
-			);
-		} catch {
-			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
-		}
+		return this.downloadWithEndpoint(`apps/${appId}/data/download`, prefixes);
 	}
 
 	async downloadStorageItemsUser(
 		appId: string,
 		prefixes: string[],
 	): Promise<IStorageItemActionResult[]> {
-		try {
-			return stabilizeSignedUrls(
-				await apiPost<IStorageItemActionResult[]>(
-					`apps/${appId}/data/user/download`,
-					{ prefixes },
-					this.backend.auth,
-				),
-			);
-		} catch {
-			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
-		}
+		return this.downloadWithEndpoint(
+			`apps/${appId}/data/user/download`,
+			prefixes,
+		);
 	}
 
 	async uploadStorageItems(
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
 		await this.uploadWithEndpoint(
 			`apps/${appId}/data`,
 			prefix,
 			files,
 			onProgress,
+			options,
 		);
 	}
 
@@ -189,13 +156,15 @@ export class WebStorageState implements IStorageState {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
 		await this.uploadWithEndpoint(
 			`apps/${appId}/data/user`,
 			prefix,
 			files,
 			onProgress,
+			options,
 		);
 	}
 

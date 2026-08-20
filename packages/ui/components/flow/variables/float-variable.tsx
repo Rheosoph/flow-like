@@ -20,7 +20,9 @@ export function FloatVariable({
 	const { t } = useTranslation("flow");
 	return (
 		<div className="grid w-full items-center gap-1.5">
-			<Label htmlFor="default_value">{t('defaultValue', 'Default Value')}</Label>
+			<Label htmlFor="default_value">
+				{t("defaultValue", "Default Value")}
+			</Label>
 			<Input
 				value={parseUint8ArrayToJson(variable.default_value)}
 				onChange={(e) => {
@@ -34,7 +36,7 @@ export function FloatVariable({
 				disabled={disabled}
 				type={variable.secret ? "password" : "number"}
 				id="default_value"
-				placeholder={t('defaultValue', 'Default Value')}
+				placeholder={t("defaultValue", "Default Value")}
 				step="any"
 			/>
 		</div>

@@ -48,7 +48,7 @@ impl FixInitialCoordinates {
         let height = (max_y - min_y).max(60.0);
         let horizontal = width >= height;
         let axis = if horizontal { width } else { height };
-        let margin = (axis * 0.25).max(200.0).min(300.0);
+        let margin = (axis * 0.25).clamp(200.0, 300.0);
 
         if horizontal {
             (

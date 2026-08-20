@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use crate::entity::{audit_entry, sea_orm_active_enums::AuditActorType};
 
-use super::chain::{GENESIS_HASH, compute_entry_hash};
+use super::chain::{ChainEntryRow, GENESIS_HASH, compute_entry_hash};
 use super::sign::{current_kid, is_signing_configured, sign_entry};
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -247,18 +247,7 @@ impl AuditService {
 
         // Build chain data with prev_signature for each entry.
         // The first entry's prev_signature comes from the entry before the range.
-        let mut chain_data: Vec<(
-            i64,
-            chrono::NaiveDateTime,
-            String,
-            String,
-            String,
-            String,
-            Option<Value>,
-            String,
-            String,
-            Option<String>,
-        )> = Vec::with_capacity(entries.len());
+        let mut chain_data: Vec<ChainEntryRow> = Vec::with_capacity(entries.len());
         for (i, e) in entries.iter().enumerate() {
             let prev_sig = if i == 0 {
                 initial_prev_sig.clone()

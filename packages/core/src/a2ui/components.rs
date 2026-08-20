@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use super::{Action, BoundValue, Children, Style};
 
 /// All possible A2UI component types
+#[allow(clippy::large_enum_variant)]
+// ~70 schema variants; only ever produced by serde_json::from_value, never built variant-by-variant
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum A2UIComponentType {
@@ -816,6 +818,9 @@ pub struct FileInputProps {
     pub accept: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multiple: Option<BoundValue>,
+    /// Offer picking a whole folder; implies `multiple`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_size: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -26,9 +26,14 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 	return (
 		<div className="space-y-4">
 			<div>
-				<h3 className="text-sm font-medium mb-1">{t('selectTables', 'Select Tables')}</h3>
+				<h3 className="text-sm font-medium mb-1">
+					{t("selectTables", "Select Tables")}
+				</h3>
 				<p className="text-xs text-muted-foreground">
-					{t('chooseWhichDatabaseTablesToIncludeInThisGraphOverlaySelectedTablesCanBeMappedAsNodeOrEdgeSources', "Choose which database tables to include in this graph overlay. Selected tables can be mapped as node or edge sources.")}
+					{t(
+						"chooseWhichDatabaseTablesToIncludeInThisGraphOverlaySelectedTablesCanBeMappedAsNodeOrEdgeSources",
+						"Choose which database tables to include in this graph overlay. Selected tables can be mapped as node or edge sources.",
+					)}
 				</p>
 			</div>
 			<ScrollArea className="max-h-[400px]">
@@ -52,7 +57,7 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 										className="shrink-0 text-[10px] gap-1"
 									>
 										<User className="h-3 w-3" />
-										{t('user', 'User')}
+										{t("user", "User")}
 									</Badge>
 								)}
 							</label>
@@ -60,7 +65,7 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 					})}
 					{tables.length === 0 && (
 						<p className="text-sm text-muted-foreground text-center py-4">
-							{t('noTablesFound', 'No tables found')}
+							{t("noTablesFound", "No tables found")}
 						</p>
 					)}
 				</div>

@@ -292,7 +292,7 @@ function IOSQuickMenuTrigger() {
 				onTouchStart={(event) => {
 					event.stopPropagation();
 				}}
-				aria-label={t('openMenu', 'Open menu')}
+				aria-label={t("openMenu", "Open menu")}
 			>
 				<SidebarOpenIcon className="h-4 w-4" />
 			</Button>
@@ -353,7 +353,7 @@ function InnerSidebar() {
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
-								{t('settings', 'Settings')}
+								{t("settings", "Settings")}
 							</span>
 						</MotionSidebarMenuButton>
 					</Link>
@@ -367,7 +367,7 @@ function InnerSidebar() {
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
 						<span className="w-full flex flex-row items-center justify-between">
-							{t('toggleSidebar', 'Toggle Sidebar')}{" "}
+							{t("toggleSidebar", "Toggle Sidebar")}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
 								{`⌘B`}
 							</span>
@@ -488,7 +488,12 @@ function Profiles() {
 					if (!response.ok && response.status !== 404) {
 						const message = await response.text().catch(() => "");
 						throw new Error(
-							message || t('failedToDeleteProfileStatus', 'Failed to delete profile: {{status}}', { status: response.status }),
+							message ||
+								t(
+									"failedToDeleteProfileStatus",
+									"Failed to delete profile: {{status}}",
+									{ status: response.status },
+								),
 						);
 					}
 				} catch (err) {
@@ -564,7 +569,7 @@ function Profiles() {
 						sideOffset={4}
 					>
 						<DropdownMenuLabel className="text-xs text-muted-foreground">
-							{t('profiles', 'Profiles')}
+							{t("profiles", "Profiles")}
 						</DropdownMenuLabel>
 						{profiles.data &&
 							Object.values(profiles.data).map((profile, index) => {
@@ -632,7 +637,7 @@ function Profiles() {
 								<Plus className="size-4" />
 							</div>
 							<div className="font-medium text-muted-foreground">
-								{t('addProfile', 'Add profile')}
+								{t("addProfile", "Add profile")}
 							</div>
 						</DropdownMenuItem>
 						<Link href="/settings/profiles">
@@ -641,7 +646,7 @@ function Profiles() {
 									<Edit3Icon className="size-4" />
 								</div>
 								<div className="font-medium text-muted-foreground">
-									{t('editProfile', 'Edit profile')}
+									{t("editProfile", "Edit profile")}
 								</div>
 							</DropdownMenuItem>
 						</Link>
@@ -661,17 +666,24 @@ function Profiles() {
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>{t('deleteProfile', 'Delete profile')}</AlertDialogTitle>
+						<AlertDialogTitle>
+							{t("deleteProfile", "Delete profile")}
+						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('areYouSureYouWantToDelete', 'Are you sure you want to delete')}{" "}
+							{t(
+								"areYouSureYouWantToDelete",
+								"Are you sure you want to delete",
+							)}{" "}
 							<span className="font-medium text-foreground">
 								{deleteTarget?.name}
 							</span>
-							{t('thisActionCannotBeUndone', '? This action cannot be undone.')}
+							{t("thisActionCannotBeUndone", "? This action cannot be undone.")}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={isDeleting}>{t('cancel', 'Cancel')}</AlertDialogCancel>
+						<AlertDialogCancel disabled={isDeleting}>
+							{t("cancel", "Cancel")}
+						</AlertDialogCancel>
 						<AlertDialogAction
 							onClick={confirmDeleteProfile}
 							disabled={isDeleting}
@@ -887,7 +899,7 @@ function NavMain({
 	return (
 		<>
 			<SidebarGroup>
-				<SidebarGroupLabel>{t('navigation', 'Navigation')}</SidebarGroupLabel>
+				<SidebarGroupLabel>{t("navigation", "Navigation")}</SidebarGroupLabel>
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
@@ -909,7 +921,9 @@ function NavMain({
 			</SidebarGroup>
 			{developerMode && (
 				<SidebarGroup>
-					<SidebarGroupLabel>{t('development', 'Development')}</SidebarGroupLabel>
+					<SidebarGroupLabel>
+						{t("development", "Development")}
+					</SidebarGroupLabel>
 					<SidebarMenu>
 						{devItems.map((item) =>
 							item.items && item.items.length > 0 ? (
@@ -929,7 +943,7 @@ function NavMain({
 			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>{t('adminArea', 'Admin Area')}</SidebarGroupLabel>
+					<SidebarGroupLabel>{t("adminArea", "Admin Area")}</SidebarGroupLabel>
 					<SidebarMenu>
 						{items
 							.filter(
@@ -1106,7 +1120,7 @@ export function NavUser({
 											<Link href="/subscription">
 												<DropdownMenuItem className="gap-2">
 													<AnimatedSparklesIcon />
-													{t('upgradeToPro', 'Upgrade to Pro')}
+													{t("upgradeToPro", "Upgrade to Pro")}
 												</DropdownMenuItem>
 											</Link>
 										</DropdownMenuGroup>
@@ -1117,7 +1131,7 @@ export function NavUser({
 									<Link href="/account">
 										<DropdownMenuItem className="gap-2">
 											<BadgeCheck className="size-4" />
-											{t('account', 'Account')}
+											{t("account", "Account")}
 										</DropdownMenuItem>
 									</Link>
 									{profile.data && (
@@ -1135,7 +1149,7 @@ export function NavUser({
 											}}
 										>
 											<CreditCard className="size-4" />
-											{t('billing', 'Billing')}
+											{t("billing", "Billing")}
 										</DropdownMenuItem>
 									)}
 									<Link href="/notifications">
@@ -1149,7 +1163,7 @@ export function NavUser({
 													</div>
 												)}
 											</div>
-											{t('notifications', 'Notifications')}
+											{t("notifications", "Notifications")}
 										</DropdownMenuItem>
 									</Link>
 									{developerMode && (
@@ -1157,19 +1171,19 @@ export function NavUser({
 											<Link href="/account/pat">
 												<DropdownMenuItem className="gap-2 p-2">
 													<KeyIcon className="size-4" />
-													{t('token', 'Token')}
+													{t("token", "Token")}
 												</DropdownMenuItem>
 											</Link>
 											<Link href="/settings/sinks">
 												<DropdownMenuItem className="gap-2 p-2">
 													<ZapIcon className="size-4" />
-													{t('activeSinks', 'Active Sinks')}
+													{t("activeSinks", "Active Sinks")}
 												</DropdownMenuItem>
 											</Link>
 											<Link href="/settings/statistics">
 												<DropdownMenuItem className="gap-2 p-2">
 													<BarChart3 className="size-4" />
-													{t('boardStatistics', 'Board Statistics')}
+													{t("boardStatistics", "Board Statistics")}
 												</DropdownMenuItem>
 											</Link>
 										</>
@@ -1183,7 +1197,7 @@ export function NavUser({
 									}}
 								>
 									<LogOut className="size-4" />
-									{t('logOut', 'Log out')}
+									{t("logOut", "Log out")}
 								</DropdownMenuItem>
 							</>
 						)}
@@ -1201,7 +1215,7 @@ export function NavUser({
 								}}
 							>
 								<LogInIcon className="size-4" />
-								{t('logIn', 'Log in')}
+								{t("logIn", "Log in")}
 							</DropdownMenuItem>
 						)}
 					</DropdownMenuContent>
@@ -1227,7 +1241,7 @@ function Flows() {
 
 	return (
 		<SidebarGroup>
-			<SidebarGroupLabel>{t('flows', 'Flows')}</SidebarGroupLabel>
+			<SidebarGroupLabel>{t("flows", "Flows")}</SidebarGroupLabel>
 			<SidebarMenu>
 				<Collapsible
 					asChild
@@ -1255,7 +1269,7 @@ function Flows() {
 								<motion.div variants={iconVariants}>
 									<AnimatedFlowsIcon />
 								</motion.div>
-								<span>{t('openFlows', 'Open Flows')}</span>
+								<span>{t("openFlows", "Open Flows")}</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
 							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>

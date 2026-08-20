@@ -1085,6 +1085,195 @@ fn find_sse_frame_boundary_from(buffer: &[u8], start: usize) -> Option<(usize, u
     None
 }
 
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Parses an MCP HTTP response that may be either `application/json` or an SSE
+/// `text/event-stream` (`data: {json}` frames). Returns the first decodable
+/// JSON object and any `Mcp-Session-Id` echoed back.
+async fn parse_mcp_response(
+    response: reqwest::Response,
+) -> flow_like_types::Result<(Option<flow_like_types::Value>, Option<String>)> {
+    let session_id = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let body = read_bounded_response_body(response, MAX_MCP_RESPONSE_BYTES).await?;
+    let text = std::str::from_utf8(&body).map_err(|error| {
+        flow_like_types::anyhow!("Remote MCP response contained invalid UTF-8: {}", error)
+    })?;
+    Ok((parse_mcp_response_body(&content_type, text)?, session_id))
+}
+
+async fn read_bounded_response_body(
+    response: reqwest::Response,
+    maximum_bytes: usize,
+) -> flow_like_types::Result<Vec<u8>> {
+    use futures::StreamExt;
+
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            flow_like_types::anyhow!("Failed to read remote MCP response: {}", error)
+        })?;
+        extend_bounded_body(&mut body, &chunk, maximum_bytes)?;
+    }
+    Ok(body)
+}
+
+fn extend_bounded_body(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    maximum_bytes: usize,
+) -> flow_like_types::Result<()> {
+    if body
+        .len()
+        .checked_add(chunk.len())
+        .is_none_or(|length| length > maximum_bytes)
+    {
+        return Err(flow_like_types::anyhow!(
+            "Remote MCP response exceeded the {} byte limit",
+            maximum_bytes
+        ));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn parse_mcp_response_body(
+    content_type: &str,
+    text: &str,
+) -> flow_like_types::Result<Option<flow_like_types::Value>> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+
+    if content_type
+        .to_ascii_lowercase()
+        .contains("text/event-stream")
+    {
+        // SSE joins every data field in an event with a newline. Normalize all
+        // valid line endings first so pretty-printed JSON split across data
+        // fields remains a valid MCP response.
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut first_message = None;
+        for frame in normalized.split("\n\n") {
+            let data = frame
+                .split('\n')
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(|data| data.strip_prefix(' ').unwrap_or(data))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if data.is_empty() {
+                continue;
+            }
+            if let Ok(value) = flow_like_types::json::from_str::<flow_like_types::Value>(&data) {
+                // A POST SSE stream may carry notifications before the
+                // response. Prefer the JSON-RPC message correlated by `id`
+                // so callers do not mistake an unrelated notification for a
+                // null result.
+                if value.get("id").is_some() {
+                    return Ok(Some(value));
+                }
+                first_message.get_or_insert(value);
+            }
+        }
+        return Ok(first_message);
+    }
+
+    let value = flow_like_types::json::from_str::<flow_like_types::Value>(text.trim())?;
+    Ok(Some(value))
+}
+
+impl RemoteAppSession {
+    async fn mcp_post(
+        &self,
+        event_id: &str,
+        session_id: Option<&str>,
+        body: &flow_like_types::Value,
+        registration_headers: &flow_like_types::Value,
+    ) -> flow_like_types::Result<(Option<flow_like_types::Value>, Option<String>)> {
+        let url = self.url(&format!("events/{}/mcp", event_id));
+        let mut request = http_client_no_redirect()
+            .post(&url)
+            .bearer_auth(&self.token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+        request = with_event_registration_headers(request, registration_headers);
+        if let Some(session_id) = session_id {
+            request = request.header("Mcp-Session-Id", session_id);
+        }
+        let response = request
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| flow_like_types::anyhow!("Failed to call remote MCP: {}", err))?;
+        let response = error_for_status(response, "Remote MCP request").await?;
+        parse_mcp_response(response).await
+    }
+
+    /// Runs a single MCP JSON-RPC method against a connected app's MCP event:
+    /// initializes a session, issues the call, and returns the JSON-RPC
+    /// `result` (erroring on a JSON-RPC error).
+    pub async fn mcp_request(
+        &self,
+        event_id: &str,
+        method: &str,
+        params: flow_like_types::Value,
+        registration_headers: &flow_like_types::Value,
+    ) -> flow_like_types::Result<flow_like_types::Value> {
+        let init = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "Flow-Like", "version": "alpha" }
+            }
+        });
+        let (_, session_id) = self
+            .mcp_post(event_id, None, &init, registration_headers)
+            .await?;
+
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": method,
+            "params": params
+        });
+        let (response, _) = self
+            .mcp_post(event_id, session_id.as_deref(), &call, registration_headers)
+            .await?;
+
+        let response = response
+            .ok_or_else(|| flow_like_types::anyhow!("Empty MCP response for {}", method))?;
+        if let Some(error) = response.get("error") {
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
+            return Err(flow_like_types::anyhow!(
+                "MCP {} error: {}",
+                method,
+                message
+            ));
+        }
+        Ok(response
+            .get("result")
+            .cloned()
+            .unwrap_or(flow_like_types::Value::Null))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1497,194 +1686,5 @@ mod tests {
         assert!(!requests[1].contains("authorization:"));
         assert!(!requests[1].contains("x-flow-like-event-authorization:"));
         assert!(!requests[1].contains("x-api-key:"));
-    }
-}
-
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-
-/// Parses an MCP HTTP response that may be either `application/json` or an SSE
-/// `text/event-stream` (`data: {json}` frames). Returns the first decodable
-/// JSON object and any `Mcp-Session-Id` echoed back.
-async fn parse_mcp_response(
-    response: reqwest::Response,
-) -> flow_like_types::Result<(Option<flow_like_types::Value>, Option<String>)> {
-    let session_id = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let body = read_bounded_response_body(response, MAX_MCP_RESPONSE_BYTES).await?;
-    let text = std::str::from_utf8(&body).map_err(|error| {
-        flow_like_types::anyhow!("Remote MCP response contained invalid UTF-8: {}", error)
-    })?;
-    Ok((parse_mcp_response_body(&content_type, text)?, session_id))
-}
-
-async fn read_bounded_response_body(
-    response: reqwest::Response,
-    maximum_bytes: usize,
-) -> flow_like_types::Result<Vec<u8>> {
-    use futures::StreamExt;
-
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| {
-            flow_like_types::anyhow!("Failed to read remote MCP response: {}", error)
-        })?;
-        extend_bounded_body(&mut body, &chunk, maximum_bytes)?;
-    }
-    Ok(body)
-}
-
-fn extend_bounded_body(
-    body: &mut Vec<u8>,
-    chunk: &[u8],
-    maximum_bytes: usize,
-) -> flow_like_types::Result<()> {
-    if body
-        .len()
-        .checked_add(chunk.len())
-        .is_none_or(|length| length > maximum_bytes)
-    {
-        return Err(flow_like_types::anyhow!(
-            "Remote MCP response exceeded the {} byte limit",
-            maximum_bytes
-        ));
-    }
-    body.extend_from_slice(chunk);
-    Ok(())
-}
-
-fn parse_mcp_response_body(
-    content_type: &str,
-    text: &str,
-) -> flow_like_types::Result<Option<flow_like_types::Value>> {
-    if text.trim().is_empty() {
-        return Ok(None);
-    }
-
-    if content_type
-        .to_ascii_lowercase()
-        .contains("text/event-stream")
-    {
-        // SSE joins every data field in an event with a newline. Normalize all
-        // valid line endings first so pretty-printed JSON split across data
-        // fields remains a valid MCP response.
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        let mut first_message = None;
-        for frame in normalized.split("\n\n") {
-            let data = frame
-                .split('\n')
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(|data| data.strip_prefix(' ').unwrap_or(data))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if data.is_empty() {
-                continue;
-            }
-            if let Ok(value) = flow_like_types::json::from_str::<flow_like_types::Value>(&data) {
-                // A POST SSE stream may carry notifications before the
-                // response. Prefer the JSON-RPC message correlated by `id`
-                // so callers do not mistake an unrelated notification for a
-                // null result.
-                if value.get("id").is_some() {
-                    return Ok(Some(value));
-                }
-                first_message.get_or_insert(value);
-            }
-        }
-        return Ok(first_message);
-    }
-
-    let value = flow_like_types::json::from_str::<flow_like_types::Value>(text.trim())?;
-    Ok(Some(value))
-}
-
-impl RemoteAppSession {
-    async fn mcp_post(
-        &self,
-        event_id: &str,
-        session_id: Option<&str>,
-        body: &flow_like_types::Value,
-        registration_headers: &flow_like_types::Value,
-    ) -> flow_like_types::Result<(Option<flow_like_types::Value>, Option<String>)> {
-        let url = self.url(&format!("events/{}/mcp", event_id));
-        let mut request = http_client_no_redirect()
-            .post(&url)
-            .bearer_auth(&self.token)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
-        request = with_event_registration_headers(request, registration_headers);
-        if let Some(session_id) = session_id {
-            request = request.header("Mcp-Session-Id", session_id);
-        }
-        let response = request
-            .json(body)
-            .send()
-            .await
-            .map_err(|err| flow_like_types::anyhow!("Failed to call remote MCP: {}", err))?;
-        let response = error_for_status(response, "Remote MCP request").await?;
-        parse_mcp_response(response).await
-    }
-
-    /// Runs a single MCP JSON-RPC method against a connected app's MCP event:
-    /// initializes a session, issues the call, and returns the JSON-RPC
-    /// `result` (erroring on a JSON-RPC error).
-    pub async fn mcp_request(
-        &self,
-        event_id: &str,
-        method: &str,
-        params: flow_like_types::Value,
-        registration_headers: &flow_like_types::Value,
-    ) -> flow_like_types::Result<flow_like_types::Value> {
-        let init = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "Flow-Like", "version": "alpha" }
-            }
-        });
-        let (_, session_id) = self
-            .mcp_post(event_id, None, &init, registration_headers)
-            .await?;
-
-        let call = json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": method,
-            "params": params
-        });
-        let (response, _) = self
-            .mcp_post(event_id, session_id.as_deref(), &call, registration_headers)
-            .await?;
-
-        let response = response
-            .ok_or_else(|| flow_like_types::anyhow!("Empty MCP response for {}", method))?;
-        if let Some(error) = response.get("error") {
-            let message = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown error");
-            return Err(flow_like_types::anyhow!(
-                "MCP {} error: {}",
-                method,
-                message
-            ));
-        }
-        Ok(response
-            .get("result")
-            .cloned()
-            .unwrap_or(flow_like_types::Value::Null))
     }
 }

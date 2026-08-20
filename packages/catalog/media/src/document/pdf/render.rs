@@ -645,6 +645,7 @@ impl<'a> PageWriter<'a> {
     }
 
     /// Rounded rectangle, optionally filled and/or stroked.
+    #[allow(clippy::too_many_arguments)]
     fn rounded_rect(
         &mut self,
         x: f64,
@@ -1428,7 +1429,7 @@ fn draw_table(
     // Columns are sized by their widest cell, then normalised to the content width, so a narrow
     // "Qty" column does not get the same space as a prose column.
     let mut weights = vec![0.0_f64; columns];
-    for index in 0..columns {
+    for (index, weight) in weights.iter_mut().enumerate() {
         let head_width = header
             .get(index)
             .map(|cell| Font::Bold.width(cell, size))
@@ -1438,7 +1439,7 @@ fn draw_table(
             .filter_map(|row| row.get(index))
             .map(|cell| Font::Regular.width(cell, size))
             .fold(0.0_f64, f64::max);
-        weights[index] = head_width.max(body_width).max(size * 2.0) + padding * 2.0;
+        *weight = head_width.max(body_width).max(size * 2.0) + padding * 2.0;
     }
     let total: f64 = weights.iter().sum();
     let widths: Vec<f64> = weights.iter().map(|w| w / total * content_width).collect();

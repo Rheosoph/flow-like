@@ -33,7 +33,7 @@ export function PagesSection({
 		return (
 			<EmptyState
 				icons={[LayoutGrid]}
-				title={t('noPagesYet', 'No pages yet')}
+				title={t("noPagesYet", "No pages yet")}
 				description={`Pages are created from within a flow. Open a flow and use the Pages panel to create your first page.`}
 			/>
 		);
@@ -42,9 +42,12 @@ export function PagesSection({
 	return (
 		<div className="space-y-4">
 			<div className="space-y-1">
-				<h2 className="text-lg font-semibold">{t('allPages', 'All Pages')}</h2>
+				<h2 className="text-lg font-semibold">{t("allPages", "All Pages")}</h2>
 				<p className="text-sm text-muted-foreground">
-					{t('manageYourAppsVisualInterfaces', 'Manage your app\'s visual interfaces')}
+					{t(
+						"manageYourAppsVisualInterfaces",
+						"Manage your app's visual interfaces",
+					)}
 				</p>
 			</div>
 
@@ -97,7 +100,7 @@ export function PageCard({
 				<div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
 					<Button variant="secondary" size="sm" className="gap-2">
 						<Pencil className="h-4 w-4" />
-						{t('editPage', 'Edit Page')}
+						{t("editPage", "Edit Page")}
 					</Button>
 				</div>
 			</div>
@@ -126,10 +129,12 @@ export function PageCard({
 										onClick={onOpenBoard}
 									>
 										<Workflow className="h-3.5 w-3.5" />
-										{t('flow', 'Flow')}
+										{t("flow", "Flow")}
 									</Button>
 								</TooltipTrigger>
-								<TooltipContent>{t('openConnectedFlow', 'Open connected flow')}</TooltipContent>
+								<TooltipContent>
+									{t("openConnectedFlow", "Open connected flow")}
+								</TooltipContent>
 							</Tooltip>
 						)}
 					</div>
@@ -145,7 +150,7 @@ export function PageCard({
 									<Pencil className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>{t('editPage', 'Edit Page')}</TooltipContent>
+							<TooltipContent>{t("editPage", "Edit Page")}</TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -158,7 +163,7 @@ export function PageCard({
 									<Trash2 className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>{t('deletePage', 'Delete Page')}</TooltipContent>
+							<TooltipContent>{t("deletePage", "Delete Page")}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

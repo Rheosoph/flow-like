@@ -28,7 +28,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCopilotSDK, useInvoke } from "../../hooks";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
-import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
+import { IBitTypes, isFreeLlmModel, selectProfileLlmModels } from "../../lib";
 import {
 	type AskUserAnswerPayload,
 	type AskUserDraft,
@@ -1111,29 +1111,22 @@ function FlowPilotImpl({
 
 	// Filter profile and custom models to runtimes supported by this host.
 	const { canHostLlamaCPP, canHostMLX } = backendContext.capabilities();
-	const bitsModels = useMemo(() => {
-		if (!foundBits.data || !profile.data?.hub_profile.bits) return [];
-		const profileBitIds = new Set(profile.data.hub_profile.bits);
-		const profileModels = foundBits.data.filter((model) =>
-			profileBitIds.has(`${model.hub}:${model.id}`),
-		);
-		const seen = new Set(profileModels.map((model) => model.id));
-		const ownModels = (customBits.data ?? []).filter(
-			(model) =>
-				!seen.has(model.id) &&
-				(model.type === IBitTypes.Llm || model.type === IBitTypes.Vlm),
-		);
-		return filterHostableLlmModels([...ownModels, ...profileModels], {
+	const bitsModels = useMemo(
+		() =>
+			selectProfileLlmModels(
+				foundBits.data,
+				customBits.data,
+				profile.data?.hub_profile.bits,
+				{ canHostLlamaCPP, canHostMLX },
+			),
+		[
+			foundBits.data,
+			customBits.data,
+			profile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
-		});
-	}, [
-		foundBits.data,
-		customBits.data,
-		profile.data?.hub_profile.bits,
-		canHostLlamaCPP,
-		canHostMLX,
-	]);
+		],
+	);
 
 	const openFrontendToolDialog = useCallback(
 		(dialog: FrontendToolDialogState, resolve: (value: any) => void) => {

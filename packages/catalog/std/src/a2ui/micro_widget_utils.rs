@@ -7,7 +7,7 @@ use flow_like::a2ui::micro_widget::{
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, remove_pin},
+    node::{Node, remove_unwired_pins},
     pin::{Pin, PinOptions, PinType, ValueType},
     variable::VariableType,
 };
@@ -361,16 +361,19 @@ pub fn add_contract_input_pins(node: &mut Node, contract: &WidgetContract, with_
 }
 
 /// Remove pins with the given prefix that are not in the keep set.
+///
+/// A pin that still carries a wire is kept and reported on `node.error` instead: the widget it
+/// was derived from can be unresolvable for reasons that have nothing to do with the binding —
+/// a registry that has not started, a selector written later in the same batch — and dropping
+/// the pin takes the connection with it, on both ends and without an error.
 pub fn remove_stale_prefixed_pins(node: &mut Node, prefix: &str, keep: &BTreeSet<String>) {
-    let stale: Vec<_> = node
+    let stale: Vec<String> = node
         .pins
         .values()
         .filter(|p| p.name.starts_with(prefix) && !keep.contains(&p.name))
-        .cloned()
+        .map(|p| p.id.clone())
         .collect();
-    for pin in stale {
-        remove_pin(node, Some(pin));
-    }
+    remove_unwired_pins(node, &stale);
 }
 
 fn find_node_with_pin<'a>(board: &'a Board, pin_id: &str) -> Option<&'a Node> {

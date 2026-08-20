@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	LoadingScreen,
 	addAppToProfile,
@@ -10,6 +9,7 @@ import {
 	attemptJoinWithRetry,
 	joinFailureMessage,
 } from "@flow-like/flow-like-ui/lib/join-invite";
+import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -64,7 +64,11 @@ export default function JoinPage() {
 	return (
 		<LoadingScreen
 			progress={Math.min(30 + attempt * 10, 95)}
-			message={attempt > 0 ? t('settingUpYourAccount', 'Setting up your account...') : undefined}
+			message={
+				attempt > 0
+					? t("settingUpYourAccount", "Setting up your account...")
+					: undefined
+			}
 		/>
 	);
 }

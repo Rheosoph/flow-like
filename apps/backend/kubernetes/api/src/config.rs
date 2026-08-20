@@ -19,6 +19,7 @@ pub enum StorageConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)] // deserialized config surface; the API resolves content/meta stores itself
 pub struct AwsStorageConfig {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -31,6 +32,7 @@ pub struct AwsStorageConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)] // deserialized config surface; the API resolves content/meta stores itself
 pub struct R2StorageConfig {
     pub account_id: String,
     pub access_key_id: String,
@@ -41,6 +43,7 @@ pub struct R2StorageConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)] // deserialized config surface; the API resolves content/meta stores itself
 pub struct AzureStorageConfig {
     pub account_name: String,
     pub account_key: Option<String>,
@@ -50,6 +53,7 @@ pub struct AzureStorageConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)] // deserialized config surface; the API resolves content/meta stores itself
 pub struct GcpStorageConfig {
     pub project_id: String,
     pub service_account_key: Option<String>,
@@ -59,6 +63,7 @@ pub struct GcpStorageConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)] // deserialized config surface; the API resolves content/meta stores itself
 pub struct S3StorageConfig {
     pub endpoint: String,
     pub region: String,
@@ -81,6 +86,7 @@ impl StorageConfig {
         }
     }
 
+    #[allow(dead_code)] // deployment storage surface: content/meta stores are resolved by the API crate itself
     pub fn content_bucket(&self) -> &str {
         match self {
             StorageConfig::Aws(c) => &c.content_bucket,
@@ -91,6 +97,7 @@ impl StorageConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn meta_bucket(&self) -> &str {
         match self {
             StorageConfig::Aws(c) => &c.meta_bucket,
@@ -215,7 +222,7 @@ impl Config {
             }
 
             // Default: S3-compatible (MinIO, etc.)
-            "s3" | _ => Ok(StorageConfig::S3(S3StorageConfig {
+            _ => Ok(StorageConfig::S3(S3StorageConfig {
                 endpoint: env::var("S3_ENDPOINT")
                     .map_err(|_| ConfigError::MissingVar("S3_ENDPOINT"))?,
                 region: env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),

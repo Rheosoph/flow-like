@@ -234,7 +234,7 @@ export function ChatWelcome({
 						{/* Text content with animations */}
 						<div className="text-center space-y-4">
 							<h3 className="text-2xl font-bold bg-linear-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent animate-pulse">
-								{t('processingYourMessage', 'Processing Your Message')}
+								{t("processingYourMessage", "Processing Your Message")}
 							</h3>
 							<div className="space-y-2">
 								<div className="flex items-center justify-center gap-2">
@@ -243,7 +243,10 @@ export function ChatWelcome({
 									<div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce delay-150" />
 								</div>
 								<p className="text-sm text-muted-foreground animate-pulse">
-									{t('uploadingFilesAndPreparingAttachments', 'Uploading files and preparing attachments')}
+									{t(
+										"uploadingFilesAndPreparingAttachments",
+										"Uploading files and preparing attachments",
+									)}
 								</p>
 							</div>
 						</div>
@@ -315,7 +318,7 @@ export function ChatWelcome({
 							<div className="space-y-2" data-fl-chat-suggestions>
 								{filteredExamples.length > 0 && (
 									<p className="text-xs text-muted-foreground uppercase tracking-wide">
-										{t('suggestions', 'Suggestions')}
+										{t("suggestions", "Suggestions")}
 									</p>
 								)}
 								<div className="grid max-h-[min(15rem,30dvh)] grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">

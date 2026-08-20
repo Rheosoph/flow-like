@@ -1530,11 +1530,9 @@ mod tests {
         }
 
         // Cleanup with master
-        match &master_store {
-            flow_like::flow_like_storage::files::store::FlowLikeStore::Google(s) => {
-                s.delete(&path).await.ok();
-            }
-            _ => {}
+        if let flow_like::flow_like_storage::files::store::FlowLikeStore::Google(s) = &master_store
+        {
+            s.delete(&path).await.ok();
         }
     }
 

@@ -48,6 +48,9 @@ pub struct CronSink {
     pub sink_execution: Option<String>,
 }
 
+/// A row from `cron_jobs` that is ready to fire: (event_id, expression, scheduled_for, timezone).
+type DueJob = (String, Option<String>, Option<i64>, String);
+
 impl CronSink {
     fn init_tables(db: &DbConnection) -> Result<()> {
         let conn = db.lock().unwrap();
@@ -251,10 +254,7 @@ impl CronSink {
         Ok(())
     }
 
-    fn get_due_jobs(
-        db: &DbConnection,
-        now: i64,
-    ) -> Result<Vec<(String, Option<String>, Option<i64>, String)>> {
+    fn get_due_jobs(db: &DbConnection, now: i64) -> Result<Vec<DueJob>> {
         let conn = db.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT event_id, expression, scheduled_for, timezone

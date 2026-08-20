@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	AppCard,
 	Button,
@@ -12,6 +11,7 @@ import {
 	useInvoke,
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { EyeIcon, FilesIcon, LayoutGridIcon, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -55,10 +55,13 @@ export default function Page() {
 					</div>
 					<div>
 						<h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
-							{t('manageAppVisibility', 'Manage App Visibility')}
+							{t("manageAppVisibility", "Manage App Visibility")}
 						</h1>
 						<p className="text-muted-foreground mt-1">
-							{t('manageWhichAppsYouWantToSeeInThisProfile', 'Manage which Apps you want to see in this Profile!')}
+							{t(
+								"manageWhichAppsYouWantToSeeInThisProfile",
+								"Manage which Apps you want to see in this Profile!",
+							)}
 						</p>
 					</div>
 				</div>
@@ -112,7 +115,7 @@ export default function Page() {
 						await apps.refetch();
 					}}
 				>
-					{t('save', 'Save')}
+					{t("save", "Save")}
 				</Button>
 			</div>
 			<Separator className="mb-4 mt-8" />
@@ -130,8 +133,11 @@ export default function Page() {
 						]}
 						icons={[Sparkles, LayoutGridIcon, FilesIcon]}
 						className="min-w-full min-h-full flex-grow h-full border-2 border-dashed border-border/50 rounded-xl bg-muted/20"
-						title={t('welcomeToYourLibrary', 'Welcome to Your Library')}
-						description={t('createPowerfulCustomApplicationsBasedOnYourDataGetStartedWithYourFirstAppTodayItsFreeAndSecure', 'Create powerful custom applications based on your data. Get started with your first app today - it\'s free and secure.')}
+						title={t("welcomeToYourLibrary", "Welcome to Your Library")}
+						description={t(
+							"createPowerfulCustomApplicationsBasedOnYourDataGetStartedWithYourFirstAppTodayItsFreeAndSecure",
+							"Create powerful custom applications based on your data. Get started with your first app today - it's free and secure.",
+						)}
 					/>
 				)}
 

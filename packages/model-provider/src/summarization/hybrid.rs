@@ -8,6 +8,7 @@ use crate::llm::ModelLogic;
 /// Uses Map-Reduce to generate initial chunk summaries in parallel (fast),
 /// then applies Refine sequentially over those summaries for narrative coherence.
 /// Captures the speed advantage of Map-Reduce and the coherence of Refine.
+#[allow(clippy::too_many_arguments)]
 pub async fn hybrid_summarize(
     chunks: &[TextChunk],
     instructions: &str,

@@ -18,7 +18,12 @@ impl EqualStringNode {
 #[async_trait]
 impl NodeLogic for EqualStringNode {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("equal_string", "==", "Compares two Strings", "Utils/String");
+        let mut node = Node::new(
+            "equal_string",
+            "== (String)",
+            "Compares two Strings",
+            "Utils/String",
+        );
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("string", "String", "Input", VariableType::String);

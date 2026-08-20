@@ -239,6 +239,8 @@ pub struct ApiEventParameters {
     pub public_endpoint: Option<bool>,
 }
 
+#[allow(clippy::large_enum_variant)]
+// schema + deserialisation target only; no runtime variant construction, so the gap never materialises
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(untagged)]
 pub enum EventPayload {
@@ -247,86 +249,6 @@ pub enum EventPayload {
     ApiEvent(ApiEventParameters),
     AnyEvent(HashMap<String, flow_like_types::Value>),
     QuickAction,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ChatEventParameters, EventPayload};
-    use serde_json::json;
-
-    #[test]
-    fn chat_event_parameters_default_presentation_fields_to_none() {
-        let parameters: ChatEventParameters = serde_json::from_value(json!({})).unwrap();
-
-        assert!(parameters.custom_css.is_none());
-        assert!(parameters.background_image.is_none());
-        assert!(parameters.color_scheme.is_none());
-        assert!(parameters.ai_disclosure.is_none());
-        // Motion the interface never asked for must stay off for chats saved before the field
-        // existed, so an upgrade never starts animating someone's placeholder.
-        assert!(parameters.placeholder_typing_motion.is_none());
-    }
-
-    #[test]
-    fn chat_event_payload_round_trips_placeholder_typing_motion() {
-        let payload: EventPayload = serde_json::from_value(json!({
-            "placeholder_visual": "bubble",
-            "placeholder_typing_motion": true
-        }))
-        .unwrap();
-
-        let EventPayload::ChatEvent(parameters) = &payload else {
-            panic!("placeholder fields should deserialize as chat event parameters");
-        };
-        assert_eq!(parameters.placeholder_visual.as_deref(), Some("bubble"));
-        assert_eq!(parameters.placeholder_typing_motion, Some(true));
-
-        let serialized = serde_json::to_value(payload).unwrap();
-        assert_eq!(serialized["placeholder_typing_motion"], json!(true));
-    }
-
-    #[test]
-    fn chat_event_payload_round_trips_presentation_fields() {
-        let payload: EventPayload = serde_json::from_value(json!({
-            "custom_css": ".message { border-radius: 1rem; }",
-            "background_image": "https://example.com/chat-background.webp",
-            "color_scheme": "dark",
-            "ai_disclosure": "Plot twist: you're chatting with an AI."
-        }))
-        .unwrap();
-
-        let EventPayload::ChatEvent(parameters) = &payload else {
-            panic!("presentation fields should deserialize as chat event parameters");
-        };
-        assert_eq!(
-            parameters.custom_css.as_deref(),
-            Some(".message { border-radius: 1rem; }")
-        );
-        assert_eq!(
-            parameters.background_image.as_deref(),
-            Some("https://example.com/chat-background.webp")
-        );
-        assert_eq!(parameters.color_scheme.as_deref(), Some("dark"));
-        assert_eq!(
-            parameters.ai_disclosure.as_deref(),
-            Some("Plot twist: you're chatting with an AI.")
-        );
-
-        let serialized = serde_json::to_value(payload).unwrap();
-        assert_eq!(
-            serialized["custom_css"],
-            json!(".message { border-radius: 1rem; }")
-        );
-        assert_eq!(
-            serialized["background_image"],
-            json!("https://example.com/chat-background.webp")
-        );
-        assert_eq!(serialized["color_scheme"], json!("dark"));
-        assert_eq!(
-            serialized["ai_disclosure"],
-            json!("Plot twist: you're chatting with an AI.")
-        );
-    }
 }
 
 pub fn canary_equal(a: &Option<CanaryEvent>, b: &Option<CanaryEvent>) -> bool {
@@ -653,5 +575,85 @@ impl Event {
             .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChatEventParameters, EventPayload};
+    use serde_json::json;
+
+    #[test]
+    fn chat_event_parameters_default_presentation_fields_to_none() {
+        let parameters: ChatEventParameters = serde_json::from_value(json!({})).unwrap();
+
+        assert!(parameters.custom_css.is_none());
+        assert!(parameters.background_image.is_none());
+        assert!(parameters.color_scheme.is_none());
+        assert!(parameters.ai_disclosure.is_none());
+        // Motion the interface never asked for must stay off for chats saved before the field
+        // existed, so an upgrade never starts animating someone's placeholder.
+        assert!(parameters.placeholder_typing_motion.is_none());
+    }
+
+    #[test]
+    fn chat_event_payload_round_trips_placeholder_typing_motion() {
+        let payload: EventPayload = serde_json::from_value(json!({
+            "placeholder_visual": "bubble",
+            "placeholder_typing_motion": true
+        }))
+        .unwrap();
+
+        let EventPayload::ChatEvent(parameters) = &payload else {
+            panic!("placeholder fields should deserialize as chat event parameters");
+        };
+        assert_eq!(parameters.placeholder_visual.as_deref(), Some("bubble"));
+        assert_eq!(parameters.placeholder_typing_motion, Some(true));
+
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["placeholder_typing_motion"], json!(true));
+    }
+
+    #[test]
+    fn chat_event_payload_round_trips_presentation_fields() {
+        let payload: EventPayload = serde_json::from_value(json!({
+            "custom_css": ".message { border-radius: 1rem; }",
+            "background_image": "https://example.com/chat-background.webp",
+            "color_scheme": "dark",
+            "ai_disclosure": "Plot twist: you're chatting with an AI."
+        }))
+        .unwrap();
+
+        let EventPayload::ChatEvent(parameters) = &payload else {
+            panic!("presentation fields should deserialize as chat event parameters");
+        };
+        assert_eq!(
+            parameters.custom_css.as_deref(),
+            Some(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            parameters.background_image.as_deref(),
+            Some("https://example.com/chat-background.webp")
+        );
+        assert_eq!(parameters.color_scheme.as_deref(), Some("dark"));
+        assert_eq!(
+            parameters.ai_disclosure.as_deref(),
+            Some("Plot twist: you're chatting with an AI.")
+        );
+
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            serialized["custom_css"],
+            json!(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            serialized["background_image"],
+            json!("https://example.com/chat-background.webp")
+        );
+        assert_eq!(serialized["color_scheme"], json!("dark"));
+        assert_eq!(
+            serialized["ai_disclosure"],
+            json!("Plot twist: you're chatting with an AI.")
+        );
     }
 }

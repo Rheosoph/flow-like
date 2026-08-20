@@ -110,7 +110,13 @@ function MicroWidgetErrorCard({
 			<CardContent className="flex items-start gap-2 p-4 text-sm">
 				<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
 				<div className="min-w-0">
-					<p className="font-medium text-destructive">{t('widgetQuotwidgetidquotFailedToLoad', 'Widget "{{widgetId}}" failed to load', { widgetId })}</p>
+					<p className="font-medium text-destructive">
+						{t(
+							"widgetQuotwidgetidquotFailedToLoad",
+							'Widget "{{widgetId}}" failed to load',
+							{ widgetId },
+						)}
+					</p>
 					<p className="text-muted-foreground break-words">{message}</p>
 				</div>
 			</CardContent>
@@ -360,7 +366,11 @@ function MicroWidgetFrame({
 		const timer = setTimeout(() => {
 			if (readyRef.current) return;
 			setErrorMessage(
-				t('theWidgetDidNotBecomeReadyWithinVals', 'The widget did not become ready within {{val}}s.', { val: Math.round(MICRO_WIDGET_READY_TIMEOUT_MS / 1000) }),
+				t(
+					"theWidgetDidNotBecomeReadyWithinVals",
+					"The widget did not become ready within {{val}}s.",
+					{ val: Math.round(MICRO_WIDGET_READY_TIMEOUT_MS / 1000) },
+				),
 			);
 			setPhase("error");
 		}, MICRO_WIDGET_READY_TIMEOUT_MS);
@@ -438,7 +448,7 @@ function MicroWidgetFrame({
 				<iframe
 					ref={iframeRef}
 					src={src}
-					title={t('widgetWidgetid', 'Widget {{widgetId}}', { widgetId })}
+					title={t("widgetWidgetid", "Widget {{widgetId}}", { widgetId })}
 					sandbox="allow-scripts"
 					referrerPolicy="no-referrer"
 					onLoad={sendInit}

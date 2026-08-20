@@ -212,7 +212,9 @@ export function SlashInputElement(
 				<InlineComboboxInput />
 
 				<InlineComboboxContent className="z-100">
-					<InlineComboboxEmpty>{t('noResults2', 'No results')}</InlineComboboxEmpty>
+					<InlineComboboxEmpty>
+						{t("noResults2", "No results")}
+					</InlineComboboxEmpty>
 
 					{groups.map(({ group, items }) => (
 						<InlineComboboxGroup key={group}>

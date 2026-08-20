@@ -183,6 +183,7 @@ pub async fn error_reporting_middleware(
 }
 
 #[cfg(feature = "sentry")]
+#[allow(clippy::too_many_arguments)]
 fn forward_to_sentry(
     error_id: &str,
     status_code: u16,

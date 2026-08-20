@@ -2314,7 +2314,7 @@ pub(crate) mod pubsub {
                 WORKLOAD_EXECUTION
             ));
             // Every inlined message still leaves room under the publish limit.
-            assert!(CLAIM_CHECK_THRESHOLD_BYTES < MAX_MESSAGE_DATA_BYTES);
+            const { assert!(CLAIM_CHECK_THRESHOLD_BYTES < MAX_MESSAGE_DATA_BYTES) };
             assert_eq!(MAX_MESSAGE_DATA_BYTES, 10_000_000 * 3 / 4);
         }
 

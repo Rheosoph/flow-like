@@ -247,6 +247,7 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
         run: &Weak<Mutex<Run>>,
@@ -367,6 +368,7 @@ impl ExecutionContext {
     }
 
     /// Create ExecutionContext using cached RunMeta to avoid locking Run
+    #[allow(clippy::too_many_arguments)]
     pub async fn with_meta(
         nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
         run: &Weak<Mutex<Run>>,

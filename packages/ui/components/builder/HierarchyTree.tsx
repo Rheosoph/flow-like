@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDown,
 	ChevronRight,
@@ -422,7 +422,7 @@ export function HierarchyTree({
 				<div className="relative">
 					<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder={t('searchTree', 'Search tree...')}
+						placeholder={t("searchTree", "Search tree...")}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-8 h-8"
@@ -434,7 +434,7 @@ export function HierarchyTree({
 				<div className="p-2">
 					{filteredTree.length === 0 ? (
 						<div className="text-sm text-muted-foreground text-center py-4">
-							{t('noComponents', 'No components')}
+							{t("noComponents", "No components")}
 						</div>
 					) : (
 						filteredTree.map((node) => (
@@ -690,27 +690,27 @@ function TreeNode({
 			<ContextMenuContent>
 				<ContextMenuItem onClick={onCopy}>
 					<Copy className="h-4 w-4 mr-2" />
-					{t('copy', 'Copy')}
+					{t("copy", "Copy")}
 				</ContextMenuItem>
 				<ContextMenuItem onClick={onCut}>
 					<Scissors className="h-4 w-4 mr-2" />
-					{t('cut', 'Cut')}
+					{t("cut", "Cut")}
 				</ContextMenuItem>
 				<ContextMenuItem onClick={() => onPaste(node.id)}>
 					<FolderPlus className="h-4 w-4 mr-2" />
-					{t('pasteInto', 'Paste into')}
+					{t("pasteInto", "Paste into")}
 				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem onClick={() => onToggleLock(node.id)}>
 					{node.locked ? (
 						<>
 							<Unlock className="h-4 w-4 mr-2" />
-							{t('unlock', 'Unlock')}
+							{t("unlock", "Unlock")}
 						</>
 					) : (
 						<>
 							<Lock className="h-4 w-4 mr-2" />
-							{t('lock', 'Lock')}
+							{t("lock", "Lock")}
 						</>
 					)}
 				</ContextMenuItem>
@@ -718,12 +718,12 @@ function TreeNode({
 					{node.hidden ? (
 						<>
 							<Eye className="h-4 w-4 mr-2" />
-							{t('show', 'Show')}
+							{t("show", "Show")}
 						</>
 					) : (
 						<>
 							<EyeOff className="h-4 w-4 mr-2" />
-							{t('hide', 'Hide')}
+							{t("hide", "Hide")}
 						</>
 					)}
 				</ContextMenuItem>
@@ -733,7 +733,7 @@ function TreeNode({
 					className="text-destructive focus:text-destructive"
 				>
 					<Trash className="h-4 w-4 mr-2" />
-					{t('delete', 'Delete')}
+					{t("delete", "Delete")}
 				</ContextMenuItem>
 			</ContextMenuContent>
 

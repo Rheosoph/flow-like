@@ -35,7 +35,7 @@ pub async fn resolve_payload(
     payload_ref: DispatchPayloadRef,
 ) -> Result<DispatchPayload, ResolveError> {
     match payload_ref {
-        DispatchPayloadRef::Inline(payload) => Ok(payload),
+        DispatchPayloadRef::Inline(payload) => Ok(*payload),
         DispatchPayloadRef::Remote { remote_url } => {
             // The presigned URL carries its bearer-equivalent signature in the
             // query string, so it must never appear in logs.

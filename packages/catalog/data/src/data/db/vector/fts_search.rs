@@ -1,4 +1,6 @@
+use crate::data::query_params as params;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
@@ -29,6 +31,7 @@ impl NodeLogic for FTSLocalDatabaseNode {
             "Data/Database/Search",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -58,10 +61,12 @@ impl NodeLogic for FTSLocalDatabaseNode {
         node.add_input_pin(
             "filter",
             "SQL Filter",
-            "Optional SQL Filter",
+            "Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        params::add_params_pin(&mut node, params::SqlFlavor::LanceFilter);
 
         node.add_input_pin("limit", "Limit", "Limit", VariableType::Integer)
             .set_default_value(Some(json!(10)));
@@ -82,6 +87,11 @@ impl NodeLogic for FTSLocalDatabaseNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "filter", board, params::SqlFlavor::LanceFilter);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -94,6 +104,7 @@ impl NodeLogic for FTSLocalDatabaseNode {
             Some(fields)
         };
         let filter: String = context.evaluate_pin("filter").await?;
+        let filter = params::bind_lance_filter(context, &filter).await?;
         let filter: Option<&str> = if filter.is_empty() {
             None
         } else {

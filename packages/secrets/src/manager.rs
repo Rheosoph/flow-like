@@ -76,10 +76,10 @@ impl SecretStore {
     }
 
     pub async fn get_secret(&self, reference: &SecretRef) -> Result<SecretValue> {
-        if self.allow_env_override {
-            if let Some(value) = env_override(reference) {
-                return Ok(value);
-            }
+        if self.allow_env_override
+            && let Some(value) = env_override(reference)
+        {
+            return Ok(value);
         }
 
         if self.providers.is_empty() {

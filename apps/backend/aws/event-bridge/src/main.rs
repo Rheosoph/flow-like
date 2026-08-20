@@ -214,103 +214,6 @@ async fn delete_orphaned_schedule(event_id: &str, schedule_arn: &str) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn payload_with(event_id: &str, scheduled_time: Option<&str>) -> ScheduledEventPayload {
-        ScheduledEventPayload {
-            event_id: event_id.to_string(),
-            scheduled_time: scheduled_time.map(str::to_string),
-            schedule_arn: Some(
-                "arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test".to_string(),
-            ),
-            execution_id: None,
-            attempt_number: None,
-        }
-    }
-
-    #[test]
-    fn idempotency_key_uses_schedule_and_scheduled_time() {
-        let payload = payload_with("event-1", Some("2026-04-27T06:00:00Z"));
-
-        assert_eq!(
-            build_idempotency_key(&payload, "request-1"),
-            "aws-scheduler:arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test:2026-04-27T06:00:00Z"
-        );
-    }
-
-    #[test]
-    fn idempotency_key_falls_back_for_old_schedule_payloads() {
-        let payload = payload_with("event-1", None);
-
-        assert_eq!(
-            build_idempotency_key(&payload, "request-1"),
-            "lambda-request:request-1"
-        );
-    }
-
-    #[test]
-    fn idempotency_key_ignores_unexpanded_scheduler_placeholders() {
-        let payload = payload_with("event-1", Some("<aws.scheduler.scheduled-time>"));
-
-        assert_eq!(
-            build_idempotency_key(&payload, "request-1"),
-            "lambda-request:request-1"
-        );
-    }
-
-    #[test]
-    fn parses_group_and_name_from_schedule_arn() {
-        assert_eq!(
-            parse_schedule_arn(
-                "arn:aws:scheduler:eu-west-1:725302850608:schedule/flow-like-dev/flow-like-cron-abc"
-            ),
-            Some(("flow-like-dev", "flow-like-cron-abc"))
-        );
-    }
-
-    #[test]
-    fn rejects_arns_that_are_not_schedules() {
-        assert_eq!(
-            parse_schedule_arn("arn:aws:lambda:eu-west-1:725302850608:function:some-fn"),
-            None
-        );
-        assert_eq!(
-            parse_schedule_arn("arn:aws:scheduler:eu-west-1:725302850608:schedule/only-group"),
-            None
-        );
-        assert_eq!(parse_schedule_arn("not-an-arn"), None);
-    }
-
-    #[test]
-    fn detects_missing_sink_response() {
-        let body =
-            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-1"}}"#;
-
-        assert!(is_missing_sink_response(body, "evt-1"));
-    }
-
-    #[test]
-    fn ignores_unrelated_not_found_responses() {
-        // A misrouted API_BASE_URL answers 404 too; reaping on that would delete
-        // every schedule in the account.
-        assert!(!is_missing_sink_response(
-            "<html>404 Not Found</html>",
-            "evt-1"
-        ));
-        assert!(!is_missing_sink_response(
-            r#"{"error":{"code":"NOT_FOUND","message":"Route not found"}}"#,
-            "evt-1"
-        ));
-        // Right shape, but about a different event.
-        assert!(!is_missing_sink_response(
-            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-2"}}"#,
-            "evt-1"
-        ));
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
@@ -457,4 +360,101 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
         "Successfully triggered event"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload_with(event_id: &str, scheduled_time: Option<&str>) -> ScheduledEventPayload {
+        ScheduledEventPayload {
+            event_id: event_id.to_string(),
+            scheduled_time: scheduled_time.map(str::to_string),
+            schedule_arn: Some(
+                "arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test".to_string(),
+            ),
+            execution_id: None,
+            attempt_number: None,
+        }
+    }
+
+    #[test]
+    fn idempotency_key_uses_schedule_and_scheduled_time() {
+        let payload = payload_with("event-1", Some("2026-04-27T06:00:00Z"));
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "aws-scheduler:arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test:2026-04-27T06:00:00Z"
+        );
+    }
+
+    #[test]
+    fn idempotency_key_falls_back_for_old_schedule_payloads() {
+        let payload = payload_with("event-1", None);
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "lambda-request:request-1"
+        );
+    }
+
+    #[test]
+    fn idempotency_key_ignores_unexpanded_scheduler_placeholders() {
+        let payload = payload_with("event-1", Some("<aws.scheduler.scheduled-time>"));
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "lambda-request:request-1"
+        );
+    }
+
+    #[test]
+    fn parses_group_and_name_from_schedule_arn() {
+        assert_eq!(
+            parse_schedule_arn(
+                "arn:aws:scheduler:eu-west-1:725302850608:schedule/flow-like-dev/flow-like-cron-abc"
+            ),
+            Some(("flow-like-dev", "flow-like-cron-abc"))
+        );
+    }
+
+    #[test]
+    fn rejects_arns_that_are_not_schedules() {
+        assert_eq!(
+            parse_schedule_arn("arn:aws:lambda:eu-west-1:725302850608:function:some-fn"),
+            None
+        );
+        assert_eq!(
+            parse_schedule_arn("arn:aws:scheduler:eu-west-1:725302850608:schedule/only-group"),
+            None
+        );
+        assert_eq!(parse_schedule_arn("not-an-arn"), None);
+    }
+
+    #[test]
+    fn detects_missing_sink_response() {
+        let body =
+            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-1"}}"#;
+
+        assert!(is_missing_sink_response(body, "evt-1"));
+    }
+
+    #[test]
+    fn ignores_unrelated_not_found_responses() {
+        // A misrouted API_BASE_URL answers 404 too; reaping on that would delete
+        // every schedule in the account.
+        assert!(!is_missing_sink_response(
+            "<html>404 Not Found</html>",
+            "evt-1"
+        ));
+        assert!(!is_missing_sink_response(
+            r#"{"error":{"code":"NOT_FOUND","message":"Route not found"}}"#,
+            "evt-1"
+        ));
+        // Right shape, but about a different event.
+        assert!(!is_missing_sink_response(
+            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-2"}}"#,
+            "evt-1"
+        ));
+    }
 }

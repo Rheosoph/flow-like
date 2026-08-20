@@ -20,7 +20,7 @@ impl NodeLogic for EqualFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_equal",
-            "==",
+            "== (Float)",
             "Checks if two floats are equal (within a tolerance)",
             "Math/Float/Comparison",
         );

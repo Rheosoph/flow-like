@@ -38,12 +38,14 @@ export function NetworkStatusIndicator() {
 			{isOnline ? (
 				<>
 					<WifiIcon className="h-4 w-4" />
-					<span>{t('backOnline', 'Back Online')}</span>
+					<span>{t("backOnline", "Back Online")}</span>
 				</>
 			) : (
 				<>
 					<WifiOffIcon className="h-4 w-4" />
-					<span>{t('offlineUsingCachedData', 'Offline - Using Cached Data')}</span>
+					<span>
+						{t("offlineUsingCachedData", "Offline - Using Cached Data")}
+					</span>
 				</>
 			)}
 		</div>

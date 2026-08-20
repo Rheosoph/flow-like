@@ -1226,25 +1226,20 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
         },
         PlatformToolSpec {
             name: "data_studio_agent",
-            description: r#"The data specialist for creating, inspecting, updating, querying, or dropping app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It does not edit workflow boards or UI.
+            description: r#"The data specialist for app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It reads AND changes data — create, insert, update, correct, migrate, seed, index, or drop — on apps that already exist as well as during BUILD. It does not edit workflow boards or UI.
 
-For DIRECT/COMPLEX app use, configured active Events are primary and this is the raw-data fallback. Outside BUILD, call it only after `list_apps` completed in an earlier assistant round and the user explicitly requested raw schema/table/ontology/SQL/DataFusion work, no suitable Event exists, or a successfully called Event explicitly lacks the required operation or fidelity. Never put it in the same wave as `list_apps`, and never bypass a failed, declined, timed-out, or approval-blocked suitable Event.
+Call it directly for any work item about the data itself: schema, ad-hoc queries, analytics, corrections, migrations, ontologies, or data setup for a build. It needs no preflight; pass `app_id` from context or `list_apps`. Choose a configured active Event instead when one already performs exactly what was asked — a routing preference, not a restriction on this tool. A failed, declined, timed-out, or approval-blocked Event is a stop to report, not work to redo through raw data.
 
-Give one complete question/change with the exact app and optional overlay from context, plus the exact `routing_reason`. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
+Give one complete question/change with the exact app and optional overlay from context. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations). State the intended change in full for a mutation." },
                         "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
-                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." },
-                        "routing_reason": {
-                            "type": "string",
-                            "enum": ["build", "explicit_raw_data", "no_suitable_event", "event_insufficient"],
-                            "description": "Why direct data access is allowed: BUILD data work; the user explicitly requested raw data/SQL/DataFusion; a complete list_apps inventory had no suitable Event; or a successfully called Event explicitly could not provide the required operation/fidelity."
-                        }
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
                     },
-                    "required": ["instruction", "routing_reason"]
+                    "required": ["instruction"]
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -2555,38 +2550,23 @@ mod tests {
     }
 
     #[test]
-    fn direct_data_tool_requires_an_event_first_routing_reason() {
+    fn direct_data_tool_is_callable_without_a_preflight() {
         let inventory = find_global_tool_spec("list_apps").expect("list_apps spec");
         assert!(inventory.description.contains("active Event"));
         assert!(inventory.description.contains("exact `consumer_tool`"));
 
         let data = find_global_tool_spec("data_studio_agent").expect("data studio spec");
-        assert!(
-            data.description
-                .contains("configured active Events are primary")
-        );
-        assert!(data.description.contains("raw-data fallback"));
-        assert!(
-            data.description
-                .contains("completed in an earlier assistant round")
-        );
-        assert!(data.description.contains("never bypass a failed, declined"));
+        // Adjusting the data of an app that already exists is a first-class use of this tool, not
+        // a fallback that has to be justified. The Event preference stays, as a preference.
+        assert!(data.description.contains("apps that already exist"));
+        assert!(data.description.contains("needs no preflight"));
+        assert!(data.description.contains("not a restriction on this tool"));
 
         let schema = (data.schema)();
+        assert!(schema["properties"]["routing_reason"].is_null());
         assert_eq!(
-            schema["properties"]["routing_reason"]["enum"],
-            json!([
-                "build",
-                "explicit_raw_data",
-                "no_suitable_event",
-                "event_insufficient"
-            ])
-        );
-        assert!(
-            schema["required"]
-                .as_array()
-                .expect("required fields")
-                .contains(&json!("routing_reason"))
+            schema["required"].as_array().expect("required fields"),
+            &vec![json!("instruction")]
         );
     }
 

@@ -1,7 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { type ILayer, ILayerType } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
-import { resolveFocusTarget, resolveLayerChain } from "./use-layer-navigation";
+import {
+	type LayerVisit,
+	dropVisitsTo,
+	parentPath,
+	recordVisit,
+	resolveExit,
+	resolveFocusTarget,
+	resolveLayerChain,
+} from "./use-layer-navigation";
 
 function layer(
 	id: string,
@@ -117,5 +125,112 @@ describe("resolveFocusTarget", () => {
 
 	it("returns undefined for an id that is neither node nor layer", () => {
 		expect(resolveFocusTarget(nodes, layers, "deleted")).toBeUndefined();
+	});
+});
+
+describe("parentPath", () => {
+	it("is undefined for a top-level layer", () => {
+		expect(parentPath("a")).toBeUndefined();
+	});
+
+	it("drops the last segment", () => {
+		expect(parentPath("a/b")).toBe("a");
+		expect(parentPath("a/b/c")).toBe("a/b");
+	});
+});
+
+describe("layer trail", () => {
+	/** Walks the same sequence of pushes and pops the hook performs. */
+	function walk(steps: (string | "up")[]): {
+		path: string | undefined;
+		trail: LayerVisit[];
+	} {
+		let path: string | undefined;
+		let trail: LayerVisit[] = [];
+
+		for (const step of steps) {
+			if (step === "up") {
+				if (!path) continue;
+				const exit = resolveExit(trail, path);
+				path = exit.path;
+				trail = exit.trail;
+				continue;
+			}
+			trail = recordVisit(trail, { from: path, to: step });
+			path = step;
+		}
+
+		return { path, trail };
+	}
+
+	it("leaves a nested layer for its parent", () => {
+		expect(walk(["a", "a/b", "a/b/c", "up"]).path).toBe("a/b");
+	});
+
+	it("leaves a top-level layer for the board root", () => {
+		expect(walk(["a", "up"]).path).toBeUndefined();
+	});
+
+	it("returns to the function a nested function was opened from", () => {
+		// Both functions hang off the root, so their paths are single segments.
+		const { path, trail } = walk(["outer_fn", "inner_fn", "up"]);
+		expect(path).toBe("outer_fn");
+		expect(trail).toHaveLength(1);
+	});
+
+	it("unwinds a whole chain of functions one step at a time", () => {
+		expect(walk(["a", "fn_one", "fn_two", "up"]).path).toBe("fn_one");
+		expect(walk(["a", "fn_one", "fn_two", "up", "up"]).path).toBe("a");
+		expect(
+			walk(["a", "fn_one", "fn_two", "up", "up", "up"]).path,
+		).toBeUndefined();
+	});
+
+	it("keeps the layer a function was called from, not the function's own parent", () => {
+		expect(walk(["a", "a/b", "fn", "up"]).path).toBe("a/b");
+	});
+
+	it("unwinds one step at a time when a function is entered twice", () => {
+		expect(walk(["fn_a", "fn_b", "fn_a", "up"]).path).toBe("fn_b");
+		expect(walk(["fn_a", "fn_b", "fn_a", "up", "up"]).path).toBe("fn_a");
+		expect(
+			walk(["fn_a", "fn_b", "fn_a", "up", "up", "up"]).path,
+		).toBeUndefined();
+	});
+
+	it("ignores re-opening the layer already on screen", () => {
+		expect(walk(["fn", "fn", "up"]).path).toBeUndefined();
+	});
+
+	it("falls back to the parent chain when the trail does not lead here", () => {
+		// A breadcrumb or goto moved the user without walking in.
+		const trail: LayerVisit[] = [{ from: undefined, to: "fn" }];
+		const exit = resolveExit(trail, "a/b/c");
+		expect(exit.path).toBe("a/b");
+		expect(exit.trail).toEqual([]);
+	});
+
+	it("forgets the steps into a layer that was jumped to", () => {
+		const trail: LayerVisit[] = [
+			{ from: undefined, to: "a" },
+			{ from: "a", to: "fn" },
+		];
+		const jumped = dropVisitsTo(trail, "fn");
+		expect(jumped).toEqual([{ from: undefined, to: "a" }]);
+		expect(resolveExit(jumped, "fn").path).toBeUndefined();
+	});
+
+	it("keeps an unrelated trail intact on a jump", () => {
+		const trail: LayerVisit[] = [{ from: undefined, to: "a" }];
+		expect(dropVisitsTo(trail, "other")).toEqual(trail);
+	});
+
+	it("bounds the trail", () => {
+		let trail: LayerVisit[] = [];
+		for (let index = 0; index < 200; index++) {
+			trail = recordVisit(trail, { from: `l${index}`, to: `l${index + 1}` });
+		}
+		expect(trail).toHaveLength(64);
+		expect(trail[trail.length - 1].to).toBe("l200");
 	});
 });

@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	SubscriptionPage,
@@ -7,6 +6,7 @@ import {
 	useHub,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -62,9 +62,14 @@ export default function SubscriptionPageWrapper() {
 		return (
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
-					<h3>{t('pleaseLogInToViewSubscriptionOptions', 'Please log in to view subscription options.')}</h3>
+					<h3>
+						{t(
+							"pleaseLogInToViewSubscriptionOptions",
+							"Please log in to view subscription options.",
+						)}
+					</h3>
 					<Button onClick={() => auth.signinRedirect()} className="mt-4">
-						{t('logIn', 'Log In')}
+						{t("logIn", "Log In")}
 					</Button>
 				</div>
 			</main>
@@ -84,10 +89,13 @@ export default function SubscriptionPageWrapper() {
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6">
 					<h3 className="text-xl font-semibold mb-2">
-						{t('premiumFeaturesNotAvailable', 'Premium Features Not Available')}
+						{t("premiumFeaturesNotAvailable", "Premium Features Not Available")}
 					</h3>
 					<p className="text-muted-foreground">
-						{t('premiumSubscriptionFeaturesAreNotEnabledOnThisInstance', 'Premium subscription features are not enabled on this instance.')}
+						{t(
+							"premiumSubscriptionFeaturesAreNotEnabledOnThisInstance",
+							"Premium subscription features are not enabled on this instance.",
+						)}
 					</p>
 				</div>
 			</main>
@@ -108,9 +116,14 @@ export default function SubscriptionPageWrapper() {
 				<div className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 					<div className="text-center p-6">
 						<h3 className="text-xl font-semibold mb-2">
-							{t('failedToLoadPricingInformation', 'Failed to load pricing information.')}
+							{t(
+								"failedToLoadPricingInformation",
+								"Failed to load pricing information.",
+							)}
 						</h3>
-						<p className="text-muted-foreground">{t('pleaseTryAgainLater', 'Please try again later.')}</p>
+						<p className="text-muted-foreground">
+							{t("pleaseTryAgainLater", "Please try again later.")}
+						</p>
 					</div>
 				</div>
 			)}

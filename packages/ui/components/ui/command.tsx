@@ -32,7 +32,10 @@ function Command({
 
 function CommandDialog({
 	title = "Command Palette",
-	description = i18next.t('searchForACommandToRun', 'Search for a command to run...'),
+	description = i18next.t(
+		"searchForACommandToRun",
+		"Search for a command to run...",
+	),
 	children,
 	className,
 	showCloseButton = true,

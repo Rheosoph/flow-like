@@ -1,6 +1,6 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
+import { useTranslation } from "@flow-like/locales";
 import "@xyflow/react/dist/style.css";
 import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";
@@ -20,7 +20,7 @@ export default function FlowEditPage() {
 		return { boardId, appId, nodeId, version };
 	}, [searchParams]);
 
-	if (boardId === "") return <p>{t('boardNotFound', 'Board not found...')}</p>;
+	if (boardId === "") return <p>{t("boardNotFound", "Board not found...")}</p>;
 	return (
 		<FlowWrapper
 			boardId={boardId}

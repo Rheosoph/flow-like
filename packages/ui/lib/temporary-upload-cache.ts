@@ -55,28 +55,54 @@ export async function temporaryUploadCacheKey(
 	return [scope, file.name, file.type, file.size, hash].join("|");
 }
 
+/**
+ * Identity key that never reads the file's bytes. Bulk uploads (folders with
+ * thousands of files) use this: hashing every file's content would read the whole
+ * selection into memory. The folder-relative path keeps same-named files in
+ * different subfolders apart.
+ */
+export function temporaryUploadMetadataKey(file: File, scope: string): string {
+	const path =
+		(file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+		file.name;
+	const hash = ["metadata", path, file.type, file.size, file.lastModified].join(
+		":",
+	);
+	return [scope, file.name, file.type, file.size, hash].join("|");
+}
+
+export function readTemporaryUploadCache(
+	key: string,
+): ITemporaryUploadedFile | undefined {
+	const cached = cachedUploads.get(key);
+	if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+	cachedUploads.delete(key);
+	return undefined;
+}
+
+export function writeTemporaryUploadCache(
+	key: string,
+	uploaded: ITemporaryUploadedFile,
+): void {
+	cachedUploads.set(key, { value: uploaded, expiresAt: cacheExpiry(uploaded) });
+}
+
 export async function getOrUploadTemporaryFile(
 	file: File,
 	scope: string,
 	upload: () => Promise<ITemporaryUploadedFile>,
 ): Promise<ITemporaryUploadedFile> {
 	const key = await temporaryUploadCacheKey(file, scope);
-	const cached = cachedUploads.get(key);
-	if (cached && cached.expiresAt > Date.now()) {
-		return cached.value;
-	}
-
-	cachedUploads.delete(key);
+	const cached = readTemporaryUploadCache(key);
+	if (cached) return cached;
 
 	const pending = pendingUploads.get(key);
 	if (pending) return pending;
 
 	const promise = upload()
 		.then((uploaded) => {
-			cachedUploads.set(key, {
-				value: uploaded,
-				expiresAt: cacheExpiry(uploaded),
-			});
+			writeTemporaryUploadCache(key, uploaded);
 			return uploaded;
 		})
 		.finally(() => {

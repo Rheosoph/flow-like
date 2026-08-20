@@ -77146,8 +77146,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), is_technical_user, key_id",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"UserExecutionContext\",\"description\":\"Represents the user context during execution.\\nContains information about the user who triggered the execution,\\ntheir role, permissions, and any custom attributes.\",\"type\":\"object\",\"properties\":{\"sub\":{\"description\":\"User subject identifier (e.g., OIDC sub claim)\\nEmpty for technical users (API keys)\",\"type\":\"string\"},\"role\":{\"description\":\"Role information\",\"anyOf\":[{\"$ref\":\"#/$defs/RoleContext\"},{\"type\":\"null\"}]},\"isTechnicalUser\":{\"description\":\"Whether this is a technical user (API key) rather than a human user\",\"type\":\"boolean\",\"default\":false},\"keyId\":{\"description\":\"For technical users, the API key identifier\",\"type\":[\"string\",\"null\"],\"default\":null}},\"required\":[\"sub\"],\"$defs\":{\"RoleContext\":{\"description\":\"Role context containing role metadata and permissions\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Role ID\",\"type\":\"string\"},\"name\":{\"description\":\"Role name\",\"type\":\"string\"},\"permissions\":{\"description\":\"Role permissions as a bitfield\",\"type\":\"integer\",\"format\":\"int64\"},\"attributes\":{\"description\":\"Custom attributes assigned to the role\",\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"customAttributes\":{\"description\":\"Custom key-value attributes that can be set by users\",\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"},\"default\":{}}},\"required\":[\"id\",\"name\",\"permissions\",\"attributes\"]}}}"
+          "doc": "The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), isTechnicalUser, keyId, principal, originAppId, onBehalfOf",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"UserExecutionContext\",\"description\":\"Represents the user context during execution.\\nContains information about the user who triggered the execution,\\ntheir role, permissions, and any custom attributes.\",\"type\":\"object\",\"properties\":{\"sub\":{\"description\":\"User subject identifier (e.g., OIDC sub claim)\\nEmpty for technical users (API keys, app connections)\",\"type\":\"string\"},\"role\":{\"description\":\"Role information\",\"anyOf\":[{\"$ref\":\"#/$defs/RoleContext\"},{\"type\":\"null\"}]},\"isTechnicalUser\":{\"description\":\"Whether this is a technical user (API key, app connection) rather than a human user\",\"type\":\"boolean\",\"default\":false},\"keyId\":{\"description\":\"For API keys, the key identifier. Never set for other principals.\",\"type\":[\"string\",\"null\"],\"default\":null},\"principal\":{\"description\":\"Which kind of principal started the run.\",\"$ref\":\"#/$defs/ExecutionPrincipal\",\"default\":\"user\"},\"originAppId\":{\"description\":\"For `ConnectedApp`, the app that made the call.\",\"type\":[\"string\",\"null\"]},\"onBehalfOf\":{\"description\":\"Subject the calling principal reported as the initiator: the API key's\\ncreator, or the user an app connection passed through. Attribution only\\n\\u2014 the run must never treat it as an identity it may act as.\",\"type\":[\"string\",\"null\"]}},\"required\":[\"sub\"],\"$defs\":{\"RoleContext\":{\"description\":\"Role context containing role metadata and permissions\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Role ID\",\"type\":\"string\"},\"name\":{\"description\":\"Role name\",\"type\":\"string\"},\"permissions\":{\"description\":\"Role permissions as a bitfield\",\"type\":\"integer\",\"format\":\"int64\"},\"attributes\":{\"description\":\"Custom attributes assigned to the role\",\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"customAttributes\":{\"description\":\"Custom key-value attributes that can be set by users\",\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"},\"default\":{}}},\"required\":[\"id\",\"name\",\"permissions\",\"attributes\"]},\"ExecutionPrincipal\":{\"description\":\"How the caller of a run authenticated. `is_technical_user` keeps the coarse\\nhuman/machine split; this names which machine principal it was, so an app\\ncalling through an app connection is no longer indistinguishable from an\\nAPI key.\",\"oneOf\":[{\"description\":\"A human account: an OIDC session or a personal access token.\",\"type\":\"string\",\"const\":\"user\"},{\"description\":\"An app-scoped API key. Carries no human subject of its own.\",\"type\":\"string\",\"const\":\"apiKey\"},{\"description\":\"Another app calling through an app connection.\",\"type\":\"string\",\"const\":\"connectedApp\"}]}}}"
         },
         {
           "name": "has_user",
@@ -77160,7 +77160,7 @@
         }
       ],
       "impure": false,
-      "doc": "Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and technical user info. Use 'Break Struct' to access individual fields."
+      "doc": "Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and details of the calling principal. Use 'Break Struct' to access individual fields."
     },
     {
       "node_type": "utils_user_get_project_user",
@@ -77567,7 +77567,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "True if the execution is by a technical user (API key), false otherwise"
+          "doc": "True if a machine triggered the run (API key or app connection), false for a person"
         },
         {
           "name": "key_id",
@@ -77576,11 +77576,38 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "The API key identifier for technical users, empty string for human users"
+          "doc": "The API key identifier, empty for every other caller"
+        },
+        {
+          "name": "principal",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "How the caller authenticated: 'user', 'apiKey' or 'connectedApp'"
+        },
+        {
+          "name": "origin_app_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The app that made the call when the principal is 'connectedApp', empty otherwise"
+        },
+        {
+          "name": "on_behalf_of",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The user the caller reported as the initiator: an API key's creator, or the user an app connection passed through. Attribution only — never authorize against it"
         }
       ],
       "impure": false,
-      "doc": "Checks if the current execution is triggered by a technical user (API key) rather than a human user. Technical users don't have a human identity (sub) but do have a key_id."
+      "doc": "Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead."
     },
     {
       "node_type": "utils_user_list_project_users",

@@ -34,6 +34,7 @@ export { BuilderDragOverlay } from "./BuilderDragOverlay";
 export {
 	WidgetBuilder,
 	type WidgetBuilderProps,
+	type WidgetBuilderHandle,
 	CONTAINER_TYPES,
 	ROOT_ID,
 	createDefaultComponent,

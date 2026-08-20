@@ -14,6 +14,9 @@ use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 
+/// Apps paired with their localized metadata, when any exists.
+pub type AppsWithMetadata = Vec<(App, Option<Metadata>)>;
+
 #[utoipa::path(
     get,
     path = "/apps",
@@ -33,7 +36,7 @@ pub async fn get_apps(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<LanguageParams>,
-) -> Result<Json<Vec<(App, Option<Metadata>)>>, ApiError> {
+) -> Result<Json<AppsWithMetadata>, ApiError> {
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());
 
     let limit = query.limit.unwrap_or(100).min(100);

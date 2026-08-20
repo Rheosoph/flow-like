@@ -227,13 +227,13 @@ fn reconcile_inner(
                     // selector, or a page/widget build that has not landed). Saying only "no pin
                     // named X; skipped" reads like a typo and silently drops the data binding.
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check. No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
                 } else {
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
@@ -1965,7 +1965,7 @@ fn find_input_pin_by_ref<'a>(node: &'a Node, pin_ref: &str) -> Option<&'a Pin> {
             .values()
             .filter(|pin| pin.pin_type == PinType::Input && node_pin_name_matches(pin, name))
             .collect::<Vec<_>>();
-        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
         return matching.get(occurrence).copied();
     }
     find_input_pin(node, pin_ref)
@@ -1984,7 +1984,7 @@ fn find_boundary_pin_by_ref<'a>(
         .values()
         .filter(|pin| pin.pin_type == expected && node_pin_name_matches(pin, name))
         .collect::<Vec<_>>();
-    matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
     matching.get(occurrence).copied()
 }
 
@@ -2022,7 +2022,12 @@ fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
         .collect();
     matching.sort_by_key(|p| {
         let populated = !p.depends_on.is_empty() || p.default_value.is_some();
-        (!populated, p.index, p.id.clone())
+        (
+            node_pin_match_rank(p, name),
+            !populated,
+            p.index,
+            p.id.clone(),
+        )
     });
     matching
 }
@@ -2038,7 +2043,13 @@ fn node_input_occurrence_ref(node: &Node, pin: &Pin) -> String {
             candidate.pin_type == PinType::Input && node_pin_name_matches(candidate, &pin.name)
         })
         .collect::<Vec<_>>();
-    matching.sort_by_key(|candidate| (candidate.index, candidate.id.clone()));
+    matching.sort_by_key(|candidate| {
+        (
+            node_pin_match_rank(candidate, &pin.name),
+            candidate.index,
+            candidate.id.clone(),
+        )
+    });
     if matching.len() <= 1 {
         return pin.name.clone();
     }
@@ -2055,7 +2066,7 @@ fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
         .values()
         .filter(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
         .collect();
-    matching.sort_by_key(|p| (p.index, p.id.clone()));
+    matching.sort_by_key(|p| (node_pin_match_rank(p, name), p.index, p.id.clone()));
     matching.first().copied()
 }
 
@@ -2073,12 +2084,32 @@ pub(crate) fn pin_name_matches(raw: &str, requested: &str) -> bool {
     raw == requested || to_camel_case(raw) == requested
 }
 
+/// How closely a pin answers to `requested`: `0` when its own name matches, `1` when only its
+/// friendly name does, `None` when neither. A pin's own name must outrank another pin's friendly
+/// name — `string_format`'s config pin is named `format_string` but presented as "Input", so a
+/// `{input}` placeholder resolves to the format string itself, and its value overwrites the
+/// template, unless the real name wins.
+fn pin_name_match_rank(name: &str, friendly_name: &str, requested: &str) -> Option<u8> {
+    if pin_name_matches(name, requested) {
+        return Some(0);
+    }
+    pin_name_matches(friendly_name, requested).then_some(1)
+}
+
+fn node_pin_match_rank(pin: &Pin, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
+fn metadata_pin_match_rank(pin: &PinMetadata, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
 fn node_pin_name_matches(pin: &Pin, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn metadata_pin_name_matches(pin: &PinMetadata, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn authored_arg_name_matches(raw: &str, canonical: &str) -> bool {
@@ -2206,10 +2237,14 @@ fn metadata_input_pin_at<'a>(
     name: &str,
     occurrence: usize,
 ) -> Option<&'a PinMetadata> {
-    meta.inputs
+    let mut matching: Vec<&PinMetadata> = meta
+        .inputs
         .iter()
         .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
-        .nth(occurrence)
+        .collect();
+    // Stable, so pins of equal rank keep their catalog order (`node_to_metadata` sorts by index).
+    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
+    matching.get(occurrence).copied()
 }
 
 /// Encode an occurrence of a same-named pin in a board-command pin reference. Catalog nodes can
@@ -2258,23 +2293,108 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
     match node_type {
         "string_format" => Some("format_string"),
         "string_render_template" => Some("template"),
-        node_type if sql_param_node(node_type) => Some("query"),
+        node_type => sql_param_config_pin(node_type),
+    }
+}
+
+/// Nodes that derive one input pin per `$placeholder` in their SQL literal, paired with the
+/// pin that carries that literal. Kept in one place because the same list gates prediction
+/// here, enrichment in `apply`, and the required-input lint in `executability`.
+///
+/// The two families do not share a config pin or a dialect: a DataFusion node parameterizes
+/// its `query` and binds through the planner, while a LanceDB node parameterizes the `filter`
+/// it hands to `only_if` and has its values substituted before the predicate is parsed.
+pub(crate) fn sql_param_config_pin(node_type: &str) -> Option<&'static str> {
+    match node_type {
+        "df_sql_query"
+        | "df_sql_query_cached"
+        | "df_execute_sql"
+        | "df_write_delta"
+        | "graph_sql_query" => Some("query"),
+        "filter_local_db"
+        | "count_local_db"
+        | "filter_delete_local_db"
+        | "vector_search_local_db"
+        | "fts_search_local_db"
+        | "hybrid_search_local_db" => Some("filter"),
         _ => None,
     }
 }
 
-/// Nodes that derive one input pin per `$placeholder` in their SQL literal. Kept in one
-/// place because the same list gates prediction here, enrichment in `apply`, and the
-/// required-input lint in `executability`.
 pub(crate) fn sql_param_node(node_type: &str) -> bool {
-    matches!(
-        node_type,
-        "df_sql_query"
-            | "df_sql_query_cached"
-            | "df_execute_sql"
-            | "df_write_delta"
-            | "graph_sql_query"
-    )
+    sql_param_config_pin(node_type).is_some()
+}
+
+/// Why an argument did not resolve to an input pin, and what has to change for it to.
+///
+/// Every diagnostic aborts the whole revision (`reconcile_is_safe_to_apply`), so the wording must
+/// never imply the rest of the call went through. The old "skipped that argument" said exactly
+/// that, and the cheapest repair it invited — delete the argument and re-commit — leaves the value
+/// producer on the canvas as a statement of its own, wired to nothing, next to a dynamic input pin
+/// that stayed empty. Naming the config value that declares these pins is what lets the author fix
+/// the cause instead.
+fn missing_input_pin_diagnostic(meta: &NodeMetadata, call: &Call, arg: &Arg) -> String {
+    let head = format!(
+        "node `{}` has no input pin named `{}`",
+        call.display, arg.name
+    );
+    let Some(config_pin) = dynamic_placeholder_config_pin(&meta.name) else {
+        return format!("{head}; no part of this revision was applied");
+    };
+
+    let config = to_camel_case(config_pin);
+    let declares = if sql_param_node(&meta.name) {
+        format!("Each `$placeholder` in `{config}` becomes one `param<Name>` pin")
+    } else {
+        format!("Each placeholder in `{config}` becomes one pin")
+    };
+    let alternative = if sql_param_node(&meta.name) {
+        ", so bind values through the `params` object instead"
+    } else {
+        ""
+    };
+
+    let config_value = call.args.iter().find_map(|candidate| {
+        metadata_input_pin(meta, &candidate.name)
+            .is_some_and(|pin| pin.name == config_pin)
+            .then_some(&candidate.value)
+    });
+    match config_value {
+        Some(Expr::Literal(Literal::String(_))) => format!(
+            "{head}. {declares}, and `{config}` on this call does not declare `{}`. Add it there, or drop the argument. No part of this revision was applied.",
+            arg.name
+        ),
+        Some(_) => format!(
+            "{head}. {declares}, and only when `{config}` is a plain string literal on this same call — a computed or wired `{config}` declares nothing{alternative}. No part of this revision was applied."
+        ),
+        None => format!(
+            "{head}. {declares}, and this call does not set `{config}`. Set it to a plain string literal on this same call. No part of this revision was applied."
+        ),
+    }
+}
+
+/// Whether `pin_name` on `node_type` is a pin that node's `on_update` both mints AND then re-types
+/// from its source via [`Node::match_type`].
+///
+/// `match_type` copies the data type, value type and schema of whatever is wired into the pin ONTO
+/// the pin, so a minted pin's stored shape describes its current source rather than its own
+/// contract — the pin is always minted `Generic`. Deliberately decided from the node type and pin
+/// name alone: a catalog lookup would make the rule depend on the catalog carrying this node type,
+/// and silently stop applying wherever it does not.
+///
+/// The widget nodes are NOT here. Their `dyn_*` pins are typed once from the widget's contract and
+/// never re-derived from the wire, so their type IS a contract and rejecting a mismatch is right.
+fn minted_wire_typed_pin(node_type: &str, pin_name: &str) -> bool {
+    if sql_param_node(node_type) {
+        // `param_<placeholder>`. The static `params` object pin does not match this prefix.
+        return pin_name.starts_with("param_");
+    }
+    // Every input except the template itself is a minted placeholder pin.
+    match node_type {
+        "string_format" => !pin_name_matches("format_string", pin_name),
+        "string_render_template" => !pin_name_matches("template", pin_name),
+        _ => false,
+    }
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
@@ -2313,13 +2433,22 @@ fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<
         // here and the pins the node actually mints cannot disagree — unlike the
         // hand-rolled `format_string` mirror above, which has to be kept in sync by eye.
         node_type if sql_param_node(node_type) => Some(
-            flow_like_storage::databases::sql_params::declared_placeholders(template)
-                .unwrap_or_default()
-                .iter()
-                .map(|placeholder| {
-                    flow_like_storage::databases::sql_params::param_pin_name(placeholder)
-                })
-                .collect(),
+            match sql_param_config_pin(node_type) {
+                // A LanceDB filter is tokenized with Lance's dialect, not DataFusion's, so
+                // prediction has to ask the same module the node's `on_update` asks.
+                Some("filter") => {
+                    flow_like_storage::databases::lance_filter_params::declared_placeholders(
+                        template,
+                    )
+                }
+                _ => flow_like_storage::databases::sql_params::declared_placeholders(template),
+            }
+            .unwrap_or_default()
+            .iter()
+            .map(|placeholder| {
+                flow_like_storage::databases::sql_params::param_pin_name(placeholder)
+            })
+            .collect(),
         ),
         "string_format" => Some(format_string_placeholders(template)),
         "string_render_template" => {
@@ -2580,9 +2709,13 @@ fn synthetic_fn_ref_targets(arg: &Arg) -> Vec<String> {
 }
 
 fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinMetadata> {
-    meta.outputs
+    let mut matching: Vec<&PinMetadata> = meta
+        .outputs
         .iter()
-        .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
+    matching.first().copied()
 }
 
 fn canonical_schema_value(value: &flow_like_types::Value) -> String {
@@ -2631,6 +2764,7 @@ fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -
         .or_else(|| Some(expanded.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn schema_constraints_are_compatible(
     input_name: &str,
     input_data_type: &str,
@@ -3542,9 +3676,9 @@ fn reconcile_schema_contract_eq_with_refs(
 }
 
 /// Project `schema` through the FULL text surface: interface generation, rendering to FlowScript,
-/// and re-parsing. Parsing normalizes strictly more than [`interface_representable_schema`]'s
-/// in-memory projection (e.g. an optional `anyOf[enum, null]` folds into an enum containing
-/// `null`), and an authored roundtrip schema is by construction in THIS fixed point.
+/// and re-parsing. Parsing normalizes strictly more than a purely in-memory interface projection
+/// would (e.g. an optional `anyOf[enum, null]` folds into an enum containing `null`), and an
+/// authored roundtrip schema is by construction in THIS fixed point.
 fn text_projected_schema(schema: &str) -> Option<String> {
     let source = VarDecl {
         name: "boundary".to_string(),
@@ -3583,28 +3717,6 @@ fn text_projected_schema(schema: &str) -> Option<String> {
     parsed.variables.first()?.schema.clone()
 }
 
-fn interface_representable_schema(schema: &str) -> Option<String> {
-    let source = VarDecl {
-        name: "boundary".to_string(),
-        ty: TypeRef::new("Struct", Container::Normal),
-        default: None,
-        exposed: false,
-        secret: false,
-        editable: true,
-        runtime_configured: false,
-        category: None,
-        description: None,
-        schema: Some(schema.to_string()),
-        anchor: None,
-    };
-    let interfaces = flow_like_ast::interfaces_for_variables(&[source]);
-    let interface_name = flow_like_ast::interface_name_for_schema(&interfaces, schema)?;
-    let interface = interfaces
-        .iter()
-        .find(|interface| interface.name == interface_name)?;
-    flow_like_ast::schema_from_interface_with_defs(interface, &interfaces)
-}
-
 fn function_boundary_contract_matches(
     live: &PinMetadata,
     authored: &PinMetadata,
@@ -3624,7 +3736,7 @@ fn function_boundary_contract_matches(
     // schema to that representable projection while retaining the exact live schema for wiring.
     // The authored schema went through the render→parse text surface, so compare against the
     // live schema's projection through that same surface (`text_projected_schema` subsumes the
-    // in-memory `interface_representable_schema` projection and its extra parse normalizations).
+    // in-memory interface projection and adds the extra parse normalizations).
     match authored.schema.as_deref() {
         Some(schema) => {
             authored.enforce_schema
@@ -3810,6 +3922,12 @@ struct StructuralPlanner<'a> {
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
     symbols: Vec<HashMap<String, SymbolValue>>,
+    /// Bindings made inside a loop body or a branch arm, kept resolvable after that block
+    /// closes. FlowScript blocks are lexical, but the board they render is one flat node
+    /// scope: a value produced inside a loop and read after it is an ordinary data edge, and
+    /// `lower` emits exactly that text from such a board. Consulted only when the lexical
+    /// chain has no such name, so an enclosing binding still wins.
+    closed_block_symbols: HashMap<String, SymbolValue>,
     variable_refs: VariableRefLookup,
     /// Exact data contract of every board variable visible to this planned source revision. New
     /// variable get/set nodes start Generic in the static catalog, but their `on_update` handlers
@@ -3879,6 +3997,7 @@ impl<'a> StructuralPlanner<'a> {
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
             symbols: Vec::new(),
+            closed_block_symbols: HashMap::new(),
             variable_refs: VariableRefLookup::from_board(existing),
             variable_value_contracts: HashMap::new(),
             function_return_targets: Vec::new(),
@@ -4646,8 +4765,10 @@ impl<'a> StructuralPlanner<'a> {
         // sugar (`events_generic_return_result`), never a return of the enclosing function whose
         // layer the handler happens to live in.
         let enclosing_function_returns = std::mem::take(&mut self.function_return_targets);
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         self.plan_block(&event.body, entry.map(ExecCursor::new), target_layer);
         self.function_return_targets = enclosing_function_returns;
+        self.closed_block_symbols = enclosing_blocks;
         self.pop_scope();
     }
 
@@ -4682,12 +4803,14 @@ impl<'a> StructuralPlanner<'a> {
         } else {
             None
         };
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         let final_cursors = self.plan_block(&func.body, entry, target_layer);
         if planned.impure {
             for cursor in final_cursors {
                 self.wire_function_exit(&layer, cursor);
             }
         }
+        self.closed_block_symbols = enclosing_blocks;
         self.function_return_targets.pop();
         self.pop_scope();
     }
@@ -5365,7 +5488,7 @@ impl<'a> StructuralPlanner<'a> {
                     // (exec inputs are fan-in points). An empty arm's tail is the labelled pin
                     // itself — the pass-through case.
                     arm_tails.extend(self.plan_block(&arm.body, arm_cursor, target_layer.clone()));
-                    self.pop_scope();
+                    self.pop_block_scope();
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
@@ -5427,7 +5550,7 @@ impl<'a> StructuralPlanner<'a> {
                         target_layer,
                     );
                 }
-                self.pop_scope();
+                self.pop_block_scope();
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
                 entity.map(|entity| {
@@ -6542,16 +6665,15 @@ impl<'a> StructuralPlanner<'a> {
                                 // actual cause is that these pins only exist once the
                                 // widget is persisted and the instance is wired up.
                                 self.result.diagnostics.push(format!(
-                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself, or split the update into a later call once the instance exists. `ui_inspect` with operation `widget` lists a widget's exact pin names.",
+                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself — every connection in a revision is applied after every pin write, so a later call in the same revision cannot see them either. `ui_inspect` with operation `widget` lists a widget's exact pin names. No part of this revision was applied.",
                                         call.display, arg.name
                                     ));
                                 continue;
                             }
                             None => {
-                                self.result.diagnostics.push(format!(
-                                    "node `{}` has no input pin named `{}`; skipped that argument",
-                                    call.display, arg.name
-                                ));
+                                self.result
+                                    .diagnostics
+                                    .push(missing_input_pin_diagnostic(meta, call, arg));
                                 continue;
                             }
                         }
@@ -6632,7 +6754,14 @@ impl<'a> StructuralPlanner<'a> {
                     source
                 }
             };
-            let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
+            // Same reason as in `queue_validated_data_connection`: selecting the source's output
+            // by the dynamic pin's CURRENT specialization hides every output of a differently
+            // typed replacement, and reports it as a node with no usable output.
+            let rewirable_target = self.rewirable_dynamic_input(entity, input);
+            let selector_input = rewirable_target.as_ref().unwrap_or(input);
+            let Some(output_pin) =
+                self.resolve_source_output_pin_for_input(&source, selector_input)
+            else {
                 self.result.diagnostics.push(format!(
                     "could not choose an output pin for argument `{}` on `{}`",
                     arg.name, call.display
@@ -6855,6 +6984,31 @@ impl<'a> StructuralPlanner<'a> {
     /// Queue one newly authored DATA edge only after resolving both endpoints to concrete live or
     /// planned contracts. Exact pre-existing endpoints are retained without re-validating legacy
     /// wiring; every changed endpoint must pass type, container, and schema checks.
+    /// The `Generic` shape a wire-typed dynamic pin is actually minted with, when `input` is one.
+    ///
+    /// A pin minted by [`respecializes_dynamic_pins_from_their_source`] stores the contract of the
+    /// source currently feeding it, because `on_update` re-runs `match_type` on every board pass.
+    /// Validating a REPLACEMENT source against that stored shape rejects every rewire — and makes
+    /// the output-pin picker report that the new source node has no usable output at all — even
+    /// though the pin re-specializes to the new source the moment the edge lands.
+    fn rewirable_dynamic_input(
+        &self,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+    ) -> Option<PinMetadata> {
+        if input.is_generic || input.data_type == "Generic" {
+            return None;
+        }
+        let node_type = match target_entity {
+            NodeEntity::Existing(node_id) => find_board_node(self.existing, node_id)?.name.as_str(),
+            NodeEntity::New { meta, .. } => meta.name.as_str(),
+            NodeEntity::Layer { .. } => return None,
+        };
+        minted_wire_typed_pin(node_type, &input.name)
+            .then(|| generic_input_pin_metadata(&input.name))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn queue_validated_data_connection(
         &mut self,
         source: &ValueSource,
@@ -6895,6 +7049,12 @@ impl<'a> StructuralPlanner<'a> {
         if already_planned {
             return true;
         }
+
+        // Past the already-wired guards, `input` is only used to validate a NEW edge. A dynamic
+        // pin's stored type is a copy of the source it holds today, so check the replacement
+        // against the `Generic` pin the node really mints instead.
+        let rewirable = self.rewirable_dynamic_input(target_entity, input);
+        let input = rewirable.as_ref().unwrap_or(input);
 
         let resolved_source = ValueSource {
             node: source.node.clone(),
@@ -7521,9 +7681,7 @@ impl<'a> StructuralPlanner<'a> {
             }
             return None;
         };
-        let Some(to_pin) = self.entity_exec_input_pin(current) else {
-            return None;
-        };
+        let to_pin = self.entity_exec_input_pin(current)?;
 
         if let Some((origin_node, origin_pin)) = insertion_origin
             && let NodeEntity::Existing(node_id) = current
@@ -9257,6 +9415,14 @@ impl<'a> StructuralPlanner<'a> {
         self.symbols.pop();
     }
 
+    /// Close a loop body or branch arm, retiring its bindings into [`Self::closed_block_symbols`]
+    /// instead of dropping them.
+    fn pop_block_scope(&mut self) {
+        if let Some(scope) = self.symbols.pop() {
+            self.closed_block_symbols.extend(scope);
+        }
+    }
+
     fn insert_symbol(&mut self, name: String, source: SymbolValue) {
         if let Some(scope) = self.symbols.last_mut() {
             scope.insert(name, source);
@@ -9281,6 +9447,7 @@ impl<'a> StructuralPlanner<'a> {
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).cloned())
+            .or_else(|| self.closed_block_symbols.get(name).cloned())
     }
 }
 
@@ -15176,6 +15343,81 @@ function constantFlag(): (flag: bool) {
     }
 
     #[tokio::test]
+    async fn applied_loop_body_return_roundtrip_is_idempotent() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut for_each = Node::new("control_for_each", "For Each", "", "control");
+        for_each.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        for_each
+            .add_input_pin("array", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        for_each.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        for_each.add_output_pin("value", "Value", "", VariableType::Generic);
+        for_each.add_output_pin("index", "Index", "", VariableType::Integer);
+        for_each.add_output_pin("done", "Done", "", VariableType::Execution);
+
+        let mut push = Node::new("array_push", "Push", "", "array");
+        push.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        push.add_input_pin("array_in", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        push.add_input_pin("value", "Value", "", VariableType::Generic);
+        push.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        push.add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+
+        let catalog_nodes = vec![for_each, push];
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"function parseRssXml(items: Generic[]): (rows: Generic[]) {
+    for (const item of controlForEach({ array: items })) {
+        const batchPush = arrayPush({ arrayIn: items, value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("loop accumulator script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // The lowerer names bindings after the node, not after the source that created it, so
+        // find the accumulator's rendered name instead of assuming the authored one survived.
+        let text = anchored_text(&board);
+        let binding = text
+            .lines()
+            .find_map(|line| {
+                let (name, call) = line.trim().strip_prefix("const ")?.split_once(" = ")?;
+                call.starts_with("arrayPush(").then(|| name.to_string())
+            })
+            .expect("the accumulator must lower as a binding inside the loop body");
+        assert!(
+            text.contains(&format!("return {binding}.arrayOut")),
+            "the lowered board must still read the loop-local accumulator:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "re-applying the board's own lowered script must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
     async fn applied_literal_return_roundtrip_is_idempotent() {
         use crate::state::{FlowLikeConfig, FlowLikeState};
         use crate::utils::http::HTTPClient;
@@ -19092,7 +19334,7 @@ eventsSimple() {
     return true
 }
 "#,
-            &vec![catalog_meta(
+            &[catalog_meta(
                 "a2ui_widget_update_inputs",
                 "Update Widget Inputs",
                 vec![pin_meta("element_ref", "Struct", PinType::Input)],
@@ -19841,6 +20083,128 @@ push(arrayOut: Struct[]) {   //@n:push
                         && to_pin == "value_in"
             )
         }));
+    }
+
+    #[test]
+    fn function_return_resolves_a_binding_declared_inside_a_loop_body() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the accumulator inside the loop must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn function_return_resolves_a_binding_declared_inside_a_branch_arm() {
+        let mut catalog = accumulator_catalog();
+        catalog.push(catalog_meta(
+            "control_branch",
+            "Branch",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("condition", "Boolean", PinType::Input),
+            ],
+            vec![
+                pin_meta("true", "Execution", PinType::Output),
+                pin_meta("false", "Execution", PinType::Output),
+            ],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    if (true) {
+        const batchPush = arrayPush({ arrayIn: [], value: "one" })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the arm-local accumulator must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_closed_block_binding_never_shadows_an_enclosing_one() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    const batchPush = arrayPush({ arrayIn: [], value: "outer" })
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let outer = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value,
+                    ..
+                } if pin_id == "value"
+                    && value == &flow_like_types::Value::String("outer".to_string()) =>
+                {
+                    Some(node_id.clone())
+                }
+                _ => None,
+            })
+            .expect("the enclosing push must be materialized");
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if from_node == &outer && from_pin == "array_out" && to_pin == "rows"
+                )
+            }),
+            "the enclosing binding must still win over the loop-local one: {:?}",
+            result.commands
+        );
     }
 
     #[test]

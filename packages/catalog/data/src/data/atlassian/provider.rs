@@ -176,7 +176,7 @@ impl AtlassianProvider {
                 // Server/Data Center PAT uses Bearer token
                 format!("Bearer {}", self.access_token)
             }
-            "api_token" | _ => {
+            _ => {
                 // Cloud API Token auth uses Basic auth with email:token
                 if let Some(email) = &self.email {
                     let credentials = format!("{}:{}", email, self.access_token);

@@ -3,6 +3,7 @@ pub mod lancedb;
 pub mod schema;
 use flow_like_types::{Result, Value, async_trait};
 
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait VectorStore: Send + Sync {
     /// Search for vectors similar to the given vector, potentially filtering results.

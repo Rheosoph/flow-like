@@ -1,17 +1,27 @@
 use crate::{
-    entity::{app, app_purchase, app_sales_daily, membership, sea_orm_active_enums::Visibility},
+    entity::{
+        app, app_purchase, app_sales_daily, membership,
+        sea_orm_active_enums::{PurchaseStatus, Visibility},
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
+    utils::stats_period::StatsPeriod,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use super::update_aggregations::ensure_sales_aggregations_current;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct StatsQuery {
@@ -19,7 +29,8 @@ pub struct StatsQuery {
     pub start_date: Option<String>,
     /// End date for the stats period (YYYY-MM-DD)
     pub end_date: Option<String>,
-    /// Aggregation period: "day", "week", "month"
+    /// Aggregation period: "day" (default), "week" or "month". Week buckets
+    /// start on Monday; every bucket is labelled with its first day.
     #[serde(default = "default_period")]
     pub period: String,
 }
@@ -236,12 +247,12 @@ pub async fn get_sales_overview(
     get,
     path = "/apps/{app_id}/sales/stats",
     tag = "sales",
-    description = "Get sales statistics with daily breakdown.",
+    description = "Get sales statistics bucketed by the requested period. Buckets are labelled with their first day; week buckets start on Monday.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("start_date" = Option<String>, Query, description = "Start date (YYYY-MM-DD)"),
         ("end_date" = Option<String>, Query, description = "End date (YYYY-MM-DD)"),
-        ("period" = String, Query, description = "Aggregation period: day, week, month")
+        ("period" = String, Query, description = "Aggregation period: day (default), week or month. Unrecognised values fall back to day.")
     ),
     responses(
         (status = 200, description = "Sales stats", body = SalesStats),
@@ -266,6 +277,8 @@ pub async fn get_sales_stats(
 
     verify_sales_access(&state, &sub, &app_id).await?;
 
+    let period = StatsPeriod::parse(&query.period);
+
     // Parse date range
     let end_date = query
         .end_date
@@ -279,7 +292,10 @@ pub async fn get_sales_stats(
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .unwrap_or_else(|| end_date - Duration::days(30));
 
-    // Try to get pre-aggregated daily stats
+    // Fill any day still missing from the pre-aggregated table, through
+    // yesterday. Runs after verify_sales_access - this writes.
+    ensure_sales_aggregations_current(&state, &app_id).await?;
+
     let daily_aggregates = app_sales_daily::Entity::find()
         .filter(app_sales_daily::Column::AppId.eq(&app_id))
         .filter(app_sales_daily::Column::Date.gte(start_date))
@@ -288,8 +304,10 @@ pub async fn get_sales_stats(
         .all(&state.db)
         .await?;
 
-    let daily_stats: Vec<DailyStat> = if daily_aggregates.is_empty() {
-        // Fall back to computing from purchases if no aggregates exist
+    let computed_from_raw = daily_aggregates.is_empty();
+    let mut daily_stats: Vec<DailyStat> = if computed_from_raw {
+        // No aggregates for this window (app never sold, or the window predates
+        // the backfill cap) - compute the whole range from raw purchases.
         compute_daily_stats_from_purchases(&state, &app_id, start_date, end_date).await?
     } else {
         daily_aggregates
@@ -307,6 +325,16 @@ pub async fn get_sales_stats(
             })
             .collect()
     };
+
+    // Aggregates only ever cover complete days; today is always live.
+    let today = Utc::now().date_naive();
+    if !computed_from_raw && start_date <= today && end_date >= today {
+        daily_stats
+            .extend(compute_daily_stats_from_purchases(&state, &app_id, today, today).await?);
+    }
+
+    let daily_stats =
+        fold_daily_stats(&state, &app_id, daily_stats, start_date, end_date, period).await?;
 
     // Calculate summary
     let total_revenue: i64 = daily_stats.iter().map(|d| d.revenue).sum();
@@ -353,6 +381,131 @@ pub async fn get_sales_stats(
     }))
 }
 
+#[derive(FromQueryResult)]
+struct BucketCount {
+    bucket: String,
+    cnt: i64,
+}
+
+/// Distinct buyers of completed purchases per bucket, counted in SQL so a buyer
+/// who bought on two days inside one bucket is counted once.
+async fn count_unique_buyers_by_bucket(
+    state: &AppState,
+    app_id: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    period: StatsPeriod,
+) -> Result<std::collections::HashMap<NaiveDate, i64>, ApiError> {
+    use std::collections::HashMap;
+
+    let bucket_expr = period.bucket_expr(state.db.get_database_backend(), "completedAt");
+    let start_of_range = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let end_of_range = end_date.and_hms_opt(0, 0, 0).unwrap() + Duration::days(1);
+
+    let rows = app_purchase::Entity::find()
+        .filter(app_purchase::Column::AppId.eq(app_id))
+        .filter(app_purchase::Column::Status.eq(PurchaseStatus::Completed))
+        .filter(app_purchase::Column::CompletedAt.gte(start_of_range))
+        .filter(app_purchase::Column::CompletedAt.lt(end_of_range))
+        .select_only()
+        .expr_as(bucket_expr.clone(), "bucket")
+        .expr_as(
+            Expr::col(app_purchase::Column::UserId).count_distinct(),
+            "cnt",
+        )
+        .group_by(bucket_expr)
+        .into_model::<BucketCount>()
+        .all(&state.db)
+        .await?;
+
+    let mut per_bucket: HashMap<NaiveDate, i64> = HashMap::new();
+    for row in rows {
+        if let Ok(date) = NaiveDate::parse_from_str(&row.bucket, "%Y-%m-%d") {
+            per_bucket.insert(date, row.cnt);
+        }
+    }
+
+    Ok(per_bucket)
+}
+
+/// Fold day rows into `period` buckets keyed by the first day of the bucket.
+///
+/// Money and counts add up, and `avg_order_value` is re-derived from the folded
+/// totals, which is the purchase-weighted average of the daily values. Distinct
+/// buyers cannot be folded this way - a buyer active on two days of the bucket
+/// would be counted twice - so that field is left untouched here and refilled
+/// from SQL by [`fold_daily_stats`].
+fn fold_bucket_totals(stats: Vec<DailyStat>, period: StatsPeriod) -> Vec<DailyStat> {
+    use std::collections::BTreeMap;
+    use std::collections::btree_map::Entry;
+
+    if period == StatsPeriod::Day {
+        return stats;
+    }
+
+    let mut buckets: BTreeMap<NaiveDate, DailyStat> = BTreeMap::new();
+    for stat in stats {
+        let Ok(date) = NaiveDate::parse_from_str(&stat.date, "%Y-%m-%d") else {
+            continue;
+        };
+        let bucket_start = period.bucket_start(date);
+        match buckets.entry(bucket_start) {
+            Entry::Vacant(slot) => {
+                slot.insert(DailyStat {
+                    date: bucket_start.format("%Y-%m-%d").to_string(),
+                    ..stat
+                });
+            }
+            Entry::Occupied(mut slot) => {
+                let target = slot.get_mut();
+                target.revenue += stat.revenue;
+                target.gross_revenue += stat.gross_revenue;
+                target.discounts += stat.discounts;
+                target.purchases += stat.purchases;
+                target.refunds += stat.refunds;
+                target.refund_amount += stat.refund_amount;
+            }
+        }
+    }
+
+    let mut folded: Vec<DailyStat> = buckets.into_values().collect();
+    for stat in &mut folded {
+        stat.avg_order_value = if stat.purchases > 0 {
+            stat.revenue / stat.purchases
+        } else {
+            0
+        };
+    }
+
+    folded
+}
+
+/// Fold day rows into `period` buckets and re-count distinct buyers per bucket.
+async fn fold_daily_stats(
+    state: &AppState,
+    app_id: &str,
+    stats: Vec<DailyStat>,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    period: StatsPeriod,
+) -> Result<Vec<DailyStat>, ApiError> {
+    if period == StatsPeriod::Day {
+        return Ok(stats);
+    }
+
+    let mut folded = fold_bucket_totals(stats, period);
+    let unique_buyers =
+        count_unique_buyers_by_bucket(state, app_id, start_date, end_date, period).await?;
+
+    for stat in &mut folded {
+        if let Ok(date) = NaiveDate::parse_from_str(&stat.date, "%Y-%m-%d") {
+            stat.unique_buyers = unique_buyers.get(&date).copied().unwrap_or(0);
+        }
+    }
+
+    Ok(folded)
+}
+
 /// Helper to compute daily stats from raw purchases (fallback when no aggregates)
 async fn compute_daily_stats_from_purchases(
     state: &AppState,
@@ -362,8 +515,13 @@ async fn compute_daily_stats_from_purchases(
 ) -> Result<Vec<DailyStat>, ApiError> {
     use std::collections::HashMap;
 
+    let start_of_range = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let end_of_range = end_date.and_hms_opt(0, 0, 0).unwrap() + Duration::days(1);
+
     let purchases = app_purchase::Entity::find()
         .filter(app_purchase::Column::AppId.eq(app_id))
+        .filter(app_purchase::Column::CompletedAt.gte(start_of_range))
+        .filter(app_purchase::Column::CompletedAt.lt(end_of_range))
         .all(&state.db)
         .await?;
 
@@ -484,4 +642,118 @@ pub(crate) async fn verify_sales_access(
     }
 
     Err(ApiError::FORBIDDEN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stat(date: &str, revenue: i64, purchases: i64, unique_buyers: i64) -> DailyStat {
+        DailyStat {
+            date: date.to_string(),
+            revenue,
+            gross_revenue: revenue + 10,
+            discounts: 10,
+            purchases,
+            refunds: 1,
+            refund_amount: 5,
+            unique_buyers,
+            avg_order_value: if purchases > 0 {
+                revenue / purchases
+            } else {
+                0
+            },
+        }
+    }
+
+    fn labels(stats: &[DailyStat]) -> Vec<&str> {
+        stats.iter().map(|s| s.date.as_str()).collect()
+    }
+
+    #[test]
+    fn day_period_returns_the_rows_untouched() {
+        let rows = vec![stat("2026-08-19", 200, 1, 1), stat("2026-08-20", 300, 3, 2)];
+        let folded = fold_bucket_totals(rows, StatsPeriod::Day);
+
+        assert_eq!(labels(&folded), ["2026-08-19", "2026-08-20"]);
+        assert_eq!(folded[0].revenue, 200);
+        assert_eq!(folded[1].avg_order_value, 100);
+    }
+
+    #[test]
+    fn week_buckets_sum_counts_and_reweight_the_average_order_value() {
+        let rows = vec![
+            stat("2026-08-17", 300, 3, 2),
+            stat("2026-08-19", 200, 1, 1),
+            stat("2026-08-23", 0, 0, 0),
+        ];
+        let folded = fold_bucket_totals(rows, StatsPeriod::Week);
+
+        assert_eq!(labels(&folded), ["2026-08-17"]);
+        let week = &folded[0];
+        assert_eq!(week.revenue, 500);
+        assert_eq!(week.gross_revenue, 530);
+        assert_eq!(week.discounts, 30);
+        assert_eq!(week.purchases, 4);
+        assert_eq!(week.refunds, 3);
+        assert_eq!(week.refund_amount, 15);
+        // Purchase-weighted, not the mean of the daily averages (which is 100).
+        assert_eq!(week.avg_order_value, 125);
+    }
+
+    #[test]
+    fn empty_buckets_report_a_zero_average_order_value() {
+        let folded = fold_bucket_totals(vec![stat("2026-08-19", 0, 0, 0)], StatsPeriod::Week);
+
+        assert_eq!(folded[0].purchases, 0);
+        assert_eq!(folded[0].avg_order_value, 0);
+    }
+
+    #[test]
+    fn week_buckets_cross_month_and_year_boundaries() {
+        let rows = vec![
+            stat("2025-12-31", 100, 1, 1),
+            stat("2026-01-01", 100, 1, 1),
+            stat("2026-01-04", 100, 1, 1),
+            stat("2026-01-05", 100, 1, 1),
+            stat("2026-08-31", 100, 1, 1),
+            stat("2026-09-01", 100, 1, 1),
+        ];
+        let folded = fold_bucket_totals(rows, StatsPeriod::Week);
+
+        assert_eq!(
+            labels(&folded),
+            ["2025-12-29", "2026-01-05", "2026-08-31"],
+            "weeks are labelled with their Monday, even across a month or year boundary"
+        );
+        assert_eq!(folded[0].purchases, 3);
+        assert_eq!(folded[1].purchases, 1);
+        assert_eq!(folded[2].purchases, 2);
+    }
+
+    #[test]
+    fn month_buckets_are_labelled_with_the_first_of_the_month() {
+        let rows = vec![
+            stat("2026-08-17", 100, 1, 1),
+            stat("2026-08-31", 100, 1, 1),
+            stat("2026-09-01", 100, 1, 1),
+        ];
+        let folded = fold_bucket_totals(rows, StatsPeriod::Month);
+
+        assert_eq!(labels(&folded), ["2026-08-01", "2026-09-01"]);
+        assert_eq!(folded[0].revenue, 200);
+        assert_eq!(folded[1].revenue, 100);
+    }
+
+    #[test]
+    fn distinct_buyers_are_never_summed_by_the_fold() {
+        let rows = vec![stat("2026-08-17", 100, 1, 1), stat("2026-08-19", 100, 1, 1)];
+        let folded = fold_bucket_totals(rows, StatsPeriod::Week);
+
+        assert_eq!(folded.len(), 1);
+        assert_eq!(
+            folded[0].unique_buyers, 1,
+            "the same buyer on two days must not become two buyers; fold_daily_stats re-queries this"
+        );
+    }
 }

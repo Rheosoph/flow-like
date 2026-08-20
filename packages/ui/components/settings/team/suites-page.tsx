@@ -17,7 +17,7 @@ export function SuitesPage() {
 	if (!appId) {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
-				{t('noAppSelected', 'No app selected.')}
+				{t("noAppSelected", "No app selected.")}
 			</div>
 		);
 	}

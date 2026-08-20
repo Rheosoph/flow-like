@@ -157,7 +157,7 @@ async fn validate_security_prerequisites(state: &State) -> Result<(), StartupErr
             })?;
         let value = secret.expose_secret();
 
-        if value.trim().is_empty() || value.as_bytes().len() < *minimum_length {
+        if value.trim().is_empty() || value.len() < *minimum_length {
             return Err(StartupError(format!(
                 "required Key Vault secret {name} must contain at least {minimum_length} bytes"
             )));

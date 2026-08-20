@@ -157,7 +157,6 @@ import {
 	resolveAppEventTarget,
 	resolveAppEventType,
 } from "./app-event-target";
-import { dataStudioRoutingGate } from "./data-studio-routing";
 import {
 	type DetachedPageLookup,
 	assertDetachedWriteSafe,
@@ -522,13 +521,15 @@ export interface RunScope {
 }
 
 interface SolveRoutingState {
-	appInventoryComplete: boolean;
+	appInventoryReturned: boolean;
 	sealedResearchUsed: boolean;
 }
 
-// Routing state is host-owned, not model-authored: public fallback is unavailable until a
-// complete local inventory has actually returned, and is one-shot afterwards. Keep it bounded so
-// abandoned run ids cannot accumulate for the lifetime of the desktop process.
+// Routing state is host-owned, not model-authored: public fallback is unavailable until a local
+// inventory has actually returned, and is one-shot afterwards. The gate is "an inventory came
+// back", never "every app in it read cleanly" — one app whose Events cannot be loaded makes the
+// listing partial, not absent, and must not permanently seal off public research. Keep it bounded
+// so abandoned run ids cannot accumulate for the lifetime of the desktop process.
 const solveRoutingStateByRun = new Map<string, SolveRoutingState>();
 const MAX_SOLVE_ROUTING_STATES = 256;
 
@@ -3213,15 +3214,6 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "data_studio_agent": {
-					const routingState = scope.runId
-						? solveRoutingStateByRun.get(scope.runId)
-						: undefined;
-					const routingError = dataStudioRoutingGate({
-						routingReason: args.routing_reason ?? args.routingReason,
-						appInventoryComplete: routingState?.appInventoryComplete === true,
-					});
-					if (routingError) return routingError;
-
 					const instruction = argString(args, "instruction");
 					if (!instruction)
 						return {
@@ -3379,12 +3371,12 @@ export function GlobalToolBridge() {
 					const routingState = scope.runId
 						? solveRoutingStateByRun.get(scope.runId)
 						: undefined;
-					if (!routingState?.appInventoryComplete)
+					if (!routingState?.appInventoryReturned)
 						return {
 							status: "error",
 							code: "local_app_discovery_required",
 							message:
-								"A complete list_apps result is required before sealed public research.",
+								"A list_apps result is required before sealed public research.",
 						};
 					if (routingState.sealedResearchUsed)
 						return {
@@ -6828,8 +6820,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					? solveRoutingStateByRun.get(scope.runId)
 					: undefined;
 				setSolveRoutingState(scope.runId, {
-					appInventoryComplete:
-						inventory?.status === "ok" && inventory?.complete === true,
+					appInventoryReturned: inventory?.status === "ok",
 					sealedResearchUsed: previousRoutingState?.sealedResearchUsed ?? false,
 				});
 			}

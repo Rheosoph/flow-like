@@ -4,7 +4,7 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{ExecutorClaims, verify_jwt_async};
+use crate::jwt::{verify_jwt_async, ExecutorClaims};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::board::Board;
@@ -1358,33 +1358,25 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Completed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_ok()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Running"),
-                &ExecutionStatus::Completed,
-            )
-            .is_err()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Failed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_err()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(false, "Failed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_ok()
-        );
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Completed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Running"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(false, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
     }
 }

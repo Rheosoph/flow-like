@@ -130,7 +130,7 @@ impl CallFunctionNode {
     /// other's results.
     fn cache_key(layer_id: &str, inputs: &HashMap<String, Value>) -> String {
         let mut sorted: Vec<(&String, &Value)> = inputs.iter().collect();
-        sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+        sorted.sort_by_key(|(left, _)| *left);
 
         let mut hasher = blake3::Hasher::new();
         hasher.update(layer_id.as_bytes());
@@ -759,13 +759,9 @@ impl NodeLogic for CallFunctionNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::{
-        board::{ExecutionMode, ExecutionStage},
-        execution::LogLevel,
-        pin::ValueType,
-    };
+    use flow_like::flow::pin::ValueType;
     use flow_like_types::json::json;
-    use std::{collections::BTreeSet, time::SystemTime};
+    use std::collections::BTreeSet;
 
     fn pin(name: &str, pin_type: PinType, data_type: VariableType, index: u16) -> Pin {
         Pin {

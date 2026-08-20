@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type CollisionDetection,
 	DndContext,
@@ -13,6 +12,7 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import { type WidgetContract, contractDefaults } from "@flow-like/widget-sdk";
 import {
 	type ReactNode,

@@ -1,12 +1,12 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl as shellOpen } from "@tauri-apps/plugin-opener";
@@ -51,6 +51,10 @@ interface NavigableInfo {
 
 // Best-effort external opener that works on iOS; avoids blocking the user gesture.
 const openInBrowser = async (href: string) => {
+	// Hrefs come from page content, so the scheme allowlist is enforced here as
+	// well as at every call site — nothing that can execute script in a webview
+	// is ever handed on.
+	if (!isHttpish(href)) return false;
 	try {
 		await shellOpen(href);
 		return true;
@@ -60,8 +64,9 @@ const openInBrowser = async (href: string) => {
 			window.open(href, "_blank", "noopener,noreferrer");
 			return true;
 		} catch {
-			location.href = href; // last-resort fallback
-			return true;
+			// Navigating this webview would strand the user on an external page
+			// inside the app shell, with no browser chrome to get back.
+			return false;
 		}
 	}
 };
@@ -446,7 +451,9 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									{IOS ? t('openInBrowser', 'Open in browser') : `Open in new window`}
+									{IOS
+										? t("openInBrowser", "Open in browser")
+										: `Open in new window`}
 								</button>
 							</DropdownMenuItem>
 
@@ -461,7 +468,7 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									{t('copyLink', 'Copy Link')}
+									{t("copyLink", "Copy Link")}
 								</button>
 							</DropdownMenuItem>
 						</DropdownMenuContent>

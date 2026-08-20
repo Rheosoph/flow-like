@@ -748,19 +748,32 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 				onDoubleClick={(e) => e.stopPropagation()}
 			>
 				<DialogHeader>
-					<DialogTitle>{t('autoLayout', 'Auto Layout')}</DialogTitle>
+					<DialogTitle>{t("autoLayout", "Auto Layout")}</DialogTitle>
 					<DialogDescription>
 						{scoped
-							? t('arrangesTheSelectioncountSelectedNodesLefttorightAlongTheirExecutionFlowTheRestOfTheBoardStaysWhereItIs', 'Arranges the {{selectionCount}} selected nodes left-to-right along their execution flow. The rest of the board stays where it is.', { selectionCount })
-							: t('arrangesEveryNodeInThisLayerLefttorightAlongItsExecutionFlowWithDataNodesBandedBeneathTheNodeThatConsumesThem', 'Arranges every node in this layer left-to-right along its execution flow, with data nodes banded beneath the node that consumes them.')}
+							? t(
+									"arrangesTheSelectioncountSelectedNodesLefttorightAlongTheirExecutionFlowTheRestOfTheBoardStaysWhereItIs",
+									"Arranges the {{selectionCount}} selected nodes left-to-right along their execution flow. The rest of the board stays where it is.",
+									{ selectionCount },
+								)
+							: t(
+									"arrangesEveryNodeInThisLayerLefttorightAlongItsExecutionFlowWithDataNodesBandedBeneathTheNodeThatConsumesThem",
+									"Arranges every node in this layer left-to-right along its execution flow, with data nodes banded beneath the node that consumes them.",
+								)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>
 				<p className="text-xs text-muted-foreground">
 					{scoped
-						? t('pressEscapeAndClearTheSelectionToLayOutTheWholeLayer', 'Press Escape and clear the selection to lay out the whole layer.')
-						: t('selectTwoOrMoreNodesFirstToLayOutOnlyThatPartOfTheBoard', 'Select two or more nodes first to lay out only that part of the board.')}{" "}
-					{t('undoWithZ', 'Undo with ⌘Z.')}
+						? t(
+								"pressEscapeAndClearTheSelectionToLayOutTheWholeLayer",
+								"Press Escape and clear the selection to lay out the whole layer.",
+							)
+						: t(
+								"selectTwoOrMoreNodesFirstToLayOutOnlyThatPartOfTheBoard",
+								"Select two or more nodes first to lay out only that part of the board.",
+							)}{" "}
+					{t("undoWithZ", "Undo with ⌘Z.")}
 				</p>
 			</DialogContent>
 		</Dialog>

@@ -114,7 +114,7 @@ export const VideoElement = withHOC(
 					<Caption style={{ width }} align={align}>
 						<CaptionTextarea
 							readOnly={readOnly}
-							placeholder={t('writeACaption', 'Write a caption...')}
+							placeholder={t("writeACaption", "Write a caption...")}
 						/>
 					</Caption>
 				</figure>

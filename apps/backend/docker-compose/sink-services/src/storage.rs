@@ -5,6 +5,8 @@
 //! - Last triggered timestamps
 //! - Active schedule state
 
+#![cfg_attr(not(any(feature = "discord", feature = "telegram")), allow(dead_code))]
+
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use serde::{de::DeserializeOwned, Serialize};

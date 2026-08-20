@@ -29,6 +29,8 @@ import type {
 	ImperativePanelHandle,
 } from "react-resizable-panels";
 import { toast } from "sonner";
+import type { useHub } from "../../hooks/use-hub";
+import { useInvoke } from "../../hooks/use-invoke";
 import type {
 	IApp,
 	IEvent,
@@ -37,12 +39,10 @@ import type {
 	IStoredOAuthToken,
 } from "../../lib";
 import { EVENT_CONFIG } from "../../lib/event-config";
+import { IExecutionStage, ILogLevel } from "../../lib/schema/flow/board";
 import { cn } from "../../lib/utils";
-import { useInvoke } from "../../hooks/use-invoke";
-import type { useHub } from "../../hooks/use-hub";
 import { useBackend } from "../../state/backend-state";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
-import { IExecutionStage, ILogLevel } from "../../lib/schema/flow/board";
 import {
 	type FlowLibraryBoardCreationState,
 	FlowLibraryBoardsSection,
@@ -559,7 +559,9 @@ function AppPaneContent({
 	}
 
 	if (target.mode === "flows") {
-		return <AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />;
+		return (
+			<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
+		);
 	}
 
 	if (target.mode === "events") {
@@ -594,7 +596,9 @@ function AppPaneContent({
 	}
 
 	if (target.mode === "pages") {
-		return <AppPagesPane appId={target.appId} onTargetChange={onTargetChange} />;
+		return (
+			<AppPagesPane appId={target.appId} onTargetChange={onTargetChange} />
+		);
 	}
 
 	return <AppConfigPane appId={target.appId} />;

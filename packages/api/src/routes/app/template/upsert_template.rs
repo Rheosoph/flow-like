@@ -25,6 +25,9 @@ pub struct TemplateUpsert {
     pub board_version: Option<(u32, u32, u32)>,
 }
 
+/// A saved template as (template id, (major, minor, patch)).
+pub type TemplateRevision = (String, (u32, u32, u32));
+
 async fn create_template(
     user: AppUser,
     state: AppState,
@@ -120,7 +123,7 @@ pub async fn upsert_template(
     Extension(user): Extension<AppUser>,
     Path((app_id, template_id)): Path<(String, String)>,
     Json(template_data): Json<TemplateUpsert>,
-) -> Result<Json<(String, (u32, u32, u32))>, ApiError> {
+) -> Result<Json<TemplateRevision>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteTemplates);
 
     if template_id.is_empty() || app_id.is_empty() {

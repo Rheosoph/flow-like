@@ -145,7 +145,7 @@ export function WidgetVariable({
 					)}
 					{packageOptions.length > 0 && (
 						<SelectGroup>
-							<SelectLabel>{t('packages', 'Packages')}</SelectLabel>
+							<SelectLabel>{t("packages", "Packages")}</SelectLabel>
 							{packageOptions.map((option) => (
 								<SelectItem key={option.selector} value={option.selector}>
 									{option.label}

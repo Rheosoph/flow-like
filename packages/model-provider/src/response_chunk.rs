@@ -77,137 +77,139 @@ impl ResponseChunk {
 
     /// Creates a chunk with text content
     pub fn from_text(text: &str, model_name: &str) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: Some(Delta {
-                role: Some("assistant".to_string()),
-                content: Some(text.to_string()),
-                content_parts: None,
-                tool_calls: None,
-                refusal: None,
-                reasoning: None,
-            }),
-            finish_reason: None,
-            logprobs: None,
-        });
-        chunk
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: Some(Delta {
+                    role: Some("assistant".to_string()),
+                    content: Some(text.to_string()),
+                    content_parts: None,
+                    tool_calls: None,
+                    refusal: None,
+                    reasoning: None,
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            ..Default::default()
+        }
     }
 
     /// Creates a chunk from a tool call
     pub fn from_tool_call(tool_call: &RigMessageToolCall, model_name: &str) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
         let arguments = json::to_string(&tool_call.function.arguments).unwrap_or_default();
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: Some(Delta {
-                role: Some("assistant".to_string()),
-                content: None,
-                content_parts: None,
-                tool_calls: Some(vec![DeltaFunctionCall {
-                    index: None,
-                    id: Some(tool_call.id.clone()),
-                    tool_type: Some("function".to_string()),
-                    function: DeltaResponseFunction {
-                        name: Some(tool_call.function.name.clone()),
-                        arguments: Some(arguments),
-                    },
-                }]),
-                refusal: None,
-                reasoning: None,
-            }),
-            finish_reason: None,
-            logprobs: None,
-        });
-        chunk
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: Some(Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    content_parts: None,
+                    tool_calls: Some(vec![DeltaFunctionCall {
+                        index: None,
+                        id: Some(tool_call.id.clone()),
+                        tool_type: Some("function".to_string()),
+                        function: DeltaResponseFunction {
+                            name: Some(tool_call.function.name.clone()),
+                            arguments: Some(arguments),
+                        },
+                    }]),
+                    refusal: None,
+                    reasoning: None,
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            ..Default::default()
+        }
     }
 
     /// Creates a chunk from a tool call delta
     pub fn from_tool_call_delta(id: &str, delta: &str, model_name: &str) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: Some(Delta {
-                role: Some("assistant".to_string()),
-                content: None,
-                content_parts: None,
-                tool_calls: Some(vec![DeltaFunctionCall {
-                    index: None,
-                    id: Some(id.to_string()),
-                    tool_type: Some("function".to_string()),
-                    function: DeltaResponseFunction {
-                        name: None,
-                        arguments: Some(delta.to_string()),
-                    },
-                }]),
-                refusal: None,
-                reasoning: None,
-            }),
-            finish_reason: None,
-            logprobs: None,
-        });
-        chunk
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: Some(Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    content_parts: None,
+                    tool_calls: Some(vec![DeltaFunctionCall {
+                        index: None,
+                        id: Some(id.to_string()),
+                        tool_type: Some("function".to_string()),
+                        function: DeltaResponseFunction {
+                            name: None,
+                            arguments: Some(delta.to_string()),
+                        },
+                    }]),
+                    refusal: None,
+                    reasoning: None,
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            ..Default::default()
+        }
     }
 
     /// Creates a chunk with reasoning content
     pub fn from_reasoning(reasoning: &str, model_name: &str) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: Some(Delta {
-                role: Some("assistant".to_string()),
-                content: None,
-                content_parts: None,
-                tool_calls: None,
-                refusal: None,
-                reasoning: Some(reasoning.to_string()),
-            }),
-            finish_reason: None,
-            logprobs: None,
-        });
-        chunk
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: Some(Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    content_parts: None,
+                    tool_calls: None,
+                    refusal: None,
+                    reasoning: Some(reasoning.to_string()),
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            ..Default::default()
+        }
     }
 
     /// Creates a synthetic non-stream chunk for structured media returned by Rig.
     pub fn from_content_part(content: Content, model_name: &str) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: Some(Delta {
-                role: Some("assistant".to_string()),
-                content: None,
-                content_parts: Some(vec![content]),
-                tool_calls: None,
-                refusal: None,
-                reasoning: None,
-            }),
-            finish_reason: None,
-            logprobs: None,
-        });
-        chunk
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: Some(Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    content_parts: Some(vec![content]),
+                    tool_calls: None,
+                    refusal: None,
+                    reasoning: None,
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            ..Default::default()
+        }
     }
 
     /// Creates a finish chunk with optional usage
     pub fn finish(model_name: &str, usage: Option<&RigUsage>) -> Self {
-        let mut chunk = Self::default();
-        chunk.model = Some(model_name.to_string());
-        chunk.choices.push(ResponseChunkChoice {
-            index: 0,
-            delta: None,
-            finish_reason: Some("stop".to_string()),
-            logprobs: None,
-        });
-
-        if let Some(usage) = usage {
-            chunk.usage = Some(Usage::from_rig(*usage));
+        Self {
+            model: Some(model_name.to_string()),
+            choices: vec![ResponseChunkChoice {
+                index: 0,
+                delta: None,
+                finish_reason: Some("stop".to_string()),
+                logprobs: None,
+            }],
+            usage: usage.map(|usage| Usage::from_rig(*usage)),
+            ..Default::default()
         }
-
-        chunk
     }
 }
 

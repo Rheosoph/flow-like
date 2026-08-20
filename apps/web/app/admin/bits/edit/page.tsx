@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	BentoGrid,
@@ -19,6 +18,7 @@ import {
 	SelectValue,
 	bitTypeToText,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
 	ChevronLeft,
@@ -150,7 +150,7 @@ export default function EditPage() {
 							<div className="relative flex-1">
 								<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
 								<Input
-									placeholder={t('searchBits', 'Search bits...')}
+									placeholder={t("searchBits", "Search bits...")}
 									value={searchTerm}
 									onChange={(e) => setSearchTerm(e.target.value)}
 									className="pl-10"
@@ -158,7 +158,7 @@ export default function EditPage() {
 							</div>
 							<div className="flex items-center gap-2">
 								<span className="text-sm font-medium whitespace-nowrap">
-									{t('itemsPerPage', 'Items per page:')}
+									{t("itemsPerPage", "Items per page:")}
 								</span>
 								<Select
 									value={itemsPerPage.toString()}
@@ -183,7 +183,9 @@ export default function EditPage() {
 							<div className="flex items-end justify-between">
 								<div className="flex items-center gap-2">
 									<Filter className="h-4 w-4" />
-									<span className="text-sm font-medium">{t('filterByType', 'Filter by Type:')}</span>
+									<span className="text-sm font-medium">
+										{t("filterByType", "Filter by Type:")}
+									</span>
 								</div>
 								<div className="flex gap-2">
 									<Button
@@ -191,14 +193,14 @@ export default function EditPage() {
 										size="default"
 										onClick={handleSelectAllBitTypes}
 									>
-										{t('selectAll', 'Select All')}
+										{t("selectAll", "Select All")}
 									</Button>
 									<Button
 										variant="outline"
 										size="default"
 										onClick={handleClearBitTypes}
 									>
-										{t('clearAll', 'Clear All')}
+										{t("clearAll", "Clear All")}
 									</Button>
 								</div>
 							</div>
@@ -234,7 +236,9 @@ export default function EditPage() {
 				<div className="text-sm text-muted-foreground">
 					{bits.isLoading
 						? "Loading..."
-						: t('showingLengthItems', 'Showing {{length}} items', { length: paginatedBits.length })}
+						: t("showingLengthItems", "Showing {{length}} items", {
+								length: paginatedBits.length,
+							})}
 				</div>
 
 				{/* Bits Grid */}
@@ -251,12 +255,17 @@ export default function EditPage() {
 						</BentoGrid>
 					) : bits.isLoading ? (
 						<div className="flex items-center justify-center h-32">
-							<div className="text-muted-foreground">{t('loadingBits', 'Loading bits...')}</div>
+							<div className="text-muted-foreground">
+								{t("loadingBits", "Loading bits...")}
+							</div>
 						</div>
 					) : (
 						<div className="flex items-center justify-center h-32">
 							<div className="text-muted-foreground">
-								{t('noBitsFoundMatchingYourCriteria', 'No bits found matching your criteria')}
+								{t(
+									"noBitsFoundMatchingYourCriteria",
+									"No bits found matching your criteria",
+								)}
 							</div>
 						</div>
 					)}
@@ -267,7 +276,11 @@ export default function EditPage() {
 					<Card className="w-full">
 						<CardContent className="p-4">
 							<div className="flex items-center justify-between">
-								<div className="text-sm text-muted-foreground">{t('pageCurrentpage', 'Page {{currentPage}}', { currentPage })}{hasMorePages ? "(more available)" : ""}
+								<div className="text-sm text-muted-foreground">
+									{t("pageCurrentpage", "Page {{currentPage}}", {
+										currentPage,
+									})}
+									{hasMorePages ? "(more available)" : ""}
 								</div>
 								<div className="flex items-center gap-2">
 									<Button
@@ -286,7 +299,11 @@ export default function EditPage() {
 									>
 										<ChevronLeft className="h-4 w-4" />
 									</Button>
-									<span className="text-sm px-2">{t('pageCurrentpage', 'Page {{currentPage}}', { currentPage })}</span>
+									<span className="text-sm px-2">
+										{t("pageCurrentpage", "Page {{currentPage}}", {
+											currentPage,
+										})}
+									</span>
 									<Button
 										variant="outline"
 										size="sm"

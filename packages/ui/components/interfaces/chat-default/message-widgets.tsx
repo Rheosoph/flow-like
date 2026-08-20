@@ -122,7 +122,7 @@ function MessageWidget({
 
 			<Dialog open={maximized} onOpenChange={setMaximized}>
 				<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]! flex flex-col">
-					<DialogTitle className="sr-only">{t('widget', 'Widget')}</DialogTitle>
+					<DialogTitle className="sr-only">{t("widget", "Widget")}</DialogTitle>
 					<div className="flex-1 overflow-auto p-4">{renderer}</div>
 				</DialogContent>
 			</Dialog>

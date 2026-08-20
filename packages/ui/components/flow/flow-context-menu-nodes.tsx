@@ -89,7 +89,13 @@ export const FlowContextMenuNodes = memo(function FlowContextMenuNodes({
 					</ContextMenuItem>
 				))}
 				{items.length > MAX_SEARCH_RESULTS && (
-					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">{t('showingMax_search_resultsOfLengthRefineYourSearch', 'Showing {{MAX_SEARCH_RESULTS}} of {{length}} — refine your search', { MAX_SEARCH_RESULTS, length: items.length })}</div>
+					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">
+						{t(
+							"showingMax_search_resultsOfLengthRefineYourSearch",
+							"Showing {{MAX_SEARCH_RESULTS}} of {{length}} — refine your search",
+							{ MAX_SEARCH_RESULTS, length: items.length },
+						)}
+					</div>
 				)}
 			</>
 		);

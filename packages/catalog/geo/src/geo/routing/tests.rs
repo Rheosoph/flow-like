@@ -1,5 +1,5 @@
 #[cfg(all(test, feature = "execute"))]
-mod tests {
+mod routing_tests {
     use crate::geo::{
         GeoCoordinate,
         routing::osrm::{RouteLeg, RouteProfile, RouteResult, RouteStep},

@@ -21,7 +21,7 @@ export function HeroFileChips({
 					<span className="max-w-32 truncate">{file.name}</span>
 					<button
 						type="button"
-						aria-label={t('removeName', 'Remove {{name}}', { name: file.name })}
+						aria-label={t("removeName", "Remove {{name}}", { name: file.name })}
 						className="grid size-6 shrink-0 place-items-center rounded-full hover:text-destructive outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 extend-touch-target"
 						onClick={() => onRemove(index)}
 					>

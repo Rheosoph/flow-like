@@ -190,9 +190,12 @@ export function PinEditModal({
 		>
 			<DialogContent className="sm:max-w-4xl max-h-[90vh]">
 				<DialogHeader>
-					<DialogTitle>{t('setDefaultValue', 'Set Default Value')}</DialogTitle>
+					<DialogTitle>{t("setDefaultValue", "Set Default Value")}</DialogTitle>
 					<DialogDescription>
-						{t('theDefaultValueWillOnlyBeUsedIfThePinIsNotConnected2', 'The default value will only be used if the pin is not connected.')}
+						{t(
+							"theDefaultValueWillOnlyBeUsedIfThePinIsNotConnected2",
+							"The default value will only be used if the pin is not connected.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody className="pr-2">

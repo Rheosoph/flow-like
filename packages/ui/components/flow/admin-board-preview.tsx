@@ -268,7 +268,9 @@ function VariablesPanel({
 	const vars = Object.values(variables);
 	if (vars.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground p-2">{t('noVariablesDefined', 'No variables defined.')}</p>
+			<p className="text-xs text-muted-foreground p-2">
+				{t("noVariablesDefined", "No variables defined.")}
+			</p>
 		);
 	}
 
@@ -371,7 +373,9 @@ function ScoreBarRow({
 				<span className="flex-1 text-muted-foreground">
 					{SCORE_LABELS[category]}
 				</span>
-				<span className={cn("font-semibold tabular-nums", tone.text)}>{`${value}/10`}</span>
+				<span
+					className={cn("font-semibold tabular-nums", tone.text)}
+				>{`${value}/10`}</span>
 			</div>
 			<div className="h-1.5 overflow-hidden rounded-full bg-muted">
 				<div
@@ -392,7 +396,7 @@ function ScoreSummaryStrip({
 	if (!aggregate) {
 		return (
 			<Badge variant="outline" className="shrink-0 text-[11px]">
-				{t('noScores', 'No scores')}
+				{t("noScores", "No scores")}
 			</Badge>
 		);
 	}
@@ -430,7 +434,7 @@ function SelectedNodeInspector({
 			<div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
 				<div className="flex items-start gap-2">
 					<Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-					<span>{t('noNodeSelected', 'No node selected.')}</span>
+					<span>{t("noNodeSelected", "No node selected.")}</span>
 				</div>
 			</div>
 		);
@@ -453,7 +457,7 @@ function SelectedNodeInspector({
 					type="button"
 					className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 					onClick={() => onFocusNode(node.id)}
-					title={t('focusNode', 'Focus node')}
+					title={t("focusNode", "Focus node")}
 				>
 					<Crosshair className="h-3.5 w-3.5" />
 				</button>
@@ -476,7 +480,10 @@ function SelectedNodeInspector({
 				</div>
 			) : (
 				<p className="text-xs text-muted-foreground">
-					{t('thisNodeDoesNotDefineGovernanceScores', 'This node does not define governance scores.')}
+					{t(
+						"thisNodeDoesNotDefineGovernanceScores",
+						"This node does not define governance scores.",
+					)}
 				</p>
 			)}
 		</div>
@@ -500,7 +507,10 @@ function ScoresPanel({
 			<div className="space-y-3 p-3">
 				<SelectedNodeInspector node={selectedNode} onFocusNode={onFocusNode} />
 				<p className="text-xs text-muted-foreground">
-					{t('noScoredNodesWereFoundInThisBoard', 'No scored nodes were found in this board.')}
+					{t(
+						"noScoredNodesWereFoundInThisBoard",
+						"No scored nodes were found in this board.",
+					)}
 				</p>
 			</div>
 		);
@@ -511,9 +521,14 @@ function ScoresPanel({
 			<div className="space-y-3 rounded-md border bg-card/60 p-3">
 				<div className="flex items-center justify-between gap-3">
 					<div>
-						<p className="text-xs font-semibold">{t('boardScore', 'Board score')}</p>
+						<p className="text-xs font-semibold">
+							{t("boardScore", "Board score")}
+						</p>
 						<p className="text-[10px] text-muted-foreground">
-							{t('minimumScoreAcrossScoredNodes', 'Minimum score across scored nodes')}
+							{t(
+								"minimumScoreAcrossScoredNodes",
+								"Minimum score across scored nodes",
+							)}
 						</p>
 					</div>
 					<ScorePill
@@ -537,11 +552,11 @@ function ScoresPanel({
 
 			<div className="space-y-2">
 				<h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-					{t('worstNodes', 'Worst nodes')}
+					{t("worstNodes", "Worst nodes")}
 				</h4>
 				{worstNodes.length === 0 ? (
 					<p className="text-xs text-muted-foreground">
-						{t('noScoredNodesFound', 'No scored nodes found.')}
+						{t("noScoredNodesFound", "No scored nodes found.")}
 					</p>
 				) : (
 					<div className="space-y-1.5">
@@ -599,7 +614,9 @@ function LayersPanel({
 	const layerList = Object.values(layers);
 	if (layerList.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground p-2">{t('noLayersDefined', 'No layers defined.')}</p>
+			<p className="text-xs text-muted-foreground p-2">
+				{t("noLayersDefined", "No layers defined.")}
+			</p>
 		);
 	}
 
@@ -632,7 +649,11 @@ function LayersPanel({
 									"inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-semibold tabular-nums text-white",
 									scoreTone(layerScores[layer.id]?.worstScore ?? 0).bg,
 								)}
-								title={t('worstLayerScoreVal10', 'Worst layer score: {{val}}/10', { val: layerScores[layer.id]?.worstScore })}
+								title={t(
+									"worstLayerScoreVal10",
+									"Worst layer score: {{val}}/10",
+									{ val: layerScores[layer.id]?.worstScore },
+								)}
 							>
 								{layerScores[layer.id]?.worstScore}
 							</span>
@@ -675,7 +696,9 @@ function SidebarSection({
 	return (
 		<div>
 			<div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground">
-				<Icon className="h-3.5 w-3.5" />{`${title} (${count})`}</div>
+				<Icon className="h-3.5 w-3.5" />
+				{`${title} (${count})`}
+			</div>
 			<Separator />
 			{children}
 		</div>
@@ -943,8 +966,29 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 							<p className="truncate text-sm font-semibold">{currentTitle}</p>
 							<p className="mt-0.5 text-xs text-muted-foreground">
 								{currentLayer
-									? t('countNodesInLayer', { defaultValue_one: '{{count}} Node in Layer', defaultValue_other: '{{count}} Nodes in Layer', count: currentNodeCount })
-									: t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: Object.keys(board.nodes).length })}{" · "}{t('countLayers', { defaultValue_one: '{{count}} Layer', defaultValue_other: '{{count}} Layers', count: Object.keys(board.layers).length })}{" · "}{t('countVariables', { defaultValue_one: '{{count}} variable', defaultValue_other: '{{count}} variables', count: Object.keys(currentVariables).length })}</p>
+									? t("countNodesInLayer", {
+											defaultValue_one: "{{count}} Node in Layer",
+											defaultValue_other: "{{count}} Nodes in Layer",
+											count: currentNodeCount,
+										})
+									: t("countNodes", {
+											defaultValue_one: "{{count}} Node",
+											defaultValue_other: "{{count}} Nodes",
+											count: Object.keys(board.nodes).length,
+										})}
+								{" · "}
+								{t("countLayers", {
+									defaultValue_one: "{{count}} Layer",
+									defaultValue_other: "{{count}} Layers",
+									count: Object.keys(board.layers).length,
+								})}
+								{" · "}
+								{t("countVariables", {
+									defaultValue_one: "{{count}} variable",
+									defaultValue_other: "{{count}} variables",
+									count: Object.keys(currentVariables).length,
+								})}
+							</p>
 						</div>
 						<ScoreSummaryStrip aggregate={activeScoreAggregate} />
 					</div>
@@ -1003,15 +1047,15 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 					<TabsList className="grid w-full grid-cols-3 shrink-0 rounded-none border-b">
 						<TabsTrigger value="layers" className="text-xs">
 							<Layers className="h-3 w-3 mr-1" />
-							{t('layers', 'Layers')}
+							{t("layers", "Layers")}
 						</TabsTrigger>
 						<TabsTrigger value="scores" className="text-xs">
 							<ShieldIcon className="h-3 w-3 mr-1" />
-							{t('scores', 'Scores')}
+							{t("scores", "Scores")}
 						</TabsTrigger>
 						<TabsTrigger value="variables" className="text-xs">
 							<Variable className="h-3 w-3 mr-1" />
-							{t('variables', 'Variables')}
+							{t("variables", "Variables")}
 						</TabsTrigger>
 					</TabsList>
 					<ScrollArea className="min-h-0 flex-1">
@@ -1058,7 +1102,9 @@ export function AdminBoardPreview({ board }: AdminBoardPreviewProps) {
 	if (!hasNodes && Object.keys(board.layers).length === 0) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-sm text-muted-foreground">{t('thisBoardIsEmpty', 'This board is empty.')}</p>
+				<p className="text-sm text-muted-foreground">
+					{t("thisBoardIsEmpty", "This board is empty.")}
+				</p>
 			</div>
 		);
 	}

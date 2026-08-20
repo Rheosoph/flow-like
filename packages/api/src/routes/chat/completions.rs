@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::entity::{llm_usage_tracking, user};
 use crate::{
     entity::bit,

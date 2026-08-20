@@ -101,12 +101,21 @@ function ChartErrorFallback({
 				<ChartSilhouette type={chartType} />
 			</div>
 			<div className="text-center space-y-1">
-				<p className="text-sm font-medium text-muted-foreground">{t('failedToRenderCharttypeChart', 'Failed to render {{chartType}} chart', { chartType })}</p>
+				<p className="text-sm font-medium text-muted-foreground">
+					{t(
+						"failedToRenderCharttypeChart",
+						"Failed to render {{chartType}} chart",
+						{ chartType },
+					)}
+				</p>
 				<p className="text-xs text-muted-foreground/70 max-w-[280px]">
 					{error.length > 100 ? `${error.slice(0, 100)}...` : error}
 				</p>
 				<p className="text-xs text-muted-foreground/50 mt-2">
-					{t('checkDataFormatMatchesChartRequirements', 'Check data format matches chart requirements')}
+					{t(
+						"checkDataFormatMatchesChartRequirements",
+						"Check data format matches chart requirements",
+					)}
 				</p>
 			</div>
 		</div>
@@ -1430,7 +1439,7 @@ export function A2UINivoChart({
 				)}
 				style={{ ...resolveInlineStyle(style), height }}
 			>
-				{t('loadingChart', 'Loading chart...')}
+				{t("loadingChart", "Loading chart...")}
 			</div>
 		);
 	}
@@ -1447,7 +1456,8 @@ export function A2UINivoChart({
 			>
 				<div className="text-sm">{error}</div>
 				<div className="text-xs text-muted-foreground mt-2">
-					{t('available', 'Available:')} {Object.keys(CHART_PACKAGES).join(", ")}
+					{t("available", "Available:")}{" "}
+					{Object.keys(CHART_PACKAGES).join(", ")}
 				</div>
 			</div>
 		);

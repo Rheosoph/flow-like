@@ -73,22 +73,24 @@ export function DevModePanel({ className }: DevModePanelProps) {
 				<div className="flex items-center justify-between px-4 py-3 border-b">
 					<div className="flex items-center gap-2">
 						<Code className="h-5 w-5" />
-						<h2 className="font-semibold">{t('devModeRawJsonEditor', 'Dev Mode - Raw JSON Editor')}</h2>
+						<h2 className="font-semibold">
+							{t("devModeRawJsonEditor", "Dev Mode - Raw JSON Editor")}
+						</h2>
 					</div>
 					<div className="flex items-center gap-2">
 						<Button variant="outline" size="sm" onClick={handleFormat}>
-							{t('format', 'Format')}
+							{t("format", "Format")}
 						</Button>
 						<Button variant="outline" size="sm" onClick={handleCopy}>
 							{copied ? (
 								<>
 									<Check className="h-4 w-4 mr-1" />
-									{t('copied', 'Copied')}
+									{t("copied", "Copied")}
 								</>
 							) : (
 								<>
 									<Copy className="h-4 w-4 mr-1" />
-									{t('copy', 'Copy')}
+									{t("copy", "Copy")}
 								</>
 							)}
 						</Button>
@@ -96,10 +98,10 @@ export function DevModePanel({ className }: DevModePanelProps) {
 							{saved ? (
 								<>
 									<Check className="h-4 w-4 mr-1" />
-									{t('saved', 'Saved')}
+									{t("saved", "Saved")}
 								</>
 							) : (
-								t('applyChanges', 'Apply Changes')
+								t("applyChanges", "Apply Changes")
 							)}
 						</Button>
 						<Button
@@ -137,9 +139,19 @@ export function DevModePanel({ className }: DevModePanelProps) {
 				{/* Footer */}
 				<div className="px-4 py-2 border-t text-xs text-muted-foreground">
 					<p>
-						{t('editTheRawJsonStructureOfYourWidgetTheStructureIncludes', 'Edit the raw JSON structure of your widget. The structure includes')}{" "}<Trans i18nKey="codeClassnamebgmutedPx1RoundedcomponentscodeArrayOfSurfacecomponentAnd"><code className="bg-muted px-1 rounded">components</code> (array of
-						SurfaceComponent) and</Trans>{" "}<Trans i18nKey="codeClassnamebgmutedPx1RoundedwidgetrefscodeWidgetDefinitions"><code className="bg-muted px-1 rounded">widgetRefs</code> (widget
-						definitions).</Trans></p>
+						{t(
+							"editTheRawJsonStructureOfYourWidgetTheStructureIncludes",
+							"Edit the raw JSON structure of your widget. The structure includes",
+						)}{" "}
+						<Trans i18nKey="codeClassnamebgmutedPx1RoundedcomponentscodeArrayOfSurfacecomponentAnd">
+							<code className="bg-muted px-1 rounded">components</code> (array
+							of SurfaceComponent) and
+						</Trans>{" "}
+						<Trans i18nKey="codeClassnamebgmutedPx1RoundedwidgetrefscodeWidgetDefinitions">
+							<code className="bg-muted px-1 rounded">widgetRefs</code> (widget
+							definitions).
+						</Trans>
+					</p>
 				</div>
 			</div>
 		</div>

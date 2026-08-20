@@ -777,6 +777,7 @@ fn decode_variant_attempt(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_barcodes_in_luma(
     luma: Vec<u8>,
     width: u32,
@@ -876,18 +877,11 @@ fn decode_barcodes_in_luma(
     Ok(barcodes)
 }
 
-fn is_exhaustive_preprocess(preprocess_mode: PreprocessMode) -> bool {
-    matches!(
-        preprocess_mode,
-        PreprocessMode::Balanced | PreprocessMode::Aggressive | PreprocessMode::Industrial
-    )
-}
-
 fn append_processed_variants<F>(
     variants: &mut Vec<DecodeVariant>,
     source_count: usize,
     max_variants: usize,
-    mut build_variant: F,
+    build_variant: F,
 ) where
     F: FnMut(&DecodeVariant) -> Option<DecodeVariant>,
 {

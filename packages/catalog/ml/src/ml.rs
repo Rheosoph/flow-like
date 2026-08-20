@@ -1084,7 +1084,7 @@ impl MLModel {
 
     pub fn predict_on_values(
         &self,
-        values: &mut Vec<Value>,
+        values: &mut [Value],
         record_col: &str,
         target_col: &str,
     ) -> Result<()> {
@@ -1693,16 +1693,16 @@ pub fn values_to_array1_usize(
     Ok((Array1::from(flat), id_to_name))
 }
 
+/// Class id per row, plus the id → label map when the target column was categorical.
+pub type ClassificationTarget = (Array1<usize>, Option<HashMap<usize, String>>);
+
 /// Auto-detect target column type and convert to Array1<usize> for classification.
 ///
 /// Supports:
 /// - String (categorical) → mapped to unique usize IDs, returns class mapping
 /// - Integer (u64/i64) → used directly as class IDs, no mapping returned
 /// - Float → error (not supported for classification targets)
-pub fn values_to_array1_target(
-    values: &[Value],
-    attr: &str,
-) -> Result<(Array1<usize>, Option<HashMap<usize, String>>)> {
+pub fn values_to_array1_target(values: &[Value], attr: &str) -> Result<ClassificationTarget> {
     if values.is_empty() {
         return Err(anyhow!("Cannot infer target type from empty dataset"));
     }

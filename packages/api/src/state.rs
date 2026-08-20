@@ -753,7 +753,7 @@ impl State {
         let sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>> = {
             let scheduler_provider = std::env::var("SINK_SCHEDULER_PROVIDER")
                 .ok()
-                .map(|s| flow_like_sinks::scheduler::SchedulerProvider::from_str(&s));
+                .map(|s| flow_like_sinks::scheduler::SchedulerProvider::from_env_value(&s));
 
             match scheduler_provider {
                 Some(flow_like_sinks::scheduler::SchedulerProvider::Aws) => {
@@ -934,7 +934,7 @@ impl State {
     async fn configured_jwk(&self, kid: &str) -> Result<Jwk> {
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }
@@ -945,7 +945,7 @@ impl State {
         let mut refresh = self.jwks_refresh.lock().await;
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }
@@ -1198,8 +1198,8 @@ impl State {
 
     /// Pin an in-memory board to the object identity its writer just persisted.
     ///
-    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates`
-    /// + `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
+    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates` +
+    /// `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
     /// would produce. Seeding makes the read that follows every edit a `NotModified` memory hit
     /// instead of a decode + hydration. Skipping this is always safe (the next read reloads);
     /// seeding a board that does **not** match `put` is not, so only call it with the exact

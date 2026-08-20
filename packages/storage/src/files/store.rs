@@ -433,16 +433,16 @@ mod tests {
         let file = StorageItem::from(Path::from("apps/app-1/upload/logo.jpg")).relative_to(&base);
         assert_eq!(file.location, "logo.jpg");
 
-        let nested =
-            StorageItem::from(Path::from("apps/app-1/upload/media/inner/logo.jpg")).relative_to(&base);
+        let nested = StorageItem::from(Path::from("apps/app-1/upload/media/inner/logo.jpg"))
+            .relative_to(&base);
         assert_eq!(nested.location, "media/inner/logo.jpg");
 
         let user_base = Path::from("users")
             .child("sub-1")
             .child("apps")
             .child("app-1");
-        let user_file =
-            StorageItem::from(Path::from("users/sub-1/apps/app-1/media/logo.jpg")).relative_to(&user_base);
+        let user_file = StorageItem::from(Path::from("users/sub-1/apps/app-1/media/logo.jpg"))
+            .relative_to(&user_base);
         assert_eq!(user_file.location, "media/logo.jpg");
     }
 

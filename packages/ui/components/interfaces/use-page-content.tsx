@@ -52,7 +52,7 @@ import { PageInterface } from "./page-interface";
  */
 const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 
-export function pageLoadErrorMessage(error: unknown): string {
+function errorText(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string") return error;
 	if (
@@ -64,6 +64,25 @@ export function pageLoadErrorMessage(error: unknown): string {
 		return (error as { error: string }).error;
 	}
 	return "Unknown error";
+}
+
+/**
+ * The message the interface card shows.
+ *
+ * A page read that fails because its board is missing reports the missing file, while the
+ * reason the board never arrived — a stale offline flag, a failed write, a server that no
+ * longer has it — travels as `cause`. Showing only the outer message turned every distinct
+ * cause into the same undiagnosable "file not found", so the cause is appended when it adds
+ * something the outer message does not already say.
+ */
+export function pageLoadErrorMessage(error: unknown): string {
+	const message = errorText(error);
+	const cause = error instanceof Error ? error.cause : undefined;
+	if (cause === undefined || cause === null) return message;
+
+	const causeMessage = errorText(cause);
+	if (!causeMessage || message.includes(causeMessage)) return message;
+	return `${message} (${causeMessage})`;
 }
 
 export interface UsePageContentProps {
@@ -136,9 +155,18 @@ export async function loadPageWithBoardSync(
 				boardVersion,
 				options,
 			);
-		} catch {
+		} catch (retryError) {
 			// The first failure is the one that describes why the page is unreadable; a retry
-			// against a board that just arrived can only restate it less precisely.
+			// against a board that just arrived can only restate it less precisely. A retry
+			// that failed *differently* knows something the first one did not, so it is kept
+			// as the cause rather than discarded.
+			if (
+				error instanceof Error &&
+				error.cause === undefined &&
+				pageLoadErrorMessage(retryError) !== pageLoadErrorMessage(error)
+			) {
+				throw new Error(error.message, { cause: retryError });
+			}
 			throw error;
 		}
 	}
@@ -820,6 +848,20 @@ export function UsePageContent({
 		if (!events.data) retryCatalog();
 	}, [isOnline, pageKey, pageError, events.data, retryCatalog]);
 
+	// A restored event catalog can render a page before the session is: the query cache is
+	// persisted, so a cold start replays the events while sign-in is still in flight, and every
+	// read the page needs is refused for want of a token. The retry ladder is short and only a
+	// reconnect re-arms it, so a sign-in that lands late used to leave a signed-in, online
+	// device sitting on an error card. Signing in is a second chance, exactly like reconnecting.
+	const hadAccessTokenRef = useRef(hasAccessToken);
+	useEffect(() => {
+		const signedIn = hasAccessToken && !hadAccessTokenRef.current;
+		hadAccessTokenRef.current = hasAccessToken;
+		if (!signedIn) return;
+		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
+		if (!events.data) retryCatalog();
+	}, [hasAccessToken, pageKey, pageError, events.data, retryCatalog]);
+
 	// --- Route/event sync effects ---
 
 	useEffect(() => {
@@ -1017,7 +1059,12 @@ export function UsePageContent({
 				return (
 					<InterfaceLoadError
 						message={
-							isOnline ? t('thisAppsEventsCouldNotBeLoaded', 'This app\'s events could not be loaded.') : undefined
+							isOnline
+								? t(
+										"thisAppsEventsCouldNotBeLoaded",
+										"This app's events could not be loaded.",
+									)
+								: undefined
 						}
 						offline={!isOnline}
 						retrying={events.isFetching}

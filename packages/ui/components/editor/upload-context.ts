@@ -60,7 +60,11 @@ export const STORAGE_URL_PREFIX = "storage://";
 
 /** Normalize a prefix to a slash-free-edges storage folder. */
 export function normalizeUploadPrefix(prefix: string): string {
-	return prefix.replace(/^\/+|\/+$/g, "");
+	let start = 0;
+	let end = prefix.length;
+	while (start < end && prefix[start] === "/") start += 1;
+	while (end > start && prefix[end - 1] === "/") end -= 1;
+	return prefix.slice(start, end);
 }
 
 export function isStorageUrl(url: string | undefined): url is string {

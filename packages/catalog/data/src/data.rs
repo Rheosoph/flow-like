@@ -11,4 +11,5 @@ pub mod microsoft;
 pub mod notion;
 pub mod path;
 pub mod providers;
+pub mod query_params;
 pub mod tdms;

@@ -4,7 +4,7 @@
 //!   cargo test -p flow-like-catalog-media --features execute --test document_generation -- --nocapture
 //!
 //! Output files are written to `packages/catalog/media/tests/output/`.
-
+#![allow(clippy::too_many_arguments)]
 #![cfg(feature = "execute")]
 
 use std::collections::HashMap;
@@ -383,12 +383,11 @@ fn pptx_add_slide(files: &mut HashMap<String, Vec<u8>>) -> u32 {
 fn pptx_next_slide_number(files: &HashMap<String, Vec<u8>>) -> u32 {
     let mut max = 0u32;
     for key in files.keys() {
-        if let Some(rest) = key.strip_prefix("ppt/slides/slide") {
-            if let Some(num_str) = rest.strip_suffix(".xml") {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    max = max.max(n);
-                }
-            }
+        if let Some(rest) = key.strip_prefix("ppt/slides/slide")
+            && let Some(num_str) = rest.strip_suffix(".xml")
+            && let Ok(n) = num_str.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max + 1
@@ -396,16 +395,17 @@ fn pptx_next_slide_number(files: &HashMap<String, Vec<u8>>) -> u32 {
 
 fn pptx_find_slide_layout_target(files: &HashMap<String, Vec<u8>>) -> String {
     for key in files.keys() {
-        if key.starts_with("ppt/slides/_rels/slide") && key.ends_with(".xml.rels") {
-            if let Some(data) = files.get(key) {
-                let content = String::from_utf8_lossy(data);
-                if let Some(pos) = content.find("slideLayout") {
-                    if let Some(start) = content[..pos].rfind("Target=\"") {
-                        let target_start = start + 8;
-                        if let Some(end) = content[target_start..].find('"') {
-                            return content[target_start..target_start + end].to_string();
-                        }
-                    }
+        if key.starts_with("ppt/slides/_rels/slide")
+            && key.ends_with(".xml.rels")
+            && let Some(data) = files.get(key)
+        {
+            let content = String::from_utf8_lossy(data);
+            if let Some(pos) = content.find("slideLayout")
+                && let Some(start) = content[..pos].rfind("Target=\"")
+            {
+                let target_start = start + 8;
+                if let Some(end) = content[target_start..].find('"') {
+                    return content[target_start..target_start + end].to_string();
                 }
             }
         }
@@ -458,10 +458,10 @@ fn pptx_next_rid(rels_data: &Option<Vec<u8>>) -> String {
         let content = String::from_utf8_lossy(data);
         for cap in content.match_indices("rId") {
             let rest = &content[cap.0 + 3..];
-            if let Some(end) = rest.find('"') {
-                if let Ok(n) = rest[..end].parse::<u32>() {
-                    max = max.max(n);
-                }
+            if let Some(end) = rest.find('"')
+                && let Ok(n) = rest[..end].parse::<u32>()
+            {
+                max = max.max(n);
             }
         }
     }
@@ -481,12 +481,11 @@ fn pptx_next_sld_id(pres_content: &str) -> u32 {
     };
     for cap in section.match_indices("id=\"") {
         let rest = &section[cap.0 + 4..];
-        if let Some(end) = rest.find('"') {
-            if let Ok(n) = rest[..end].parse::<u32>() {
-                if n >= 256 {
-                    max = max.max(n);
-                }
-            }
+        if let Some(end) = rest.find('"')
+            && let Ok(n) = rest[..end].parse::<u32>()
+            && n >= 256
+        {
+            max = max.max(n);
         }
     }
     max + 1
@@ -1030,12 +1029,11 @@ fn build_multi_series_chart_xml(
 fn pptx_next_chart_number(files: &HashMap<String, Vec<u8>>) -> u32 {
     let mut max = 0u32;
     for key in files.keys() {
-        if let Some(rest) = key.strip_prefix("ppt/charts/chart") {
-            if let Some(num_str) = rest.strip_suffix(".xml") {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    max = max.max(n);
-                }
-            }
+        if let Some(rest) = key.strip_prefix("ppt/charts/chart")
+            && let Some(num_str) = rest.strip_suffix(".xml")
+            && let Ok(n) = num_str.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max + 1
@@ -1047,10 +1045,10 @@ fn pptx_next_rel_id(files: &HashMap<String, Vec<u8>>, rels_path: &str) -> String
         let content = String::from_utf8_lossy(data);
         for cap in content.match_indices("rId") {
             let rest = &content[cap.0 + 3..];
-            if let Some(end) = rest.find('"') {
-                if let Ok(n) = rest[..end].parse::<u32>() {
-                    max = max.max(n);
-                }
+            if let Some(end) = rest.find('"')
+                && let Ok(n) = rest[..end].parse::<u32>()
+            {
+                max = max.max(n);
             }
         }
     }
@@ -1132,18 +1130,18 @@ fn extract_charts_from_runs(runs: &[FormattedRun]) -> Vec<OfficeChartData> {
     let mut charts = Vec::new();
     let mut i = 0;
     while i < runs.len() {
-        if let BlockType::CodeBlock { ref language } = runs[i].block_type {
-            if is_chart_language(language) {
-                let mut j = i;
-                let code_text = collect_chart_code_text(runs, &mut j);
-                if let Some(input) = parse_chart_block(&code_text) {
-                    if let Some(office) = chart_input_to_office_data(&input) {
-                        charts.push(office);
-                    }
-                }
-                i = j;
-                continue;
+        if let BlockType::CodeBlock { ref language } = runs[i].block_type
+            && is_chart_language(language)
+        {
+            let mut j = i;
+            let code_text = collect_chart_code_text(runs, &mut j);
+            if let Some(input) = parse_chart_block(&code_text)
+                && let Some(office) = chart_input_to_office_data(&input)
+            {
+                charts.push(office);
             }
+            i = j;
+            continue;
         }
         i += 1;
     }
@@ -1403,12 +1401,11 @@ fn docx_embed_charts_from_markdown(
         let chart_num = {
             let mut max = 0u32;
             for key in files.keys() {
-                if let Some(rest) = key.strip_prefix("word/charts/chart") {
-                    if let Some(num_str) = rest.strip_suffix(".xml") {
-                        if let Ok(n) = num_str.parse::<u32>() {
-                            max = max.max(n);
-                        }
-                    }
+                if let Some(rest) = key.strip_prefix("word/charts/chart")
+                    && let Some(num_str) = rest.strip_suffix(".xml")
+                    && let Ok(n) = num_str.parse::<u32>()
+                {
+                    max = max.max(n);
                 }
             }
             max + 1
@@ -1436,10 +1433,10 @@ fn docx_embed_charts_from_markdown(
                 let content = String::from_utf8_lossy(data);
                 for cap in content.match_indices("rId") {
                     let rest = &content[cap.0 + 3..];
-                    if let Some(end) = rest.find('"') {
-                        if let Ok(n) = rest[..end].parse::<u32>() {
-                            max = max.max(n);
-                        }
+                    if let Some(end) = rest.find('"')
+                        && let Ok(n) = rest[..end].parse::<u32>()
+                    {
+                        max = max.max(n);
                     }
                 }
             }
@@ -1483,12 +1480,11 @@ fn docx_embed_charts_from_markdown(
             if let Some(p_start) = result[..pos]
                 .rfind("<w:p>")
                 .or_else(|| result[..pos].rfind("<w:p "))
+                && let Some(end_offset) = result[pos..].find("</w:p>")
             {
-                if let Some(end_offset) = result[pos..].find("</w:p>") {
-                    let p_end = pos + end_offset + 6;
-                    result.replace_range(p_start..p_end, &drawing);
-                    continue;
-                }
+                let p_end = pos + end_offset + 6;
+                result.replace_range(p_start..p_end, &drawing);
+                continue;
             }
         }
         // Fallback: append at end if placeholder not found
@@ -1990,43 +1986,43 @@ fn pdf_add_watermark(pdf_bytes: &[u8], text: &str, color: &str, opacity: f64) ->
         let stream = Stream::new(dictionary! {}, content_str.into_bytes());
         let content_id = doc.add_object(stream);
 
-        if let Ok(page) = doc.get_object_mut(*page_id) {
-            if let Object::Dictionary(dict) = page {
-                let resources = dict.get_mut(b"Resources");
-                match resources {
-                    Ok(Object::Dictionary(res)) => {
-                        let ext_g = dictionary! { "GS0" => Object::Reference(gs_id) };
-                        res.set("ExtGState", Object::Dictionary(ext_g));
-                        let fonts = dictionary! { "F1" => Object::Reference(font_id) };
-                        res.set("Font", Object::Dictionary(fonts));
-                    }
-                    _ => {
-                        let res = dictionary! {
-                            "ExtGState" => dictionary! { "GS0" => Object::Reference(gs_id) },
-                            "Font" => dictionary! { "F1" => Object::Reference(font_id) },
-                        };
-                        dict.set("Resources", Object::Dictionary(res));
-                    }
+        if let Ok(page) = doc.get_object_mut(*page_id)
+            && let Object::Dictionary(dict) = page
+        {
+            let resources = dict.get_mut(b"Resources");
+            match resources {
+                Ok(Object::Dictionary(res)) => {
+                    let ext_g = dictionary! { "GS0" => Object::Reference(gs_id) };
+                    res.set("ExtGState", Object::Dictionary(ext_g));
+                    let fonts = dictionary! { "F1" => Object::Reference(font_id) };
+                    res.set("Font", Object::Dictionary(fonts));
                 }
+                _ => {
+                    let res = dictionary! {
+                        "ExtGState" => dictionary! { "GS0" => Object::Reference(gs_id) },
+                        "Font" => dictionary! { "F1" => Object::Reference(font_id) },
+                    };
+                    dict.set("Resources", Object::Dictionary(res));
+                }
+            }
 
-                let existing_contents = dict.get(b"Contents").ok().cloned();
-                match existing_contents {
-                    Some(Object::Array(mut arr)) => {
-                        arr.push(Object::Reference(content_id));
-                        dict.set("Contents", Object::Array(arr));
-                    }
-                    Some(Object::Reference(existing_ref)) => {
-                        dict.set(
-                            "Contents",
-                            Object::Array(vec![
-                                Object::Reference(existing_ref),
-                                Object::Reference(content_id),
-                            ]),
-                        );
-                    }
-                    _ => {
-                        dict.set("Contents", Object::Reference(content_id));
-                    }
+            let existing_contents = dict.get(b"Contents").ok().cloned();
+            match existing_contents {
+                Some(Object::Array(mut arr)) => {
+                    arr.push(Object::Reference(content_id));
+                    dict.set("Contents", Object::Array(arr));
+                }
+                Some(Object::Reference(existing_ref)) => {
+                    dict.set(
+                        "Contents",
+                        Object::Array(vec![
+                            Object::Reference(existing_ref),
+                            Object::Reference(content_id),
+                        ]),
+                    );
+                }
+                _ => {
+                    dict.set("Contents", Object::Reference(content_id));
                 }
             }
         }
@@ -2067,40 +2063,40 @@ fn pdf_add_page_numbers(pdf_bytes: &[u8]) -> Vec<u8> {
         let stream = Stream::new(dictionary! {}, content_str.into_bytes());
         let content_id = doc.add_object(stream);
 
-        if let Ok(page) = doc.get_object_mut(*page_id) {
-            if let Object::Dictionary(dict) = page {
-                let resources = dict.get_mut(b"Resources");
-                match resources {
-                    Ok(Object::Dictionary(res)) => {
-                        let fonts = dictionary! { "F1" => Object::Reference(font_id) };
-                        res.set("Font", Object::Dictionary(fonts));
-                    }
-                    _ => {
-                        let res = dictionary! {
-                            "Font" => dictionary! { "F1" => Object::Reference(font_id) },
-                        };
-                        dict.set("Resources", Object::Dictionary(res));
-                    }
+        if let Ok(page) = doc.get_object_mut(*page_id)
+            && let Object::Dictionary(dict) = page
+        {
+            let resources = dict.get_mut(b"Resources");
+            match resources {
+                Ok(Object::Dictionary(res)) => {
+                    let fonts = dictionary! { "F1" => Object::Reference(font_id) };
+                    res.set("Font", Object::Dictionary(fonts));
                 }
+                _ => {
+                    let res = dictionary! {
+                        "Font" => dictionary! { "F1" => Object::Reference(font_id) },
+                    };
+                    dict.set("Resources", Object::Dictionary(res));
+                }
+            }
 
-                let existing_contents = dict.get(b"Contents").ok().cloned();
-                match existing_contents {
-                    Some(Object::Array(mut arr)) => {
-                        arr.push(Object::Reference(content_id));
-                        dict.set("Contents", Object::Array(arr));
-                    }
-                    Some(Object::Reference(existing_ref)) => {
-                        dict.set(
-                            "Contents",
-                            Object::Array(vec![
-                                Object::Reference(existing_ref),
-                                Object::Reference(content_id),
-                            ]),
-                        );
-                    }
-                    _ => {
-                        dict.set("Contents", Object::Reference(content_id));
-                    }
+            let existing_contents = dict.get(b"Contents").ok().cloned();
+            match existing_contents {
+                Some(Object::Array(mut arr)) => {
+                    arr.push(Object::Reference(content_id));
+                    dict.set("Contents", Object::Array(arr));
+                }
+                Some(Object::Reference(existing_ref)) => {
+                    dict.set(
+                        "Contents",
+                        Object::Array(vec![
+                            Object::Reference(existing_ref),
+                            Object::Reference(content_id),
+                        ]),
+                    );
+                }
+                _ => {
+                    dict.set("Contents", Object::Reference(content_id));
                 }
             }
         }
@@ -2113,24 +2109,22 @@ fn pdf_add_page_numbers(pdf_bytes: &[u8]) -> Vec<u8> {
 
 fn pdf_get_page_size(doc: &lopdf::Document, page_id: lopdf::ObjectId) -> (f64, f64) {
     use lopdf::Object;
-    if let Ok(page) = doc.get_object(page_id) {
-        if let Object::Dictionary(dict) = page {
-            if let Ok(Object::Array(media_box)) = dict.get(b"MediaBox") {
-                if media_box.len() == 4 {
-                    let w = match &media_box[2] {
-                        Object::Integer(n) => *n as f64,
-                        Object::Real(n) => *n as f64,
-                        _ => 612.0,
-                    };
-                    let h = match &media_box[3] {
-                        Object::Integer(n) => *n as f64,
-                        Object::Real(n) => *n as f64,
-                        _ => 792.0,
-                    };
-                    return (w, h);
-                }
-            }
-        }
+    if let Ok(page) = doc.get_object(page_id)
+        && let Object::Dictionary(dict) = page
+        && let Ok(Object::Array(media_box)) = dict.get(b"MediaBox")
+        && media_box.len() == 4
+    {
+        let w = match &media_box[2] {
+            Object::Integer(n) => *n as f64,
+            Object::Real(n) => *n as f64,
+            _ => 612.0,
+        };
+        let h = match &media_box[3] {
+            Object::Integer(n) => *n as f64,
+            Object::Real(n) => *n as f64,
+            _ => 792.0,
+        };
+        return (w, h);
     }
     (612.0, 792.0)
 }
@@ -2151,10 +2145,10 @@ fn max_id(xml: &str) -> u32 {
     let mut max = 0u32;
     for cap in xml.match_indices("id=\"") {
         let rest = &xml[cap.0 + 4..];
-        if let Some(end) = rest.find('"') {
-            if let Ok(n) = rest[..end].parse::<u32>() {
-                max = max.max(n);
-            }
+        if let Some(end) = rest.find('"')
+            && let Ok(n) = rest[..end].parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max
@@ -4114,9 +4108,7 @@ fn markdown_runs_to_docx_xml(
         // -- Normal paragraph / list items --
         if run.text == "\n" {
             // Paragraph break — flush
-            xml.push_str(&format!(
-                "<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:p>"
-            ));
+            xml.push_str("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:p>");
             i += 1;
             continue;
         }
@@ -4567,8 +4559,6 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                 let word_w = word.len() as f64 * cw;
                 let space_needed = if span_buf.is_empty() && cur_line.is_empty() {
                     0.0
-                } else if span_buf.is_empty() {
-                    cw
                 } else {
                     cw
                 };
@@ -4893,10 +4883,10 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                 // Chart code block → render native chart shapes in PDF
                 let mut j = i;
                 let code_text = collect_chart_code_text(&runs, &mut j);
-                if let Some(input) = parse_chart_block(&code_text) {
-                    if let Some(office) = chart_input_to_office_data(&input) {
-                        ops.push_str(&pdf_render_chart(&office, &mut y, page_width));
-                    }
+                if let Some(input) = parse_chart_block(&code_text)
+                    && let Some(office) = chart_input_to_office_data(&input)
+                {
+                    ops.push_str(&pdf_render_chart(&office, &mut y, page_width));
                 }
                 i = j;
                 continue;
@@ -5005,12 +4995,6 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
         }
     }
     ops
-}
-
-fn pdf_escape_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 //!
 //! This module provides a unified `UnifiedCopilot` struct that delegates to either
 //! the flow `Copilot` or A2UI `A2UICopilot` based on the requested scope.
+#![allow(clippy::too_many_arguments)]
 
 use std::sync::Arc;
 

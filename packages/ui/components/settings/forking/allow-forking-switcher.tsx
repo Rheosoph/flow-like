@@ -59,8 +59,15 @@ export function AllowForkingSwitcher({
 				setAllow(previous);
 				toast.error(
 					err instanceof Error
-						? t('couldntUpdateForkingSettingMessage', 'Couldn\'t update forking setting: {{message}}', { message: err.message })
-						: t('couldntUpdateForkingSetting', 'Couldn\'t update forking setting'),
+						? t(
+								"couldntUpdateForkingSettingMessage",
+								"Couldn't update forking setting: {{message}}",
+								{ message: err.message },
+							)
+						: t(
+								"couldntUpdateForkingSetting",
+								"Couldn't update forking setting",
+							),
 				);
 			} finally {
 				setPending(false);
@@ -77,10 +84,13 @@ export function AllowForkingSwitcher({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2">
 						<GitForkIcon className="w-4 h-4" />
-						{t('forking2', 'Forking')}
+						{t("forking2", "Forking")}
 					</CardTitle>
 					<CardDescription>
-						{t('letOtherUsersWithReadAccessCreateTheirOwnCopyOfThisAppOffByDefaultSecretVariablesOauthBindingsAndRemoteeventTokensAreStrippedOrReplacedWhenAForkIsCreated', "Let other users with read access create their own copy of this app. Off by default — secret variables, OAuth bindings and remote-event tokens are stripped or replaced when a fork is created.")}
+						{t(
+							"letOtherUsersWithReadAccessCreateTheirOwnCopyOfThisAppOffByDefaultSecretVariablesOauthBindingsAndRemoteeventTokensAreStrippedOrReplacedWhenAForkIsCreated",
+							"Let other users with read access create their own copy of this app. Off by default — secret variables, OAuth bindings and remote-event tokens are stripped or replaced when a fork is created.",
+						)}
 					</CardDescription>
 				</div>
 			</CardHeader>
@@ -88,17 +98,26 @@ export function AllowForkingSwitcher({
 				<div className="flex items-center justify-between rounded-md border p-4">
 					<div className="space-y-1 pr-4">
 						<Label htmlFor={inputId} className="text-sm font-medium">
-							{t('allowForking', 'Allow forking')}
+							{t("allowForking", "Allow forking")}
 						</Label>
 						<p className="text-xs text-muted-foreground">
 							{allow
-								? t('membersWithReadAccessCanForkThisApp', 'Members with read access can fork this app.')
-								: t('forkingIsDisabledTheForkButtonIsHiddenForEveryone', 'Forking is disabled. The Fork button is hidden for everyone.')}
+								? t(
+										"membersWithReadAccessCanForkThisApp",
+										"Members with read access can fork this app.",
+									)
+								: t(
+										"forkingIsDisabledTheForkButtonIsHiddenForEveryone",
+										"Forking is disabled. The Fork button is hidden for everyone.",
+									)}
 						</p>
 						{!canEdit && (
 							<p className="text-xs text-muted-foreground flex items-center gap-1">
 								<ShieldIcon className="w-3 h-3" />
-								{t('onlyTheAppOwnerCanChangeThis', 'Only the app owner can change this.')}
+								{t(
+									"onlyTheAppOwnerCanChangeThis",
+									"Only the app owner can change this.",
+								)}
 							</p>
 						)}
 					</div>

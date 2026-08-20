@@ -192,10 +192,7 @@ fn normalize_key(key: &str, separator: &str) -> String {
         // Key Vault secret names only accept alphanumeric characters and
         // hyphens. Flow-Like uses env-style names such as DATABASE_URL, so
         // normalize both path and underscore separators before lookup.
-        return key
-            .trim_matches('/')
-            .replace('/', separator)
-            .replace('_', separator);
+        return key.trim_matches('/').replace(['/', '_'], separator);
     }
 
     key.to_string()
@@ -203,14 +200,8 @@ fn normalize_key(key: &str, separator: &str) -> String {
 
 fn join_prefix(prefix: &str, key: &str, separator: &str) -> String {
     if separator != "/" {
-        let normalized_prefix = prefix
-            .trim_matches('/')
-            .replace('/', separator)
-            .replace('_', separator);
-        let normalized_key = key
-            .trim_matches('/')
-            .replace('/', separator)
-            .replace('_', separator);
+        let normalized_prefix = prefix.trim_matches('/').replace(['/', '_'], separator);
+        let normalized_key = key.trim_matches('/').replace(['/', '_'], separator);
         let normalized_prefix = normalized_prefix.trim_end_matches(separator);
         let normalized_key = normalized_key.trim_start_matches(separator);
 

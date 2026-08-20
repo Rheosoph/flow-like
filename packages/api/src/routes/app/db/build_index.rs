@@ -22,15 +22,15 @@ pub enum IndexType {
     Auto,
 }
 
-impl IndexType {
-    pub fn to_string(&self) -> String {
-        match self {
-            IndexType::FullText => "FULL TEXT".to_string(),
-            IndexType::BTree => "BTREE".to_string(),
-            IndexType::Bitmap => "BITMAP".to_string(),
-            IndexType::LabelList => "LABEL LIST".to_string(),
-            IndexType::Auto => "AUTO".to_string(),
-        }
+impl std::fmt::Display for IndexType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            IndexType::FullText => "FULL TEXT",
+            IndexType::BTree => "BTREE",
+            IndexType::Bitmap => "BITMAP",
+            IndexType::LabelList => "LABEL LIST",
+            IndexType::Auto => "AUTO",
+        })
     }
 }
 

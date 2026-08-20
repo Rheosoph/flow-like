@@ -272,8 +272,11 @@ export function GlobalChatOverlay() {
 							onPointerMove={onHandleMove}
 							onPointerUp={onHandleUp}
 							onDoubleClick={resetSize}
-							aria-label={t('resizeFlowpilotDock', 'Resize FlowPilot dock')}
-							title={t('dragToResizeDoubleclickToReset', 'Drag to resize · double-click to reset')}
+							aria-label={t("resizeFlowpilotDock", "Resize FlowPilot dock")}
+							title={t(
+								"dragToResizeDoubleclickToReset",
+								"Drag to resize · double-click to reset",
+							)}
 							className="group absolute left-0 top-0 z-20 flex size-6 cursor-nwse-resize items-start justify-start p-1.5 outline-none"
 						>
 							<svg
@@ -301,15 +304,15 @@ export function GlobalChatOverlay() {
 								<span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/25 to-purple-600/20 text-primary ring-1 ring-primary/15">
 									<SparklesIcon className="size-3.5" />
 								</span>
-								{t('flowpilot', 'FlowPilot')}
+								{t("flowpilot", "FlowPilot")}
 							</div>
 							<div className="flex items-center gap-0.5">
 								<Button
 									variant="ghost"
 									size="icon"
 									className="h-7 w-7 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-									aria-label={t('openFullChat', 'Open full chat')}
-									title={t('openFullChat', 'Open full chat')}
+									aria-label={t("openFullChat", "Open full chat")}
+									title={t("openFullChat", "Open full chat")}
 									onClick={() => {
 										router.push("/chat");
 										closeOverlay();
@@ -321,8 +324,8 @@ export function GlobalChatOverlay() {
 									variant="ghost"
 									size="icon"
 									className="h-7 w-7 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-									aria-label={t('closeChat', 'Close chat')}
-									title={t('close', 'Close')}
+									aria-label={t("closeChat", "Close chat")}
+									title={t("close", "Close")}
 									onClick={dismissOverlay}
 								>
 									<XIcon className="size-4" />

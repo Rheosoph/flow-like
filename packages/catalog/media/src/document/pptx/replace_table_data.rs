@@ -185,20 +185,21 @@ impl NodeLogic for PptxReplaceTableDataNode {
             .map(|m| (m.start(), m.end(), m.as_str().to_string()))
             .collect();
 
+        let tc_pr_re = Regex::new(r"<a:tcPr([^/]*)/>")?;
+        let tbl_pr_re = Regex::new(r"(?s)<a:tblPr[^>]*>.*?</a:tblPr>|<a:tblPr[^/]*/>")?;
+
         for (start, end, tbl_content) in tables.iter().rev() {
             if !tbl_content.contains(&placeholder) {
                 continue;
             }
             found_table = true;
 
-            let tc_pr_re = Regex::new(r"<a:tcPr([^/]*)/>")?;
             let template_tc_pr = tc_pr_re
                 .captures(tbl_content)
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default();
 
-            let tbl_pr_re = Regex::new(r"(?s)<a:tblPr[^>]*>.*?</a:tblPr>|<a:tblPr[^/]*/>")?;
             let tbl_pr = tbl_pr_re
                 .find(tbl_content)
                 .map(|m| m.as_str().to_string())

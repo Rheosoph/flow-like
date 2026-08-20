@@ -1,6 +1,6 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import { DragOverlay, useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { type UseQueryResult, useQueryClient } from "@tanstack/react-query";
 import {
@@ -100,10 +100,8 @@ import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-pan
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
-import {
-	Variable,
-	VariablesMenu,
-} from "../../components/flow/variables/variables-menu";
+import { typeToColor } from "../../components/flow/utils";
+import { VariablesMenu } from "../../components/flow/variables/variables-menu";
 import {
 	ResizableHandle,
 	ResizablePanel,
@@ -776,7 +774,7 @@ export function FlowBoard({
 			<Button
 				variant={"outline"}
 				size={"icon"}
-				aria-label={t('openLogs', 'Open logs')}
+				aria-label={t("openLogs", "Open logs")}
 				onClick={async () => {
 					toggleLogs();
 				}}
@@ -792,7 +790,7 @@ export function FlowBoard({
 				<Button
 					variant={"outline"}
 					size={"icon"}
-					aria-label={t('openFlowpilot', 'Open FlowPilot')}
+					aria-label={t("openFlowpilot", "Open FlowPilot")}
 					onClick={() => openAssistant()}
 					className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
 				>
@@ -1086,7 +1084,10 @@ export function FlowBoard({
 	const handleApplyTemplate = useCallback(
 		async (templateAppId: string, templateId: string) => {
 			if (typeof version !== "undefined") {
-				toastError(t('cannotModifyOldVersion', 'Cannot modify old version'), <XIcon />);
+				toastError(
+					t("cannotModifyOldVersion", "Cannot modify old version"),
+					<XIcon />,
+				);
 				return;
 			}
 
@@ -1097,7 +1098,7 @@ export function FlowBoard({
 				);
 
 				if (!templateBoard) {
-					toastError(t('templateNotFound', 'Template not found'), <XIcon />);
+					toastError(t("templateNotFound", "Template not found"), <XIcon />);
 					return;
 				}
 
@@ -1110,7 +1111,7 @@ export function FlowBoard({
 					templateComments.length === 0 &&
 					templateLayers.length === 0
 				) {
-					toastError(t('templateIsEmpty', 'Template is empty'), <XIcon />);
+					toastError(t("templateIsEmpty", "Template is empty"), <XIcon />);
 					return;
 				}
 
@@ -1120,7 +1121,10 @@ export function FlowBoard({
 				setTemplateSelectorOpen(false);
 			} catch (error) {
 				console.error("Failed to apply template:", error);
-				toastError(t('failedToApplyTemplate', 'Failed to apply template'), <XIcon />);
+				toastError(
+					t("failedToApplyTemplate", "Failed to apply template"),
+					<XIcon />,
+				);
 			}
 		},
 		[backend.templateState, executeCommand, currentLayer, version],
@@ -1506,7 +1510,7 @@ export function FlowBoard({
 
 				const errorMessage = getErrorMessage(error, "");
 				toastError(
-					errorMessage || t('failedToExecuteBoard', 'Failed to execute board'),
+					errorMessage || t("failedToExecuteBoard", "Failed to execute board"),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
 				return;
@@ -1514,7 +1518,7 @@ export function FlowBoard({
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
-					t('failedToExecuteBoard', 'Failed to execute board'),
+					t("failedToExecuteBoard", "Failed to execute board"),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
 				return;
@@ -1548,7 +1552,7 @@ export function FlowBoard({
 		) => {
 			if (!backend.boardState.executeBoardRemote) {
 				toastError(
-					t('remoteExecutionNotAvailable', 'Remote execution not available'),
+					t("remoteExecutionNotAvailable", "Remote execution not available"),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
 				return;
@@ -1592,7 +1596,11 @@ export function FlowBoard({
 				console.warn("Failed to execute board remotely", error);
 				const errorMessage = getErrorMessage(error, "");
 				toastError(
-					errorMessage || t('failedToExecuteBoardOnServer', 'Failed to execute board on server'),
+					errorMessage ||
+						t(
+							"failedToExecuteBoardOnServer",
+							"Failed to execute board on server",
+						),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
 				return;
@@ -1600,7 +1608,10 @@ export function FlowBoard({
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
-					t('failedToExecuteBoardOnServer', 'Failed to execute board on server'),
+					t(
+						"failedToExecuteBoardOnServer",
+						"Failed to execute board on server",
+					),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
 				return;
@@ -1819,7 +1830,10 @@ export function FlowBoard({
 				return;
 			}
 			if (typeof version !== "undefined") {
-				toastError(t('cannotChangeOldVersion', 'Cannot change old version'), <XIcon />);
+				toastError(
+					t("cannotChangeOldVersion", "Cannot change old version"),
+					<XIcon />,
+				);
 				return;
 			}
 			const mp = mousePositionRef.current;
@@ -1889,8 +1903,16 @@ export function FlowBoard({
 
 			// Build the explain prompt
 			const nodeCount = nodeIds.length;
-			const prompt =
-				t('explainWhatTheseCountSelectedNodesDoAndHowTheyWorkTogetherInThisFlow', { defaultValue_one: 'Explain what this node does and how it works in the context of this flow.', defaultValue_other: 'Explain what these {{count}} selected nodes do and how they work together in this flow.', count: nodeCount });
+			const prompt = t(
+				"explainWhatTheseCountSelectedNodesDoAndHowTheyWorkTogetherInThisFlow",
+				{
+					defaultValue_one:
+						"Explain what this node does and how it works in the context of this flow.",
+					defaultValue_other:
+						"Explain what these {{count}} selected nodes do and how they work together in this flow.",
+					count: nodeCount,
+				},
+			);
 
 			openAssistant(prompt);
 		},
@@ -2552,8 +2574,8 @@ export function FlowBoard({
 							id: handle.id,
 							name: handle.id.startsWith("ref_in_") ? "ref_in" : "ref_out",
 							friendly_name: handle.id.startsWith("ref_in_")
-								? t('functionReferenceIn', 'Function Reference In')
-								: t('functionReferenceOut', 'Function Reference Out'),
+								? t("functionReferenceIn", "Function Reference In")
+								: t("functionReferenceOut", "Function Reference Out"),
 							pin_type: handle.id.startsWith("ref_in_")
 								? IPinType.Input
 								: IPinType.Output,
@@ -2814,7 +2836,7 @@ export function FlowBoard({
 
 		const nodes = getNodes();
 		if (nodes.length === 0) {
-			toastError(t('noNodesToCapture', 'No nodes to capture'), <XIcon />);
+			toastError(t("noNodesToCapture", "No nodes to capture"), <XIcon />);
 			return;
 		}
 
@@ -2863,7 +2885,10 @@ export function FlowBoard({
 				await navigator.clipboard.write([
 					new ClipboardItem({ "image/png": blob }),
 				]);
-				toastSuccess(t('screenshotCopiedToClipboard', 'Screenshot copied to clipboard'), <CheckIcon />);
+				toastSuccess(
+					t("screenshotCopiedToClipboard", "Screenshot copied to clipboard"),
+					<CheckIcon />,
+				);
 			} catch {
 				const link = document.createElement("a");
 				link.download = "flow-screenshot.png";
@@ -2873,7 +2898,10 @@ export function FlowBoard({
 			}
 		} catch (error) {
 			console.error("Screenshot failed:", error);
-			toastError(t('failedToCaptureScreenshot', 'Failed to capture screenshot'), <XIcon />);
+			toastError(
+				t("failedToCaptureScreenshot", "Failed to capture screenshot"),
+				<XIcon />,
+			);
 		}
 	}, [getNodes]);
 
@@ -3055,7 +3083,12 @@ export function FlowBoard({
 			if (node) {
 				await placeNode(node);
 			} else {
-				toastError(t('nodeTypeNode_typeNotFound', 'Node type {{node_type}} not found', { node_type: suggestion.node_type }), <XIcon />);
+				toastError(
+					t("nodeTypeNode_typeNotFound", "Node type {{node_type}} not found", {
+						node_type: suggestion.node_type,
+					}),
+					<XIcon />,
+				);
 			}
 		},
 		[catalog.data, placeNode],
@@ -3066,7 +3099,10 @@ export function FlowBoard({
 	const autoLayout = useCallback(
 		async (style: LayoutStyle = "compact") => {
 			if (typeof version !== "undefined") {
-				toastError(t('cannotModifyOldVersion', 'Cannot modify old version'), <XIcon />);
+				toastError(
+					t("cannotModifyOldVersion", "Cannot modify old version"),
+					<XIcon />,
+				);
 				return;
 			}
 			const boardData = board.data;
@@ -3390,7 +3426,9 @@ export function FlowBoard({
 				{awareness && connectionStatus === "connected" && (
 					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-primary animate-pulse" />
-						<span className="text-xs font-medium text-primary">{t('live', 'Live')}</span>
+						<span className="text-xs font-medium text-primary">
+							{t("live", "Live")}
+						</span>
 					</div>
 				)}
 				{awareness && connectionStatus === "reconnecting" && (
@@ -3409,7 +3447,10 @@ export function FlowBoard({
 					>
 						<WifiOffIcon className="h-3.5 w-3.5 text-destructive" />
 						<span className="text-xs font-medium text-destructive">
-							{t('disconnectedClickToReconnect', 'Disconnected - Click to reconnect')}
+							{t(
+								"disconnectedClickToReconnect",
+								"Disconnected - Click to reconnect",
+							)}
 						</span>
 					</button>
 				)}
@@ -3417,7 +3458,7 @@ export function FlowBoard({
 					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiOffIcon className="h-3.5 w-3.5 text-muted-foreground" />
 						<span className="text-xs font-medium text-muted-foreground">
-							{t('offline', 'Offline')}
+							{t("offline", "Offline")}
 						</span>
 					</div>
 				)}
@@ -3445,7 +3486,10 @@ export function FlowBoard({
 					>
 						<Eye className="h-3.5 w-3.5 text-blue-400" />
 						<span className="text-xs font-medium text-blue-400">
-							{t('followingClickOrPressEscToStop', 'Following — click or press Esc to stop')}
+							{t(
+								"followingClickOrPressEscToStop",
+								"Following — click or press Esc to stop",
+							)}
 						</span>
 					</button>
 				)}
@@ -3501,7 +3545,7 @@ export function FlowBoard({
 							? [
 									{
 										icon: <ArrowBigLeftDashIcon />,
-										title: t('back', 'Back'),
+										title: t("back", "Back"),
 										onClick: async () => {
 											const urlWithQuery = parentRegister.boardParents[boardId];
 											router.push(urlWithQuery);
@@ -3511,7 +3555,7 @@ export function FlowBoard({
 							: []),
 						{
 							icon: <VariableIcon />,
-							title: t('variables', 'Variables'),
+							title: t("variables", "Variables"),
 							onClick: async () => {
 								toggleVars();
 							},
@@ -3519,35 +3563,35 @@ export function FlowBoard({
 
 						{
 							icon: <LayoutTemplateIcon />,
-							title: t('templates', 'Templates'),
+							title: t("templates", "Templates"),
 							onClick: async () => {
 								setTemplateSelectorOpen(true);
 							},
 						},
 						{
 							icon: <WaypointsIcon />,
-							title: t('autoLayout', 'Auto Layout'),
+							title: t("autoLayout", "Auto Layout"),
 							onClick: async () => {
 								setAutoLayoutDialogOpen(true);
 							},
 						},
 						{
 							icon: <NotebookPenIcon />,
-							title: t('manageBoard', 'Manage Board'),
+							title: t("manageBoard", "Manage Board"),
 							onClick: async () => {
 								setEditBoard(true);
 							},
 						},
 						{
 							icon: <FileTextIcon />,
-							title: t('pages', 'Pages'),
+							title: t("pages", "Pages"),
 							onClick: async () => {
 								togglePages();
 							},
 						},
 						{
 							icon: <SearchIcon />,
-							title: t('searchFFSidebar', 'Search (⌘F / ⌘⇧F sidebar)'),
+							title: t("searchFFSidebar", "Search (⌘F / ⌘⇧F sidebar)"),
 							onClick: async () => {
 								setSearchMode("dialog");
 								setSearchOpen(true);
@@ -3559,7 +3603,7 @@ export function FlowBoard({
 						},
 						{
 							icon: <FileCode2Icon />,
-							title: t('flowscript', 'FlowScript'),
+							title: t("flowscript", "FlowScript"),
 							onClick: async () => {
 								toggleFlowScript();
 							},
@@ -3567,7 +3611,7 @@ export function FlowBoard({
 						{
 							icon: <HistoryIcon />,
 							separator: "left",
-							title: t('runHistory', 'Run History'),
+							title: t("runHistory", "Run History"),
 							onClick: async () => {
 								toggleRunHistory();
 							},
@@ -3576,7 +3620,7 @@ export function FlowBoard({
 							? [
 									{
 										icon: <ScrollIcon />,
-										title: t('logs', 'Logs'),
+										title: t("logs", "Logs"),
 										onClick: async () => {
 											toggleLogs();
 										},
@@ -3587,7 +3631,7 @@ export function FlowBoard({
 							? [
 									{
 										icon: <SquareChevronUpIcon />,
-										title: t('layerUp', 'Layer Up'),
+										title: t("layerUp", "Layer Up"),
 										separator: "left",
 										highlight: true,
 										onClick: async () => {
@@ -3604,7 +3648,7 @@ export function FlowBoard({
 							: [
 									{
 										icon: <SparklesIcon className="text-white" />,
-										title: t('flowpilot', 'FlowPilot'),
+										title: t("flowpilot", "FlowPilot"),
 										separator: "left",
 										special: true,
 										onClick: () => openAssistant(),
@@ -3748,7 +3792,8 @@ export function FlowBoard({
 									)}
 									{version && (
 										<h3 className="absolute top-0 mr-2 mt-2 right-0 z-10 text-muted pointer-events-none select-none">
-											{t('version', 'Version')} {version[0]}.{version[1]}.{version[2]} {t('readonly', '- Read-Only')}
+											{t("version", "Version")} {version[0]}.{version[1]}.
+											{version[2]} {t("readonly", "- Read-Only")}
 										</h3>
 									)}
 									<FlowCanvas
@@ -3808,12 +3853,19 @@ export function FlowBoard({
 												</span>
 											</div>
 										) : (active?.data?.current as IVariable)?.id ? (
-											<Variable
-												variable={active?.data?.current as IVariable}
-												preview
-												onVariableChange={() => {}}
-												onVariableDeleted={() => {}}
-											/>
+											<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
+												<span
+													className="h-2 w-4 rounded-full"
+													style={{
+														backgroundColor: typeToColor(
+															(active?.data?.current as IVariable).data_type,
+														),
+													}}
+												/>
+												<span className="font-mono text-sm font-medium">
+													{(active?.data?.current as IVariable).name}
+												</span>
+											</div>
 										) : null}
 									</DragOverlay>
 								</div>
@@ -3913,7 +3965,9 @@ export function FlowBoard({
 				<Sheet open={varsOpen} onOpenChange={setVarsOpen}>
 					<SheetContent side="bottom" className="h-[60dvh] w-full">
 						<SheetHeader>
-							<SheetTitle>{t('variablesFunctions', 'Variables & Functions')}</SheetTitle>
+							<SheetTitle>
+								{t("variablesFunctions", "Variables & Functions")}
+							</SheetTitle>
 						</SheetHeader>
 						{board.data && (
 							<div className="h-[calc(60dvh-3.5rem)] overflow-y-auto overscroll-contain">
@@ -3931,7 +3985,7 @@ export function FlowBoard({
 				<Sheet open={runsOpen} onOpenChange={setRunsOpen}>
 					<SheetContent side="bottom" className="h-[80dvh] w-full">
 						<SheetHeader>
-							<SheetTitle>{t('runs', 'Runs')}</SheetTitle>
+							<SheetTitle>{t("runs", "Runs")}</SheetTitle>
 						</SheetHeader>
 						{board.data && (
 							<div className="h-[calc(80dvh-3.5rem)] overflow-y-auto overscroll-contain">
@@ -3951,7 +4005,7 @@ export function FlowBoard({
 				<Sheet open={logsOpen} onOpenChange={setLogsOpen}>
 					<SheetContent side="bottom" className="h-[80dvh] w-full">
 						<SheetHeader>
-							<SheetTitle>{t('logs', 'Logs')}</SheetTitle>
+							<SheetTitle>{t("logs", "Logs")}</SheetTitle>
 						</SheetHeader>
 						{board.data && currentMetadata && (
 							<div className="h-[calc(80dvh-3.5rem)] w-full">
@@ -3967,7 +4021,10 @@ export function FlowBoard({
 						)}
 						{(!currentMetadata || !board.data) && (
 							<div className="h-[calc(80dvh-3.5rem)] w-full flex items-center justify-center text-sm text-muted-foreground p-6">
-								{t('noRunSelectedYetStartARunToViewLogsHere', 'No run selected yet. Start a run to view logs here.')}
+								{t(
+									"noRunSelectedYetStartARunToViewLogsHere",
+									"No run selected yet. Start a run to view logs here.",
+								)}
 							</div>
 						)}
 					</SheetContent>
@@ -3976,7 +4033,7 @@ export function FlowBoard({
 				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
 					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
 						<SheetHeader className="px-4 pt-4">
-							<SheetTitle>{t('flowscript', 'FlowScript')}</SheetTitle>
+							<SheetTitle>{t("flowscript", "FlowScript")}</SheetTitle>
 						</SheetHeader>
 						{board.data && flowScriptSheetOpen && (
 							<div className="h-[calc(90dvh-3.5rem)] w-full">

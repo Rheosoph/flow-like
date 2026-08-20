@@ -1,6 +1,6 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
+import { useTranslation } from "@flow-like/locales";
 import "@xyflow/react/dist/style.css";
 import { Video } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -25,7 +25,7 @@ export default function FlowEditPage() {
 		return { boardId, appId, nodeId, version };
 	}, [searchParams]);
 
-	if (boardId === "") return <p>{t('boardNotFound', 'Board not found...')}</p>;
+	if (boardId === "") return <p>{t("boardNotFound", "Board not found...")}</p>;
 
 	return (
 		<>
@@ -40,7 +40,7 @@ export default function FlowEditPage() {
 				extraDockItems={[
 					{
 						icon: <Video className={showRecording ? "text-red-500" : ""} />,
-						title: t('recordActions', 'Record Actions'),
+						title: t("recordActions", "Record Actions"),
 						separator: "left",
 						onClick: () => setShowRecording((prev) => !prev),
 					},

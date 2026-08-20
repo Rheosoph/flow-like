@@ -127,13 +127,13 @@ export function FlowPreviewPin({
 					<FlowPinInner pin={pin} index={index} boardId={boardId} node={node} />
 				</ContextMenuTrigger>
 				<ContextMenuContent>
-					<ContextMenuLabel>{t('pinActions', 'Pin Actions')}</ContextMenuLabel>
+					<ContextMenuLabel>{t("pinActions", "Pin Actions")}</ContextMenuLabel>
 					<ContextMenuItem
 						onClick={() => {
 							onPinRemove(pin);
 						}}
 					>
-						{t('removePin2', 'Remove Pin')}
+						{t("removePin2", "Remove Pin")}
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>

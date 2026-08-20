@@ -182,6 +182,7 @@ impl SqlStore {
         }
     }
 
+    #[allow(dead_code)] // parity with Store::set_base_dir; the SQL store is rebased via open()
     pub async fn set_base_dir(&self, new_dir: PathBuf) {
         *self.base_dir.write().await = new_dir;
     }

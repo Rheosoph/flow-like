@@ -51,7 +51,7 @@ export function DateElement(props: PlateElementProps<TDateElement>) {
 					});
 				})()
 			) : (
-				<span>{t('pickADate', 'Pick a date')}</span>
+				<span>{t("pickADate", "Pick a date")}</span>
 			)}
 		</span>
 	);

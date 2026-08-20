@@ -501,10 +501,17 @@ export function StructVariable({
 							disabled={disabled}
 							value={value}
 							onValidChange={updateField}
-							placeholder={t('enterFieldnameAsJson', 'Enter {{fieldName}} as JSON', { fieldName })}
+							placeholder={t(
+								"enterFieldnameAsJson",
+								"Enter {{fieldName}} as JSON",
+								{ fieldName },
+							)}
 						/>
 						<p className="text-xs text-muted-foreground">
-							{t('circularSchemaReferenceEditThisValueAsJson', 'Circular schema reference. Edit this value as JSON.')}
+							{t(
+								"circularSchemaReferenceEditThisValueAsJson",
+								"Circular schema reference. Edit this value as JSON.",
+							)}
 						</p>
 					</div>
 				);
@@ -608,7 +615,10 @@ export function StructVariable({
 									e.target.value ? Number.parseInt(e.target.value, 10) : "",
 								)
 							}
-							placeholder={resolvedProp.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
+							placeholder={
+								resolvedProp.description ||
+								t("enterFieldname", "Enter {{fieldName}}", { fieldName })
+							}
 						/>
 					</div>
 				);
@@ -628,7 +638,10 @@ export function StructVariable({
 									e.target.value ? Number.parseFloat(e.target.value) : "",
 								)
 							}
-							placeholder={resolvedProp.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
+							placeholder={
+								resolvedProp.description ||
+								t("enterFieldname", "Enter {{fieldName}}", { fieldName })
+							}
 						/>
 					</div>
 				);
@@ -643,7 +656,10 @@ export function StructVariable({
 							value={value}
 							onValidChange={updateField}
 							placeholder={
-								resolvedProp.description || t('enterFieldnameAsJson', 'Enter {{fieldName}} as JSON', { fieldName })
+								resolvedProp.description ||
+								t("enterFieldnameAsJson", "Enter {{fieldName}} as JSON", {
+									fieldName,
+								})
 							}
 						/>
 					</div>
@@ -659,7 +675,10 @@ export function StructVariable({
 							className="h-8"
 							value={String(value ?? "")}
 							onChange={(e) => updateField(e.target.value)}
-							placeholder={resolvedProp.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
+							placeholder={
+								resolvedProp.description ||
+								t("enterFieldname", "Enter {{fieldName}}", { fieldName })
+							}
 						/>
 					</div>
 				);
@@ -691,10 +710,12 @@ export function StructVariable({
 								}}
 							>
 								<FormInputIcon className="w-3 h-3" />
-								<span className="text-xs">{t('form', 'Form')}</span>
+								<span className="text-xs">{t("form", "Form")}</span>
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>{t('editUsingGeneratedForm', 'Edit using generated form')}</TooltipContent>
+						<TooltipContent>
+							{t("editUsingGeneratedForm", "Edit using generated form")}
+						</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -711,7 +732,7 @@ export function StructVariable({
 								<span className="text-xs">{`JSON`}</span>
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>{t('editRawJson', 'Edit raw JSON')}</TooltipContent>
+						<TooltipContent>{t("editRawJson", "Edit raw JSON")}</TooltipContent>
 					</Tooltip>
 				</div>
 			)}
@@ -749,7 +770,10 @@ export function StructVariable({
 					{jsonError && <p className="text-xs text-destructive">{jsonError}</p>}
 					{!hasSchema && (
 						<p className="text-xs text-muted-foreground">
-							{t('noSchemaDefinedAddASchemaToEnableFormMode', 'No schema defined. Add a schema to enable form mode.')}
+							{t(
+								"noSchemaDefinedAddASchemaToEnableFormMode",
+								"No schema defined. Add a schema to enable form mode.",
+							)}
 						</p>
 					)}
 				</div>

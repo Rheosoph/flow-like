@@ -40,3 +40,9 @@ rustflags = [
   "-C", "opt-level=z",
   "-C", "panic=abort",
 ]
+
+[unstable]
+min-publish-age = true
+
+[registry]
+global-min-publish-age = "7 days"

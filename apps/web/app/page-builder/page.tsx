@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -28,6 +27,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IPage, PageLayoutType } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowLeft,
 	Check,
@@ -185,7 +185,7 @@ export default function PageBuilderPage() {
 			} catch {
 				const newPage: IPage = {
 					id: pageId,
-					name: t('newPage', 'New Page'),
+					name: t("newPage", "New Page"),
 					content: [],
 					layoutType: "freeform",
 					components: [],
@@ -423,7 +423,9 @@ export default function PageBuilderPage() {
 	if (!pageId) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">{t('pageNotFound', 'Page not found')}</p>
+				<p className="text-muted-foreground">
+					{t("pageNotFound", "Page not found")}
+				</p>
 			</div>
 		);
 	}
@@ -432,7 +434,9 @@ export default function PageBuilderPage() {
 		return (
 			<div className="flex items-center justify-center h-full gap-2">
 				<Loader2 className="h-5 w-5 animate-spin" />
-				<p className="text-muted-foreground">{t('loadingPage', 'Loading page...')}</p>
+				<p className="text-muted-foreground">
+					{t("loadingPage", "Loading page...")}
+				</p>
 			</div>
 		);
 	}
@@ -440,7 +444,9 @@ export default function PageBuilderPage() {
 	if (!page) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">{t('pageNotFound', 'Page not found')}</p>
+				<p className="text-muted-foreground">
+					{t("pageNotFound", "Page not found")}
+				</p>
 			</div>
 		);
 	}
@@ -457,7 +463,9 @@ export default function PageBuilderPage() {
 					</Link>
 					<div>
 						<h1 className="text-lg font-semibold">{page.name}</h1>
-						<p className="text-sm text-muted-foreground">{t('visualPageBuilder', 'Visual Page Builder')}</p>
+						<p className="text-sm text-muted-foreground">
+							{t("visualPageBuilder", "Visual Page Builder")}
+						</p>
 					</div>
 					{page.version && (
 						<Badge variant="secondary">
@@ -472,7 +480,7 @@ export default function PageBuilderPage() {
 						<Link href={`/flow?id=${boardId}&app=${appId}`}>
 							<Button variant="outline" size="sm">
 								<Workflow className="h-4 w-4 mr-2" />
-								{t('openFlow', 'Open Flow')}
+								{t("openFlow", "Open Flow")}
 							</Button>
 						</Link>
 					)}
@@ -485,12 +493,12 @@ export default function PageBuilderPage() {
 					) : hasUnsavedChanges ? (
 						<div className="flex items-center gap-1.5 text-sm text-muted-foreground">
 							<span className="h-2 w-2 rounded-full bg-yellow-500" />
-							<span>{t('unsavedChanges', 'Unsaved changes')}</span>
+							<span>{t("unsavedChanges", "Unsaved changes")}</span>
 						</div>
 					) : lastSavedAt ? (
 						<div className="flex items-center gap-1.5 text-sm text-muted-foreground">
 							<Check className="h-3 w-3 text-green-500" />
-							<span>{t('saved', 'Saved')}</span>
+							<span>{t("saved", "Saved")}</span>
 						</div>
 					) : null}
 					<Button
@@ -499,7 +507,7 @@ export default function PageBuilderPage() {
 						onClick={() => setShowSettings(!showSettings)}
 					>
 						<Settings className="h-4 w-4 mr-2" />
-						{t('settings', 'Settings')}
+						{t("settings", "Settings")}
 					</Button>
 				</div>
 			</div>
@@ -521,7 +529,7 @@ export default function PageBuilderPage() {
 						currentPageId={pageId}
 						onPageChange={(newPageId) => {
 							if (newPageId === pageId) return; // Skip if same page
-							const url = `/page-builder?id=${newPageId}&app=${appId}${boardId ? t('boardboardid', '&board={{boardId}}', { boardId }) : ""}`;
+							const url = `/page-builder?id=${newPageId}&app=${appId}${boardId ? t("boardboardid", "&board={{boardId}}", { boardId }) : ""}`;
 							console.log("[PageBuilder] Navigating to:", url);
 							window.location.href = url;
 						}}
@@ -546,7 +554,7 @@ export default function PageBuilderPage() {
 				<Sheet open={showSettings} onOpenChange={setShowSettings}>
 					<SheetContent className="w-96 sm:max-w-md overflow-hidden flex flex-col">
 						<SheetHeader>
-							<SheetTitle>{t('pageSettings', 'Page Settings')}</SheetTitle>
+							<SheetTitle>{t("pageSettings", "Page Settings")}</SheetTitle>
 						</SheetHeader>
 						<ScrollArea className="flex-1 -mx-6 px-6">
 							<PageSettingsPanel
@@ -591,15 +599,15 @@ function PageSettingsPanel({
 	return (
 		<Tabs defaultValue="general" className="w-full">
 			<TabsList className="w-full justify-start px-4 pt-2">
-				<TabsTrigger value="general">{t('general', 'General')}</TabsTrigger>
-				<TabsTrigger value="behavior">{t('behavior', 'Behavior')}</TabsTrigger>
-				<TabsTrigger value="layout">{t('layout', 'Layout')}</TabsTrigger>
+				<TabsTrigger value="general">{t("general", "General")}</TabsTrigger>
+				<TabsTrigger value="behavior">{t("behavior", "Behavior")}</TabsTrigger>
+				<TabsTrigger value="layout">{t("layout", "Layout")}</TabsTrigger>
 				<TabsTrigger value="seo">SEO</TabsTrigger>
 			</TabsList>
 
 			<TabsContent value="general" className="p-4 space-y-4">
 				<div className="space-y-2">
-					<Label htmlFor="name">{t('pageName', 'Page Name')}</Label>
+					<Label htmlFor="name">{t("pageName", "Page Name")}</Label>
 					<Input
 						id="name"
 						value={page.name}
@@ -607,7 +615,7 @@ function PageSettingsPanel({
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="description">{t('description', 'Description')}</Label>
+					<Label htmlFor="description">{t("description", "Description")}</Label>
 					<Textarea
 						id="description"
 						value={page.meta?.description || ""}
@@ -615,21 +623,24 @@ function PageSettingsPanel({
 							updateMeta("description", e.target.value || undefined)
 						}
 						className="min-h-20"
-						placeholder={t('describeWhatThisPageIsFor', 'Describe what this page is for...')}
+						placeholder={t(
+							"describeWhatThisPageIsFor",
+							"Describe what this page is for...",
+						)}
 					/>
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('pageId', 'Page ID')}</Label>
+					<Label>{t("pageId", "Page ID")}</Label>
 					<Input value={page.id} disabled />
 				</div>
 				<div className="space-y-2">
-					<Label>{t('version', 'Version')}</Label>
+					<Label>{t("version", "Version")}</Label>
 					<Input
 						value={
 							page.version
 								? `${page.version[0]}.${page.version[1]}.${page.version[2]}`
-								: t('notVersioned', 'Not versioned')
+								: t("notVersioned", "Not versioned")
 						}
 						disabled
 					/>
@@ -641,13 +652,13 @@ function PageSettingsPanel({
 					) : (
 						<Save className="h-4 w-4 mr-2" />
 					)}
-					{t('saveMetadata', 'Save Metadata')}
+					{t("saveMetadata", "Save Metadata")}
 				</Button>
 			</TabsContent>
 
 			<TabsContent value="behavior" className="p-4 space-y-4">
 				<div className="space-y-2">
-					<Label>{t('onPageLoad', 'On Page Load')}</Label>
+					<Label>{t("onPageLoad", "On Page Load")}</Label>
 					<Select
 						value={page.onLoadEventId || "none"}
 						onValueChange={(v) =>
@@ -655,10 +666,12 @@ function PageSettingsPanel({
 						}
 					>
 						<SelectTrigger>
-							<SelectValue placeholder={t('noEventSelected', 'No event selected')} />
+							<SelectValue
+								placeholder={t("noEventSelected", "No event selected")}
+							/>
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="none">{t('none', 'None')}</SelectItem>
+							<SelectItem value="none">{t("none", "None")}</SelectItem>
 							{workflowEvents.map((event) => (
 								<SelectItem key={event.nodeId} value={event.nodeId}>
 									{event.name}
@@ -667,12 +680,15 @@ function PageSettingsPanel({
 						</SelectContent>
 					</Select>
 					<p className="text-xs text-muted-foreground">
-						{t('executesWhenThePageFirstLoads', 'Executes when the page first loads')}
+						{t(
+							"executesWhenThePageFirstLoads",
+							"Executes when the page first loads",
+						)}
 					</p>
 				</div>
 
 				<div className="space-y-2">
-					<Label>{t('onPageUnload', 'On Page Unload')}</Label>
+					<Label>{t("onPageUnload", "On Page Unload")}</Label>
 					<Select
 						value={page.onUnloadEventId || "none"}
 						onValueChange={(v) =>
@@ -680,10 +696,12 @@ function PageSettingsPanel({
 						}
 					>
 						<SelectTrigger>
-							<SelectValue placeholder={t('noEventSelected', 'No event selected')} />
+							<SelectValue
+								placeholder={t("noEventSelected", "No event selected")}
+							/>
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="none">{t('none', 'None')}</SelectItem>
+							<SelectItem value="none">{t("none", "None")}</SelectItem>
 							{workflowEvents.map((event) => (
 								<SelectItem key={event.nodeId} value={event.nodeId}>
 									{event.name}
@@ -697,7 +715,7 @@ function PageSettingsPanel({
 				</div>
 
 				<div className="space-y-2">
-					<Label>{t('onInterval', 'On Interval')}</Label>
+					<Label>{t("onInterval", "On Interval")}</Label>
 					<Select
 						value={page.onIntervalEventId || "none"}
 						onValueChange={(v) =>
@@ -705,10 +723,12 @@ function PageSettingsPanel({
 						}
 					>
 						<SelectTrigger>
-							<SelectValue placeholder={t('noEventSelected', 'No event selected')} />
+							<SelectValue
+								placeholder={t("noEventSelected", "No event selected")}
+							/>
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="none">{t('none', 'None')}</SelectItem>
+							<SelectItem value="none">{t("none", "None")}</SelectItem>
 							{workflowEvents.map((event) => (
 								<SelectItem key={event.nodeId} value={event.nodeId}>
 									{event.name}
@@ -718,7 +738,9 @@ function PageSettingsPanel({
 					</Select>
 					{page.onIntervalEventId && (
 						<div className="flex items-center gap-2 mt-2">
-							<Label className="text-sm whitespace-nowrap">{t('every', 'Every')}</Label>
+							<Label className="text-sm whitespace-nowrap">
+								{t("every", "Every")}
+							</Label>
 							<Input
 								type="number"
 								min={1}
@@ -735,20 +757,26 @@ function PageSettingsPanel({
 						</div>
 					)}
 					<p className="text-xs text-muted-foreground">
-						{t('executesAtAFixedTimeIntervalForPollingrefresh', 'Executes at a fixed time interval (for polling/refresh)')}
+						{t(
+							"executesAtAFixedTimeIntervalForPollingrefresh",
+							"Executes at a fixed time interval (for polling/refresh)",
+						)}
 					</p>
 				</div>
 
 				{workflowEvents.length === 0 && (
 					<p className="text-sm text-muted-foreground">
-						{t('noWorkflowEventsAvailableCreateSimpleEventNodesInYourFlowToUseHere', "No workflow events available. Create Simple Event nodes in your flow to use here.")}
+						{t(
+							"noWorkflowEventsAvailableCreateSimpleEventNodesInYourFlowToUseHere",
+							"No workflow events available. Create Simple Event nodes in your flow to use here.",
+						)}
 					</p>
 				)}
 			</TabsContent>
 
 			<TabsContent value="layout" className="p-4 space-y-4">
 				<div className="space-y-2">
-					<Label>{t('layoutType', 'Layout Type')}</Label>
+					<Label>{t("layoutType", "Layout Type")}</Label>
 					<Select
 						value={page.layoutType}
 						onValueChange={(v) =>
@@ -774,7 +802,7 @@ function PageSettingsPanel({
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('backgroundColor', 'Background Color')}</Label>
+					<Label>{t("backgroundColor", "Background Color")}</Label>
 					<div className="flex gap-2">
 						<Input
 							type="color"
@@ -792,13 +820,16 @@ function PageSettingsPanel({
 									e.target.value || undefined,
 								)
 							}
-							placeholder={t('ffffffOrBgbackground', '#ffffff or bg-background')}
+							placeholder={t(
+								"ffffffOrBgbackground",
+								"#ffffff or bg-background",
+							)}
 							className="flex-1"
 						/>
 					</div>
 				</div>
 				<div className="space-y-2">
-					<Label>{t('backgroundImage', 'Background Image')}</Label>
+					<Label>{t("backgroundImage", "Background Image")}</Label>
 					<Input
 						value={page.canvasSettings?.backgroundImage || ""}
 						onChange={(e) =>
@@ -807,11 +838,11 @@ function PageSettingsPanel({
 								e.target.value || undefined,
 							)
 						}
-						placeholder={t('urlOrStoragePath', 'URL or storage:// path')}
+						placeholder={t("urlOrStoragePath", "URL or storage:// path")}
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label>{t('padding', 'Padding')}</Label>
+					<Label>{t("padding", "Padding")}</Label>
 					<Input
 						value={page.canvasSettings?.padding || ""}
 						onChange={(e) =>
@@ -824,16 +855,21 @@ function PageSettingsPanel({
 
 			<TabsContent value="seo" className="p-4 space-y-4">
 				<div className="space-y-2">
-					<Label htmlFor="title">{t('seoTitle', 'SEO Title')}</Label>
+					<Label htmlFor="title">{t("seoTitle", "SEO Title")}</Label>
 					<Input
 						id="title"
 						value={page.title || ""}
 						onChange={(e) => onUpdatePage("title", e.target.value || undefined)}
-						placeholder={t('pageTitleForSearchEngines', 'Page title for search engines')}
+						placeholder={t(
+							"pageTitleForSearchEngines",
+							"Page title for search engines",
+						)}
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="seo-description">{t('metaDescription', 'Meta Description')}</Label>
+					<Label htmlFor="seo-description">
+						{t("metaDescription", "Meta Description")}
+					</Label>
 					<Textarea
 						id="seo-description"
 						value={page.meta?.description || ""}
@@ -841,11 +877,14 @@ function PageSettingsPanel({
 							updateMeta("description", e.target.value || undefined)
 						}
 						className="min-h-20"
-						placeholder={t('descriptionShownInSearchResults', 'Description shown in search results')}
+						placeholder={t(
+							"descriptionShownInSearchResults",
+							"Description shown in search results",
+						)}
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="favicon">{t('faviconUrl', 'Favicon URL')}</Label>
+					<Label htmlFor="favicon">{t("faviconUrl", "Favicon URL")}</Label>
 					<Input
 						id="favicon"
 						value={page.meta?.favicon || ""}
@@ -854,7 +893,7 @@ function PageSettingsPanel({
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="theme-color">{t('themeColor', 'Theme Color')}</Label>
+					<Label htmlFor="theme-color">{t("themeColor", "Theme Color")}</Label>
 					<div className="flex gap-2">
 						<Input
 							id="theme-color"
@@ -875,11 +914,11 @@ function PageSettingsPanel({
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t('created', 'Created')}</Label>
+					<Label>{t("created", "Created")}</Label>
 					<Input value={new Date(page.createdAt).toLocaleString()} disabled />
 				</div>
 				<div className="space-y-2">
-					<Label>{t('lastUpdated', 'Last Updated')}</Label>
+					<Label>{t("lastUpdated", "Last Updated")}</Label>
 					<Input value={new Date(page.updatedAt).toLocaleString()} disabled />
 				</div>
 			</TabsContent>

@@ -128,6 +128,49 @@ fn join_prefix(prefix: &str, key: &str, separator: &str) -> String {
     )
 }
 
+#[async_trait]
+impl SecretProvider for GcpSecretManagerProvider {
+    fn kind(&self) -> SecretProviderKind {
+        SecretProviderKind::GcpSecretManager
+    }
+
+    async fn get(&self, reference: &SecretRef) -> Result<SecretValue> {
+        let resource_names = self.resource_names(reference)?;
+        let last_index = resource_names.len().saturating_sub(1);
+
+        for (index, resource_name) in resource_names.iter().enumerate() {
+            let response = self
+                .client
+                .access_secret_version()
+                .set_name(resource_name)
+                .send()
+                .await
+                .map_err(|error| self.map_error(error));
+
+            match response {
+                Ok(response) => {
+                    let payload = response.payload.ok_or_else(|| {
+                        SecretError::provider_failure(
+                            self.kind(),
+                            "secret version response missing payload",
+                        )
+                    })?;
+
+                    let bytes = payload.data.to_vec();
+                    return match String::from_utf8(bytes) {
+                        Ok(value) => Ok(SecretValue::from_string(value)),
+                        Err(error) => Ok(SecretValue::from_bytes(error.into_bytes())),
+                    };
+                }
+                Err(error) if error.is_not_found() && index < last_index => continue,
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(SecretError::SecretNotFound(self.kind()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,48 +222,5 @@ mod tests {
             candidate_names(&None, "/flow-like/dev/SECRET_NAME", "-"),
             vec!["flow-like-dev-SECRET_NAME".to_string()]
         );
-    }
-}
-
-#[async_trait]
-impl SecretProvider for GcpSecretManagerProvider {
-    fn kind(&self) -> SecretProviderKind {
-        SecretProviderKind::GcpSecretManager
-    }
-
-    async fn get(&self, reference: &SecretRef) -> Result<SecretValue> {
-        let resource_names = self.resource_names(reference)?;
-        let last_index = resource_names.len().saturating_sub(1);
-
-        for (index, resource_name) in resource_names.iter().enumerate() {
-            let response = self
-                .client
-                .access_secret_version()
-                .set_name(resource_name)
-                .send()
-                .await
-                .map_err(|error| self.map_error(error));
-
-            match response {
-                Ok(response) => {
-                    let payload = response.payload.ok_or_else(|| {
-                        SecretError::provider_failure(
-                            self.kind(),
-                            "secret version response missing payload",
-                        )
-                    })?;
-
-                    let bytes = payload.data.to_vec();
-                    return match String::from_utf8(bytes) {
-                        Ok(value) => Ok(SecretValue::from_string(value)),
-                        Err(error) => Ok(SecretValue::from_bytes(error.into_bytes())),
-                    };
-                }
-                Err(error) if error.is_not_found() && index < last_index => continue,
-                Err(error) => return Err(error),
-            }
-        }
-
-        Err(SecretError::SecretNotFound(self.kind()))
     }
 }

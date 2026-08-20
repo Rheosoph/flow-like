@@ -234,13 +234,28 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 			]);
 			toastSuccess(
 				plan.plan.renamedPins > 0
-					? t('nameIsNowAFunctionDuplicatePinNamesWereRenamed', { defaultValue_one: '\'{{name}}\' is now a function — {{count}} duplicate pin name was renamed', defaultValue_other: '\'{{name}}\' is now a function — {{count}} duplicate pin names were renamed', name: props.data.layer.name, count: plan.plan.renamedPins })
-					: t('nameIsNowAFunction', '\'{{name}}\' is now a function', { name: props.data.layer.name }),
+					? t("nameIsNowAFunctionDuplicatePinNamesWereRenamed", {
+							defaultValue_one:
+								"'{{name}}' is now a function — {{count}} duplicate pin name was renamed",
+							defaultValue_other:
+								"'{{name}}' is now a function — {{count}} duplicate pin names were renamed",
+							name: props.data.layer.name,
+							count: plan.plan.renamedPins,
+						})
+					: t("nameIsNowAFunction", "'{{name}}' is now a function", {
+							name: props.data.layer.name,
+						}),
 				<CheckIcon />,
 			);
 		} catch (error) {
 			console.error("Failed to convert layer to function:", error);
-			toastError(t('failedToConvertTheLayerIntoAFunction', 'Failed to convert the layer into a function'), <XIcon />);
+			toastError(
+				t(
+					"failedToConvertTheLayerIntoAFunction",
+					"Failed to convert the layer into a function",
+				),
+				<XIcon />,
+			);
 		}
 	}, [
 		props.data.appId,

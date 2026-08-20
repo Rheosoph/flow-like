@@ -168,7 +168,11 @@
 											"label": "Uninstalling from the device also removes the dependency from each app"
 										}
 									],
-									"correct": ["registry-explore", "device-library", "app-declares"]
+									"correct": [
+										"registry-explore",
+										"device-library",
+										"app-declares"
+									]
 								}
 							}
 						],

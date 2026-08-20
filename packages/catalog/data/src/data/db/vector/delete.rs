@@ -1,4 +1,6 @@
+use crate::data::query_params as params;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
@@ -29,7 +31,7 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             "Data/Database/Delete",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -44,10 +46,12 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         node.add_input_pin(
             "filter",
             "SQL Filter",
-            "Optional SQL filter. Leave empty to delete all rows.",
+            "Optional SQL filter on the table's columns; leave empty to delete all rows. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        params::add_params_pin(&mut node, params::SqlFlavor::LanceFilter);
 
         node.add_output_pin(
             "exec_out",
@@ -67,6 +71,11 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "filter", board, params::SqlFlavor::LanceFilter);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -75,6 +84,7 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
         let filter: String = context.evaluate_pin("filter").await?;
+        let filter = params::bind_lance_filter(context, &filter).await?;
 
         let normalized_filter = filter.trim().to_string();
 

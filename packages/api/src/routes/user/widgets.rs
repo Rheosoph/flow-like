@@ -16,6 +16,9 @@ use sea_orm::{
     RelationTrait, TransactionTrait,
 };
 
+/// One widget per entry as (widget id, board id, localized metadata).
+pub type UserWidgetListing = Vec<(String, String, Metadata)>;
+
 /// Get all widgets accessible to the current user based on their permissions.
 /// Returns widgets from all apps where the user has ReadWidgets permission.
 #[utoipa::path(
@@ -40,7 +43,7 @@ pub async fn get_widgets(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<LanguageParams>,
-) -> Result<Json<Vec<(String, String, Metadata)>>, ApiError> {
+) -> Result<Json<UserWidgetListing>, ApiError> {
     let language = query.language.as_deref().unwrap_or("en");
     let user_id = user.sub()?;
 
@@ -87,7 +90,7 @@ async fn get_widgets_with_metadata(
     app_ids: &[String],
     language: &str,
     state: &AppState,
-) -> Result<Vec<(String, String, Metadata)>, ApiError> {
+) -> Result<UserWidgetListing, ApiError> {
     if app_ids.is_empty() {
         return Ok(Vec::new());
     }

@@ -123,7 +123,7 @@ impl GovernanceCopilot {
                     ..Default::default()
                 };
                 profile
-                    .get_best_model(&preference, false, true, self.state.http_client.clone())
+                    .get_best_model(&preference, false, false, self.state.http_client.clone())
                     .await?
             }
         } else {

@@ -657,6 +657,7 @@ impl Copilot {
     }
 
     /// Main entry point - unified agent that can both explain and modify
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat<F>(
         &self,
         board: &Board,
@@ -2185,6 +2186,7 @@ impl Copilot {
     }
 
     /// Execute a tool by name and return the result
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool(
         &self,
         name: &str,
@@ -2773,7 +2775,7 @@ impl Copilot {
                     ..Default::default()
                 };
                 profile
-                    .get_best_model(&preference, false, true, self.state.http_client.clone())
+                    .get_best_model(&preference, false, false, self.state.http_client.clone())
                     .await?
             }
         } else {
@@ -3973,8 +3975,8 @@ mod runtime_bridge_tests {
     /// so it ran out of iterations mid-repair and the loop broke out with an empty final message.
     #[test]
     fn flowscript_path_leaves_the_twelve_round_default() {
-        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
-        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET);
+        const { assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET) };
+        const { assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET) };
         for tool in [
             "write_flowscript",
             "patch_flowscript",
@@ -4046,11 +4048,12 @@ mod runtime_bridge_tests {
             "ok"
         );
 
-        let calls = concrete.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "execute_node");
-        assert_eq!(calls[0].1["node_id"], "node");
-        drop(calls);
+        {
+            let calls = concrete.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "execute_node");
+            assert_eq!(calls[0].1["node_id"], "node");
+        }
 
         let invalid = execute_runtime_bridge_tool(
             Some(&bridge),
@@ -4468,7 +4471,7 @@ mod runtime_bridge_tests {
             typed_ir_iteration_budget(ir::MAX_FLOW_IR_MODULES),
             MAX_TYPED_IR_ITERATION_BUDGET
         );
-        assert!(MAX_TYPED_IR_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
+        const { assert!(MAX_TYPED_IR_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET) };
     }
 
     #[test]

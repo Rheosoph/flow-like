@@ -30,7 +30,7 @@ use super::tool_spec::{
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::flow::ast::{
     ReconcileResult, RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
-    destructive_flowscript_command_summaries, reconcile_text_with_catalog,
+    destructive_flowscript_command_summaries,
 };
 use crate::flow::board::Board;
 use crate::state::FlowLikeState;
@@ -2177,19 +2177,6 @@ typed arguments. This covers every package in the project's catalog, including t
     }
 }
 
-/// Apply an edited FlowScript document to the board via reconcile.
-///
-/// The agent edits the board's FlowScript (obtained from the system context) and submits the full
-/// document here. Reconcile diffs it against the live board — keyed on `//@n:<id>` anchors — and
-/// catalog declarations, then emits the minimal `BoardCommand`s. Anchored edits become pin
-/// updates/removals; new unanchored catalog calls become AddNode/ConnectPins/UpdateNodePin.
-/// The commands are surfaced in the same `<commands>…</commands>` envelope the `emit_commands`
-/// path consumes, so they flow through the existing validation/apply/undo pipeline.
-pub(crate) struct EditFlowScriptTool {
-    pub board: Arc<Board>,
-    pub provider: Arc<dyn CatalogProvider>,
-}
-
 /// Code-first FlowScript lifecycle tools. The immutable request binding is captured by the host
 /// and never appears in model-authored JSON, while the retained store supplies revision CAS and
 /// the existing atomic Apply/Dismiss claim boundary.
@@ -3295,131 +3282,6 @@ pub fn is_blocking_flowscript_diagnostic(diagnostic: &str) -> bool {
     // identity could not be represented exactly. Applying the remaining commands creates a graph
     // that looks successful but is only a partial program, so agent-authored FlowScript is atomic.
     !diagnostic.trim().is_empty()
-}
-
-impl Tool for EditFlowScriptTool {
-    const NAME: &'static str = "edit_flowscript";
-
-    type Error = FlowScriptToolError;
-    type Args = EditFlowScriptArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "edit_flowscript".to_string(),
-            description: r#"Apply an edited FlowScript document to the board.
-
-This is the PRIMARY way to modify a workflow. For existing-board edits, call
-`get_current_flowscript` first, edit that exact returned document, and submit the FULL edited
-FlowScript source. Reconcile compares it to the live board using the `//@n:<id>` anchor comments
-and catalog declarations, then produces minimal changes:
-- A changed literal argument on an anchored call → updates that node's pin value.
-- An anchored statement you removed → deletes that node only when `allow_deletions` is true.
-- A new unanchored FlowScript call → adds that node, configures literal args, and connects
-  resolvable FlowScript references/nested calls.
-- A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
-  body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
-- `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })` immediately above a function
-  configures its result cache; bare `@cache` uses the `global` namespace, a 300-second lifetime,
-  and app scope. Set `ttlSeconds: 0` explicitly for a permanent entry. A hit skips the entire
-  function body and its side effects, so cache only input-determined functions.
-- Existing context may report `ttl_seconds: null` for a permanent cache. Preserve that as
-  explicit `ttlSeconds: 0`; omission on newly authored cache settings means 300 seconds.
-
-RULES:
-- PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
-- Leave `allow_deletions` false unless the user explicitly asked to delete existing board items.
-- Do NOT invent anchors for brand-new nodes; write normal unanchored calls using declarations
-  from `get_declarations`.
-- New catalog calls must be inside a function/event block, e.g.
-  `function run() { const db = openLocalDb({ name: "email_vectors" }) }`.
-- Top-level `const name: Type = literal` declarations are variables/defaults only; they must use
-  literal defaults and do not create node calls.
-- If you use `variableGet({ varRef: "NAME" })` or any `varRef`, `NAME` must resolve to an
-  existing variable or a top-level FlowScript variable declaration such as
-  `const NAME: string = ""`; missing varRefs are validation errors.
-- Inside a function/event block, `const name = ...` must bind a node-call expression. Use
-  local alias syntax like `let rows = []` / `rows = arrayPush(...)`, typed `let name: Type =
-  literal`, or direct literals for non-call values.
-- A `let` reassigned across new `if`/`for` blocks promotes to a board variable with its
-  initializer preserved. Never reassign a `const` binding inside a branch arm — declare it with
-  `let`; for a value chosen between branches, assign the same `let` in both arms.
-- FlowScript statement order maps to the normal execution path only when the previous node has one
-  execution output, a `done` / `exec_done` output, or an explicit continuation policy in the
-  reconciler. Multi-output nodes are not guessed by pin order; API Call/httpFetch continues from
-  `exec_success`, never `exec_error`. If no policy exists, validation reports a diagnostic instead
-  of queueing an unsafe edge.
-- Existing multi-output execution graphs render back to FlowScript as labelled branch blocks, so
-  board -> FlowScript -> board preserves those branches rather than flattening them.
-- Streaming calls with `on_stream` plus `exec_done` may place `.chunk` consumers immediately after
-  the call; those consumers wire from `on_stream`, while later `.response` / `.stats` consumers
-  continue from `exec_done`.
-- For loops, the body is the `exec_out` path and the next statement continues from `done` /
-  `exec_done`; make sure the loop's `array` input receives the array being iterated.
-- Object/call-argument fields use colon syntax (`{ host: "imap.gmail.com" }`), never assignment
-  syntax (`{ host = "imap.gmail.com" }`).
-- Do NOT submit implementation plans, TODOs, function stubs, comments-only FlowScript, or lists of
-  node names. If a signature is missing, call `get_declarations` again and submit concrete calls.
-- Build substantial workflows as focused, non-empty named `function` helpers, then put each thin
-  `eventsSimple` / `eventsGeneric` / `eventsChat` registration entry after the helper declarations
-  and call the completed helper logic from it. Multiple Events are supported and remain separate
-  roots; preserve every required helper, variable and Event across repair attempts.
-- A helper declaration MUST include the literal keyword `function`, for example
-  `function fetchMail(host: string) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper,
-  and a call such as `fetchMail()` is valid only when that function is declared in this same full
-  document. Never invent helper calls and expect them to resolve as catalog nodes.
-- A helper that returns a value MUST declare a named return pin, for example
-  `function classify(body: string): (isSupport: bool) { ...; return result.value }`. Without the
-  `: (name: Type)` return signature, the Function layer has no matching output pin. Return values
-  may be node outputs, parameters, literals (`return "done"`), or mutable `let` bindings; each
-  declared return pin needs a matching return value, and an event-level `return` accepts exactly
-  one value.
-- An Event entry is the final execution/registration root, not the implementation. Never replace a
-  failed rich draft with an empty Event or a direct one-node log/string-format smoke test. Keep and
-  repair the complete document; every diagnostic blocks the whole candidate. If only a working
-  partial is possible, it must remain modular: real non-trivial logic in a named helper plus a
-  separate Event that invokes it, so the partial can be executed and extended independently.
-- Always provide the complete edited document in the `flowscript` argument; never call this tool
-  with an empty string or only a summary.
-- To reposition nodes on the canvas without changing layer membership, use `emit_commands` with
-  MoveNode. Positions are visual and not represented in FlowScript text."#
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "flowscript": {
-                        "type": "string",
-                        "description": "The full edited FlowScript source for the board, with anchors preserved."
-                    },
-                    "allow_deletions": {
-                        "type": "boolean",
-                        "description": "Set true only when the user explicitly requested deletion of existing board items. Defaults false to prevent incomplete FlowScript from deleting nodes."
-                    }
-                },
-                "required": ["flowscript"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.flowscript.trim().is_empty() {
-            return Ok(format!(
-                "{}\n{}",
-                flowscript_workspace_tag(&args.flowscript, "validation_errors"),
-                "FlowScript validation failed: edit_flowscript requires a non-empty `flowscript` string."
-            ));
-        }
-
-        let catalog = self.provider.get_all_metadata().await;
-        let result = reconcile_text_with_catalog(&self.board, &args.flowscript, &catalog);
-
-        Ok(render_edit_flowscript_result(
-            &args.flowscript,
-            &result,
-            board_has_no_nodes(&self.board),
-            args.allow_deletions,
-        ))
-    }
 }
 
 pub struct ExtendTimeBudgetTool;
@@ -4954,7 +4816,7 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let signature =
-            format!("declare function largeLiveDeclaration({{ payload: Struct }}): string;");
+            "declare function largeLiveDeclaration({ payload: Struct }): string;".to_string();
         let body = format!(
             "// declaration query: large live declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n// {}\n{DECLARATION_PRIORITY_END}",
             "usage".repeat(MAX_DECLARATION_RESPONSE_BYTES)

@@ -367,7 +367,12 @@ function PaginationControls({
 			>
 				<ChevronLeft className="h-4 w-4" />
 			</Button>
-			<span className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</span>
+			<span className="text-sm text-muted-foreground">
+				{t("pagePageOfTotalpages", "Page {{page}} of {{totalPages}}", {
+					page,
+					totalPages,
+				})}
+			</span>
 			<Button
 				variant="outline"
 				size="sm"
@@ -433,12 +438,14 @@ function AppRequestsTab({
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>{t('app', 'App')}</TableHead>
-								<TableHead>{t('visibility', 'Visibility')}</TableHead>
-								<TableHead>{t('status', 'Status')}</TableHead>
-								<TableHead>{t('stats', 'Stats')}</TableHead>
-								<TableHead>{t('submitted2', 'Submitted')}</TableHead>
-								<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
+								<TableHead>{t("app", "App")}</TableHead>
+								<TableHead>{t("visibility", "Visibility")}</TableHead>
+								<TableHead>{t("status", "Status")}</TableHead>
+								<TableHead>{t("stats", "Stats")}</TableHead>
+								<TableHead>{t("submitted2", "Submitted")}</TableHead>
+								<TableHead className="text-right">
+									{t("actions", "Actions")}
+								</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -450,7 +457,10 @@ function AppRequestsTab({
 											colSpan={6}
 											className="text-center text-muted-foreground py-8"
 										>
-											{t('noPublicationRequestsFound', 'No publication requests found.')}
+											{t(
+												"noPublicationRequestsFound",
+												"No publication requests found.",
+											)}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -535,7 +545,7 @@ function AppRequestsTab({
 													onClick={() => onSelectRequest?.(req.id)}
 												>
 													<Eye className="h-3 w-3 mr-1" />
-													{t('review', 'Review')}
+													{t("review", "Review")}
 												</Button>
 											</TableCell>
 										</TableRow>
@@ -613,10 +623,12 @@ function PackageRequestsTab({
 						<TableHeader>
 							<TableRow>
 								<TableHead>Name</TableHead>
-								<TableHead>{t('version', 'Version')}</TableHead>
-								<TableHead>{t('status', 'Status')}</TableHead>
-								<TableHead>{t('downloads', 'Downloads')}</TableHead>
-								<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
+								<TableHead>{t("version", "Version")}</TableHead>
+								<TableHead>{t("status", "Status")}</TableHead>
+								<TableHead>{t("downloads", "Downloads")}</TableHead>
+								<TableHead className="text-right">
+									{t("actions", "Actions")}
+								</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -628,7 +640,10 @@ function PackageRequestsTab({
 											colSpan={5}
 											className="text-center text-muted-foreground py-8"
 										>
-											{t('noPackagesPendingReview', 'No packages pending review.')}
+											{t(
+												"noPackagesPendingReview",
+												"No packages pending review.",
+											)}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -661,7 +676,7 @@ function PackageRequestsTab({
 													onClick={() => onNavigateToPackage?.(pkg.id)}
 												>
 													<Eye className="h-3 w-3 mr-1" />
-													{t('view', 'View')}
+													{t("view", "View")}
 												</Button>
 											</TableCell>
 										</TableRow>
@@ -707,7 +722,9 @@ export function AdminPublicationsPage({
 			<Card className="border-border/60 shadow-sm">
 				<CardHeader className="gap-4 sm:flex-row sm:items-end sm:justify-between">
 					<div className="space-y-2">
-						<CardTitle className="text-3xl">{t('publicationRequests', 'Publication Requests')}</CardTitle>
+						<CardTitle className="text-3xl">
+							{t("publicationRequests", "Publication Requests")}
+						</CardTitle>
 						<CardDescription className="max-w-3xl text-sm leading-6">
 							{`Review app publication requests and package submissions from one place. Package requests use the package review queue and app requests use the publication request workflow.`}
 						</CardDescription>
@@ -721,14 +738,24 @@ export function AdminPublicationsPage({
 								}
 							>
 								<SelectTrigger className="w-full sm:w-40">
-									<SelectValue placeholder={t('appStatus', 'App status')} />
+									<SelectValue placeholder={t("appStatus", "App status")} />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">{t('allAppStatuses', 'All app statuses')}</SelectItem>
-									<SelectItem value="pending">{t('pending', 'Pending')}</SelectItem>
-									<SelectItem value="on_hold">{t('onHold', 'On hold')}</SelectItem>
-									<SelectItem value="accepted">{t('accepted', 'Accepted')}</SelectItem>
-									<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
+									<SelectItem value="all">
+										{t("allAppStatuses", "All app statuses")}
+									</SelectItem>
+									<SelectItem value="pending">
+										{t("pending", "Pending")}
+									</SelectItem>
+									<SelectItem value="on_hold">
+										{t("onHold", "On hold")}
+									</SelectItem>
+									<SelectItem value="accepted">
+										{t("accepted", "Accepted")}
+									</SelectItem>
+									<SelectItem value="rejected">
+										{t("rejected", "Rejected")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						) : (
@@ -739,27 +766,41 @@ export function AdminPublicationsPage({
 								}
 							>
 								<SelectTrigger className="w-full sm:w-48">
-									<SelectValue placeholder={t('packageStatus', 'Package status')} />
+									<SelectValue
+										placeholder={t("packageStatus", "Package status")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">{t('pendingReview', 'Pending review')}</SelectItem>
-									<SelectItem value="pending_review">{t('pendingReview', 'Pending review')}</SelectItem>
-									<SelectItem value="active">{t('approved', 'Approved')}</SelectItem>
-									<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
-									<SelectItem value="deprecated">{t('deprecated', 'Deprecated')}</SelectItem>
-									<SelectItem value="disabled">{t('disabled', 'Disabled')}</SelectItem>
+									<SelectItem value="all">
+										{t("pendingReview", "Pending review")}
+									</SelectItem>
+									<SelectItem value="pending_review">
+										{t("pendingReview", "Pending review")}
+									</SelectItem>
+									<SelectItem value="active">
+										{t("approved", "Approved")}
+									</SelectItem>
+									<SelectItem value="rejected">
+										{t("rejected", "Rejected")}
+									</SelectItem>
+									<SelectItem value="deprecated">
+										{t("deprecated", "Deprecated")}
+									</SelectItem>
+									<SelectItem value="disabled">
+										{t("disabled", "Disabled")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						)}
 						{onNavigateToSuites && (
 							<Button variant="outline" size="sm" onClick={onNavigateToSuites}>
 								<Layers className="mr-2 h-4 w-4" />
-								{t('suiteRequests', 'Suite Requests')}
+								{t("suiteRequests", "Suite Requests")}
 							</Button>
 						)}
 						<Button variant="outline" size="sm" onClick={handleRefresh}>
 							<RefreshCw className="mr-2 h-4 w-4" />
-							{t('refresh', 'Refresh')}
+							{t("refresh", "Refresh")}
 						</Button>
 					</div>
 				</CardHeader>
@@ -770,8 +811,12 @@ export function AdminPublicationsPage({
 				onValueChange={(value) => setActiveTab(value as "apps" | "packages")}
 			>
 				<TabsList className="w-full justify-start gap-2 rounded-xl border border-border/60 bg-background p-1">
-					<TabsTrigger value="apps">{t('appRequests', 'App Requests')}</TabsTrigger>
-					<TabsTrigger value="packages">{t('packageRequests', 'Package Requests')}</TabsTrigger>
+					<TabsTrigger value="apps">
+						{t("appRequests", "App Requests")}
+					</TabsTrigger>
+					<TabsTrigger value="packages">
+						{t("packageRequests", "Package Requests")}
+					</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="apps" className="mt-4">

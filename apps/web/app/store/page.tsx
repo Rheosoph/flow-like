@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	AboutSection,
 	AppReviewsSection,
@@ -12,6 +11,7 @@ import {
 	TextEditor,
 	useStoreData,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
@@ -61,9 +61,15 @@ export default function Page() {
 		handledPurchaseRef.current = purchaseStatus;
 
 		if (purchaseStatus === "success") {
-			toast.success(t('purchaseSuccessfulYouNowHaveAccessToThisApp', 'Purchase successful! You now have access to this app.'), {
-				duration: 5000,
-			});
+			toast.success(
+				t(
+					"purchaseSuccessfulYouNowHaveAccessToThisApp",
+					"Purchase successful! You now have access to this app.",
+				),
+				{
+					duration: 5000,
+				},
+			);
 			void registerAppInProfile().finally(() => {
 				void refetchAppData();
 			});
@@ -94,11 +100,21 @@ export default function Page() {
 		return (
 			<div className="flex-1 flex items-center justify-center p-6">
 				<StoreEmptyState
-					title={isError ? t('failedToLoadApp', 'Failed to load app') : t('appNotFound', 'App not found')}
+					title={
+						isError
+							? t("failedToLoadApp", "Failed to load app")
+							: t("appNotFound", "App not found")
+					}
 					description={
 						isError
-							? t('somethingWentWrongPleaseTryAgainLater', 'Something went wrong. Please try again later.')
-							: t('thisAppMayBePrivateOrNoLongerAvailable', 'This app may be private or no longer available.')
+							? t(
+									"somethingWentWrongPleaseTryAgainLater",
+									"Something went wrong. Please try again later.",
+								)
+							: t(
+									"thisAppMayBePrivateOrNoLongerAvailable",
+									"This app may be private or no longer available.",
+								)
 					}
 				/>
 			</div>

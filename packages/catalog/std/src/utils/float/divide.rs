@@ -20,7 +20,7 @@ impl NodeLogic for DivideFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_divide",
-            "/",
+            "/ (Float)",
             "Divides one float by another",
             "Math/Float",
         );

@@ -179,7 +179,9 @@ const NewVariableDialog = memo(
 			<Dialog open={open} onOpenChange={onOpenChange}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>{i18next.t('createNewVariable', 'Create New Variable')}</DialogTitle>
+						<DialogTitle>
+							{i18next.t("createNewVariable", "Create New Variable")}
+						</DialogTitle>
 						<DialogDescription>
 							{`Define a new variable for your flow.`}
 						</DialogDescription>
@@ -192,37 +194,51 @@ const NewVariableDialog = memo(
 								id="var-name"
 								value={name}
 								onChange={(e) => setName(e.target.value)}
-								placeholder={i18next.t('variableName2', 'Variable name...')}
+								placeholder={i18next.t("variableName2", "Variable name...")}
 								autoFocus
 							/>
 						</div>
 
 						<div className="grid gap-2">
-							<Label htmlFor="var-category">{i18next.t('categoryOptional', 'Category (optional)')}</Label>
+							<Label htmlFor="var-category">
+								{i18next.t("categoryOptional", "Category (optional)")}
+							</Label>
 							<Input
 								id="var-category"
 								value={category}
 								onChange={(e) => setCategory(e.target.value)}
-								placeholder={i18next.t('egConfigsettings', 'e.g. Config/Settings')}
+								placeholder={i18next.t(
+									"egConfigsettings",
+									"e.g. Config/Settings",
+								)}
 							/>
 							<p className="text-xs text-muted-foreground">
-								{i18next.t('useToCreateNestedFolders', 'Use "/" to create nested folders')}
+								{i18next.t(
+									"useToCreateNestedFolders",
+									'Use "/" to create nested folders',
+								)}
 							</p>
 						</div>
 
 						<div className="grid grid-cols-2 gap-4">
 							<div className="grid gap-2">
-								<Label htmlFor="var-data-type">{i18next.t('dataType', 'Data Type')}</Label>
+								<Label htmlFor="var-data-type">
+									{i18next.t("dataType", "Data Type")}
+								</Label>
 								<Select
 									value={dataType}
 									onValueChange={(value) => setDataType(value as IVariableType)}
 								>
 									<SelectTrigger id="var-data-type">
-										<SelectValue placeholder={i18next.t('selectType', 'Select type')} />
+										<SelectValue
+											placeholder={i18next.t("selectType", "Select type")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										<SelectGroup>
-											<SelectLabel>{i18next.t('dataType', 'Data Type')}</SelectLabel>
+											<SelectLabel>
+												{i18next.t("dataType", "Data Type")}
+											</SelectLabel>
 											<SelectItem value="Boolean">
 												<TypePreview type={IVariableType.Boolean} />
 											</SelectItem>
@@ -250,17 +266,23 @@ const NewVariableDialog = memo(
 							</div>
 
 							<div className="grid gap-2">
-								<Label htmlFor="var-value-type">{i18next.t('valueType', 'Value Type')}</Label>
+								<Label htmlFor="var-value-type">
+									{i18next.t("valueType", "Value Type")}
+								</Label>
 								<Select
 									value={valueType}
 									onValueChange={(value) => setValueType(value as IValueType)}
 								>
 									<SelectTrigger id="var-value-type">
-										<SelectValue placeholder={i18next.t('selectType', 'Select type')} />
+										<SelectValue
+											placeholder={i18next.t("selectType", "Select type")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										<SelectGroup>
-											<SelectLabel>{i18next.t('valueType', 'Value Type')}</SelectLabel>
+											<SelectLabel>
+												{i18next.t("valueType", "Value Type")}
+											</SelectLabel>
 											<SelectItem value="Normal">
 												<ValueTypePreview
 													valueType={IValueType.Normal}
@@ -298,13 +320,15 @@ const NewVariableDialog = memo(
 							onClick={() => onOpenChange(false)}
 							disabled={isCreating}
 						>
-							{i18next.t('cancel', 'Cancel')}
+							{i18next.t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={handleCreate}
 							disabled={!name.trim() || isCreating}
 						>
-							{isCreating ? "Creating..." : i18next.t('createVariable', 'Create Variable')}
+							{isCreating
+								? "Creating..."
+								: i18next.t("createVariable", "Create Variable")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

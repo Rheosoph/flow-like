@@ -1371,6 +1371,7 @@ fn legacy_message_endpoint(
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut stream: super::tls::BoxedIo,
     remote_addr: String,
@@ -1825,6 +1826,7 @@ async fn handle_initialize(
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_get_sse<S>(
     stream: &mut S,
     request: &super::http_runtime::HttpRequest,

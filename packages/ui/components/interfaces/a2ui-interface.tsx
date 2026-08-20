@@ -62,7 +62,7 @@ export function A2UIInterface({
 	if (allSurfaces.length === 0) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>{t('waitingForUi', 'Waiting for UI...')}</p>
+				<p>{t("waitingForUi", "Waiting for UI...")}</p>
 			</div>
 		);
 	}

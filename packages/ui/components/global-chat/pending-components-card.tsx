@@ -65,13 +65,19 @@ export function PendingComponentsCard() {
 		if (!current) return;
 		if (!surface) {
 			toast.error(
-				t('theWidgetpageBuilderIsClosedReopenItToApplyTheComponents', 'The widget/page builder is closed — reopen it to apply the components.'),
+				t(
+					"theWidgetpageBuilderIsClosedReopenItToApplyTheComponents",
+					"The widget/page builder is closed — reopen it to apply the components.",
+				),
 			);
 			return;
 		}
 		if (current.surfaceId && surface.surfaceId !== current.surfaceId) {
 			toast.error(
-				t('theseComponentsWereGeneratedForADifferentBuilderOpenThatBuilderAgainToApplyThem', 'These components were generated for a different builder. Open that builder again to apply them.'),
+				t(
+					"theseComponentsWereGeneratedForADifferentBuilderOpenThatBuilderAgainToApplyThem",
+					"These components were generated for a different builder. Open that builder again to apply them.",
+				),
 			);
 			return;
 		}
@@ -82,14 +88,21 @@ export function PendingComponentsCard() {
 			if (!restaged) {
 				// Keep the pending card — the components are the only copy.
 				toast.error(
-					t('theBuilderDidNotPickUpTheComponentsItMayHaveClosedNothingWasAppliedTryAgainWithTheBuilderOpen', 'The builder did not pick up the components (it may have closed). Nothing was applied — try again with the builder open.'),
+					t(
+						"theBuilderDidNotPickUpTheComponentsItMayHaveClosedNothingWasAppliedTryAgainWithTheBuilderOpen",
+						"The builder did not pick up the components (it may have closed). Nothing was applied — try again with the builder open.",
+					),
 				);
 				return;
 			}
 			restaged.applyComponents(current.components, current.canvasSettings);
 			setPendingComponents(null, null);
 			toast.success(
-				t('appliedCountComponentsToTheBuilder', 'Applied {{count}} component to the builder.', { count: current.components.length }),
+				t(
+					"appliedCountComponentsToTheBuilder",
+					"Applied {{count}} component to the builder.",
+					{ count: current.components.length },
+				),
 			);
 		} finally {
 			applyingRef.current = false;
@@ -134,13 +147,19 @@ export function PendingComponentsCard() {
 			{!widgetSurface && (
 				<div className="flex items-center gap-2 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/5 border-b border-amber-500/15">
 					<AlertTriangleIcon className="size-3.5 shrink-0" />
-					{t('theWidgetpageBuilderIsClosedReopenItToApplyTheseComponents', "The widget/page builder is closed — reopen it to apply these components.")}
+					{t(
+						"theWidgetpageBuilderIsClosedReopenItToApplyTheseComponents",
+						"The widget/page builder is closed — reopen it to apply these components.",
+					)}
 				</div>
 			)}
 			{surfaceMismatch && (
 				<div className="flex items-center gap-2 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/5 border-b border-amber-500/15">
 					<AlertTriangleIcon className="size-3.5 shrink-0" />
-					{t('theseComponentsWereGeneratedForADifferentBuilderOpenThatBuilderToApplyThem', "These components were generated for a different builder — open that builder to apply them.")}
+					{t(
+						"theseComponentsWereGeneratedForADifferentBuilderOpenThatBuilderToApplyThem",
+						"These components were generated for a different builder — open that builder to apply them.",
+					)}
 				</div>
 			)}
 			<PendingComponentsView

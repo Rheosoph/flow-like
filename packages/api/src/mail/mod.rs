@@ -31,6 +31,7 @@ pub struct EmailMessage {
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::wrong_self_convention)] // "from" is the RFC5322 From: header/display name, not a constructor prefix
 pub trait MailClient: Send + Sync {
     async fn send(&self, message: EmailMessage) -> Result<()>;
     fn from_email(&self) -> &str;

@@ -657,6 +657,8 @@ pub fn parse_col_1_based(s: &str) -> flow_like_types::Result<u32> {
 /// Cached workbook stored in the execution context.
 /// Supports both umya-spreadsheet (read/write, xlsx only) and calamine
 /// (read-only fallback for xls, xlsb, ods, etc.).
+#[allow(clippy::large_enum_variant)]
+// every construction site is Arc::new(..); boxing would only add a second hop on the per-cell read path
 #[cfg(feature = "execute")]
 pub enum CachedExcelWorkbook {
     Umya {

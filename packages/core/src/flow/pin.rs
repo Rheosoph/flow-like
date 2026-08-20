@@ -77,7 +77,7 @@ impl PinOptions {
         self.clone()
     }
 
-    pub fn hash(&self, hasher: &mut HighwayHasher) {
+    pub fn hash_into(&self, hasher: &mut HighwayHasher) {
         if let Some(sensitive) = &self.sensitive {
             hasher.append(sensitive.to_string().as_bytes());
         }
@@ -179,7 +179,7 @@ impl Pin {
         self
     }
 
-    pub fn hash(&self, hasher: &mut HighwayHasher) {
+    pub fn hash_into(&self, hasher: &mut HighwayHasher) {
         hasher.append(self.id.as_bytes());
         hasher.append(self.name.as_bytes());
         hasher.append(self.friendly_name.as_bytes());
@@ -193,7 +193,7 @@ impl Pin {
         }
 
         if let Some(options) = &self.options {
-            options.hash(hasher);
+            options.hash_into(hasher);
         }
 
         for connected in &self.connected_to {

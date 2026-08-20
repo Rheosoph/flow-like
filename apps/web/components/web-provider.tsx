@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -38,6 +37,7 @@ import { setWidgetQueryResponder } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import { i18n as i18next } from "@flow-like/locales";
 import { useEffect } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -210,7 +210,11 @@ export class WebBackend implements IBackendState {
 				} else {
 					reject(
 						new Error(
-							i18next.t('uploadFailedWithStatusStatusStatustext', 'Upload failed with status {{status}}: {{statusText}}', { status: xhr.status, statusText: xhr.statusText }),
+							i18next.t(
+								"uploadFailedWithStatusStatusStatustext",
+								"Upload failed with status {{status}}: {{statusText}}",
+								{ status: xhr.status, statusText: xhr.statusText },
+							),
 						),
 					);
 				}

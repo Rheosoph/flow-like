@@ -1206,12 +1206,14 @@ pub async fn upsert_model(
         active.insert(&state.db).await?
     };
 
-    let mut update_model = <ai_act_model_observation::ActiveModel as Default>::default();
-    update_model.posture = Set(stored.posture.clone());
-    update_model.hosted = Set(stored.hosted);
-    update_model.open_licence = Set(stored.open_licence);
-    update_model.systemic_risk = Set(stored.systemic_risk);
-    update_model.vetted = Set(stored.vetted);
+    let update_model = ai_act_model_observation::ActiveModel {
+        posture: Set(stored.posture.clone()),
+        hosted: Set(stored.hosted),
+        open_licence: Set(stored.open_licence),
+        systemic_risk: Set(stored.systemic_risk),
+        vetted: Set(stored.vetted),
+        ..Default::default()
+    };
 
     let update_res = ai_act_model_observation::Entity::update_many()
         .filter(observation_registry_condition(

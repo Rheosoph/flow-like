@@ -31,6 +31,7 @@ use axum::{
 };
 use flow_like::flow::{
     board::Board,
+    execution::UserExecutionContext,
     node::Node,
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
@@ -73,6 +74,15 @@ pub(crate) struct ProxyCallerContext {
     pub app_chain: Option<Vec<String>>,
     pub parent_run_id: Option<String>,
     pub correlation: Option<CorrelationContext>,
+    /// The connected app's execution identity: the role the connection grants
+    /// and, as `on_behalf_of`, the subject it passed through. The proxy
+    /// resolves this to authorize the call, so handing it to the run costs
+    /// nothing and is the only way a flow can see who reached it.
+    ///
+    /// Stays `None` for public inbound traffic — an anonymous or
+    /// registration-authenticated caller is not a Flow-Like principal, and
+    /// inventing one would make permission gates pass for the public internet.
+    pub user_context: Option<UserExecutionContext>,
 }
 
 const INBOUND_RESULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -214,6 +224,7 @@ async fn inbound_mcp(
 /// - A `PUBLIC` event on the proxy → 403 (call it via its public endpoint).
 /// - An `INTERNAL` event on the public router → 404 (never publicly exposed;
 ///   404 rather than 403 so its existence is not revealed).
+#[allow(clippy::result_large_err)] // Err is axum's Response, the currency type of this module
 fn enforce_exposure(event_row: &event::Model, is_public_surface: bool) -> Result<(), Response> {
     let internal = flow_like::flow::event::EventExposure::parse(&event_row.exposure).is_internal();
     if is_public_surface && internal {
@@ -1622,6 +1633,7 @@ async fn dispatch_rest_file(
     Ok(resp)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_rest_fn(
     state: &AppState,
     event_row: &event::Model,
@@ -1845,7 +1857,10 @@ async fn dispatch_event_collect(
         stream_state: false,
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
-        user_context: None,
+        // Present only for app-connection proxy calls. `user_id` above stays the
+        // sink/inbound subject on purpose: it scopes the storage credentials,
+        // and the passed-through user is frequently not a member of this app.
+        user_context: caller.user_context.clone(),
         profile: {
             let mut profile = sink.as_ref().and_then(|sink| sink.profile_json.clone());
             if let Some(profile_json) = profile.as_mut() {
@@ -2318,6 +2333,7 @@ async fn prune_expired_mcp_sessions() {
     sessions.retain(|_, session| session.created_at.elapsed() < TTL);
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mcp_handle_post(
     state: &AppState,
     event_row: &event::Model,
@@ -3536,8 +3552,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PROXY_EVENT_AUTHORIZATION_HEADER, canonical_auth_kind, client_metadata, inbound_base_path,
-        is_asymmetric_jwt_algorithm, jwk_matches_oauth_header, mcp_resource_url,
+        PROXY_EVENT_AUTHORIZATION_HEADER, ProxyCallerContext, canonical_auth_kind, client_metadata,
+        inbound_base_path, is_asymmetric_jwt_algorithm, jwk_matches_oauth_header, mcp_resource_url,
         parse_query_single, registration_auth_headers, rest_args_from_body_and_query,
         with_inbound_openapi_server,
     };
@@ -3545,6 +3561,18 @@ mod tests {
     #[test]
     fn inbound_base_path_encodes_the_route_key() {
         assert_eq!(inbound_base_path("event/id alias"), "/r/event%2Fid%20alias");
+    }
+
+    /// Public `/r` and `/m` traffic dispatches with the default caller. Giving
+    /// that a user context would hand every anonymous internet caller a role,
+    /// so permission gates inside the board would start passing.
+    #[test]
+    fn public_inbound_traffic_carries_no_principal() {
+        let caller = ProxyCallerContext::default();
+
+        assert!(caller.user_context.is_none());
+        assert!(caller.app_chain.is_none());
+        assert!(caller.parent_run_id.is_none());
     }
 
     #[test]

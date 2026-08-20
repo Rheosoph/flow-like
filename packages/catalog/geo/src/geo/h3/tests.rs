@@ -1,5 +1,5 @@
 #[cfg(all(test, feature = "execute"))]
-mod tests {
+mod h3_tests {
     use crate::geo::GeoCoordinate;
     use h3o::{CellIndex, LatLng, Resolution};
     use std::str::FromStr;
@@ -399,7 +399,7 @@ mod tests {
 
         let disk: Vec<CellIndex> = cell.grid_disk::<Vec<_>>(1);
         let solvent = SolventBuilder::new().build();
-        let multi_poly = solvent.dissolve(disk.into_iter()).unwrap();
+        let multi_poly = solvent.dissolve(disk).unwrap();
 
         // A disk of k=1 should form a single connected polygon
         assert_eq!(multi_poly.0.len(), 1);
@@ -417,9 +417,7 @@ mod tests {
         let cell_nyc: CellIndex = nyc.to_cell(res);
 
         let solvent = SolventBuilder::new().build();
-        let multi_poly = solvent
-            .dissolve(vec![cell_berlin, cell_nyc].into_iter())
-            .unwrap();
+        let multi_poly = solvent.dissolve(vec![cell_berlin, cell_nyc]).unwrap();
 
         // Two cells far apart should create two separate polygons
         assert_eq!(multi_poly.0.len(), 2);

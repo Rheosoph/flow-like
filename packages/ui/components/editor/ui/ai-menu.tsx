@@ -185,7 +185,7 @@ export function AIMenu() {
 								}
 							}}
 							onValueChange={setInput}
-							placeholder={t('askAiAnything', 'Ask AI anything...')}
+							placeholder={t("askAiAnything", "Ask AI anything...")}
 							data-plate-focus
 							autoFocus
 						/>
@@ -522,10 +522,14 @@ export function AILoadingBar() {
 				className="flex items-center gap-1 text-xs"
 				onClick={() => api.aiChat.stop()}
 			>
-				<PauseIcon className="h-4 w-4" /><Trans i18nKey="stopKbdClassnameml1RoundedBgborderPx1FontmonoText10pxTextmutedforegroundShadowsmEscKbd">Stop
-				<kbd className="ml-1 rounded bg-border px-1 font-mono text-[10px] text-muted-foreground shadow-sm">
-					Esc
-				</kbd></Trans></Button>
+				<PauseIcon className="h-4 w-4" />
+				<Trans i18nKey="stopKbdClassnameml1RoundedBgborderPx1FontmonoText10pxTextmutedforegroundShadowsmEscKbd">
+					Stop
+					<kbd className="ml-1 rounded bg-border px-1 font-mono text-[10px] text-muted-foreground shadow-sm">
+						Esc
+					</kbd>
+				</Trans>
+			</Button>
 		</div>
 	);
 }

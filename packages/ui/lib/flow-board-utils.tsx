@@ -196,6 +196,13 @@ function deserializeNode(node: ISerializedNode): INode {
 	};
 }
 
+// Monaco >= 0.52 edits through the EditContext API wherever the browser supports it: the focused
+// host is then a bare `div.native-edit-context`, which is neither a form control nor
+// contenteditable. Without these two tests the board's document-level copy/paste handlers win over
+// the editor's own and replace the clipboard with the selected nodes.
+const EDITABLE_CLIPBOARD_HOST_SELECTOR =
+	"[contenteditable='true'], [contenteditable=''], .monaco-editor";
+
 function isEditableClipboardTarget(
 	element: EventTarget | Element | null,
 ): boolean {
@@ -210,9 +217,10 @@ function isEditableClipboardTarget(
 	) {
 		return true;
 	}
-	return Boolean(
-		element.closest("[contenteditable='true'], [contenteditable='']"),
-	);
+	if ((element as { editContext?: unknown }).editContext) {
+		return true;
+	}
+	return Boolean(element.closest(EDITABLE_CLIPBOARD_HOST_SELECTOR));
 }
 
 function hasSelectedPageText(): boolean {
@@ -668,8 +676,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});
@@ -715,8 +725,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});

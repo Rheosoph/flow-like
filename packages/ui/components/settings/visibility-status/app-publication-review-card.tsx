@@ -186,10 +186,13 @@ export function AppPublicationReviewCard({
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2 text-base">
 					<MessageSquare className="h-4 w-4" />
-					{t('publicationReview', 'Publication Review')}
+					{t("publicationReview", "Publication Review")}
 				</CardTitle>
 				<CardDescription>
-					{t('currentPublicationRequestsAndAuditorCommentsForThisAppAppearHere', "Current publication requests and auditor comments for this app appear here.")}
+					{t(
+						"currentPublicationRequestsAndAuditorCommentsForThisAppAppearHere",
+						"Current publication requests and auditor comments for this app appear here.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
@@ -212,10 +215,11 @@ export function AppPublicationReviewCard({
 										</span>
 									</Badge>
 									<Badge variant="outline">
-										{t('target', 'Target:')} {formatLabel(request.targetVisibility)}
+										{t("target", "Target:")}{" "}
+										{formatLabel(request.targetVisibility)}
 									</Badge>
 									<span className="text-xs text-muted-foreground">
-										{t('submitted', 'Submitted')}{" "}
+										{t("submitted", "Submitted")}{" "}
 										<RelativeTime
 											value={request.createdAt}
 											fallback={request.createdAt || "Unknown"}
@@ -225,7 +229,10 @@ export function AppPublicationReviewCard({
 
 								{request.logs.length === 0 ? (
 									<p className="mt-3 text-sm text-muted-foreground">
-										{t('noReviewEventsRecordedYet', 'No review events recorded yet.')}
+										{t(
+											"noReviewEventsRecordedYet",
+											"No review events recorded yet.",
+										)}
 									</p>
 								) : (
 									<div className="mt-4 space-y-3">
@@ -264,7 +271,7 @@ export function AppPublicationReviewCard({
 															</p>
 														) : (
 															<p className="text-sm text-muted-foreground">
-																{t('noCommentProvided', 'No comment provided.')}
+																{t("noCommentProvided", "No comment provided.")}
 															</p>
 														)}
 													</div>

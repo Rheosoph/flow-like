@@ -33,14 +33,18 @@ pub(crate) fn ensure_vertex_credentials_explicit(
         return Ok(());
     }
     let has_explicit = provider.params.as_ref().is_some_and(|params| {
-        ["access_token", "service_account_json", "service_account_key"]
-            .iter()
-            .any(|key| {
-                params
-                    .get(*key)
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|value| !value.trim().is_empty())
-            })
+        [
+            "access_token",
+            "service_account_json",
+            "service_account_key",
+        ]
+        .iter()
+        .any(|key| {
+            params
+                .get(*key)
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+        })
     });
     if has_explicit {
         return Ok(());

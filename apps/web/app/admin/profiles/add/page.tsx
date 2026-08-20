@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IBit,
 	IBitTypes,
@@ -29,6 +28,7 @@ import {
 import { Badge } from "@flow-like/flow-like-ui";
 import { Avatar, AvatarFallback, AvatarImage } from "@flow-like/flow-like-ui";
 import { Separator } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { Image, Monitor, Plus, Save, Upload, User, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
@@ -215,7 +215,9 @@ export default function AddProfilePage() {
 	return (
 		<div className="container mx-auto p-6 max-w-4xl">
 			<div className="mb-6">
-				<h1 className="text-3xl font-bold">{t('createNewProfile', 'Create New Profile')}</h1>
+				<h1 className="text-3xl font-bold">
+					{t("createNewProfile", "Create New Profile")}
+				</h1>
 				<p className="text-muted-foreground">
 					{`Configure a new user profile with custom settings and preferences.`}
 				</p>
@@ -227,10 +229,13 @@ export default function AddProfilePage() {
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2">
 							<User className="h-5 w-5" />
-							{t('basicInformation', 'Basic Information')}
+							{t("basicInformation", "Basic Information")}
 						</CardTitle>
 						<CardDescription>
-							{t('setUpTheFundamentalProfileDetailsAndAppearance', 'Set up the fundamental profile details and appearance.')}
+							{t(
+								"setUpTheFundamentalProfileDetailsAndAppearance",
+								"Set up the fundamental profile details and appearance.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -238,7 +243,7 @@ export default function AddProfilePage() {
 						<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 							{/* Icon Upload (1:1) */}
 							<div className="space-y-3">
-								<Label>{t('profileIcon11', 'Profile Icon (1:1)')}</Label>
+								<Label>{t("profileIcon11", "Profile Icon (1:1)")}</Label>
 								<div className="flex items-center gap-4">
 									<Avatar className="h-20 w-20 rounded-md">
 										<AvatarImage
@@ -263,7 +268,7 @@ export default function AddProfilePage() {
 											onClick={() => iconInputRef.current?.click()}
 										>
 											<Upload className="h-4 w-4 mr-2" />
-											{t('uploadIcon', 'Upload Icon')}
+											{t("uploadIcon", "Upload Icon")}
 										</Button>
 									</div>
 								</div>
@@ -271,13 +276,15 @@ export default function AddProfilePage() {
 
 							{/* Thumbnail Upload (16:9) */}
 							<div className="space-y-3">
-								<Label>{t('profileThumbnail169', 'Profile Thumbnail (16:9)')}</Label>
+								<Label>
+									{t("profileThumbnail169", "Profile Thumbnail (16:9)")}
+								</Label>
 								<div className="space-y-3">
 									<div className="aspect-video w-full bg-muted rounded-lg overflow-hidden">
 										{profile.thumbnail ? (
 											<img
 												src={profile.thumbnail}
-												alt={t('profileThumbnail', 'Profile thumbnail')}
+												alt={t("profileThumbnail", "Profile thumbnail")}
 												className="w-full h-full object-cover"
 											/>
 										) : (
@@ -299,7 +306,7 @@ export default function AddProfilePage() {
 										onClick={() => thumbnailInputRef.current?.click()}
 									>
 										<Upload className="h-4 w-4 mr-2" />
-										{t('uploadThumbnail', 'Upload Thumbnail')}
+										{t("uploadThumbnail", "Upload Thumbnail")}
 									</Button>
 								</div>
 							</div>
@@ -307,34 +314,42 @@ export default function AddProfilePage() {
 
 						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 							<div className="space-y-2">
-								<Label htmlFor="name">{t('profileName', 'Profile Name')}</Label>
+								<Label htmlFor="name">{t("profileName", "Profile Name")}</Label>
 								<Input
 									id="name"
 									value={profile.name}
 									onChange={(e) => updateProfile("name", e.target.value)}
-									placeholder={t('enterProfileName', 'Enter profile name')}
+									placeholder={t("enterProfileName", "Enter profile name")}
 								/>
 							</div>
 							<div className="space-y-2">
-								<Label htmlFor="hub">{t('primaryHub', 'Primary Hub')}</Label>
+								<Label htmlFor="hub">{t("primaryHub", "Primary Hub")}</Label>
 								<Input
 									id="hub"
 									value={profile.hub}
 									onChange={(e) => updateProfile("hub", e.target.value)}
-									placeholder={t('enterHubUrlOrIdentifier', 'Enter hub URL or identifier')}
+									placeholder={t(
+										"enterHubUrlOrIdentifier",
+										"Enter hub URL or identifier",
+									)}
 								/>
 							</div>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="description">{t('description', 'Description')}</Label>
+							<Label htmlFor="description">
+								{t("description", "Description")}
+							</Label>
 							<Textarea
 								id="description"
 								value={profile.description || ""}
 								onChange={(e) =>
 									updateProfile("description", e.target.value || null)
 								}
-								placeholder={t('describeThisProfile', 'Describe this profile...')}
+								placeholder={t(
+									"describeThisProfile",
+									"Describe this profile...",
+								)}
 								rows={3}
 							/>
 						</div>
@@ -346,10 +361,13 @@ export default function AddProfilePage() {
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2">
 							<Monitor className="h-5 w-5" />
-							{t('hubManagement', 'Hub Management')}
+							{t("hubManagement", "Hub Management")}
 						</CardTitle>
 						<CardDescription>
-							{t('manageAdditionalHubsAssociatedWithThisProfile', 'Manage additional hubs associated with this profile.')}
+							{t(
+								"manageAdditionalHubsAssociatedWithThisProfile",
+								"Manage additional hubs associated with this profile.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -357,7 +375,7 @@ export default function AddProfilePage() {
 							<Input
 								value={newHub}
 								onChange={(e) => setNewHub(e.target.value)}
-								placeholder={t('addAHubUrl', 'Add a hub URL...')}
+								placeholder={t("addAHubUrl", "Add a hub URL...")}
 								onKeyPress={(e) => e.key === "Enter" && addHub()}
 							/>
 							<Button onClick={addHub} size="sm">
@@ -390,9 +408,12 @@ export default function AddProfilePage() {
 				{/* Bit IDs Management */}
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('bitIds', 'Bit IDs')}</CardTitle>
+						<CardTitle>{t("bitIds", "Bit IDs")}</CardTitle>
 						<CardDescription>
-							{t('selectAndManageBitIdsAssociatedWithThisProfile', 'Select and manage bit IDs associated with this profile.')}
+							{t(
+								"selectAndManageBitIdsAssociatedWithThisProfile",
+								"Select and manage bit IDs associated with this profile.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -409,7 +430,12 @@ export default function AddProfilePage() {
 									}}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder={t('selectABitToAdd', 'Select a bit to add...')} />
+										<SelectValue
+											placeholder={t(
+												"selectABitToAdd",
+												"Select a bit to add...",
+											)}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										{bits.data
@@ -439,7 +465,7 @@ export default function AddProfilePage() {
 							<Input
 								value={newBitId}
 								onChange={(e) => setNewBitId(e.target.value)}
-								placeholder={t('addABitIdManually', 'Add a bit ID manually...')}
+								placeholder={t("addABitIdManually", "Add a bit ID manually...")}
 								onKeyPress={(e) => e.key === "Enter" && addBitId()}
 							/>
 							<Button onClick={addBitId} size="sm">
@@ -450,7 +476,7 @@ export default function AddProfilePage() {
 						{/* Selected Bit IDs */}
 						{(profile.bits?.length ?? 0) > 0 && (
 							<div className="space-y-2">
-								<Label>{t('selectedBitIds', 'Selected Bit IDs')}</Label>
+								<Label>{t("selectedBitIds", "Selected Bit IDs")}</Label>
 								<div className="flex flex-wrap gap-2">
 									{profile.bits?.map((bitId) => {
 										const bit = bits.data?.find(
@@ -490,14 +516,21 @@ export default function AddProfilePage() {
 				{/* Settings */}
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('connectionSettings', 'Connection Settings')}</CardTitle>
+						<CardTitle>
+							{t("connectionSettings", "Connection Settings")}
+						</CardTitle>
 						<CardDescription>
-							{t('configureHowConnectionsAreDisplayedAndManaged', 'Configure how connections are displayed and managed.')}
+							{t(
+								"configureHowConnectionsAreDisplayedAndManaged",
+								"Configure how connections are displayed and managed.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
 						<div className="space-y-2">
-							<Label htmlFor="connection-mode">{t('connectionMode', 'Connection Mode')}</Label>
+							<Label htmlFor="connection-mode">
+								{t("connectionMode", "Connection Mode")}
+							</Label>
 							<Select
 								value={profile.settings?.connection_mode}
 								onValueChange={(value) =>
@@ -525,9 +558,12 @@ export default function AddProfilePage() {
 				{/* Tags */}
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('tags', 'Tags')}</CardTitle>
+						<CardTitle>{t("tags", "Tags")}</CardTitle>
 						<CardDescription>
-							{t('addTagsToCategorizeAndOrganizeThisProfile', 'Add tags to categorize and organize this profile.')}
+							{t(
+								"addTagsToCategorizeAndOrganizeThisProfile",
+								"Add tags to categorize and organize this profile.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -535,7 +571,7 @@ export default function AddProfilePage() {
 							<Input
 								value={newTag}
 								onChange={(e) => setNewTag(e.target.value)}
-								placeholder={t('addATag', 'Add a tag...')}
+								placeholder={t("addATag", "Add a tag...")}
 								onKeyPress={(e) => e.key === "Enter" && addTag()}
 							/>
 							<Button onClick={addTag} size="sm">
@@ -565,9 +601,12 @@ export default function AddProfilePage() {
 				{/* Interests */}
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('interests', 'Interests')}</CardTitle>
+						<CardTitle>{t("interests", "Interests")}</CardTitle>
 						<CardDescription>
-							{t('defineInterestsAndTopicsRelevantToThisProfile', 'Define interests and topics relevant to this profile.')}
+							{t(
+								"defineInterestsAndTopicsRelevantToThisProfile",
+								"Define interests and topics relevant to this profile.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -575,7 +614,7 @@ export default function AddProfilePage() {
 							<Input
 								value={newInterest}
 								onChange={(e) => setNewInterest(e.target.value)}
-								placeholder={t('addAnInterest', 'Add an interest...')}
+								placeholder={t("addAnInterest", "Add an interest...")}
 								onKeyPress={(e) => e.key === "Enter" && addInterest()}
 							/>
 							<Button onClick={addInterest} size="sm">
@@ -608,16 +647,22 @@ export default function AddProfilePage() {
 				{/* Profile Info */}
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('profileInformation', 'Profile Information')}</CardTitle>
+						<CardTitle>
+							{t("profileInformation", "Profile Information")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
 							<div>
-								<Label className="text-muted-foreground">{t('profileId', 'Profile ID')}</Label>
+								<Label className="text-muted-foreground">
+									{t("profileId", "Profile ID")}
+								</Label>
 								<p className="font-mono">{profile.id}</p>
 							</div>
 							<div>
-								<Label className="text-muted-foreground">{t('created', 'Created')}</Label>
+								<Label className="text-muted-foreground">
+									{t("created", "Created")}
+								</Label>
 								<p>{new Date(profile.created).toLocaleString()}</p>
 							</div>
 						</div>
@@ -629,10 +674,10 @@ export default function AddProfilePage() {
 
 			{/* Actions */}
 			<div className="flex justify-end gap-2">
-				<Button variant="outline">{t('cancel', 'Cancel')}</Button>
+				<Button variant="outline">{t("cancel", "Cancel")}</Button>
 				<Button onClick={handleSave} className="flex items-center gap-2">
 					<Save className="h-4 w-4" />
-					{t('createProfile', 'Create Profile')}
+					{t("createProfile", "Create Profile")}
 				</Button>
 			</div>
 		</div>

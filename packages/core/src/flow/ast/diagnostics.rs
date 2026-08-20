@@ -865,8 +865,8 @@ fn backtick_values(message: &str) -> Vec<String> {
     message
         .split('`')
         .enumerate()
-        .filter(|&(index, value)| (index % 2 == 1))
-        .map(|(index, value)| value.to_string())
+        .filter(|&(index, _value)| index % 2 == 1)
+        .map(|(_index, value)| value.to_string())
         .collect()
 }
 
@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn structures_unknown_pin_with_call_ast_path_and_catalog_search() {
         let structured = result(&[
-            "node `agentRegisterFunctionTools` has no input pin named `tools`; skipped that argument",
+            "node `agentRegisterFunctionTools` has no input pin named `tools`; no part of this revision was applied",
         ])
         .structured_diagnostics();
 

@@ -28,7 +28,8 @@ const LIMIT_OPTIONS = [
 ];
 
 function formatDuration(ms: number): string {
-	if (ms < 1000) return i18next.t('valMs', '{{val}} ms', { val: Math.round(ms) });
+	if (ms < 1000)
+		return i18next.t("valMs", "{{val}} ms", { val: Math.round(ms) });
 	return `${(ms / 1000).toFixed(2)} s`;
 }
 
@@ -84,14 +85,19 @@ export function EditorFooterBar({
 
 			{tables.length > 0 && (
 				<span className="hidden min-w-0 items-center gap-1 truncate md:flex">
-					<span className="shrink-0">{t('tables', 'tables:')}</span>
+					<span className="shrink-0">{t("tables", "tables:")}</span>
 					<span className="truncate font-mono">{tables.join(", ")}</span>
 				</span>
 			)}
 
 			<span className="ml-auto flex shrink-0 items-center gap-3">
 				{cursor && (
-					<span className="hidden tabular-nums sm:inline">{t('lnLineColColumn', 'Ln {{line}}, Col {{column}}', { line: cursor.line, column: cursor.column })}</span>
+					<span className="hidden tabular-nums sm:inline">
+						{t("lnLineColColumn", "Ln {{line}}, Col {{column}}", {
+							line: cursor.line,
+							column: cursor.column,
+						})}
+					</span>
 				)}
 
 				<Select
@@ -102,7 +108,7 @@ export function EditorFooterBar({
 				>
 					<SelectTrigger
 						className="h-6 gap-1 border-none bg-transparent px-1.5 text-[11px] shadow-none hover:bg-muted focus:ring-0"
-						aria-label={t('rowLimit', 'Row limit')}
+						aria-label={t("rowLimit", "Row limit")}
 					>
 						<SelectValue />
 					</SelectTrigger>

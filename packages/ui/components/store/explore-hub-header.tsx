@@ -54,7 +54,7 @@ export function ExploreHubHeader({
 		>
 			<div className="space-y-1 min-w-0">
 				<h1 className="text-2xl font-bold tracking-tight text-foreground">
-					{t('explore', 'Explore')}
+					{t("explore", "Explore")}
 				</h1>
 				{subtitle && (
 					<p className="text-sm text-muted-foreground">{subtitle}</p>
@@ -63,7 +63,7 @@ export function ExploreHubHeader({
 			<div className="flex items-center gap-2">
 				{actions}
 				<nav
-					aria-label={t('exploreSections', 'Explore sections')}
+					aria-label={t("exploreSections", "Explore sections")}
 					className="inline-flex items-center rounded-full border border-border/40 bg-muted/30 p-1"
 				>
 					{tabs.map((tab) => {

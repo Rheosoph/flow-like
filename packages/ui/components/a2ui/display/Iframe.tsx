@@ -47,7 +47,7 @@ export function A2UIIframe({
 				)}
 				style={{ ...resolveInlineStyle(style), width, height }}
 			>
-				{t('noContentProvided', 'No content provided')}
+				{t("noContentProvided", "No content provided")}
 			</div>
 		);
 	}

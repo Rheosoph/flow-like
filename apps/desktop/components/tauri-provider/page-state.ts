@@ -107,10 +107,18 @@ export class PageState implements IPageState {
 				// Native get_page opens the board manifest for the requested view. Ensure
 				// that exact local storage view exists before retrying the lookup.
 				await this.backend.boardState.getBoard(appId, boardId, version, true);
-			} catch {
+			} catch (repairError) {
 				// Preserve the authoritative native storage failure when repair itself
-				// is unavailable (offline, unauthenticated, or a real storage error).
-				throw localError;
+				// is unavailable (offline, unauthenticated, or a real storage error) — but
+				// never lose why the repair failed. Without it every cause, from a stale
+				// offline flag to a server 404, reads as "the file is missing".
+				console.error(
+					`[PageState] Board ${boardId} could not be repaired for page ${pageId}:`,
+					repairError,
+				);
+				throw new Error(nativeErrorMessage(localError) ?? String(localError), {
+					cause: repairError,
+				});
 			}
 
 			return invoke<IPage>("get_page", {
@@ -161,8 +169,10 @@ export class PageState implements IPageState {
 		version?: [number, number, number],
 		ifNoneMatch?: string,
 	): Promise<{ page: IPage | null; notModified: boolean; etag?: string }> {
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) {
+		// Gate on explicit local-only, not on `isOffline`: an app whose visibility this device
+		// has not learned yet would otherwise be denied the very fallback that repairs it.
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
 			return { page: null, notModified: false };
 		}
 
@@ -404,7 +414,12 @@ export class PageState implements IPageState {
 			const nativeMiss = isNativePageNotFoundError(localError);
 			const contentUnavailable =
 				isNativePageContentUnavailableError(localError);
-			if (!nativeMiss && !contentUnavailable) {
+			// A board this device never downloaded is recoverable too: rendering needs the
+			// page payload, which the server holds and serves, and reaching here already
+			// means `getNativePage`'s own board repair failed. Refusing to ask would leave
+			// the interface dark over a file that rendering does not read.
+			const boardUnavailable = isNativePageBoardUnavailableError(localError);
+			if (!nativeMiss && !contentUnavailable && !boardUnavailable) {
 				throw localError;
 			}
 

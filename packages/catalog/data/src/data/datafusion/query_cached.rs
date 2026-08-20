@@ -1,8 +1,8 @@
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-use crate::data::datafusion::params;
 use crate::data::datafusion::query::{QueryRow, batches_to_csv_table};
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -84,7 +84,7 @@ impl NodeLogic for CachedSqlQueryNode {
         let mut node = Node::new(
             "df_sql_query_cached",
             "Cached SQL Query",
-            "Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
+            "Execute a read-only SQL query against a DataFusion session, remembering the result in the app's cache. Writing statements (INSERT/UPDATE/DELETE) are rejected — a cache hit would skip them; use the SQL Query node for writes. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -113,7 +113,7 @@ impl NodeLogic for CachedSqlQueryNode {
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_input_pin(
             "scope",
@@ -195,7 +195,7 @@ impl NodeLogic for CachedSqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -203,7 +203,17 @@ impl NodeLogic for CachedSqlQueryNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+
+        // A cache hit skips execution entirely, so a writing statement would silently
+        // do nothing whenever a live result exists. Writes belong on the SQL Query node.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&query).map_err(|error| {
+            flow_like_types::anyhow!(
+                "Cached SQL Query only runs read-only SELECT statements (a cache hit would skip the write); use the SQL Query node for INSERT/UPDATE/DELETE: {error}"
+            )
+        })?;
+
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let scope: String = context.evaluate_pin("scope").await?;
         let namespace: String = context.evaluate_pin("namespace").await?;
         let ttl_seconds: i64 = context.evaluate_pin("ttl_seconds").await?;

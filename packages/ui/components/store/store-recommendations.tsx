@@ -43,13 +43,17 @@ export const StoreRecommendations = memo(function StoreRecommendations({
 		<section className="space-y-4">
 			<h2 className="text-sm font-medium text-muted-foreground/60 uppercase tracking-wider flex items-center gap-2">
 				<SparklesIcon className="w-4 h-4" />
-				{t('youMightAlsoLike', 'You might also like')}
+				{t("youMightAlsoLike", "You might also like")}
 			</h2>
 
 			{error && (
 				<Alert className="border-destructive/20 bg-destructive/5">
 					<AlertCircle className="h-4 w-4" />
-					<AlertDescription>{t('failedToLoadMessage', 'Failed to load: {{message}}', { message: error.message })}</AlertDescription>
+					<AlertDescription>
+						{t("failedToLoadMessage", "Failed to load: {{message}}", {
+							message: error.message,
+						})}
+					</AlertDescription>
 				</Alert>
 			)}
 

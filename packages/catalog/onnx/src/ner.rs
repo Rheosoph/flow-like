@@ -64,6 +64,7 @@ pub enum EntityLabel {
 
 impl EntityLabel {
     /// Parse from label string, auto-detecting prefix format
+    #[allow(clippy::should_implement_trait)] // infallible lenient parser; a FromStr impl would need a junk Err type
     pub fn from_str(s: &str) -> Self {
         let s = s.trim();
         if s == "O" || s.is_empty() {
@@ -195,6 +196,10 @@ pub struct TokenPrediction {
     pub end: usize,
 }
 
+/// Entity being accumulated across BIO tokens:
+/// (tokens, entity_type, start_token, start_char, end_char, summed_confidence, token_count)
+type PendingEntity = (Vec<String>, String, usize, usize, usize, f32, usize);
+
 /// Merge BIO-tagged tokens into entities
 pub fn merge_entities(
     tokens: &[String],
@@ -204,8 +209,7 @@ pub fn merge_entities(
     original_text: &str,
 ) -> Vec<NamedEntity> {
     let mut entities = Vec::new();
-    let mut current_entity: Option<(Vec<String>, String, usize, usize, usize, f32, usize)> = None;
-    // (tokens, entity_type, start_token, start_char, end_char, sum_conf, count)
+    let mut current_entity: Option<PendingEntity> = None;
 
     for (i, (token, label)) in tokens.iter().zip(labels.iter()).enumerate() {
         let conf = confidences.get(i).copied().unwrap_or(0.0);

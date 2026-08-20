@@ -199,6 +199,9 @@ impl std::str::FromStr for CatalogPackage {
     }
 }
 
+/// Predicate deciding whether an individual node stays in the built catalog.
+pub type NodeFilter = Box<dyn Fn(&dyn NodeLogic) -> bool + Send + Sync>;
+
 /// Builder for constructing a customized catalog
 #[derive(Default)]
 pub struct CatalogBuilder {
@@ -207,7 +210,7 @@ pub struct CatalogBuilder {
     excluded_nodes: HashSet<String>,
     included_nodes: Option<HashSet<String>>,
     custom_nodes: Vec<Arc<dyn NodeLogic>>,
-    node_filter: Option<Box<dyn Fn(&dyn NodeLogic) -> bool + Send + Sync>>,
+    node_filter: Option<NodeFilter>,
 }
 
 impl CatalogBuilder {

@@ -117,7 +117,7 @@ where
             if deviation > max_deviation {
                 max_deviation = deviation;
             }
-            total = total + deviation;
+            total += deviation;
             count += 1;
 
             // A coefficient indistinguishable from zero has no direction to flip.

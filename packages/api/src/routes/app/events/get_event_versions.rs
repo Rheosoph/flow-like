@@ -7,6 +7,9 @@ use axum::{
     extract::{Path, State},
 };
 
+/// Available event versions, each as (major, minor, patch).
+pub type EventVersionList = Vec<(u32, u32, u32)>;
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/events/{event_id}/versions",
@@ -35,7 +38,7 @@ pub async fn get_event_versions(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, event_id)): Path<(String, String)>,
-) -> Result<Json<Vec<(u32, u32, u32)>>, ApiError> {
+) -> Result<Json<EventVersionList>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
     let sub = permission.sub()?;
 

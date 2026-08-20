@@ -26,7 +26,7 @@ impl NodeLogic for GetExecutingUserNode {
         let mut node = Node::new(
             "utils_user_get_executing_user",
             "Get Executing User",
-            "Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and technical user info. Use 'Break Struct' to access individual fields.",
+            "Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and details of the calling principal. Use 'Break Struct' to access individual fields.",
             "Utils/User",
         );
         node.add_icon("/flow/icons/user.svg");
@@ -34,7 +34,7 @@ impl NodeLogic for GetExecutingUserNode {
         node.add_output_pin(
             "user_context",
             "User Context",
-            "The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), is_technical_user, key_id",
+            "The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), isTechnicalUser, keyId, principal, originAppId, onBehalfOf",
             VariableType::Struct,
         )
         .set_schema::<UserExecutionContext>()

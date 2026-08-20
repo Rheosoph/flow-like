@@ -108,12 +108,14 @@ export function FlowPages({ appId, boardId, onOpenPage }: FlowPagesProps) {
 			<div className="flex flex-col h-full">
 				<div className="flex items-center justify-between p-4 border-b">
 					<div>
-						<h3 className="font-semibold">{t('pages', 'Pages')}</h3>
-						<p className="text-sm text-muted-foreground">{t('uiForThisFlow', 'UI for this flow')}</p>
+						<h3 className="font-semibold">{t("pages", "Pages")}</h3>
+						<p className="text-sm text-muted-foreground">
+							{t("uiForThisFlow", "UI for this flow")}
+						</p>
 					</div>
 					<Button size="sm" onClick={() => setCreateDialogOpen(true)}>
 						<PlusIcon className="h-4 w-4 mr-1" />
-						{t('new', 'New')}
+						{t("new", "New")}
 					</Button>
 				</div>
 
@@ -143,8 +145,11 @@ export function FlowPages({ appId, boardId, onOpenPage }: FlowPagesProps) {
 						) : (
 							<EmptyState
 								icons={[FileTextIcon]}
-								title={t('noPagesYet', 'No pages yet')}
-								description={t('createAPageToBuildUiForThisFlow', 'Create a page to build UI for this flow.')}
+								title={t("noPagesYet", "No pages yet")}
+								description={t(
+									"createAPageToBuildUiForThisFlow",
+									"Create a page to build UI for this flow.",
+								)}
 								action={{
 									label: "Create Page",
 									onClick: () => setCreateDialogOpen(true),
@@ -157,17 +162,17 @@ export function FlowPages({ appId, boardId, onOpenPage }: FlowPagesProps) {
 				<Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
 					<DialogContent>
 						<DialogHeader>
-							<DialogTitle>{t('createNewPage', 'Create New Page')}</DialogTitle>
+							<DialogTitle>{t("createNewPage", "Create New Page")}</DialogTitle>
 							<DialogDescription>
 								{`Add a new page to this board. Pages can be connected to routes for navigation.`}
 							</DialogDescription>
 						</DialogHeader>
 						<div className="space-y-4 py-4">
 							<div className="space-y-2">
-								<Label htmlFor="page-name">{t('pageName', 'Page Name')}</Label>
+								<Label htmlFor="page-name">{t("pageName", "Page Name")}</Label>
 								<Input
 									id="page-name"
-									placeholder={t('enterPageName', 'Enter page name...')}
+									placeholder={t("enterPageName", "Enter page name...")}
 									value={newPageName}
 									onChange={(e) => setNewPageName(e.target.value)}
 									onKeyDown={(e) => {
@@ -183,10 +188,10 @@ export function FlowPages({ appId, boardId, onOpenPage }: FlowPagesProps) {
 								variant="outline"
 								onClick={() => setCreateDialogOpen(false)}
 							>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button onClick={handleCreatePage} disabled={isCreating}>
-								{isCreating ? "Creating..." : t('createPage', 'Create Page')}
+								{isCreating ? "Creating..." : t("createPage", "Create Page")}
 							</Button>
 						</DialogFooter>
 					</DialogContent>
@@ -238,7 +243,10 @@ function PageCard({
 					// The board still lists the page, so it is not deleted — its content just
 					// isn't readable here. Naming that beats a card that opens onto nothing.
 					<p className="text-xs text-amber-600 dark:text-amber-400 line-clamp-1">
-						{t('contentUnavailableOnThisDevice', 'Content unavailable on this device')}
+						{t(
+							"contentUnavailableOnThisDevice",
+							"Content unavailable on this device",
+						)}
 					</p>
 				) : (
 					description && (
@@ -263,7 +271,7 @@ function PageCard({
 							<Pencil className="h-3.5 w-3.5" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{t('edit', 'Edit')}</TooltipContent>
+					<TooltipContent side="bottom">{t("edit", "Edit")}</TooltipContent>
 				</Tooltip>
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -277,7 +285,7 @@ function PageCard({
 							<Trash2Icon className="h-3.5 w-3.5" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{t('delete', 'Delete')}</TooltipContent>
+					<TooltipContent side="bottom">{t("delete", "Delete")}</TooltipContent>
 				</Tooltip>
 			</div>
 		</div>

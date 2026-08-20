@@ -456,7 +456,11 @@
 											"label": "It can present the result as an inline chart"
 										}
 									],
-									"correct": ["events-first", "deliberate-fallback", "inline-chart"]
+									"correct": [
+										"events-first",
+										"deliberate-fallback",
+										"inline-chart"
+									]
 								}
 							}
 						]

@@ -381,28 +381,28 @@ function TableBordersDropdownMenuContent(
 					onCheckedChange={getOnSelectTableBorder("top")}
 				>
 					<BorderTopIcon />
-					<div>{t('topBorder', 'Top Border')}</div>
+					<div>{t("topBorder", "Top Border")}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasRightBorder}
 					onCheckedChange={getOnSelectTableBorder("right")}
 				>
 					<BorderRightIcon />
-					<div>{t('rightBorder', 'Right Border')}</div>
+					<div>{t("rightBorder", "Right Border")}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasBottomBorder}
 					onCheckedChange={getOnSelectTableBorder("bottom")}
 				>
 					<BorderBottomIcon />
-					<div>{t('bottomBorder', 'Bottom Border')}</div>
+					<div>{t("bottomBorder", "Bottom Border")}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasLeftBorder}
 					onCheckedChange={getOnSelectTableBorder("left")}
 				>
 					<BorderLeftIcon />
-					<div>{t('leftBorder', 'Left Border')}</div>
+					<div>{t("leftBorder", "Left Border")}</div>
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuGroup>
 
@@ -412,14 +412,14 @@ function TableBordersDropdownMenuContent(
 					onCheckedChange={getOnSelectTableBorder("none")}
 				>
 					<BorderNoneIcon />
-					<div>{t('noBorder', 'No Border')}</div>
+					<div>{t("noBorder", "No Border")}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasOuterBorders}
 					onCheckedChange={getOnSelectTableBorder("outer")}
 				>
 					<BorderAllIcon />
-					<div>{t('outsideBorders', 'Outside Borders')}</div>
+					<div>{t("outsideBorders", "Outside Borders")}</div>
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuGroup>
 		</DropdownMenuContent>
@@ -472,7 +472,7 @@ function ColorDropdownMenu({
 				<DropdownMenuGroup>
 					<DropdownMenuItem className="p-2" onClick={onClearColor}>
 						<EraserIcon />
-						<span>{t('clear', 'Clear')}</span>
+						<span>{t("clear", "Clear")}</span>
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

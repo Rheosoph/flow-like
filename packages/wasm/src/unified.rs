@@ -55,6 +55,7 @@ impl Clone for LoadedWasm {
     }
 }
 
+#[allow(clippy::large_enum_variant)] // second variant is #[cfg(feature = "component-model")]-gated; do not restructure across the gate
 /// A unified WASM instance — wraps either a core module or component instance.
 pub enum UnifiedInstance {
     Module(WasmInstance),

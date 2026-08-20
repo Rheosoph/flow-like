@@ -157,6 +157,8 @@ fn recv_with_cancellation<T>(
 #[derive(Debug, Clone)]
 pub struct FrontendToolBridge {
     app_handle: AppHandle,
+    #[allow(dead_code)]
+    // default deadline for FrontendToolBridge::call; live callers pass explicit timeouts
     timeout: Duration,
     event: String,
     context: Option<FrontendToolContext>,
@@ -426,6 +428,7 @@ impl FrontendToolApproval {
         }
     }
 
+    #[allow(dead_code)] // completes the none/mutating/execute trio; live
     pub fn execute(
         title: impl Into<String>,
         description: impl Into<String>,
@@ -462,6 +465,7 @@ impl FrontendToolBridge {
         self
     }
 
+    #[allow(dead_code)] // default-timeout entry point; all callers currently pass an explicit deadline
     pub fn call(
         &self,
         tool_name: impl Into<String>,
@@ -1135,6 +1139,7 @@ fn emit_lifecycle_report(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_bridge_result(
     app_handle: &AppHandle,
     trace: &FrontendToolTrace,

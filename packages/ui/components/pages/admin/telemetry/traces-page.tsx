@@ -134,12 +134,17 @@ function TraceRow({
 				<div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
 					<RelativeTime value={trace.startedAt} />
 					<span>·</span>
-					<span className="tabular-nums">{t('spancountSpans', '{{spanCount}} spans', { spanCount: trace.spanCount })}</span>
+					<span className="tabular-nums">
+						{t("spancountSpans", "{{spanCount}} spans", {
+							spanCount: trace.spanCount,
+						})}
+					</span>
 					<span>·</span>
-					<span
-						className="truncate font-mono"
-						title={trace.traceId}
-					>{t('traceVal', 'trace {{val}}', { val: trace.traceId.slice(0, 16) })}</span>
+					<span className="truncate font-mono" title={trace.traceId}>
+						{t("traceVal", "trace {{val}}", {
+							val: trace.traceId.slice(0, 16),
+						})}
+					</span>
 				</div>
 			</div>
 			<div className="hidden w-48 shrink-0 sm:block">
@@ -302,9 +307,13 @@ export function AdminTelemetryTracesPage({
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							{t('insufficientPermissions', 'Insufficient permissions')}
+							{t("insufficientPermissions", "Insufficient permissions")}
 						</CardTitle>
-						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToViewTraces">You need the <b>Admin</b> permission to view traces.</Trans></CardDescription>
+						<CardDescription>
+							<Trans i18nKey="youNeedTheBadminbPermissionToViewTraces">
+								You need the <b>Admin</b> permission to view traces.
+							</Trans>
+						</CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -322,35 +331,38 @@ export function AdminTelemetryTracesPage({
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<GitBranch className="h-7 w-7 text-primary" />
-								{t('traces', 'Traces')}
+								{t("traces", "Traces")}
 							</h1>
 							<p className="text-muted-foreground">
-								{t('sampledDistributedTracesAnonymousSpanWaterfallsAcrossDesktopWebAndBackend', "Sampled distributed traces — anonymous span waterfalls across desktop, web and backend.")}
+								{t(
+									"sampledDistributedTracesAnonymousSpanWaterfallsAcrossDesktopWebAndBackend",
+									"Sampled distributed traces — anonymous span waterfalls across desktop, web and backend.",
+								)}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry">
 									<ArrowLeft className="mr-1 h-3.5 w-3.5" />
-									{t('telemetry', 'Telemetry')}
+									{t("telemetry", "Telemetry")}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								{t('refresh', 'Refresh')}
+								{t("refresh", "Refresh")}
 							</Button>
 						</div>
 					</div>
 
 					<div className="grid gap-2 sm:grid-cols-3">
 						<StatTile
-							label={t('matchingTraces', 'Matching traces')}
+							label={t("matchingTraces", "Matching traces")}
 							value={traces.isLoading ? "…" : total.toLocaleString()}
 							icon={<GitBranch className="h-4 w-4" />}
 							hint="In the selected window"
 						/>
 						<StatTile
-							label={t('slowestOnPage', 'Slowest on page')}
+							label={t("slowestOnPage", "Slowest on page")}
 							value={
 								traces.isLoading
 									? "…"
@@ -359,10 +371,10 @@ export function AdminTelemetryTracesPage({
 										: "—"
 							}
 							icon={<Timer className="h-4 w-4" />}
-							hint={slowest?.rootName ?? t('noTracesYet', 'No traces yet')}
+							hint={slowest?.rootName ?? t("noTracesYet", "No traces yet")}
 						/>
 						<StatTile
-							label={t('failingOnPage', 'Failing on page')}
+							label={t("failingOnPage", "Failing on page")}
 							value={traces.isLoading ? "…" : errorCount.toLocaleString()}
 							icon={<TriangleAlert className="h-4 w-4" />}
 							hint="Traces with an error root span"
@@ -377,7 +389,7 @@ export function AdminTelemetryTracesPage({
 									<Input
 										value={filters.name}
 										onChange={(e) => setFilterValue("name", e.target.value)}
-										placeholder={t('filterBySpanName', 'Filter by span name')}
+										placeholder={t("filterBySpanName", "Filter by span name")}
 										className="pl-8"
 									/>
 								</div>
@@ -406,7 +418,9 @@ export function AdminTelemetryTracesPage({
 										<SelectValue placeholder="Source" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value={ALL}>{t('allSources', 'All sources')}</SelectItem>
+										<SelectItem value={ALL}>
+											{t("allSources", "All sources")}
+										</SelectItem>
 										{TRACE_SOURCE_OPTIONS.map((source) => (
 											<SelectItem key={source} value={source}>
 												{source}
@@ -422,7 +436,9 @@ export function AdminTelemetryTracesPage({
 										<SelectValue placeholder="Status" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value={ALL}>{t('allStatuses', 'All statuses')}</SelectItem>
+										<SelectItem value={ALL}>
+											{t("allStatuses", "All statuses")}
+										</SelectItem>
 										{TRACE_STATUS_OPTIONS.map((status) => (
 											<SelectItem key={status} value={status}>
 												{status}
@@ -437,7 +453,9 @@ export function AdminTelemetryTracesPage({
 									}
 								>
 									<SelectTrigger className="w-48">
-										<SelectValue placeholder={t('minimumDuration', 'Minimum duration')} />
+										<SelectValue
+											placeholder={t("minimumDuration", "Minimum duration")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										{MIN_DURATION_OPTIONS.map((o) => (
@@ -449,7 +467,10 @@ export function AdminTelemetryTracesPage({
 								</Select>
 							</div>
 							<CardDescription>
-								{t('rootSpanTotalDurationAndSpanCountPerTraceSelectARowForItsFlamegraph', "Root span, total duration and span count per trace. Select a row for its flamegraph.")}
+								{t(
+									"rootSpanTotalDurationAndSpanCountPerTraceSelectARowForItsFlamegraph",
+									"Root span, total duration and span count per trace. Select a row for its flamegraph.",
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="p-0">
@@ -482,7 +503,11 @@ export function AdminTelemetryTracesPage({
 					{totalPages > 1 && (
 						<div className="flex items-center justify-between">
 							<div className="text-sm text-muted-foreground">
-								{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page: page + 1, totalPages })}</div>
+								{t("pagePageOfTotalpages", "Page {{page}} of {{totalPages}}", {
+									page: page + 1,
+									totalPages,
+								})}
+							</div>
 							<div className="flex gap-2">
 								<Button
 									variant="outline"
@@ -490,7 +515,7 @@ export function AdminTelemetryTracesPage({
 									onClick={() => setPage((p) => Math.max(0, p - 1))}
 									disabled={page === 0}
 								>
-									{t('previous', 'Previous')}
+									{t("previous", "Previous")}
 								</Button>
 								<Button
 									variant="outline"
@@ -500,7 +525,7 @@ export function AdminTelemetryTracesPage({
 									}
 									disabled={page >= totalPages - 1}
 								>
-									{t('next', 'Next')}
+									{t("next", "Next")}
 								</Button>
 							</div>
 						</div>

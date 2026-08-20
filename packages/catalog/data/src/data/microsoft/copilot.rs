@@ -1312,6 +1312,7 @@ fn attributions_to_annotations(
 }
 
 /// Convert adaptive cards to markdown
+#[allow(dead_code)] // adaptive-card → markdown rendering is parsed (parse_adaptive_card) but not yet surfaced on a pin
 fn adaptive_cards_to_markdown(cards: &[CopilotAdaptiveCard]) -> String {
     let mut markdown = String::new();
     for card in cards {
@@ -1471,12 +1472,14 @@ fn utc_offset_to_iana(offset_minutes: i32) -> String {
 
 /// Get the Microsoft Graph Search API region code based on system timezone.
 /// Maps IANA timezone to the appropriate Microsoft datacenter region.
+#[allow(dead_code)] // staged: Graph Search
 fn get_system_region() -> String {
     let timezone = get_system_timezone();
     timezone_to_region(&timezone)
 }
 
 /// Map an IANA timezone to Microsoft Graph Search API region code.
+#[allow(dead_code)]
 fn timezone_to_region(timezone: &str) -> String {
     let tz_lower = timezone.to_lowercase();
 
@@ -2290,7 +2293,7 @@ impl NodeLogic for CopilotSemanticSearchNode {
         // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/search/copilotroot-search
         let mut request_body = json!({
             "query": query,
-            "pageSize": page_size.min(100).max(1)
+            "pageSize": page_size.clamp(1, 100)
         });
 
         // Add dataSources.oneDrive configuration if filter or metadata is specified

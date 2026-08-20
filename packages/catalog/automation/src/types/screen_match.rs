@@ -137,6 +137,10 @@ pub fn find_template_in_image(
         .unwrap_or_default()
 }
 
+/// Matches found on screen plus the grayscale screen and template they came from.
+#[cfg(feature = "execute")]
+pub type ScreenTemplateMatch = (Vec<(u32, u32, f32)>, GrayImage, GrayImage);
+
 /// High-level: capture screen, find template, return matches.
 ///
 /// This is the primary entry point for template matching that replaces
@@ -145,7 +149,7 @@ pub fn find_template_in_image(
 pub fn find_template_on_screen(
     template_bytes: &[u8],
     precision: f32,
-) -> Option<(Vec<(u32, u32, f32)>, GrayImage, GrayImage)> {
+) -> Option<ScreenTemplateMatch> {
     let gray_template = to_grayscale(template_bytes)?;
     let gray_screen = capture_screen_grayscale()?;
 

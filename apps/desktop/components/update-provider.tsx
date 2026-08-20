@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	type TelemetryBreadcrumbLevel,
 	addTelemetryBreadcrumb,
@@ -10,6 +9,7 @@ import {
 	normalizeError,
 } from "@flow-like/flow-like-ui/lib/telemetry/errors";
 import { startTelemetrySpan } from "@flow-like/flow-like-ui/lib/telemetry/tracing";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn, listen } from "@tauri-apps/api/event";
@@ -196,8 +196,11 @@ function reportUpdaterError(
 
 function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 ** 2) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
-	return i18next.t('valMb', '{{val}} MB', { val: (bytes / 1024 ** 2).toFixed(1) });
+	if (bytes < 1024 ** 2)
+		return i18next.t("valKb", "{{val}} KB", { val: (bytes / 1024).toFixed(1) });
+	return i18next.t("valMb", "{{val}} MB", {
+		val: (bytes / 1024 ** 2).toFixed(1),
+	});
 }
 
 export function UpdateProvider() {
@@ -329,7 +332,7 @@ export function UpdateProvider() {
 				duration: Number.POSITIVE_INFINITY,
 				closeButton: true,
 				action: {
-					label: t('retry', 'Retry'),
+					label: t("retry", "Retry"),
 					onClick: retry,
 				},
 			});
@@ -371,15 +374,28 @@ export function UpdateProvider() {
 						trigger,
 					});
 					addUpdaterBreadcrumb(
-						t('download_startedCurrentversionTargetversion', 'download_started {{currentVersion}} -> {{targetVersion}}', { currentVersion, targetVersion }),
+						t(
+							"download_startedCurrentversionTargetversion",
+							"download_started {{currentVersion}} -> {{targetVersion}}",
+							{ currentVersion, targetVersion },
+						),
 					);
-					toast.loading(t('downloadingFlowLikeVersion', 'Downloading Flow Like {{version}}…', { version: update.version }), {
-						id: UPDATE_TOAST_ID,
-						description: contentLength
-							? t('00MbOfVal', '0% · 0 MB of {{val}}', { val: formatBytes(contentLength) })
-							: t('startingDownload', 'Starting download…'),
-						duration: Number.POSITIVE_INFINITY,
-					});
+					toast.loading(
+						t(
+							"downloadingFlowLikeVersion",
+							"Downloading Flow Like {{version}}…",
+							{ version: update.version },
+						),
+						{
+							id: UPDATE_TOAST_ID,
+							description: contentLength
+								? t("00MbOfVal", "0% · 0 MB of {{val}}", {
+										val: formatBytes(contentLength),
+									})
+								: t("startingDownload", "Starting download…"),
+							duration: Number.POSITIVE_INFINITY,
+						},
+					);
 					return;
 				}
 
@@ -393,14 +409,27 @@ export function UpdateProvider() {
 						trigger,
 					});
 					addUpdaterBreadcrumb(
-						t('download_finishedCurrentversionTargetversion', 'download_finished {{currentVersion}} -> {{targetVersion}}', { currentVersion, targetVersion }),
+						t(
+							"download_finishedCurrentversionTargetversion",
+							"download_finished {{currentVersion}} -> {{targetVersion}}",
+							{ currentVersion, targetVersion },
+						),
 					);
-					toast.loading(t('installingFlowLikeVersion', 'Installing Flow Like {{version}}…', { version: update.version }), {
-						id: UPDATE_TOAST_ID,
-						description:
-							t('theApplicationWillRestartWhenInstallationFinishes', 'The application will restart when installation finishes.'),
-						duration: Number.POSITIVE_INFINITY,
-					});
+					toast.loading(
+						t(
+							"installingFlowLikeVersion",
+							"Installing Flow Like {{version}}…",
+							{ version: update.version },
+						),
+						{
+							id: UPDATE_TOAST_ID,
+							description: t(
+								"theApplicationWillRestartWhenInstallationFinishes",
+								"The application will restart when installation finishes.",
+							),
+							duration: Number.POSITIVE_INFINITY,
+						},
+					);
 					return;
 				}
 
@@ -418,20 +447,34 @@ export function UpdateProvider() {
 				lastRenderedPercent = percent ?? lastRenderedPercent;
 				const description =
 					percent === undefined || contentLength === undefined
-						? t('valDownloaded', '{{val}} downloaded', { val: formatBytes(downloaded) })
+						? t("valDownloaded", "{{val}} downloaded", {
+								val: formatBytes(downloaded),
+							})
 						: `${percent}% · ${formatBytes(downloaded)} of ${formatBytes(contentLength)}`;
-				toast.loading(t('downloadingFlowLikeVersion', 'Downloading Flow Like {{version}}…', { version: update.version }), {
-					id: UPDATE_TOAST_ID,
-					description,
-					duration: Number.POSITIVE_INFINITY,
-				});
+				toast.loading(
+					t(
+						"downloadingFlowLikeVersion",
+						"Downloading Flow Like {{version}}…",
+						{ version: update.version },
+					),
+					{
+						id: UPDATE_TOAST_ID,
+						description,
+						duration: Number.POSITIVE_INFINITY,
+					},
+				);
 			};
 
-			toast.loading(t('downloadingFlowLikeVersion', 'Downloading Flow Like {{version}}…', { version: update.version }), {
-				id: UPDATE_TOAST_ID,
-				description: t('preparingDownload', 'Preparing download…'),
-				duration: Number.POSITIVE_INFINITY,
-			});
+			toast.loading(
+				t("downloadingFlowLikeVersion", "Downloading Flow Like {{version}}…", {
+					version: update.version,
+				}),
+				{
+					id: UPDATE_TOAST_ID,
+					description: t("preparingDownload", "Preparing download…"),
+					duration: Number.POSITIVE_INFINITY,
+				},
+			);
 			writeUpdateAttempt({
 				attempt_id: attemptId,
 				current_version: currentVersion,
@@ -456,7 +499,7 @@ export function UpdateProvider() {
 					return;
 				}
 				showError(
-					t('flowLikeCouldNotBeUpdated', 'Flow Like could not be updated'),
+					t("flowLikeCouldNotBeUpdated", "Flow Like could not be updated"),
 					"download_install",
 					error,
 					() => {
@@ -490,15 +533,22 @@ export function UpdateProvider() {
 			});
 			pendingUpdate = null;
 			addUpdaterBreadcrumb(
-				t('install_completedCurrentversionTargetversion', 'install_completed {{currentVersion}} -> {{targetVersion}}', { currentVersion, targetVersion }),
+				t(
+					"install_completedCurrentversionTargetversion",
+					"install_completed {{currentVersion}} -> {{targetVersion}}",
+					{ currentVersion, targetVersion },
+				),
 			);
 			await setTrayAvailability(false);
 			await closeUpdate(update);
 
 			if (active) {
-				toast.success(t('flowLikeWasUpdated', 'Flow Like was updated'), {
+				toast.success(t("flowLikeWasUpdated", "Flow Like was updated"), {
 					id: UPDATE_TOAST_ID,
-					description: t('restartingTheApplication', 'Restarting the application…'),
+					description: t(
+						"restartingTheApplication",
+						"Restarting the application…",
+					),
 					duration: Number.POSITIVE_INFINITY,
 				});
 			}
@@ -511,7 +561,10 @@ export function UpdateProvider() {
 				const retryRestart = () => {
 					void invoke("restart_app").catch((retryError) => {
 						showError(
-							t('theUpdateIsInstalledButFlowLikeCouldNotRestart', 'The update is installed, but Flow Like could not restart'),
+							t(
+								"theUpdateIsInstalledButFlowLikeCouldNotRestart",
+								"The update is installed, but Flow Like could not restart",
+							),
 							"restart",
 							retryError,
 							retryRestart,
@@ -523,7 +576,10 @@ export function UpdateProvider() {
 					});
 				};
 				showError(
-					t('theUpdateIsInstalledButFlowLikeCouldNotRestart', 'The update is installed, but Flow Like could not restart'),
+					t(
+						"theUpdateIsInstalledButFlowLikeCouldNotRestart",
+						"The update is installed, but Flow Like could not restart",
+					),
 					"restart",
 					error,
 					retryRestart,
@@ -540,12 +596,20 @@ export function UpdateProvider() {
 			prompting = true;
 			const promptStartedAt = Date.now();
 			addUpdaterBreadcrumb(
-				t('prompt_shownCurrentversionVersion', 'prompt_shown {{currentVersion}} -> {{version}}', { currentVersion: update.currentVersion, version: update.version }),
+				t(
+					"prompt_shownCurrentversionVersion",
+					"prompt_shown {{currentVersion}} -> {{version}}",
+					{ currentVersion: update.currentVersion, version: update.version },
+				),
 			);
 
 			try {
 				const shouldUpdate = await confirm(
-					t('flowLikeVersionIsAvailableWouldYouLikeToDownloadAndInstallItNow', 'Flow Like {{version}} is available. Would you like to download and install it now?', { version: update.version }),
+					t(
+						"flowLikeVersionIsAvailableWouldYouLikeToDownloadAndInstallItNow",
+						"Flow Like {{version}} is available. Would you like to download and install it now?",
+						{ version: update.version },
+					),
 				);
 				if (!active) return;
 
@@ -559,20 +623,30 @@ export function UpdateProvider() {
 				dismissVersion(update.version);
 				pendingUpdate = null;
 				await closeUpdate(update);
-				toast.info(t('flowLikeVersionIsAvailable', 'Flow Like {{version}} is available', { version: update.version }), {
-					id: UPDATE_TOAST_ID,
-					description: `Install it later from the tray menu.`,
-					action: {
-						label: t('install', 'Install'),
-						onClick: () => {
-							void checkForUpdate("manual", true);
+				toast.info(
+					t(
+						"flowLikeVersionIsAvailable",
+						"Flow Like {{version}} is available",
+						{ version: update.version },
+					),
+					{
+						id: UPDATE_TOAST_ID,
+						description: `Install it later from the tray menu.`,
+						action: {
+							label: t("install", "Install"),
+							onClick: () => {
+								void checkForUpdate("manual", true);
+							},
 						},
 					},
-				});
+				);
 			} catch (error) {
 				if (!active) return;
 				showError(
-					t('flowLikeCouldNotStartTheUpdate', 'Flow Like could not start the update'),
+					t(
+						"flowLikeCouldNotStartTheUpdate",
+						"Flow Like could not start the update",
+					),
 					"prompt",
 					error,
 					() => {
@@ -632,7 +706,7 @@ export function UpdateProvider() {
 					pendingUpdate = null;
 					void setTrayAvailability(false);
 					if (manualCheck) {
-						toast.success(t('flowLikeIsUpToDate', 'Flow Like is up to date'), {
+						toast.success(t("flowLikeIsUpToDate", "Flow Like is up to date"), {
 							id: UPDATE_TOAST_ID,
 						});
 					}
@@ -642,7 +716,14 @@ export function UpdateProvider() {
 				if (lastBreadcrumbUpdateVersion !== update.version) {
 					lastBreadcrumbUpdateVersion = update.version;
 					addUpdaterBreadcrumb(
-						t('update_availableCurrentversionVersion', 'update_available {{currentVersion}} -> {{version}}', { currentVersion: update.currentVersion, version: update.version }),
+						t(
+							"update_availableCurrentversionVersion",
+							"update_available {{currentVersion}} -> {{version}}",
+							{
+								currentVersion: update.currentVersion,
+								version: update.version,
+							},
+						),
 					);
 				}
 				pendingUpdate = update;
@@ -686,7 +767,10 @@ export function UpdateProvider() {
 					lastReportedCheckError = checkErrorKey;
 					repeatedCheckFailureNoted = false;
 					showError(
-						t('flowLikeCouldNotCheckForUpdates', 'Flow Like could not check for updates'),
+						t(
+							"flowLikeCouldNotCheckForUpdates",
+							"Flow Like could not check for updates",
+						),
 						"check",
 						error,
 						retry,
@@ -709,13 +793,19 @@ export function UpdateProvider() {
 					console.warn(
 						`Flow Like could not check for updates: ${normalized.value}`,
 					);
-					toast.error(t('flowLikeCouldNotCheckForUpdates', 'Flow Like could not check for updates'), {
-						id: UPDATE_TOAST_ID,
-						description: normalized.value,
-						duration: Number.POSITIVE_INFINITY,
-						closeButton: true,
-						action: { label: t('retry', 'Retry'), onClick: retry },
-					});
+					toast.error(
+						t(
+							"flowLikeCouldNotCheckForUpdates",
+							"Flow Like could not check for updates",
+						),
+						{
+							id: UPDATE_TOAST_ID,
+							description: normalized.value,
+							duration: Number.POSITIVE_INFINITY,
+							closeButton: true,
+							action: { label: t("retry", "Retry"), onClick: retry },
+						},
+					);
 				}
 				return null;
 			}
@@ -738,10 +828,13 @@ export function UpdateProvider() {
 				manualCheckQueued = true;
 				queuedCheckTrigger = trigger;
 				addUpdaterBreadcrumb(`${trigger}_check_started`);
-				toast.loading(t('checkingForFlowLikeUpdates', 'Checking for Flow Like updates…'), {
-					id: UPDATE_TOAST_ID,
-					duration: Number.POSITIVE_INFINITY,
-				});
+				toast.loading(
+					t("checkingForFlowLikeUpdates", "Checking for Flow Like updates…"),
+					{
+						id: UPDATE_TOAST_ID,
+						duration: Number.POSITIVE_INFINITY,
+					},
+				);
 			}
 			if (installWhenFound) {
 				installQueued = true;
@@ -773,7 +866,10 @@ export function UpdateProvider() {
 					registeringTrayListener = false;
 					if (!active) return;
 					showError(
-						t('flowLikeCouldNotConnectTheUpdateMenu', 'Flow Like could not connect the update menu'),
+						t(
+							"flowLikeCouldNotConnectTheUpdateMenu",
+							"Flow Like could not connect the update menu",
+						),
 						"tray_listener",
 						error,
 						() => {

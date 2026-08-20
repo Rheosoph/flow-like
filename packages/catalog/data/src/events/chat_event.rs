@@ -1253,9 +1253,8 @@ mod tests {
 
         // All remaining should be valid HTTPS URLs
         for attachment in processed {
-            match attachment {
-                Attachment::Url(url) => assert!(url.starts_with("https://")),
-                _ => {}
+            if let Attachment::Url(url) = attachment {
+                assert!(url.starts_with("https://"))
             }
         }
     }

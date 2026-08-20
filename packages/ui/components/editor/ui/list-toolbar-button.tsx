@@ -68,8 +68,12 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentBgcurrentDefault"><div className="size-2 rounded-full border border-current bg-current" />
-								Default</Trans></div>
+							<div className="flex items-center gap-2">
+								<Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentBgcurrentDefault">
+									<div className="size-2 rounded-full border border-current bg-current" />
+									Default
+								</Trans>
+							</div>
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -78,8 +82,12 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentCircle"><div className="size-2 rounded-full border border-current" />
-								Circle</Trans></div>
+							<div className="flex items-center gap-2">
+								<Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentCircle">
+									<div className="size-2 rounded-full border border-current" />
+									Circle
+								</Trans>
+							</div>
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -88,8 +96,12 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2BorderBordercurrentBgcurrentSquare"><div className="size-2 border border-current bg-current" />
-								Square</Trans></div>
+							<div className="flex items-center gap-2">
+								<Trans i18nKey="divClassnamesize2BorderBordercurrentBgcurrentSquare">
+									<div className="size-2 border border-current bg-current" />
+									Square
+								</Trans>
+							</div>
 						</DropdownMenuItem>
 					</DropdownMenuGroup>
 				</DropdownMenuContent>
@@ -143,7 +155,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							{t('decimal123', 'Decimal (1, 2, 3)')}
+							{t("decimal123", "Decimal (1, 2, 3)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -152,7 +164,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							{t('lowerAlphaABC', 'Lower Alpha (a, b, c)')}
+							{t("lowerAlphaABC", "Lower Alpha (a, b, c)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -161,7 +173,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							{t('upperAlphaABC', 'Upper Alpha (A, B, C)')}
+							{t("upperAlphaABC", "Upper Alpha (A, B, C)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -170,7 +182,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							{t('lowerRomanIIiIii', 'Lower Roman (i, ii, iii)')}
+							{t("lowerRomanIIiIii", "Lower Roman (i, ii, iii)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -179,7 +191,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							{t('upperRomanIIiIii', 'Upper Roman (I, II, III)')}
+							{t("upperRomanIIiIii", "Upper Roman (I, II, III)")}
 						</DropdownMenuItem>
 					</DropdownMenuGroup>
 				</DropdownMenuContent>

@@ -89,7 +89,11 @@ const HeroSection = memo(
 								{category}
 							</Badge>
 							{node.layer && (
-								<Badge variant="outline" className="text-[10px] md:text-xs">{i18next.t('layerLayer', 'Layer: {{layer}}', { layer: node.layer })}</Badge>
+								<Badge variant="outline" className="text-[10px] md:text-xs">
+									{i18next.t("layerLayer", "Layer: {{layer}}", {
+										layer: node.layer,
+									})}
+								</Badge>
 							)}
 						</div>
 						<div>
@@ -130,15 +134,20 @@ KeyFactCard.displayName = "KeyFactCard";
 const OverviewSection = memo(({ node }: { node: INode }) => {
 	const facts = useMemo(
 		() => [
-			{ label: i18next.t('category', 'Category'), value: node.category },
-			{ label: i18next.t('layer2', 'Layer'), value: node.layer ?? "Global" },
-			{ label: i18next.t('entryPoint', 'Entry point'), value: node.start ? i18next.t('startsFlows', 'Starts flows') : "Utility" },
+			{ label: i18next.t("category", "Category"), value: node.category },
+			{ label: i18next.t("layer2", "Layer"), value: node.layer ?? "Global" },
 			{
-				label: i18next.t('longRunning', 'Long running'),
+				label: i18next.t("entryPoint", "Entry point"),
+				value: node.start
+					? i18next.t("startsFlows", "Starts flows")
+					: "Utility",
+			},
+			{
+				label: i18next.t("longRunning", "Long running"),
 				value: node.long_running ? "Yes" : "No",
 			},
 			{
-				label: i18next.t('eventCallback', 'Event callback'),
+				label: i18next.t("eventCallback", "Event callback"),
 				value: node.event_callback ? "Enabled" : "Disabled",
 			},
 		],
@@ -154,7 +163,7 @@ const OverviewSection = memo(({ node }: { node: INode }) => {
 	return (
 		<div className="space-y-3 md:space-y-4">
 			<h3 className="text-xs md:text-sm font-semibold tracking-wide text-muted-foreground uppercase">
-				{i18next.t('overview', 'Overview')}
+				{i18next.t("overview", "Overview")}
 			</h3>
 			<div className="grid grid-cols-1 gap-2 md:gap-3 sm:grid-cols-2">
 				{facts.map((fact) => (
@@ -182,11 +191,11 @@ const PermissionsSection = memo(({ node }: { node: INode }) => {
 	return (
 		<div className="space-y-3 md:space-y-4">
 			<h3 className="text-xs md:text-sm font-semibold tracking-wide text-muted-foreground uppercase">
-				{i18next.t('wasmNode', 'WASM Node')}
+				{i18next.t("wasmNode", "WASM Node")}
 			</h3>
 			{node.wasm?.package_id && (
 				<div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
-					<span className="shrink-0">{i18next.t('package', 'Package:')}</span>
+					<span className="shrink-0">{i18next.t("package", "Package:")}</span>
 					<span className="truncate">{node.wasm.package_id}</span>
 				</div>
 			)}
@@ -204,7 +213,10 @@ const PermissionsSection = memo(({ node }: { node: INode }) => {
 				</div>
 			) : (
 				<p className="text-xs text-muted-foreground">
-					{i18next.t('noAdditionalPermissionsRequired', 'No additional permissions required.')}
+					{i18next.t(
+						"noAdditionalPermissionsRequired",
+						"No additional permissions required.",
+					)}
 				</p>
 			)}
 		</div>
@@ -216,7 +228,7 @@ const DocsPreview = memo(({ url }: { url: string }) => {
 	return (
 		<div className="h-[70vh] min-h-[360px] overflow-hidden rounded-xl border bg-card md:h-full md:min-h-0">
 			<iframe
-				title={i18next.t('nodeDocsPreview', 'Node docs preview')}
+				title={i18next.t("nodeDocsPreview", "Node docs preview")}
 				src={url}
 				className="h-full w-full"
 				loading="lazy"
@@ -306,7 +318,9 @@ const PinInfo = memo(
 						</p>
 						<div className="flex items-center gap-2 md:gap-3 text-[9px] md:text-[10px] text-muted-foreground">
 							<span className="flex items-center gap-1">
-								<span className="font-medium">{i18next.t('type', 'Type:')}</span>
+								<span className="font-medium">
+									{i18next.t("type", "Type:")}
+								</span>
 								<code className="px-1 py-0.5 rounded bg-muted">
 									{pin.value_type}
 								</code>
@@ -332,14 +346,18 @@ const PinsSection = memo(
 	}) => {
 		return (
 			<div className="space-y-3 md:space-y-4">
-				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2"><Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullPins"><div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
-					Pins</Trans></h3>
+				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2">
+					<Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullPins">
+						<div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
+						Pins
+					</Trans>
+				</h3>
 
 				{inputPins.length > 0 && (
 					<div className="space-y-2 md:space-y-3">
 						<div className="flex items-center gap-1.5 md:gap-2">
 							<Badge variant="outline" className="text-[10px] md:text-xs">
-								{i18next.t('input', 'Input')}
+								{i18next.t("input", "Input")}
 							</Badge>
 							<span className="text-[10px] md:text-xs text-muted-foreground">
 								{inputPins.length} {inputPins.length === 1 ? "pin" : "pins"}
@@ -357,7 +375,7 @@ const PinsSection = memo(
 					<div className="space-y-2 md:space-y-3">
 						<div className="flex items-center gap-1.5 md:gap-2">
 							<Badge variant="outline" className="text-[10px] md:text-xs">
-								{i18next.t('output', 'Output')}
+								{i18next.t("output", "Output")}
 							</Badge>
 							<span className="text-[10px] md:text-xs text-muted-foreground">
 								{outputPins.length} {outputPins.length === 1 ? "pin" : "pins"}
@@ -398,7 +416,7 @@ const ScoreCard = memo(
 					color: "text-muted-foreground",
 					bgColor: "bg-muted/30",
 					textColor: "text-muted-foreground",
-					statusText: i18next.t('notRated', 'Not Rated'),
+					statusText: i18next.t("notRated", "Not Rated"),
 				};
 			}
 			if (clamped <= 3) {
@@ -476,39 +494,48 @@ const ScoresSection = memo(
 		const scoreItems = useMemo(
 			() => [
 				{
-					label: i18next.t('privacy', 'Privacy'),
+					label: i18next.t("privacy", "Privacy"),
 					score: scores.privacy,
-					description: i18next.t('dataProtectionLevel', 'Data protection level'),
+					description: i18next.t(
+						"dataProtectionLevel",
+						"Data protection level",
+					),
 					icon: LockIcon,
 				},
 				{
-					label: i18next.t('security', 'Security'),
+					label: i18next.t("security", "Security"),
 					score: scores.security,
-					description: i18next.t('attackResistance', 'Attack resistance'),
+					description: i18next.t("attackResistance", "Attack resistance"),
 					icon: ShieldIcon,
 				},
 				{
-					label: i18next.t('performance', 'Performance'),
+					label: i18next.t("performance", "Performance"),
 					score: scores.performance,
-					description: i18next.t('computationalEfficiency', 'Computational efficiency'),
+					description: i18next.t(
+						"computationalEfficiency",
+						"Computational efficiency",
+					),
 					icon: ActivityIcon,
 				},
 				{
-					label: i18next.t('governance', 'Governance'),
+					label: i18next.t("governance", "Governance"),
 					score: scores.governance,
-					description: i18next.t('policyCompliance', 'Policy compliance'),
+					description: i18next.t("policyCompliance", "Policy compliance"),
 					icon: ScaleIcon,
 				},
 				{
-					label: i18next.t('reliability', 'Reliability'),
+					label: i18next.t("reliability", "Reliability"),
 					score: scores.reliability,
-					description: i18next.t('stabilityErrorHandling', 'Stability & error handling'),
+					description: i18next.t(
+						"stabilityErrorHandling",
+						"Stability & error handling",
+					),
 					icon: CircleCheckIcon,
 				},
 				{
-					label: i18next.t('cost', 'Cost'),
+					label: i18next.t("cost", "Cost"),
 					score: scores.cost,
-					description: i18next.t('resourceConsumption', 'Resource consumption'),
+					description: i18next.t("resourceConsumption", "Resource consumption"),
 					icon: CoinsIcon,
 				},
 			],
@@ -524,8 +551,12 @@ const ScoresSection = memo(
 
 		return (
 			<div className="space-y-3 md:space-y-4">
-				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2"><Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullQualityMetrics"><div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
-					Quality Metrics</Trans></h3>
+				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2">
+					<Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullQualityMetrics">
+						<div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
+						Quality Metrics
+					</Trans>
+				</h3>
 				<p className="text-[10px] md:text-xs text-muted-foreground">
 					{`Scores range from 0-10, where higher values indicate areas requiring attention.`}
 				</p>
@@ -552,8 +583,12 @@ const FnRefsSection = memo(
 	}) => {
 		return (
 			<div className="space-y-3 md:space-y-4">
-				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2"><Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullFunctionReferences"><div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
-					Function References</Trans></h3>
+				<h3 className="text-xs md:text-sm font-semibold flex items-center gap-2">
+					<Trans i18nKey="divClassnamew05Mdw1H3Mdh4BgprimaryRoundedfullFunctionReferences">
+						<div className="w-0.5 md:w-1 h-3 md:h-4 bg-primary rounded-full" />
+						Function References
+					</Trans>
+				</h3>
 				<div className="space-y-2 md:space-y-3">
 					{fnRefs.can_reference_fns && (
 						<div className="flex items-start gap-2 md:gap-3 p-2.5 md:p-3 rounded-lg bg-muted/50 border">
@@ -562,10 +597,16 @@ const FnRefsSection = memo(
 							</div>
 							<div className="flex-1 min-w-0">
 								<p className="text-xs md:text-sm font-medium">
-									{i18next.t('canReferenceFunctions', 'Can reference functions')}
+									{i18next.t(
+										"canReferenceFunctions",
+										"Can reference functions",
+									)}
 								</p>
 								<p className="text-[10px] md:text-xs text-muted-foreground mt-0.5">
-									{i18next.t('thisNodeCanCallOtherFunctionsInTheFlow', 'This node can call other functions in the flow')}
+									{i18next.t(
+										"thisNodeCanCallOtherFunctionsInTheFlow",
+										"This node can call other functions in the flow",
+									)}
 								</p>
 							</div>
 						</div>
@@ -577,10 +618,13 @@ const FnRefsSection = memo(
 							</div>
 							<div className="flex-1 min-w-0">
 								<p className="text-xs md:text-sm font-medium">
-									{i18next.t('canBeReferenced', 'Can be referenced')}
+									{i18next.t("canBeReferenced", "Can be referenced")}
 								</p>
 								<p className="text-[10px] md:text-xs text-muted-foreground mt-0.5">
-									{i18next.t('otherFunctionsCanCallThisNode', 'Other functions can call this node')}
+									{i18next.t(
+										"otherFunctionsCanCallThisNode",
+										"Other functions can call this node",
+									)}
 								</p>
 							</div>
 						</div>
@@ -588,7 +632,7 @@ const FnRefsSection = memo(
 					{fnRefs.fn_refs.length > 0 && (
 						<div className="space-y-1.5 md:space-y-2">
 							<p className="text-[10px] md:text-xs font-medium text-muted-foreground">
-								{i18next.t('activeReferences', 'Active References')}
+								{i18next.t("activeReferences", "Active References")}
 							</p>
 							<div className="space-y-1.5 md:space-y-2">
 								{fnRefs.fn_refs.map((ref) => (
@@ -604,7 +648,7 @@ const FnRefsSection = memo(
 											size="icon"
 											className="h-5 w-5 md:h-6 md:w-6 p-1"
 											onClick={() => onFocusNode(ref)}
-											title={i18next.t('goToNode', 'Go to node')}
+											title={i18next.t("goToNode", "Go to node")}
 										>
 											<CornerRightUpIcon className="w-3 h-3 md:w-3.5 md:h-3.5" />
 										</Button>
@@ -763,7 +807,7 @@ export const FlowNodeInfoOverlay = forwardRef<
 							className="inline-flex items-center justify-center gap-2"
 						>
 							<ExternalLinkIcon className="w-4 h-4" />
-							{i18next.t('openFullDocumentation', 'Open full documentation')}
+							{i18next.t("openFullDocumentation", "Open full documentation")}
 						</a>
 					</Button>
 				</div>

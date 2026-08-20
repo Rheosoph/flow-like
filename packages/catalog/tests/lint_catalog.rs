@@ -10,8 +10,7 @@
 //!   so the count can only go *down* over time.
 
 use flow_like::flow::{
-    board::{Board, ExecutionMode, ExecutionStage},
-    execution::LogLevel,
+    board::Board,
     node::{Node, NodeLogic},
     pin::PinType,
     variable::VariableType,
@@ -20,7 +19,7 @@ use flow_like_catalog::CatalogBuilder;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::json::json;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::SystemTime,
@@ -427,7 +426,7 @@ fn warn_struct_pins_without_schema() {
         node.pins
             .values()
             .filter(|p| p.data_type == VariableType::Struct)
-            .filter(|p| p.schema.as_ref().map_or(true, |s| s.trim().is_empty()))
+            .filter(|p| p.schema.as_ref().is_none_or(|s| s.trim().is_empty()))
             .map(|p| format!("Struct pin \"{}\" ({:?}) has no schema", p.name, p.pin_type))
             .collect()
     });

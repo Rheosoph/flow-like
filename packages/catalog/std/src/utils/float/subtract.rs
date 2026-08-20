@@ -20,7 +20,7 @@ impl NodeLogic for SubtractFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_subtract",
-            "-",
+            "- (Float)",
             "Subtracts one float from another",
             "Math/Float",
         );

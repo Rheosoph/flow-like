@@ -84,7 +84,8 @@ class TestClient {
 			try {
 				this.ws = new WebSocket(CONFIG.endpoint, {
 					handshakeTimeout: 5000,
-					rejectUnauthorized: false,
+					// Opt-in only, for pointing the suite at a self-signed dev server.
+					rejectUnauthorized: process.env.WS_INSECURE_TLS !== "1",
 					servername: "signaling.flow-like.com",
 				});
 

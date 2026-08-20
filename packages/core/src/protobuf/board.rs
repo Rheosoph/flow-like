@@ -74,7 +74,7 @@ impl LayerType {
 }
 
 impl LayerCacheScope {
-    fn to_proto(&self) -> i32 {
+    fn to_proto(self) -> i32 {
         match self {
             LayerCacheScope::App => 0,
             LayerCacheScope::User => 1,
@@ -112,7 +112,7 @@ impl FromProto<flow_like_types::proto::LayerCache> for LayerCache {
 }
 
 impl LogLevel {
-    fn to_proto(&self) -> i32 {
+    fn to_proto(self) -> i32 {
         match self {
             LogLevel::Debug => 0,
             LogLevel::Info => 1,

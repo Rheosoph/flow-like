@@ -463,9 +463,9 @@ impl<F: Float, D: Data<Elem = F>, T: AsSingleTargets<Elem = usize>>
                 let v_hat = v[index] / bias_correction2;
                 let update = self.learning_rate * m_hat / (v_hat.sqrt() + eps);
                 if index < n_features {
-                    beta[index] = beta[index] - update;
+                    beta[index] -= update;
                 } else {
-                    thresholds[index - n_features] = thresholds[index - n_features] - update;
+                    thresholds[index - n_features] -= update;
                 }
             }
         }
@@ -524,7 +524,7 @@ impl<F: Float, D: Data<Elem = F>> PredictInplace<ArrayBase<D, Ix2>, Array1<usize
 fn initial_thresholds<F: Float>(targets: &[usize], n_classes: usize) -> Vec<F> {
     let mut counts = vec![F::zero(); n_classes];
     for &rank in targets {
-        counts[rank] = counts[rank] + F::one();
+        counts[rank] += F::one();
     }
 
     // Jeffreys-style pseudo-count. A declared-but-unobserved level would otherwise start at a log
@@ -547,7 +547,7 @@ fn level_log_scores<F: Float>(eta: F, thresholds: &[F], n_classes: usize) -> Vec
     scores.push(F::zero());
     let mut offset = F::zero();
     for (index, theta) in thresholds.iter().enumerate() {
-        offset = offset + *theta;
+        offset += *theta;
         scores.push(offset + F::cast(index + 1) * eta);
     }
     scores
@@ -595,7 +595,7 @@ fn level_probabilities<F: Float>(eta: F, thresholds: &[F], n_classes: usize) -> 
         .fold(F::zero(), |acc, value| acc + *value);
     if total > F::zero() {
         for value in probabilities.iter_mut() {
-            *value = *value / total;
+            *value /= total;
         }
     }
     probabilities
@@ -659,14 +659,14 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
             .fold(F::zero(), |acc, (level, p)| acc + F::cast(level) * *p);
         let d_eta = expected_level - F::cast(rank);
         for (index, feature) in row.iter().enumerate() {
-            grad_beta[index] = grad_beta[index] + d_eta * *feature;
+            grad_beta[index] += d_eta * *feature;
         }
 
         // theta_j enters the score of every level above `j`, so its derivative is the upper-tail
         // probability minus the indicator of actually being up there.
         let mut tail = F::zero();
         for cut in (0..n_cuts).rev() {
-            tail = tail + probabilities[cut + 1];
+            tail += probabilities[cut + 1];
             let indicator = if rank > cut { F::one() } else { F::zero() };
             grad_theta[cut] = grad_theta[cut] + tail - indicator;
         }
@@ -676,9 +676,9 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     // toward uniform, which is an assertion about the data rather than about model complexity.
     let half = F::cast(0.5);
     let penalty = beta.iter().fold(F::zero(), |acc, b| acc + *b * *b);
-    negative_log_likelihood = negative_log_likelihood + half * alpha * penalty;
+    negative_log_likelihood += half * alpha * penalty;
     for (index, value) in beta.iter().enumerate() {
-        grad_beta[index] = grad_beta[index] + alpha * *value;
+        grad_beta[index] += alpha * *value;
     }
 
     if !negative_log_likelihood.is_finite()

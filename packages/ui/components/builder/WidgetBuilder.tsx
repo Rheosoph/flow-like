@@ -1,5 +1,5 @@
-import { useTranslation } from "@flow-like/locales";
 import { useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import html2canvas from "html2canvas-pro";
 import {
 	ChevronRight,
@@ -10,6 +10,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import {
+	type RefObject,
 	useCallback,
 	useEffect,
 	useId,
@@ -188,6 +189,34 @@ export interface WidgetBuilderProps {
 	 * requestOpenAssistant() and the embedded A2UICopilot panel/sheet are not mounted.
 	 */
 	externalAssistant?: boolean;
+	/**
+	 * Receives an imperative handle onto the live component state so the host can rewrite it without
+	 * remounting the builder (e.g. renaming a widget action id referenced by components).
+	 */
+	handleRef?: RefObject<WidgetBuilderHandle | null>;
+}
+
+export interface WidgetBuilderHandle {
+	getComponents: () => SurfaceComponent[];
+	replaceComponents: (components: SurfaceComponent[]) => void;
+}
+
+function BuilderHandleBridge({
+	handleRef,
+}: Readonly<{ handleRef: RefObject<WidgetBuilderHandle | null> }>) {
+	const { components, replaceComponents } = useBuilder();
+
+	useEffect(() => {
+		handleRef.current = {
+			getComponents: () => Array.from(components.values()),
+			replaceComponents,
+		};
+		return () => {
+			handleRef.current = null;
+		};
+	}, [components, replaceComponents, handleRef]);
+
+	return null;
 }
 
 export function WidgetBuilder({
@@ -205,6 +234,7 @@ export function WidgetBuilder({
 	currentPageId,
 	onPageChange,
 	externalAssistant = false,
+	handleRef,
 }: WidgetBuilderProps) {
 	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
 	// the assistant, so ask for it exactly when we drop our own.
@@ -232,6 +262,7 @@ export function WidgetBuilder({
 			onCanvasSettingsChange={onCanvasSettingsChange}
 			actionContext={actionContext}
 		>
+			{handleRef && <BuilderHandleBridge handleRef={handleRef} />}
 			<WidgetBuilderWithDnd
 				className={className}
 				surfaceId={surfaceId}
@@ -539,7 +570,7 @@ function WidgetBuilderContent({
 							onClick={() => setCopilotOpen(!copilotOpen)}
 						>
 							<SparklesIcon className="h-4 w-4" />
-							<span className="text-xs">{t('flowpilot', 'FlowPilot')}</span>
+							<span className="text-xs">{t("flowpilot", "FlowPilot")}</span>
 						</Button>
 					)}
 				</div>
@@ -577,11 +608,15 @@ function WidgetBuilderContent({
 									<TabsList className="w-full justify-start rounded-none border-b bg-transparent px-2 shrink-0">
 										<TabsTrigger value="palette" className="gap-1.5">
 											<Palette className="h-4 w-4" />
-											<span className="hidden sm:inline">{t('components', 'Components')}</span>
+											<span className="hidden sm:inline">
+												{t("components", "Components")}
+											</span>
 										</TabsTrigger>
 										<TabsTrigger value="hierarchy" className="gap-1.5">
 											<Layers className="h-4 w-4" />
-											<span className="hidden sm:inline">{t('hierarchy', 'Hierarchy')}</span>
+											<span className="hidden sm:inline">
+												{t("hierarchy", "Hierarchy")}
+											</span>
 										</TabsTrigger>
 									</TabsList>
 									<TabsContent
@@ -690,8 +725,13 @@ function PendingComponentsBar({
 		<div className="flex items-center justify-between px-4 py-2 bg-primary/5 border-b border-primary/20 shrink-0">
 			<div className="flex items-center gap-2">
 				<SparklesIcon className="h-4 w-4 text-primary" />
-				<span className="text-sm font-medium">{t('countComponents', { defaultValue_one: '{{count}} component', defaultValue_other: '{{count}} components', count: components.length })}{" "}
-					{t('readyToApply', 'ready to apply')}
+				<span className="text-sm font-medium">
+					{t("countComponents", {
+						defaultValue_one: "{{count}} component",
+						defaultValue_other: "{{count}} components",
+						count: components.length,
+					})}{" "}
+					{t("readyToApply", "ready to apply")}
 				</span>
 			</div>
 			<div className="flex items-center gap-2">
@@ -702,10 +742,10 @@ function PendingComponentsBar({
 					className="h-7 px-2 text-muted-foreground hover:text-destructive"
 				>
 					<XIcon className="h-4 w-4 mr-1" />
-					{t('dismiss', 'Dismiss')}
+					{t("dismiss", "Dismiss")}
 				</Button>
 				<Button size="sm" onClick={onApply} className="h-7 px-3">
-					{t('applyChanges', 'Apply Changes')}
+					{t("applyChanges", "Apply Changes")}
 				</Button>
 			</div>
 		</div>
@@ -978,7 +1018,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
-				<span>{t('canvas', 'Canvas')}</span>
+				<span>{t("canvas", "Canvas")}</span>
 				{selection.componentIds.length > 0 &&
 					selection.componentIds[0] !== ROOT_ID && (
 						<>
@@ -1042,7 +1082,10 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 							<div className="text-center text-muted-foreground">
 								<Plus className="h-8 w-8 mx-auto mb-2 opacity-50" />
 								<p className="text-sm">
-									{t('dropComponentsHereToStartBuilding', 'Drop components here to start building')}
+									{t(
+										"dropComponentsHereToStartBuilding",
+										"Drop components here to start building",
+									)}
 								</p>
 							</div>
 						</div>

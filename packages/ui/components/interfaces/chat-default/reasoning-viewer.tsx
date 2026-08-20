@@ -122,7 +122,7 @@ export function ReasoningViewer({
 				<span
 					className={cn("font-medium", compact ? "text-[11px]" : "text-xs")}
 				>
-					{t('reasoning', 'Reasoning')}
+					{t("reasoning", "Reasoning")}
 				</span>
 				{isExpanded ? (
 					<ChevronUp className="size-3.5" />
@@ -155,7 +155,9 @@ export function ReasoningViewer({
 						<Suspense
 							fallback={
 								<div className="flex items-center justify-center py-4 text-muted-foreground">
-									<div className="animate-pulse">{t('loading', 'Loading…')}</div>
+									<div className="animate-pulse">
+										{t("loading", "Loading…")}
+									</div>
 								</div>
 							}
 						>

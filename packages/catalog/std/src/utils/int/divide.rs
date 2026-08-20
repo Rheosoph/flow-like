@@ -20,7 +20,7 @@ impl NodeLogic for DivideIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_divide",
-            "/",
+            "/ (Int)",
             "Divides two Integers (handles division by zero)",
             "Math/Int",
         );

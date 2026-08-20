@@ -447,7 +447,11 @@
 											"label": "Prepend the full document to every chunk so no context is ever lost."
 										}
 									],
-									"correct": ["table-header", "heading-metadata", "steps-preconditions"]
+									"correct": [
+										"table-header",
+										"heading-metadata",
+										"steps-preconditions"
+									]
 								}
 							},
 							{

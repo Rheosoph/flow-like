@@ -84,7 +84,7 @@ impl NodeLogic for RegisterLanceTableNode {
         let mut node = Node::new(
             "df_register_lance",
             "Register Lance Table",
-            "Register a LanceDB table into a DataFusion session for SQL queries. Uses the existing to_datafusion() implementation from the vector store.",
+            "Register a LanceDB table into a DataFusion session for SQL. Supports SELECT, INSERT INTO, and UPDATE/DELETE with a column-referencing WHERE clause (SQL Query node). Uses the existing to_datafusion() implementation from the vector store.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");

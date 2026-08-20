@@ -343,9 +343,12 @@ function SchemaSyncButton({ onSync }: Readonly<{ onSync: () => void }>) {
 			onPointerDown={(event) => event.stopPropagation()}
 			onClick={onSync}
 			className="ml-1 mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-border bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-			title={t('theContractChangedSinceThisNodeWasConfiguredReapplyTheCurrentTypedSchema', 'The contract changed since this node was configured. Re-apply the current typed schema.')}
+			title={t(
+				"theContractChangedSinceThisNodeWasConfiguredReapplyTheCurrentTypedSchema",
+				"The contract changed since this node was configured. Re-apply the current typed schema.",
+			)}
 		>
-			<RefreshCw className="h-3 w-3" /> {t('syncSchema', 'Sync schema')}
+			<RefreshCw className="h-3 w-3" /> {t("syncSchema", "Sync schema")}
 		</button>
 	);
 }
@@ -457,11 +460,19 @@ export function OntologySelect({
 			}
 		>
 			{loading && overlays.length === 0 && (
-				<SelectLabel>{t('loadingOntologies', 'Loading ontologies…')}</SelectLabel>
+				<SelectLabel>
+					{t("loadingOntologies", "Loading ontologies…")}
+				</SelectLabel>
 			)}
-			{error && <SelectLabel>{t('couldNotLoadOntologies', 'Could not load ontologies')}</SelectLabel>}
+			{error && (
+				<SelectLabel>
+					{t("couldNotLoadOntologies", "Could not load ontologies")}
+				</SelectLabel>
+			)}
 			{!loading && !error && overlays.length === 0 && (
-				<SelectLabel>{t('noOntologiesDefined', 'No ontologies defined')}</SelectLabel>
+				<SelectLabel>
+					{t("noOntologiesDefined", "No ontologies defined")}
+				</SelectLabel>
 			)}
 			{overlays.map((overlay) => (
 				<SelectItem key={overlay.id} value={overlay.id}>
@@ -529,8 +540,16 @@ export function OntologyObjectSelect({
 				});
 			}}
 		>
-			{loading && <SelectLabel>{t('loadingObjectTypes', 'Loading object types…')}</SelectLabel>}
-			{error && <SelectLabel>{t('couldNotLoadObjectTypes', 'Could not load object types')}</SelectLabel>}
+			{loading && (
+				<SelectLabel>
+					{t("loadingObjectTypes", "Loading object types…")}
+				</SelectLabel>
+			)}
+			{error && (
+				<SelectLabel>
+					{t("couldNotLoadObjectTypes", "Could not load object types")}
+				</SelectLabel>
+			)}
 			{overlay?.nodes.map((object) => (
 				<SelectItem
 					key={objectIdentifier(object)}
@@ -540,7 +559,7 @@ export function OntologyObjectSelect({
 				</SelectItem>
 			))}
 			{overlay && overlay.nodes.length === 0 && (
-				<SelectLabel>{t('noObjectTypes', 'No object types')}</SelectLabel>
+				<SelectLabel>{t("noObjectTypes", "No object types")}</SelectLabel>
 			)}
 		</CompactSelect>
 	);
@@ -616,10 +635,18 @@ export function OntologyActionSelect({
 					)
 				}
 			>
-				{loading && <SelectLabel>{t('loadingActions', 'Loading actions…')}</SelectLabel>}
-				{error && <SelectLabel>{t('couldNotLoadActions', 'Could not load actions')}</SelectLabel>}
+				{loading && (
+					<SelectLabel>{t("loadingActions", "Loading actions…")}</SelectLabel>
+				)}
+				{error && (
+					<SelectLabel>
+						{t("couldNotLoadActions", "Could not load actions")}
+					</SelectLabel>
+				)}
 				{!loading && !error && actions.length === 0 && (
-					<SelectLabel>{t('noEnabledActions', 'No enabled actions')}</SelectLabel>
+					<SelectLabel>
+						{t("noEnabledActions", "No enabled actions")}
+					</SelectLabel>
 				)}
 				{actions.map((action) => (
 					<SelectItem key={action.id} value={action.id}>
@@ -707,16 +734,24 @@ export function RemoteOntologySelect({
 			open={open}
 			onOpenChange={setOpen}
 			value={selected?.contract.name ?? selectedId}
-			placeholder={t('installedOntology', 'Installed ontology')}
+			placeholder={t("installedOntology", "Installed ontology")}
 			label={pin.friendly_name}
 			onChange={(id) => void persist(pin, id, { clearPins: ["object_type"] })}
 		>
 			{loading && imports.length === 0 && (
-				<SelectLabel>{t('loadingInstalledOntologies', 'Loading installed ontologies…')}</SelectLabel>
+				<SelectLabel>
+					{t("loadingInstalledOntologies", "Loading installed ontologies…")}
+				</SelectLabel>
 			)}
-			{error && <SelectLabel>{t('couldNotLoadImports', 'Could not load imports')}</SelectLabel>}
+			{error && (
+				<SelectLabel>
+					{t("couldNotLoadImports", "Could not load imports")}
+				</SelectLabel>
+			)}
 			{!loading && !error && imports.length === 0 && (
-				<SelectLabel>{t('noInstalledOntologies', 'No installed ontologies')}</SelectLabel>
+				<SelectLabel>
+					{t("noInstalledOntologies", "No installed ontologies")}
+				</SelectLabel>
 			)}
 			{imports.map((item) => (
 				<SelectItem key={item.id} value={item.id}>
@@ -785,8 +820,16 @@ export function RemoteOntologyObjectSelect({
 				});
 			}}
 		>
-			{loading && <SelectLabel>{t('loadingObjectTypes', 'Loading object types…')}</SelectLabel>}
-			{error && <SelectLabel>{t('couldNotLoadObjectTypes', 'Could not load object types')}</SelectLabel>}
+			{loading && (
+				<SelectLabel>
+					{t("loadingObjectTypes", "Loading object types…")}
+				</SelectLabel>
+			)}
+			{error && (
+				<SelectLabel>
+					{t("couldNotLoadObjectTypes", "Could not load object types")}
+				</SelectLabel>
+			)}
 			{contract?.nodes.map((object) => (
 				<SelectItem
 					key={objectIdentifier(object)}
@@ -796,7 +839,7 @@ export function RemoteOntologyObjectSelect({
 				</SelectItem>
 			))}
 			{contract && contract.nodes.length === 0 && (
-				<SelectLabel>{t('noObjectTypes', 'No object types')}</SelectLabel>
+				<SelectLabel>{t("noObjectTypes", "No object types")}</SelectLabel>
 			)}
 		</CompactSelect>
 	);
@@ -870,10 +913,18 @@ export function RemoteOntologyActionSelect({
 					)
 				}
 			>
-				{loading && <SelectLabel>{t('loadingActions', 'Loading actions…')}</SelectLabel>}
-				{error && <SelectLabel>{t('couldNotLoadActions', 'Could not load actions')}</SelectLabel>}
+				{loading && (
+					<SelectLabel>{t("loadingActions", "Loading actions…")}</SelectLabel>
+				)}
+				{error && (
+					<SelectLabel>
+						{t("couldNotLoadActions", "Could not load actions")}
+					</SelectLabel>
+				)}
 				{!loading && !error && actions.length === 0 && (
-					<SelectLabel>{t('noEnabledActions', 'No enabled actions')}</SelectLabel>
+					<SelectLabel>
+						{t("noEnabledActions", "No enabled actions")}
+					</SelectLabel>
 				)}
 				{actions.map((action) => (
 					<SelectItem key={action.id} value={action.id}>

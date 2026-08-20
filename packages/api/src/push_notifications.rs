@@ -202,6 +202,7 @@ pub async fn dispatch_notification(
     Ok(notification_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_provider_target_registration(
     state: &AppState,
     user_id: &str,

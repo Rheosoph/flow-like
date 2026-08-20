@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { IBit } from "../schema";
+import { type IBit, IBitTypes } from "../schema";
 import {
 	filterHostableLlmModels,
 	getLlmModelTier,
@@ -8,6 +8,7 @@ import {
 	isLlamaCppLlmModel,
 	isLocalLlmModel,
 	isMlxLlmModel,
+	selectProfileLlmModels,
 } from "./local-model-filter";
 function bit(providerName?: string): IBit {
 	return {
@@ -128,5 +129,70 @@ describe("hosted model tiers", () => {
 		expect(getLlmModelTier(unspecified)).toBeUndefined();
 		expect(isFreeLlmModel(unspecified)).toBe(false);
 		expect(isFreeLlmModel(paid)).toBe(false);
+	});
+});
+
+describe("selectProfileLlmModels", () => {
+	const ALL_HOSTS = { canHostLlamaCPP: true, canHostMLX: true };
+	const model = (id: string, hub: string, type = IBitTypes.Vlm): IBit =>
+		({
+			id,
+			hub,
+			type,
+			parameters: { provider: { provider_name: "Hosted" } },
+		}) as unknown as IBit;
+
+	test("matches a profile reference whose hub differs from the bit's own hub", () => {
+		// The Lean template references `api.flow-like.com:<id>` while the bit is
+		// served carrying `api.alpha.flow-like.com` — it is still the same model.
+		const free = model("ca6ziza1", "api.alpha.flow-like.com");
+		const selected = selectProfileLlmModels(
+			[free, model("other", "api.flow-like.com")],
+			[],
+			["api.flow-like.com:ca6ziza1"],
+			ALL_HOSTS,
+		);
+		expect(selected.map((bit) => bit.id)).toEqual(["ca6ziza1"]);
+	});
+
+	test("matches bare references and ignores catalog models outside the profile", () => {
+		const selected = selectProfileLlmModels(
+			[model("a", "hub"), model("b", "hub")],
+			[],
+			["a"],
+			ALL_HOSTS,
+		);
+		expect(selected.map((bit) => bit.id)).toEqual(["a"]);
+	});
+
+	test("adds custom models once and drops non-LLM bits", () => {
+		const selected = selectProfileLlmModels(
+			[model("shared", "hub"), model("embed", "hub", IBitTypes.Embedding)],
+			[model("shared", "hub"), model("own", "hub", IBitTypes.Llm)],
+			["hub:shared", "hub:embed"],
+			ALL_HOSTS,
+		);
+		expect(selected.map((bit) => bit.id).sort()).toEqual(["own", "shared"]);
+	});
+
+	test("drops local models this host cannot run", () => {
+		const local = {
+			id: "local",
+			hub: "hub",
+			type: IBitTypes.Llm,
+			parameters: { provider: { provider_name: "Local" } },
+		} as unknown as IBit;
+		const selected = selectProfileLlmModels([local], [], ["hub:local"], {
+			canHostLlamaCPP: false,
+			canHostMLX: false,
+		});
+		expect(selected).toEqual([]);
+	});
+
+	test("returns nothing until both catalog and profile have loaded", () => {
+		expect(selectProfileLlmModels(undefined, [], ["a"], ALL_HOSTS)).toEqual([]);
+		expect(
+			selectProfileLlmModels([model("a", "hub")], [], undefined, ALL_HOSTS),
+		).toEqual([]);
 	});
 });

@@ -1,7 +1,12 @@
 "use client";
 
+import {
+	type BulkUploadProgressCallback,
+	type IStorageUploadOptions,
+	StorageSystem,
+	useBackend,
+} from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
-import { StorageSystem, useBackend } from "@flow-like/flow-like-ui";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -72,13 +77,15 @@ export default function Page() {
 				appId: string,
 				targetPrefix: string,
 				files: File[],
-				onProgress?: (progress: number) => void,
+				onProgress?: BulkUploadProgressCallback,
+				uploadOptions?: IStorageUploadOptions,
 			) =>
 				backend.storageState.uploadStorageItemsUser(
 					appId,
 					targetPrefix,
 					files,
 					onProgress,
+					uploadOptions,
 				),
 			writeStorageItems: backend.storageState.writeStorageItems?.bind(
 				backend.storageState,
@@ -92,7 +99,7 @@ export default function Page() {
 			appId={id ?? ""}
 			prefix={decodeURIComponent(prefix)}
 			fileToUrl={fileToUrl}
-			title={t('userStorage', 'User Storage')}
+			title={t("userStorage", "User Storage")}
 			storageScopeKey="user"
 			operations={operations}
 			revealInExplorer={handleRevealInExplorer}

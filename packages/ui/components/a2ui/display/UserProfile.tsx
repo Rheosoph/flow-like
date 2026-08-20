@@ -238,7 +238,7 @@ function ProfileHoverContent({
 								href={`/profile?sub=${encodeURIComponent(userId)}`}
 								className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
 							>
-								{t('viewProfile', 'View profile')}
+								{t("viewProfile", "View profile")}
 								<ExternalLink className="h-3 w-3" />
 							</a>
 						)}
@@ -272,7 +272,7 @@ function ProfileHoverContent({
 						{showUserId && userId ? (
 							<DetailRow
 								icon={<IdCard className="h-3.5 w-3.5" />}
-								label={t('userId', 'User ID')}
+								label={t("userId", "User ID")}
 							>
 								<code className="block truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
 									{userId}
@@ -478,7 +478,9 @@ export function A2UIUserProfile({
 								href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
 								className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline"
 							>
-								<span className="truncate">{t('viewProfile', 'View profile')}</span>
+								<span className="truncate">
+									{t("viewProfile", "View profile")}
+								</span>
 								<ExternalLink className="h-3 w-3 shrink-0" />
 							</a>
 						) : null}

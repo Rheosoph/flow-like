@@ -2,8752 +2,8752 @@
 // Do not edit by hand.
 
 export const generatedNodeSidebar = [
-  {
-    "label": "AI",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/ai"
-      },
-      {
-        "label": "Agents",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/agents"
-          },
-          {
-            "label": "Builder",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/agents/builder"
-              },
-              {
-                "label": "Add DataFusion",
-                "slug": "nodes/ai/agents/builder/add-datafusion-to-agent"
-              },
-              {
-                "label": "Agent from Model",
-                "slug": "nodes/ai/agents/builder/agent-from-model"
-              },
-              {
-                "label": "Lazy Register Function Tools",
-                "slug": "nodes/ai/agents/builder/agent-lazy-register-function-tools"
-              },
-              {
-                "label": "Register Function Tools",
-                "slug": "nodes/ai/agents/builder/agent-register-function-tools"
-              },
-              {
-                "label": "Register KG Traverse Tool",
-                "slug": "nodes/ai/agents/builder/kg-traverse-tool"
-              },
-              {
-                "label": "Register MCP Tools",
-                "slug": "nodes/ai/agents/builder/agent-register-mcp-tools"
-              },
-              {
-                "label": "Register Memory",
-                "slug": "nodes/ai/agents/builder/agent-register-memory"
-              },
-              {
-                "label": "Register Remote MCP Tools",
-                "slug": "nodes/ai/agents/builder/agent-register-remote-mcp-tools"
-              },
-              {
-                "label": "Register Thinking Tool",
-                "slug": "nodes/ai/agents/builder/agent-register-thinking"
-              },
-              {
-                "label": "Set Agent System Prompt",
-                "slug": "nodes/ai/agents/builder/agent-set-system-prompt"
-              }
-            ]
-          },
-          {
-            "label": "Invoke Agent",
-            "slug": "nodes/ai/agents/agent-invoke"
-          },
-          {
-            "label": "Simple Agent",
-            "slug": "nodes/ai/agents/simple-agent"
-          },
-          {
-            "label": "Stream Invoke Agent",
-            "slug": "nodes/ai/agents/agent-stream-invoke"
-          }
-        ]
-      },
-      {
-        "label": "Embedding",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/embedding"
-          },
-          {
-            "label": "Embed Document",
-            "slug": "nodes/ai/embedding/embed-document"
-          },
-          {
-            "label": "Embed Image",
-            "slug": "nodes/ai/embedding/embed-image"
-          },
-          {
-            "label": "Embed Query",
-            "slug": "nodes/ai/embedding/embed-query"
-          },
-          {
-            "label": "Load Embedding Model",
-            "slug": "nodes/ai/embedding/load-model"
-          }
-        ]
-      },
-      {
-        "label": "Generative",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/generative"
-          },
-          {
-            "label": "Audio",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/audio"
-              },
-              {
-                "label": "Options",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/audio/options"
-                  },
-                  {
-                    "label": "Google STT Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-stt-options-google"
-                  },
-                  {
-                    "label": "Google TTS Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-google"
-                  },
-                  {
-                    "label": "Hugging Face TTS Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-huggingface"
-                  },
-                  {
-                    "label": "Mistral TTS Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-mistral"
-                  },
-                  {
-                    "label": "OpenAI-Compatible STT Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-stt-options-openai-compatible"
-                  },
-                  {
-                    "label": "OpenAI-Compatible TTS Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-openai-compatible"
-                  },
-                  {
-                    "label": "xAI STT Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-stt-options-xai"
-                  },
-                  {
-                    "label": "xAI TTS Options",
-                    "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-xai"
-                  }
-                ]
-              },
-              {
-                "label": "Local Speech to Text",
-                "slug": "nodes/ai/generative/audio/ai-audio-local-speech-to-text"
-              },
-              {
-                "label": "Local Text to Speech",
-                "slug": "nodes/ai/generative/audio/ai-audio-local-text-to-speech"
-              },
-              {
-                "label": "Speech to Text",
-                "slug": "nodes/ai/generative/audio/ai-audio-speech-to-text"
-              },
-              {
-                "label": "Text to Speech",
-                "slug": "nodes/ai/generative/audio/ai-audio-text-to-speech"
-              }
-            ]
-          },
-          {
-            "label": "History",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/history"
-              },
-              {
-                "label": "Message",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/history/message"
-                  },
-                  {
-                    "label": "Extract Content",
-                    "slug": "nodes/ai/generative/history/message/ai-generative-message-extract-content"
-                  },
-                  {
-                    "label": "Make Message",
-                    "slug": "nodes/ai/generative/history/message/ai-generative-make-history-message"
-                  },
-                  {
-                    "label": "Push Content",
-                    "slug": "nodes/ai/generative/history/message/ai-generative-push-content"
-                  }
-                ]
-              },
-              {
-                "label": "Clear History",
-                "slug": "nodes/ai/generative/history/ai-generative-clear-history"
-              },
-              {
-                "label": "From Messages",
-                "slug": "nodes/ai/generative/history/ai-generative-from-messages"
-              },
-              {
-                "label": "Get System Prompt",
-                "slug": "nodes/ai/generative/history/ai-generative-get-system-prompt"
-              },
-              {
-                "label": "History From String",
-                "slug": "nodes/ai/generative/history/ai-generative-history-from-string"
-              },
-              {
-                "label": "Make History",
-                "slug": "nodes/ai/generative/history/ai-generative-make-history"
-              },
-              {
-                "label": "Pop Message from History",
-                "slug": "nodes/ai/generative/history/ai-generative-pop-history-message"
-              },
-              {
-                "label": "Push Message",
-                "slug": "nodes/ai/generative/history/ai-generative-add-history-message"
-              },
-              {
-                "label": "Set History Frequency Penalty",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-frequency-penalty"
-              },
-              {
-                "label": "Set History N",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-n"
-              },
-              {
-                "label": "Set History Presence Penalty",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-presence-penalty"
-              },
-              {
-                "label": "Set History Temperature",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-temperature"
-              },
-              {
-                "label": "Set History Thinking",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-thinking"
-              },
-              {
-                "label": "Set History Top P",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-top-p"
-              },
-              {
-                "label": "Set History User",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-user"
-              },
-              {
-                "label": "Set Max Tokens",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-max-tokens"
-              },
-              {
-                "label": "Set Response Format",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-response-format"
-              },
-              {
-                "label": "Set Seed",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-seed"
-              },
-              {
-                "label": "Set Stop Words",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-stop-words"
-              },
-              {
-                "label": "Set Stream",
-                "slug": "nodes/ai/generative/history/ai-generative-set-history-stream"
-              },
-              {
-                "label": "Set System Message",
-                "slug": "nodes/ai/generative/history/ai-generative-set-system-prompt-message"
-              }
-            ]
-          },
-          {
-            "label": "Image",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/image"
-              },
-              {
-                "label": "Options",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/image/options"
-                  },
-                  {
-                    "label": "AWS Bedrock Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-aws-bedrock"
-                  },
-                  {
-                    "label": "Google Imagen Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-google-imagen"
-                  },
-                  {
-                    "label": "Hugging Face Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-huggingface"
-                  },
-                  {
-                    "label": "OpenAI Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-openai"
-                  },
-                  {
-                    "label": "OpenRouter Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-openrouter"
-                  },
-                  {
-                    "label": "Together Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-together"
-                  },
-                  {
-                    "label": "xAI Image Options",
-                    "slug": "nodes/ai/generative/image/options/ai-image-options-xai"
-                  }
-                ]
-              },
-              {
-                "label": "Generate Image",
-                "slug": "nodes/ai/generative/image/ai-image-generate"
-              }
-            ]
-          },
-          {
-            "label": "Preferences",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/preferences"
-              },
-              {
-                "label": "Make Preferences",
-                "slug": "nodes/ai/generative/preferences/ai-generative-make-preferences"
-              },
-              {
-                "label": "Set Model Hint",
-                "slug": "nodes/ai/generative/preferences/ai-generative-set-model-hint"
-              },
-              {
-                "label": "Set Preference Weight",
-                "slug": "nodes/ai/generative/preferences/ai-generative-set-preference-weight"
-              }
-            ]
-          },
-          {
-            "label": "Provider",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/provider"
-              },
-              {
-                "label": "AWS Bedrock Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-bedrock"
-              },
-              {
-                "label": "Anthropic Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-anthropic"
-              },
-              {
-                "label": "Atlas Cloud Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-atlascloud"
-              },
-              {
-                "label": "Cohere Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-cohere"
-              },
-              {
-                "label": "Deepseek Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-deepseek"
-              },
-              {
-                "label": "Galadriel Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-galadriel"
-              },
-              {
-                "label": "Gemini Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-gemini"
-              },
-              {
-                "label": "Groq Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-groq"
-              },
-              {
-                "label": "Huggingface Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-huggingface"
-              },
-              {
-                "label": "Hyperbolic Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-hyperbolic"
-              },
-              {
-                "label": "LM Studio Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-lmstudio"
-              },
-              {
-                "label": "MiniMax Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-minimax"
-              },
-              {
-                "label": "Mira Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-mira"
-              },
-              {
-                "label": "Mistral Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-mistral"
-              },
-              {
-                "label": "Moonshot AI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-moonshot"
-              },
-              {
-                "label": "Mozilla any-llm Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-mozilla"
-              },
-              {
-                "label": "Ollama Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-ollama"
-              },
-              {
-                "label": "OpenAI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-openai"
-              },
-              {
-                "label": "OpenRouter Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-openrouter"
-              },
-              {
-                "label": "Perplexity Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-perplexity"
-              },
-              {
-                "label": "Together AI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-together"
-              },
-              {
-                "label": "Vertex AI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-vertex"
-              },
-              {
-                "label": "VoyageAI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-voyageai"
-              },
-              {
-                "label": "xAI Model",
-                "slug": "nodes/ai/generative/provider/ai-generative-build-xai"
-              }
-            ]
-          },
-          {
-            "label": "Response",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/response"
-              },
-              {
-                "label": "Chunk",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/response/chunk"
-                  },
-                  {
-                    "label": "Get Token",
-                    "slug": "nodes/ai/generative/response/chunk/ai-generative-llm-response-chunk-get-token"
-                  }
-                ]
-              },
-              {
-                "label": "Message",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/response/message"
-                  },
-                  {
-                    "label": "Get Content",
-                    "slug": "nodes/ai/generative/response/message/ai-generative-llm-response-message-get-content"
-                  },
-                  {
-                    "label": "Get Role",
-                    "slug": "nodes/ai/generative/response/message/ai-generative-llm-response-message-get-role"
-                  }
-                ]
-              },
-              {
-                "label": "Chunk From String",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-chunk-from-string"
-              },
-              {
-                "label": "Last Content",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-response-last-content"
-              },
-              {
-                "label": "Last Message",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-response-last-message"
-              },
-              {
-                "label": "Make Response",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-response-make"
-              },
-              {
-                "label": "Push Chunk",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-response-push-chunk"
-              },
-              {
-                "label": "Response From String",
-                "slug": "nodes/ai/generative/response/ai-generative-llm-response-from-string"
-              }
-            ]
-          },
-          {
-            "label": "Video",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/generative/video"
-              },
-              {
-                "label": "Options",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/video/options"
-                  },
-                  {
-                    "label": "OpenAI Sora Options",
-                    "slug": "nodes/ai/generative/video/options/ai-video-options-openai-sora"
-                  },
-                  {
-                    "label": "Replicate Video Options",
-                    "slug": "nodes/ai/generative/video/options/ai-video-options-replicate"
-                  },
-                  {
-                    "label": "Runway Options",
-                    "slug": "nodes/ai/generative/video/options/ai-video-options-runway"
-                  },
-                  {
-                    "label": "Vertex Veo Options",
-                    "slug": "nodes/ai/generative/video/options/ai-video-options-vertex-veo"
-                  },
-                  {
-                    "label": "fal Video Options",
-                    "slug": "nodes/ai/generative/video/options/ai-video-options-fal"
-                  }
-                ]
-              },
-              {
-                "label": "Provider",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/generative/video/provider"
-                  },
-                  {
-                    "label": "Replicate Video Model",
-                    "slug": "nodes/ai/generative/video/provider/ai-video-build-replicate"
-                  },
-                  {
-                    "label": "Runway Video Model",
-                    "slug": "nodes/ai/generative/video/provider/ai-video-build-runway"
-                  },
-                  {
-                    "label": "fal Video Model",
-                    "slug": "nodes/ai/generative/video/provider/ai-video-build-fal"
-                  }
-                ]
-              },
-              {
-                "label": "Generate Video",
-                "slug": "nodes/ai/generative/video/ai-video-generate"
-              }
-            ]
-          },
-          {
-            "label": "AI Extractor",
-            "slug": "nodes/ai/generative/llm-extractor"
-          },
-          {
-            "label": "AI Extractor from History",
-            "slug": "nodes/ai/generative/llm-extractor-history"
-          },
-          {
-            "label": "Add Model Headers",
-            "slug": "nodes/ai/generative/ai-generative-add-headers"
-          },
-          {
-            "label": "Find Model",
-            "slug": "nodes/ai/generative/ai-generative-find-model"
-          },
-          {
-            "label": "Invoke Model",
-            "slug": "nodes/ai/generative/ai-generative-invoke"
-          },
-          {
-            "label": "Invoke Simple",
-            "slug": "nodes/ai/generative/ai-generative-invoke-simple"
-          },
-          {
-            "label": "Invoke with Tools",
-            "slug": "nodes/ai/generative/invoke-llm-with-tools"
-          },
-          {
-            "label": "LLM Branch",
-            "slug": "nodes/ai/generative/llm-branch"
-          },
-          {
-            "label": "Summarize",
-            "slug": "nodes/ai/generative/ai-llm-summarize"
-          }
-        ]
-      },
-      {
-        "label": "GitHub",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/github"
-          },
-          {
-            "label": "Copilot",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/github/copilot"
-              },
-              {
-                "label": "Chat",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/chat"
-                  },
-                  {
-                    "label": "Abort",
-                    "slug": "nodes/ai/github/copilot/chat/copilot-abort"
-                  },
-                  {
-                    "label": "Send Message",
-                    "slug": "nodes/ai/github/copilot/chat/copilot-send-and-wait"
-                  },
-                  {
-                    "label": "Stream Message",
-                    "slug": "nodes/ai/github/copilot/chat/copilot-send-streaming"
-                  }
-                ]
-              },
-              {
-                "label": "Client",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/client"
-                  },
-                  {
-                    "label": "Local Client Config",
-                    "slug": "nodes/ai/github/copilot/client/copilot-local-client-builder"
-                  },
-                  {
-                    "label": "Server Client Config",
-                    "slug": "nodes/ai/github/copilot/client/copilot-server-client-builder"
-                  },
-                  {
-                    "label": "Start Local Client",
-                    "slug": "nodes/ai/github/copilot/client/copilot-local-client-start"
-                  },
-                  {
-                    "label": "Start Server Client",
-                    "slug": "nodes/ai/github/copilot/client/copilot-server-client-start"
-                  },
-                  {
-                    "label": "Stop Client",
-                    "slug": "nodes/ai/github/copilot/client/copilot-client-stop"
-                  }
-                ]
-              },
-              {
-                "label": "Config",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/config"
-                  },
-                  {
-                    "label": "Custom Agent Config",
-                    "slug": "nodes/ai/github/copilot/config/copilot-custom-agent"
-                  },
-                  {
-                    "label": "Infinite Session Config",
-                    "slug": "nodes/ai/github/copilot/config/copilot-infinite-session"
-                  },
-                  {
-                    "label": "Provider Config (BYOK)",
-                    "slug": "nodes/ai/github/copilot/config/copilot-provider-config"
-                  },
-                  {
-                    "label": "System Message Config",
-                    "slug": "nodes/ai/github/copilot/config/copilot-system-message"
-                  }
-                ]
-              },
-              {
-                "label": "MCP",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/mcp"
-                  },
-                  {
-                    "label": "MCP HTTP Server",
-                    "slug": "nodes/ai/github/copilot/mcp/copilot-mcp-http-server"
-                  },
-                  {
-                    "label": "MCP Local Server",
-                    "slug": "nodes/ai/github/copilot/mcp/copilot-mcp-local-server"
-                  }
-                ]
-              },
-              {
-                "label": "Session",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/session"
-                  },
-                  {
-                    "label": "Create Session",
-                    "slug": "nodes/ai/github/copilot/session/copilot-create-session"
-                  },
-                  {
-                    "label": "Destroy Session",
-                    "slug": "nodes/ai/github/copilot/session/copilot-destroy-session"
-                  },
-                  {
-                    "label": "Session Builder",
-                    "slug": "nodes/ai/github/copilot/session/copilot-session-builder"
-                  }
-                ]
-              },
-              {
-                "label": "Tools",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/tools"
-                  },
-                  {
-                    "label": "Tool Config",
-                    "slug": "nodes/ai/github/copilot/tools/copilot-tool-config"
-                  },
-                  {
-                    "label": "Tool List Builder",
-                    "slug": "nodes/ai/github/copilot/tools/copilot-tool-list"
-                  }
-                ]
-              },
-              {
-                "label": "Utilities",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/github/copilot/utilities"
-                  },
-                  {
-                    "label": "Client Status",
-                    "slug": "nodes/ai/github/copilot/utilities/copilot-client-status"
-                  },
-                  {
-                    "label": "Get Auth Status",
-                    "slug": "nodes/ai/github/copilot/utilities/copilot-get-auth-status"
-                  },
-                  {
-                    "label": "Get Models",
-                    "slug": "nodes/ai/github/copilot/utilities/copilot-get-models"
-                  },
-                  {
-                    "label": "Get Version",
-                    "slug": "nodes/ai/github/copilot/utilities/copilot-get-version"
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "ML",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/ml"
-          },
-          {
-            "label": "Classification",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/classification"
-              },
-              {
-                "label": "Fit Novelty Detection (One-Class SVM)",
-                "slug": "nodes/ai/ml/classification/fit-one-class-svm"
-              },
-              {
-                "label": "Train Classifier (AdaBoost)",
-                "slug": "nodes/ai/ml/classification/fit-adaboost"
-              },
-              {
-                "label": "Train Classifier (Decision Tree)",
-                "slug": "nodes/ai/ml/classification/fit-decision-tree"
-              },
-              {
-                "label": "Train Classifier (K-Nearest Neighbours)",
-                "slug": "nodes/ai/ml/classification/fit-knn-classifier"
-              },
-              {
-                "label": "Train Classifier (Logistic Regression)",
-                "slug": "nodes/ai/ml/classification/fit-logistic-regression"
-              },
-              {
-                "label": "Train Classifier (Multinomial Naive Bayes)",
-                "slug": "nodes/ai/ml/classification/fit-multinomial-naive-bayes"
-              },
-              {
-                "label": "Train Classifier (Naive Bayes)",
-                "slug": "nodes/ai/ml/classification/fit-naive-bayes"
-              },
-              {
-                "label": "Train Classifier (Random Forest)",
-                "slug": "nodes/ai/ml/classification/fit-random-forest"
-              },
-              {
-                "label": "Train Classifier (SVM)",
-                "slug": "nodes/ai/ml/classification/fit-svm-multi-class"
-              }
-            ]
-          },
-          {
-            "label": "Clustering",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/clustering"
-              },
-              {
-                "label": "Fit Clustering (Gaussian Mixture)",
-                "slug": "nodes/ai/ml/clustering/fit-gaussian-mixture"
-              },
-              {
-                "label": "Train Clustering (DBSCAN)",
-                "slug": "nodes/ai/ml/clustering/fit-dbscan"
-              },
-              {
-                "label": "Train Clustering (KMeans)",
-                "slug": "nodes/ai/ml/clustering/fit-kmeans"
-              }
-            ]
-          },
-          {
-            "label": "Dataset",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/dataset"
-              },
-              {
-                "label": "K-Fold Split",
-                "slug": "nodes/ai/ml/dataset/ai-ml-dataset-kfold"
-              },
-              {
-                "label": "Sample Dataset",
-                "slug": "nodes/ai/ml/dataset/ai-ml-dataset-sample"
-              },
-              {
-                "label": "Shuffle Dataset",
-                "slug": "nodes/ai/ml/dataset/ai-ml-dataset-shuffle"
-              },
-              {
-                "label": "Split Dataset",
-                "slug": "nodes/ai/ml/dataset/ai-ml-dataset-split"
-              },
-              {
-                "label": "Stratified Split",
-                "slug": "nodes/ai/ml/dataset/ai-ml-dataset-stratified-split"
-              }
-            ]
-          },
-          {
-            "label": "Metrics",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/metrics"
-              },
-              {
-                "label": "Accuracy",
-                "slug": "nodes/ai/ml/metrics/ml-eval-accuracy"
-              },
-              {
-                "label": "Confusion Matrix",
-                "slug": "nodes/ai/ml/metrics/ml-eval-confusion-matrix"
-              },
-              {
-                "label": "ROC-AUC & Log Loss",
-                "slug": "nodes/ai/ml/metrics/ml-roc-auc"
-              },
-              {
-                "label": "Regression Metrics",
-                "slug": "nodes/ai/ml/metrics/ml-eval-regression"
-              },
-              {
-                "label": "Silhouette Score",
-                "slug": "nodes/ai/ml/metrics/ml-silhouette-score"
-              }
-            ]
-          },
-          {
-            "label": "Model Info",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/model-info"
-              },
-              {
-                "label": "Feature Importance",
-                "slug": "nodes/ai/ml/model-info/ml-feature-importance"
-              },
-              {
-                "label": "Get Centroids",
-                "slug": "nodes/ai/ml/model-info/ml-get-kmeans-centroids"
-              },
-              {
-                "label": "Get Coefficients",
-                "slug": "nodes/ai/ml/model-info/ml-get-linear-coefficients"
-              },
-              {
-                "label": "Model Info",
-                "slug": "nodes/ai/ml/model-info/ml-model-info"
-              }
-            ]
-          },
-          {
-            "label": "ONNX",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/onnx"
-              },
-              {
-                "label": "Audio",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/audio"
-                  },
-                  {
-                    "label": "Audio to Mel Spectrogram",
-                    "slug": "nodes/ai/ml/onnx/audio/audio-to-mel-spectrogram"
-                  },
-                  {
-                    "label": "Load Audio",
-                    "slug": "nodes/ai/ml/onnx/audio/load-audio"
-                  },
-                  {
-                    "label": "Resample Audio",
-                    "slug": "nodes/ai/ml/onnx/audio/resample-audio"
-                  },
-                  {
-                    "label": "Trim Audio",
-                    "slug": "nodes/ai/ml/onnx/audio/trim-audio"
-                  },
-                  {
-                    "label": "Voice Activity Detection",
-                    "slug": "nodes/ai/ml/onnx/audio/onnx-vad"
-                  }
-                ]
-              },
-              {
-                "label": "Batch",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/batch"
-                  },
-                  {
-                    "label": "Batch Image Inference",
-                    "slug": "nodes/ai/ml/onnx/batch/onnx-batch-image-inference"
-                  }
-                ]
-              },
-              {
-                "label": "Face",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/face"
-                  },
-                  {
-                    "label": "Analyze Faces",
-                    "slug": "nodes/ai/ml/onnx/face/face-id-analyze"
-                  },
-                  {
-                    "label": "Compare Faces",
-                    "slug": "nodes/ai/ml/onnx/face/compare-faces"
-                  },
-                  {
-                    "label": "Crop Faces",
-                    "slug": "nodes/ai/ml/onnx/face/crop-faces"
-                  },
-                  {
-                    "label": "Face Detection",
-                    "slug": "nodes/ai/ml/onnx/face/onnx-face-detection"
-                  },
-                  {
-                    "label": "Face Embedding",
-                    "slug": "nodes/ai/ml/onnx/face/onnx-face-embedding"
-                  },
-                  {
-                    "label": "Load Face Analyzer",
-                    "slug": "nodes/ai/ml/onnx/face/face-id-load-analyzer"
-                  },
-                  {
-                    "label": "Unload Face Analyzer",
-                    "slug": "nodes/ai/ml/onnx/face/face-id-unload-analyzer"
-                  }
-                ]
-              },
-              {
-                "label": "NLP",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/nlp"
-                  },
-                  {
-                    "label": "Named Entity Recognition",
-                    "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
-                  },
-                  {
-                    "label": "Zero-Shot NER (GLiNER)",
-                    "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner"
-                  }
-                ]
-              },
-              {
-                "label": "OCR",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/ocr"
-                  },
-                  {
-                    "label": "Crop Text Regions",
-                    "slug": "nodes/ai/ml/onnx/ocr/crop-text-regions"
-                  },
-                  {
-                    "label": "Text Detection",
-                    "slug": "nodes/ai/ml/onnx/ocr/onnx-text-detection"
-                  },
-                  {
-                    "label": "Text Recognition",
-                    "slug": "nodes/ai/ml/onnx/ocr/onnx-text-recognition"
-                  }
-                ]
-              },
-              {
-                "label": "Vision",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ai/ml/onnx/vision"
-                  },
-                  {
-                    "label": "Colorize Depth",
-                    "slug": "nodes/ai/ml/onnx/vision/depth-colorize"
-                  },
-                  {
-                    "label": "Depth Estimation",
-                    "slug": "nodes/ai/ml/onnx/vision/onnx-depth-estimation"
-                  },
-                  {
-                    "label": "Depth to Point Cloud",
-                    "slug": "nodes/ai/ml/onnx/vision/depth-to-point-cloud"
-                  }
-                ]
-              },
-              {
-                "label": "Extract Keypoint",
-                "slug": "nodes/ai/ml/onnx/extract-keypoint"
-              },
-              {
-                "label": "Feature Extraction",
-                "slug": "nodes/ai/ml/onnx/feature-extraction"
-              },
-              {
-                "label": "Feature Similarity",
-                "slug": "nodes/ai/ml/onnx/feature-similarity"
-              },
-              {
-                "label": "Image Classification",
-                "slug": "nodes/ai/ml/onnx/image-classification"
-              },
-              {
-                "label": "Load ONNX",
-                "slug": "nodes/ai/ml/onnx/load-onnx"
-              },
-              {
-                "label": "Model Info",
-                "slug": "nodes/ai/ml/onnx/onnx-model-info"
-              },
-              {
-                "label": "Object Detection",
-                "slug": "nodes/ai/ml/onnx/object-detection"
-              },
-              {
-                "label": "Pose Estimation",
-                "slug": "nodes/ai/ml/onnx/pose-estimation"
-              },
-              {
-                "label": "Semantic Segmentation",
-                "slug": "nodes/ai/ml/onnx/semantic-segmentation"
-              },
-              {
-                "label": "Session Info",
-                "slug": "nodes/ai/ml/onnx/onnx-session-info"
-              },
-              {
-                "label": "Unload ONNX",
-                "slug": "nodes/ai/ml/onnx/unload-onnx"
-              }
-            ]
-          },
-          {
-            "label": "Ordinal",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/ordinal"
-              },
-              {
-                "label": "Ordinal Metrics",
-                "slug": "nodes/ai/ml/ordinal/ml-ordinal-metrics"
-              },
-              {
-                "label": "Train Ordinal Model (Adjacent Category)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-adjacent-category"
-              },
-              {
-                "label": "Train Ordinal Model (Continuation Ratio)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio"
-              },
-              {
-                "label": "Train Ordinal Model (Frank & Hall)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-frank-hall"
-              },
-              {
-                "label": "Train Ordinal Model (Neural CORAL/CORN)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-neural"
-              },
-              {
-                "label": "Train Ordinal Model (Proportional Odds)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-logistic"
-              },
-              {
-                "label": "Train Ordinal Model (Ridge)",
-                "slug": "nodes/ai/ml/ordinal/fit-ordinal-ridge"
-              }
-            ]
-          },
-          {
-            "label": "Preprocessing",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/preprocessing"
-              },
-              {
-                "label": "Apply Transform",
-                "slug": "nodes/ai/ml/preprocessing/ml-apply-transform"
-              },
-              {
-                "label": "Fit Feature Scaler",
-                "slug": "nodes/ai/ml/preprocessing/fit-feature-scaler"
-              },
-              {
-                "label": "Fit TF-IDF Vectorizer",
-                "slug": "nodes/ai/ml/preprocessing/fit-tfidf-vectorizer"
-              }
-            ]
-          },
-          {
-            "label": "Reduction",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/reduction"
-              },
-              {
-                "label": "PCA Reduction",
-                "slug": "nodes/ai/ml/reduction/fit-pca"
-              },
-              {
-                "label": "t-SNE Reduction",
-                "slug": "nodes/ai/ml/reduction/fit-tsne"
-              }
-            ]
-          },
-          {
-            "label": "Regression",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/regression"
-              },
-              {
-                "label": "Train Regression (Linear)",
-                "slug": "nodes/ai/ml/regression/fit-linear-regression"
-              },
-              {
-                "label": "Train Regressor (GLM / Tweedie)",
-                "slug": "nodes/ai/ml/regression/fit-glm"
-              },
-              {
-                "label": "Train Regressor (K-Nearest Neighbours)",
-                "slug": "nodes/ai/ml/regression/fit-knn-regressor"
-              },
-              {
-                "label": "Train Regressor (Ridge/Lasso/ElasticNet)",
-                "slug": "nodes/ai/ml/regression/fit-elastic-net"
-              },
-              {
-                "label": "Train Regressor (SVM)",
-                "slug": "nodes/ai/ml/regression/fit-svm-regression"
-              }
-            ]
-          },
-          {
-            "label": "Teachable Machine",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/teachable-machine"
-              },
-              {
-                "label": "Prediction Score",
-                "slug": "nodes/ai/ml/teachable-machine/ai-ml-pred-score"
-              }
-            ]
-          },
-          {
-            "label": "Tuning",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/ml/tuning"
-              },
-              {
-                "label": "Auto Classifier",
-                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier"
-              },
-              {
-                "label": "Auto Ordinal",
-                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal"
-              },
-              {
-                "label": "Grid Search",
-                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-grid-search"
-              },
-              {
-                "label": "Ordinal Grid Search",
-                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search"
-              }
-            ]
-          },
-          {
-            "label": "Load Model",
-            "slug": "nodes/ai/ml/load-ml-model"
-          },
-          {
-            "label": "Load Model (Binary)",
-            "slug": "nodes/ai/ml/load-ml-model-binary"
-          },
-          {
-            "label": "Predict",
-            "slug": "nodes/ai/ml/ml-predict"
-          },
-          {
-            "label": "Prediction Class/Label",
-            "slug": "nodes/ai/ml/ai-ml-pred-class-or-label"
-          },
-          {
-            "label": "Save Model",
-            "slug": "nodes/ai/ml/save-ml-model"
-          },
-          {
-            "label": "Save Model (Binary)",
-            "slug": "nodes/ai/ml/save-ml-model-binary"
-          },
-          {
-            "label": "Teachable Machine",
-            "slug": "nodes/ai/ml/ai-ml-teachable-machine"
-          }
-        ]
-      },
-      {
-        "label": "Memory",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/memory"
-          },
-          {
-            "label": "Graph",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ai/memory/graph"
-              },
-              {
-                "label": "KG Extract",
-                "slug": "nodes/ai/memory/graph/kg-extract"
-              },
-              {
-                "label": "KG Retrieve",
-                "slug": "nodes/ai/memory/graph/kg-retrieve"
-              },
-              {
-                "label": "KG Summarize",
-                "slug": "nodes/ai/memory/graph/kg-summarize"
-              }
-            ]
-          },
-          {
-            "label": "Build Memory Context",
-            "slug": "nodes/ai/memory/memory-build-context"
-          },
-          {
-            "label": "Compress Memory",
-            "slug": "nodes/ai/memory/memory-compress"
-          },
-          {
-            "label": "Create Memory Config",
-            "slug": "nodes/ai/memory/memory-create-config"
-          },
-          {
-            "label": "Optimize Memory",
-            "slug": "nodes/ai/memory/memory-optimize"
-          },
-          {
-            "label": "Search Memory",
-            "slug": "nodes/ai/memory/memory-search"
-          },
-          {
-            "label": "Store Memory",
-            "slug": "nodes/ai/memory/memory-store"
-          }
-        ]
-      },
-      {
-        "label": "Preprocessing",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/preprocessing"
-          },
-          {
-            "label": "Character Chunk Text",
-            "slug": "nodes/ai/preprocessing/chunk-text-char"
-          },
-          {
-            "label": "Chunk Text",
-            "slug": "nodes/ai/preprocessing/chunk-text"
-          }
-        ]
-      },
-      {
-        "label": "Processing",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ai/processing"
-          },
-          {
-            "label": "AI Extract Document",
-            "slug": "nodes/ai/processing/ai-processing-extract-document-ai"
-          },
-          {
-            "label": "AI Extract Documents",
-            "slug": "nodes/ai/processing/ai-processing-extract-documents-ai"
-          },
-          {
-            "label": "AI Keywords",
-            "slug": "nodes/ai/processing/ai-processing-ai-keyword-extraction"
-          },
-          {
-            "label": "Extract Content Sections",
-            "slug": "nodes/ai/processing/ai-processing-extract-content-sections"
-          },
-          {
-            "label": "Extract Document",
-            "slug": "nodes/ai/processing/ai-processing-extract-document"
-          },
-          {
-            "label": "Extract Documents",
-            "slug": "nodes/ai/processing/ai-processing-extract-documents"
-          },
-          {
-            "label": "PII Mask (AI)",
-            "slug": "nodes/ai/processing/processing-pii-mask-ai"
-          },
-          {
-            "label": "Pages to Markdown",
-            "slug": "nodes/ai/processing/ai-processing-pages-to-markdown"
-          },
-          {
-            "label": "RAKE Keywords",
-            "slug": "nodes/ai/processing/ai-processing-rake-extraction"
-          },
-          {
-            "label": "Summarize Document",
-            "slug": "nodes/ai/processing/ai-processing-summarize-document"
-          },
-          {
-            "label": "YAKE Keywords",
-            "slug": "nodes/ai/processing/ai-processing-yake-extraction"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Audio",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/audio"
-      },
-      {
-        "label": "Analyze Audio",
-        "slug": "nodes/audio/video-analyze-audio"
-      },
-      {
-        "label": "Audio To WAV",
-        "slug": "nodes/audio/video-audio-to-wav"
-      },
-      {
-        "label": "Detect Silence",
-        "slug": "nodes/audio/video-detect-silence"
-      },
-      {
-        "label": "Transform Audio",
-        "slug": "nodes/audio/video-transform-audio"
-      }
-    ]
-  },
-  {
-    "label": "Automation",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/automation"
-      },
-      {
-        "label": "Browser",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/browser"
-          },
-          {
-            "label": "Auth",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/auth"
-              },
-              {
-                "label": "Clear Cookies",
-                "slug": "nodes/automation/browser/auth/browser-clear-cookies"
-              },
-              {
-                "label": "Load Cookies",
-                "slug": "nodes/automation/browser/auth/browser-load-cookies"
-              },
-              {
-                "label": "Save Cookies",
-                "slug": "nodes/automation/browser/auth/browser-save-cookies"
-              },
-              {
-                "label": "Set Basic Auth",
-                "slug": "nodes/automation/browser/auth/browser-set-basic-auth"
-              }
-            ]
-          },
-          {
-            "label": "Capture",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/capture"
-              },
-              {
-                "label": "Screenshot Element",
-                "slug": "nodes/automation/browser/capture/browser-screenshot-element"
-              },
-              {
-                "label": "Take Screenshot",
-                "slug": "nodes/automation/browser/capture/browser-screenshot"
-              }
-            ]
-          },
-          {
-            "label": "Extract",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/extract"
-              },
-              {
-                "label": "Execute JavaScript",
-                "slug": "nodes/automation/browser/extract/browser-execute-js"
-              },
-              {
-                "label": "Get Attribute",
-                "slug": "nodes/automation/browser/extract/browser-get-attribute"
-              },
-              {
-                "label": "Get HTML",
-                "slug": "nodes/automation/browser/extract/browser-get-html"
-              },
-              {
-                "label": "Get Text",
-                "slug": "nodes/automation/browser/extract/browser-get-text"
-              }
-            ]
-          },
-          {
-            "label": "Files",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/files"
-              },
-              {
-                "label": "Set Download Directory",
-                "slug": "nodes/automation/browser/files/browser-set-download-dir"
-              },
-              {
-                "label": "Trigger Download",
-                "slug": "nodes/automation/browser/files/browser-trigger-download"
-              },
-              {
-                "label": "Upload File",
-                "slug": "nodes/automation/browser/files/browser-upload-file"
-              },
-              {
-                "label": "Upload Multiple Files",
-                "slug": "nodes/automation/browser/files/browser-upload-multiple-files"
-              },
-              {
-                "label": "Wait For Download",
-                "slug": "nodes/automation/browser/files/browser-wait-for-download"
-              }
-            ]
-          },
-          {
-            "label": "Input",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/input"
-              },
-              {
-                "label": "Press Key",
-                "slug": "nodes/automation/browser/input/browser-press-key"
-              },
-              {
-                "label": "Select Option",
-                "slug": "nodes/automation/browser/input/browser-select-option"
-              },
-              {
-                "label": "Type Text",
-                "slug": "nodes/automation/browser/input/browser-type-text"
-              }
-            ]
-          },
-          {
-            "label": "Interact",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/interact"
-              },
-              {
-                "label": "Click Element",
-                "slug": "nodes/automation/browser/interact/browser-click"
-              },
-              {
-                "label": "Double Click Element",
-                "slug": "nodes/automation/browser/interact/browser-double-click"
-              },
-              {
-                "label": "Hover Element",
-                "slug": "nodes/automation/browser/interact/browser-hover"
-              },
-              {
-                "label": "Scroll Into View",
-                "slug": "nodes/automation/browser/interact/browser-scroll-into-view"
-              }
-            ]
-          },
-          {
-            "label": "Navigation",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/navigation"
-              },
-              {
-                "label": "Go Back",
-                "slug": "nodes/automation/browser/navigation/browser-back"
-              },
-              {
-                "label": "Go Forward",
-                "slug": "nodes/automation/browser/navigation/browser-forward"
-              },
-              {
-                "label": "Go To URL",
-                "slug": "nodes/automation/browser/navigation/browser-goto"
-              },
-              {
-                "label": "Reload",
-                "slug": "nodes/automation/browser/navigation/browser-reload"
-              }
-            ]
-          },
-          {
-            "label": "Observe",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/observe"
-              },
-              {
-                "label": "Clear Console Logs",
-                "slug": "nodes/automation/browser/observe/browser-clear-console-logs"
-              },
-              {
-                "label": "Get Console Logs",
-                "slug": "nodes/automation/browser/observe/browser-get-console-logs"
-              },
-              {
-                "label": "Get Network Requests",
-                "slug": "nodes/automation/browser/observe/browser-get-network-requests"
-              },
-              {
-                "label": "Start Network Observer",
-                "slug": "nodes/automation/browser/observe/browser-start-network-observer"
-              },
-              {
-                "label": "Wait For Network Idle",
-                "slug": "nodes/automation/browser/observe/browser-wait-for-network-idle"
-              }
-            ]
-          },
-          {
-            "label": "Snapshot",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/snapshot"
-              },
-              {
-                "label": "Get Accessibility Snapshot",
-                "slug": "nodes/automation/browser/snapshot/browser-get-accessibility-snapshot"
-              },
-              {
-                "label": "Get DOM Snapshot",
-                "slug": "nodes/automation/browser/snapshot/browser-get-dom-snapshot"
-              },
-              {
-                "label": "Get Element Snapshot",
-                "slug": "nodes/automation/browser/snapshot/browser-get-element-snapshot"
-              }
-            ]
-          },
-          {
-            "label": "Storage",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/storage"
-              },
-              {
-                "label": "Clear Storage",
-                "slug": "nodes/automation/browser/storage/browser-clear-storage"
-              },
-              {
-                "label": "Get All Storage",
-                "slug": "nodes/automation/browser/storage/browser-get-all-storage"
-              },
-              {
-                "label": "Get Local Storage",
-                "slug": "nodes/automation/browser/storage/browser-get-local-storage"
-              },
-              {
-                "label": "Get Session Storage",
-                "slug": "nodes/automation/browser/storage/browser-get-session-storage"
-              },
-              {
-                "label": "Set Local Storage",
-                "slug": "nodes/automation/browser/storage/browser-set-local-storage"
-              },
-              {
-                "label": "Set Session Storage",
-                "slug": "nodes/automation/browser/storage/browser-set-session-storage"
-              }
-            ]
-          },
-          {
-            "label": "Wait",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/browser/wait"
-              },
-              {
-                "label": "Wait Delay",
-                "slug": "nodes/automation/browser/wait/browser-wait-delay"
-              },
-              {
-                "label": "Wait For Selector",
-                "slug": "nodes/automation/browser/wait/browser-wait-for"
-              }
-            ]
-          },
-          {
-            "label": "Close Browser",
-            "slug": "nodes/automation/browser/browser-close"
-          },
-          {
-            "label": "Close Page",
-            "slug": "nodes/automation/browser/browser-close-page"
-          },
-          {
-            "label": "New Page",
-            "slug": "nodes/automation/browser/browser-new-page"
-          },
-          {
-            "label": "Open Browser",
-            "slug": "nodes/automation/browser/browser-open"
-          }
-        ]
-      },
-      {
-        "label": "Computer",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/computer"
-          },
-          {
-            "label": "Accessibility",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/accessibility"
-              },
-              {
-                "label": "Find Accessibility Element",
-                "slug": "nodes/automation/computer/accessibility/computer-find-accessibility-element"
-              },
-              {
-                "label": "Get Accessibility Tree",
-                "slug": "nodes/automation/computer/accessibility/computer-get-accessibility-tree"
-              }
-            ]
-          },
-          {
-            "label": "Capture",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/capture"
-              },
-              {
-                "label": "Screenshot",
-                "slug": "nodes/automation/computer/capture/computer-screenshot"
-              }
-            ]
-          },
-          {
-            "label": "Clipboard",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/clipboard"
-              },
-              {
-                "label": "Get Clipboard Image",
-                "slug": "nodes/automation/computer/clipboard/computer-clipboard-get-image"
-              },
-              {
-                "label": "Get Clipboard Text",
-                "slug": "nodes/automation/computer/clipboard/computer-clipboard-get-text"
-              },
-              {
-                "label": "Set Clipboard Image",
-                "slug": "nodes/automation/computer/clipboard/computer-clipboard-set-image"
-              },
-              {
-                "label": "Set Clipboard Text",
-                "slug": "nodes/automation/computer/clipboard/computer-clipboard-set-text"
-              }
-            ]
-          },
-          {
-            "label": "Display",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/display"
-              },
-              {
-                "label": "Get Display",
-                "slug": "nodes/automation/computer/display/computer-get-display"
-              },
-              {
-                "label": "Get Primary Display",
-                "slug": "nodes/automation/computer/display/computer-get-primary-display"
-              },
-              {
-                "label": "List Displays",
-                "slug": "nodes/automation/computer/display/computer-list-displays"
-              }
-            ]
-          },
-          {
-            "label": "Keyboard",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/keyboard"
-              },
-              {
-                "label": "Key Press",
-                "slug": "nodes/automation/computer/keyboard/computer-key-press"
-              },
-              {
-                "label": "Type Text",
-                "slug": "nodes/automation/computer/keyboard/computer-key-type"
-              }
-            ]
-          },
-          {
-            "label": "Mouse",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/mouse"
-              },
-              {
-                "label": "Mouse Click",
-                "slug": "nodes/automation/computer/mouse/computer-mouse-click"
-              },
-              {
-                "label": "Mouse Double Click",
-                "slug": "nodes/automation/computer/mouse/computer-mouse-double-click"
-              },
-              {
-                "label": "Mouse Drag",
-                "slug": "nodes/automation/computer/mouse/computer-mouse-drag"
-              },
-              {
-                "label": "Mouse Move",
-                "slug": "nodes/automation/computer/mouse/computer-mouse-move"
-              },
-              {
-                "label": "Natural Mouse Move",
-                "slug": "nodes/automation/computer/mouse/computer-natural-mouse-move"
-              },
-              {
-                "label": "Scroll",
-                "slug": "nodes/automation/computer/mouse/computer-scroll"
-              }
-            ]
-          },
-          {
-            "label": "Wait",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/wait"
-              },
-              {
-                "label": "Wait",
-                "slug": "nodes/automation/computer/wait/computer-wait"
-              }
-            ]
-          },
-          {
-            "label": "Window",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/computer/window"
-              },
-              {
-                "label": "Capture Window",
-                "slug": "nodes/automation/computer/window/computer-capture-window"
-              },
-              {
-                "label": "Find Window By Title",
-                "slug": "nodes/automation/computer/window/computer-find-window-by-title"
-              },
-              {
-                "label": "Focus Window",
-                "slug": "nodes/automation/computer/window/computer-focus-window"
-              },
-              {
-                "label": "Get Active Window",
-                "slug": "nodes/automation/computer/window/computer-get-active-window"
-              },
-              {
-                "label": "Launch Application",
-                "slug": "nodes/automation/computer/window/computer-launch-app"
-              },
-              {
-                "label": "List Windows",
-                "slug": "nodes/automation/computer/window/computer-list-windows"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "Fingerprint",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/fingerprint"
-          },
-          {
-            "label": "Compare Fingerprints",
-            "slug": "nodes/automation/fingerprint/fingerprint-compare"
-          },
-          {
-            "label": "Compute Fingerprint Hash",
-            "slug": "nodes/automation/fingerprint/fingerprint-compute-hash"
-          },
-          {
-            "label": "Create Fingerprint",
-            "slug": "nodes/automation/fingerprint/fingerprint-create"
-          },
-          {
-            "label": "Extract Fingerprint Data",
-            "slug": "nodes/automation/fingerprint/fingerprint-extract-data"
-          },
-          {
-            "label": "Fingerprint From JSON",
-            "slug": "nodes/automation/fingerprint/fingerprint-from-json"
-          },
-          {
-            "label": "Fingerprint To JSON",
-            "slug": "nodes/automation/fingerprint/fingerprint-to-json"
-          },
-          {
-            "label": "Match Fingerprint",
-            "slug": "nodes/automation/fingerprint/fingerprint-match"
-          },
-          {
-            "label": "Match Options",
-            "slug": "nodes/automation/fingerprint/fingerprint-match-options"
-          },
-          {
-            "label": "Record Fingerprint Match",
-            "slug": "nodes/automation/fingerprint/fingerprint-record-match"
-          },
-          {
-            "label": "Update Fingerprint",
-            "slug": "nodes/automation/fingerprint/fingerprint-update"
-          }
-        ]
-      },
-      {
-        "label": "LLM",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/llm"
-          },
-          {
-            "label": "Healing",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/llm/healing"
-              },
-              {
-                "label": "LLM Diagnose & Heal",
-                "slug": "nodes/automation/llm/healing/llm-diagnose-and-heal"
-              },
-              {
-                "label": "LLM Heal Selector",
-                "slug": "nodes/automation/llm/healing/llm-heal-selector"
-              },
-              {
-                "label": "LLM Heal Template",
-                "slug": "nodes/automation/llm/healing/llm-heal-template"
-              }
-            ]
-          },
-          {
-            "label": "Planning",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/llm/planning"
-              },
-              {
-                "label": "LLM Plan Actions",
-                "slug": "nodes/automation/llm/planning/llm-plan-actions"
-              },
-              {
-                "label": "LLM Suggest Next Step",
-                "slug": "nodes/automation/llm/planning/llm-suggest-next-step"
-              }
-            ]
-          },
-          {
-            "label": "Vision",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/automation/llm/vision"
-              },
-              {
-                "label": "LLM Classify Screen",
-                "slug": "nodes/automation/llm/vision/llm-classify-screen"
-              },
-              {
-                "label": "LLM Describe Element",
-                "slug": "nodes/automation/llm/vision/llm-describe-element"
-              },
-              {
-                "label": "LLM Extract From Screen",
-                "slug": "nodes/automation/llm/vision/llm-extract-from-screen"
-              },
-              {
-                "label": "LLM Find Element",
-                "slug": "nodes/automation/llm/vision/llm-find-element"
-              },
-              {
-                "label": "LLM Observe Screen",
-                "slug": "nodes/automation/llm/vision/llm-observe-screen"
-              },
-              {
-                "label": "LLM Rank Candidates",
-                "slug": "nodes/automation/llm/vision/llm-rank-candidates"
-              },
-              {
-                "label": "LLM Resolve Element",
-                "slug": "nodes/automation/llm/vision/llm-resolve-element"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "RPA",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/rpa"
-          },
-          {
-            "label": "Assert Color At Position",
-            "slug": "nodes/automation/rpa/rpa-assert-color"
-          },
-          {
-            "label": "Assert Template Exists",
-            "slug": "nodes/automation/rpa/rpa-assert-template-exists"
-          },
-          {
-            "label": "Calculate Elapsed",
-            "slug": "nodes/automation/rpa/rpa-calculate-elapsed"
-          },
-          {
-            "label": "Click At Position",
-            "slug": "nodes/automation/rpa/rpa-click-at-position"
-          },
-          {
-            "label": "Delay",
-            "slug": "nodes/automation/rpa/rpa-delay"
-          },
-          {
-            "label": "Diagnose Failure",
-            "slug": "nodes/automation/rpa/rpa-diagnose-failure"
-          },
-          {
-            "label": "Drag And Drop",
-            "slug": "nodes/automation/rpa/rpa-drag-drop"
-          },
-          {
-            "label": "Error Recovery",
-            "slug": "nodes/automation/rpa/rpa-error-recovery"
-          },
-          {
-            "label": "Locate By Color",
-            "slug": "nodes/automation/rpa/rpa-locate-color"
-          },
-          {
-            "label": "Locate By Template",
-            "slug": "nodes/automation/rpa/rpa-locate-template"
-          },
-          {
-            "label": "Log Action",
-            "slug": "nodes/automation/rpa/rpa-log-action"
-          },
-          {
-            "label": "Parse Checkpoint",
-            "slug": "nodes/automation/rpa/rpa-parse-checkpoint"
-          },
-          {
-            "label": "Retry Loop",
-            "slug": "nodes/automation/rpa/rpa-retry-loop"
-          },
-          {
-            "label": "Save Checkpoint",
-            "slug": "nodes/automation/rpa/rpa-save-checkpoint"
-          },
-          {
-            "label": "Scroll",
-            "slug": "nodes/automation/rpa/rpa-scroll"
-          },
-          {
-            "label": "Start Timer",
-            "slug": "nodes/automation/rpa/rpa-start-timer"
-          },
-          {
-            "label": "Take Snapshot",
-            "slug": "nodes/automation/rpa/rpa-take-snapshot"
-          },
-          {
-            "label": "Try Catch",
-            "slug": "nodes/automation/rpa/rpa-try-catch"
-          },
-          {
-            "label": "Type Text",
-            "slug": "nodes/automation/rpa/rpa-type-text"
-          },
-          {
-            "label": "Wait For Color",
-            "slug": "nodes/automation/rpa/rpa-wait-for-color"
-          },
-          {
-            "label": "Wait For Template",
-            "slug": "nodes/automation/rpa/rpa-wait-for-template"
-          },
-          {
-            "label": "With Timeout",
-            "slug": "nodes/automation/rpa/rpa-with-timeout"
-          }
-        ]
-      },
-      {
-        "label": "Selector",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/selector"
-          },
-          {
-            "label": "Add To Selector Set",
-            "slug": "nodes/automation/selector/selector-add-to-set"
-          },
-          {
-            "label": "Build Selector",
-            "slug": "nodes/automation/selector/selector-build"
-          },
-          {
-            "label": "Create Selector Set",
-            "slug": "nodes/automation/selector/selector-create-set"
-          },
-          {
-            "label": "Get Best Selector",
-            "slug": "nodes/automation/selector/selector-get-best"
-          },
-          {
-            "label": "Get Primary Selector",
-            "slug": "nodes/automation/selector/selector-get-primary"
-          },
-          {
-            "label": "Rank Selectors",
-            "slug": "nodes/automation/selector/selector-rank"
-          },
-          {
-            "label": "Ranked To Selector Set",
-            "slug": "nodes/automation/selector/selector-ranked-to-set"
-          },
-          {
-            "label": "Selector To String",
-            "slug": "nodes/automation/selector/selector-to-string"
-          },
-          {
-            "label": "Validate Selector",
-            "slug": "nodes/automation/selector/selector-validate"
-          }
-        ]
-      },
-      {
-        "label": "Vision",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/automation/vision"
-          },
-          {
-            "label": "Click Template",
-            "slug": "nodes/automation/vision/vision-click-template"
-          },
-          {
-            "label": "Find All Templates",
-            "slug": "nodes/automation/vision/vision-find-all-templates"
-          },
-          {
-            "label": "Find Template",
-            "slug": "nodes/automation/vision/vision-find-template"
-          },
-          {
-            "label": "Get Pixel Color",
-            "slug": "nodes/automation/vision/vision-get-pixel-color"
-          },
-          {
-            "label": "Get Screen Size",
-            "slug": "nodes/automation/vision/vision-get-screen-size"
-          },
-          {
-            "label": "Screenshot Region",
-            "slug": "nodes/automation/vision/vision-screenshot-region"
-          },
-          {
-            "label": "Screenshot To File",
-            "slug": "nodes/automation/vision/vision-screenshot-to-file"
-          },
-          {
-            "label": "Wait For Template",
-            "slug": "nodes/automation/vision/vision-wait-template"
-          },
-          {
-            "label": "Wait Template Disappear",
-            "slug": "nodes/automation/vision/vision-wait-template-disappear"
-          }
-        ]
-      },
-      {
-        "label": "Start Automation Session",
-        "slug": "nodes/automation/automation-start-session"
-      },
-      {
-        "label": "Stop Automation Session",
-        "slug": "nodes/automation/automation-stop-session"
-      }
-    ]
-  },
-  {
-    "label": "Bit",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/bit"
-      },
-      {
-        "label": "Is Bit of Type",
-        "slug": "nodes/bit/is-bit-of-type"
-      },
-      {
-        "label": "Load Bit",
-        "slug": "nodes/bit/bit-from-string"
-      },
-      {
-        "label": "Switch on Bit",
-        "slug": "nodes/bit/switch-on-bit"
-      }
-    ]
-  },
-  {
-    "label": "Control",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/control"
-      },
-      {
-        "label": "Call",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/control/call"
-          },
-          {
-            "label": "Call Reference",
-            "slug": "nodes/control/call/control-call-reference"
-          }
-        ]
-      },
-      {
-        "label": "Flow",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/control/flow"
-          },
-          {
-            "label": "Do N",
-            "slug": "nodes/control/flow/control-do-n"
-          },
-          {
-            "label": "Do Once",
-            "slug": "nodes/control/flow/control-do-once"
-          },
-          {
-            "label": "Flip Flop",
-            "slug": "nodes/control/flow/control-flip-flop"
-          },
-          {
-            "label": "Gate",
-            "slug": "nodes/control/flow/control-gate"
-          }
-        ]
-      },
-      {
-        "label": "Functions",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/control/functions"
-          },
-          {
-            "label": "Call Function",
-            "slug": "nodes/control/functions/control-call-function"
-          }
-        ]
-      },
-      {
-        "label": "Parallel",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/control/parallel"
-          },
-          {
-            "label": "Gather",
-            "slug": "nodes/control/parallel/control-gather"
-          }
-        ]
-      },
-      {
-        "label": "Branch",
-        "slug": "nodes/control/control-branch"
-      },
-      {
-        "label": "Delay",
-        "slug": "nodes/control/delay"
-      },
-      {
-        "label": "For Each",
-        "slug": "nodes/control/control-for-each"
-      },
-      {
-        "label": "For Each (Batch)",
-        "slug": "nodes/control/control-for-each-batch"
-      },
-      {
-        "label": "For Each (Break)",
-        "slug": "nodes/control/control-for-each-with-break"
-      },
-      {
-        "label": "For Each Row",
-        "slug": "nodes/control/control-for-each-row"
-      },
-      {
-        "label": "Parallel Execution",
-        "slug": "nodes/control/control-par-execution"
-      },
-      {
-        "label": "Parallel For Each",
-        "slug": "nodes/control/control-par-for-each"
-      },
-      {
-        "label": "Parallel For Each (Batch)",
-        "slug": "nodes/control/control-par-for-each-batch"
-      },
-      {
-        "label": "Reroute",
-        "slug": "nodes/control/reroute"
-      },
-      {
-        "label": "Sequence",
-        "slug": "nodes/control/control-sequence"
-      },
-      {
-        "label": "Timeout",
-        "slug": "nodes/control/control-timeout"
-      },
-      {
-        "label": "While Loop",
-        "slug": "nodes/control/control-while-loop"
-      }
-    ]
-  },
-  {
-    "label": "Data",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/data"
-      },
-      {
-        "label": "Atlassian",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/atlassian"
-          },
-          {
-            "label": "Confluence",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/atlassian/confluence"
-              },
-              {
-                "label": "Add Comment",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-add-comment"
-              },
-              {
-                "label": "Add Label",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-add-label"
-              },
-              {
-                "label": "Create Confluence Page",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-create-page"
-              },
-              {
-                "label": "Delete Attachment",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-delete-attachment"
-              },
-              {
-                "label": "Delete Page",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-delete-page"
-              },
-              {
-                "label": "Download Attachment",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-download-attachment"
-              },
-              {
-                "label": "Get Comments",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-comments"
-              },
-              {
-                "label": "Get Confluence Page",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page"
-              },
-              {
-                "label": "Get Current User",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-current-user"
-              },
-              {
-                "label": "Get Labels",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-labels"
-              },
-              {
-                "label": "Get Page Ancestors",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page-ancestors"
-              },
-              {
-                "label": "Get Page Children",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page-children"
-              },
-              {
-                "label": "List Attachments",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-list-attachments"
-              },
-              {
-                "label": "List Confluence Spaces",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-list-spaces"
-              },
-              {
-                "label": "Remove Label",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-remove-label"
-              },
-              {
-                "label": "Search Confluence",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-search"
-              },
-              {
-                "label": "Search Users",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-search-users"
-              },
-              {
-                "label": "Update Confluence Page",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-update-page"
-              },
-              {
-                "label": "Upload Attachment",
-                "slug": "nodes/data/atlassian/confluence/data-atlassian-confluence-upload-attachment"
-              }
-            ]
-          },
-          {
-            "label": "Jira",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/atlassian/jira"
-              },
-              {
-                "label": "Agile",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/data/atlassian/jira/agile"
-                  },
-                  {
-                    "label": "Create Sprint",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-create-sprint"
-                  },
-                  {
-                    "label": "Get Backlog",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-backlog"
-                  },
-                  {
-                    "label": "Get Board Issues",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-board-issues"
-                  },
-                  {
-                    "label": "Get Boards",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-boards"
-                  },
-                  {
-                    "label": "Get Sprint Issues",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-sprint-issues"
-                  },
-                  {
-                    "label": "Get Sprints",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-sprints"
-                  },
-                  {
-                    "label": "Move to Sprint",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-move-to-sprint"
-                  },
-                  {
-                    "label": "Update Sprint",
-                    "slug": "nodes/data/atlassian/jira/agile/data-atlassian-jira-update-sprint"
-                  }
-                ]
-              },
-              {
-                "label": "Add Comment",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-add-comment"
-              },
-              {
-                "label": "Add Worklog",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-add-worklog"
-              },
-              {
-                "label": "Batch Create Issues",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-batch-create-issues"
-              },
-              {
-                "label": "Batch Create Versions",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-batch-create-versions"
-              },
-              {
-                "label": "Batch Get Changelogs",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-batch-get-changelogs"
-              },
-              {
-                "label": "Create Issue Link",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-create-issue-link"
-              },
-              {
-                "label": "Create Jira Issue",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-create-issue"
-              },
-              {
-                "label": "Create Version",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-create-version"
-              },
-              {
-                "label": "Delete Attachment",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-delete-attachment"
-              },
-              {
-                "label": "Delete Issue",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-delete-issue"
-              },
-              {
-                "label": "Download Attachment",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-download-attachment"
-              },
-              {
-                "label": "Get Attachments",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-attachments"
-              },
-              {
-                "label": "Get Changelog",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-changelog"
-              },
-              {
-                "label": "Get Current User",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-current-user"
-              },
-              {
-                "label": "Get Epic Issues",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-epic-issues"
-              },
-              {
-                "label": "Get Fields",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-fields"
-              },
-              {
-                "label": "Get Issue Links",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-issue-links"
-              },
-              {
-                "label": "Get Jira Issue",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-issue"
-              },
-              {
-                "label": "Get Link Types",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-link-types"
-              },
-              {
-                "label": "Get Project Issues",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-project-issues"
-              },
-              {
-                "label": "Get Transitions",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-transitions"
-              },
-              {
-                "label": "Get Versions",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-versions"
-              },
-              {
-                "label": "Get Worklog",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-get-worklog"
-              },
-              {
-                "label": "Link to Epic",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-link-to-epic"
-              },
-              {
-                "label": "List Jira Projects",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-list-projects"
-              },
-              {
-                "label": "Remove Issue Link",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-remove-issue-link"
-              },
-              {
-                "label": "Search Fields",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-search-fields"
-              },
-              {
-                "label": "Search Jira Issues",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-search-issues"
-              },
-              {
-                "label": "Transition Jira Issue",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-transition-issue"
-              },
-              {
-                "label": "Unlink from Epic",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-unlink-from-epic"
-              },
-              {
-                "label": "Update Jira Issue",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-update-issue"
-              },
-              {
-                "label": "Update Version",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-update-version"
-              },
-              {
-                "label": "Upload Attachment",
-                "slug": "nodes/data/atlassian/jira/data-atlassian-jira-upload-attachment"
-              }
-            ]
-          },
-          {
-            "label": "Atlassian (API Token)",
-            "slug": "nodes/data/atlassian/data-atlassian-provider-api-token"
-          },
-          {
-            "label": "Atlassian (OAuth)",
-            "slug": "nodes/data/atlassian/data-atlassian-provider-oauth"
-          },
-          {
-            "label": "Get Me",
-            "slug": "nodes/data/atlassian/data-atlassian-get-me"
-          }
-        ]
-      },
-      {
-        "label": "Cache",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/cache"
-          },
-          {
-            "label": "Delete Cache Entry",
-            "slug": "nodes/data/cache/cache-delete"
-          },
-          {
-            "label": "Get or Write Cache",
-            "slug": "nodes/data/cache/cache-get-or-write"
-          },
-          {
-            "label": "Has Cache Entry",
-            "slug": "nodes/data/cache/cache-has"
-          },
-          {
-            "label": "Invalidate Cache Namespace",
-            "slug": "nodes/data/cache/cache-invalidate-namespace"
-          },
-          {
-            "label": "Open Cache",
-            "slug": "nodes/data/cache/cache-open"
-          },
-          {
-            "label": "Read Cache",
-            "slug": "nodes/data/cache/cache-read"
-          },
-          {
-            "label": "Write Cache",
-            "slug": "nodes/data/cache/cache-write"
-          }
-        ]
-      },
-      {
-        "label": "DataFusion",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/datafusion"
-          },
-          {
-            "label": "Aggregation",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/datafusion/aggregation"
-              },
-              {
-                "label": "Date Truncate Aggregation",
-                "slug": "nodes/data/datafusion/aggregation/df-date-trunc-aggregation"
-              },
-              {
-                "label": "Time Bin Aggregation",
-                "slug": "nodes/data/datafusion/aggregation/df-time-bin-aggregation"
-              },
-              {
-                "label": "Window Aggregation",
-                "slug": "nodes/data/datafusion/aggregation/df-window-aggregation"
-              }
-            ]
-          },
-          {
-            "label": "Databases",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/datafusion/databases"
-              },
-              {
-                "label": "Mount Athena S3 Results",
-                "slug": "nodes/data/datafusion/databases/df-mount-athena-query"
-              },
-              {
-                "label": "Register Athena Table",
-                "slug": "nodes/data/datafusion/databases/df-register-athena"
-              },
-              {
-                "label": "Register BigQuery",
-                "slug": "nodes/data/datafusion/databases/df-register-bigquery"
-              },
-              {
-                "label": "Register ClickHouse",
-                "slug": "nodes/data/datafusion/databases/df-register-clickhouse"
-              },
-              {
-                "label": "Register DuckDB",
-                "slug": "nodes/data/datafusion/databases/df-register-duckdb"
-              },
-              {
-                "label": "Register FlightSQL",
-                "slug": "nodes/data/datafusion/databases/df-register-flightsql"
-              },
-              {
-                "label": "Register MySQL",
-                "slug": "nodes/data/datafusion/databases/df-register-mysql"
-              },
-              {
-                "label": "Register Oracle",
-                "slug": "nodes/data/datafusion/databases/df-register-oracle"
-              },
-              {
-                "label": "Register PostgreSQL",
-                "slug": "nodes/data/datafusion/databases/df-register-postgres"
-              },
-              {
-                "label": "Register SQLite",
-                "slug": "nodes/data/datafusion/databases/df-register-sqlite"
-              }
-            ]
-          },
-          {
-            "label": "Lakes",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/datafusion/lakes"
-              },
-              {
-                "label": "Delta Table Info",
-                "slug": "nodes/data/datafusion/lakes/df-delta-info"
-              },
-              {
-                "label": "Delta Time Travel",
-                "slug": "nodes/data/datafusion/lakes/df-delta-time-travel"
-              },
-              {
-                "label": "Iceberg Table Info",
-                "slug": "nodes/data/datafusion/lakes/df-iceberg-info"
-              },
-              {
-                "label": "Iceberg Time Travel",
-                "slug": "nodes/data/datafusion/lakes/df-iceberg-time-travel"
-              },
-              {
-                "label": "Register Delta Table",
-                "slug": "nodes/data/datafusion/lakes/df-register-delta"
-              },
-              {
-                "label": "Register Hive Parquet",
-                "slug": "nodes/data/datafusion/lakes/df-register-hive-parquet"
-              },
-              {
-                "label": "Register Iceberg Table",
-                "slug": "nodes/data/datafusion/lakes/df-register-iceberg"
-              },
-              {
-                "label": "Register Partitioned JSON",
-                "slug": "nodes/data/datafusion/lakes/df-register-partitioned-json"
-              },
-              {
-                "label": "Write Delta Table",
-                "slug": "nodes/data/datafusion/lakes/df-write-delta"
-              }
-            ]
-          },
-          {
-            "label": "Time",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/datafusion/time"
-              },
-              {
-                "label": "DateTime to SQL Timestamp",
-                "slug": "nodes/data/datafusion/time/df-datetime-to-timestamp"
-              },
-              {
-                "label": "Time Range Filter",
-                "slug": "nodes/data/datafusion/time/df-time-range-filter"
-              }
-            ]
-          },
-          {
-            "label": "Tools",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/datafusion/tools"
-              },
-              {
-                "label": "Describe Table",
-                "slug": "nodes/data/datafusion/tools/df-describe-table"
-              },
-              {
-                "label": "Execute SQL",
-                "slug": "nodes/data/datafusion/tools/df-execute-sql"
-              },
-              {
-                "label": "List Tables",
-                "slug": "nodes/data/datafusion/tools/df-list-tables"
-              }
-            ]
-          },
-          {
-            "label": "Cached SQL Query",
-            "slug": "nodes/data/datafusion/df-sql-query-cached"
-          },
-          {
-            "label": "Create DataFusion Session",
-            "slug": "nodes/data/datafusion/df-create-session"
-          },
-          {
-            "label": "Mount CSV",
-            "slug": "nodes/data/datafusion/df-mount-csv"
-          },
-          {
-            "label": "Mount JSON",
-            "slug": "nodes/data/datafusion/df-mount-json"
-          },
-          {
-            "label": "Mount Parquet",
-            "slug": "nodes/data/datafusion/df-mount-parquet"
-          },
-          {
-            "label": "Register Excel (DataFusion)",
-            "slug": "nodes/data/datafusion/df-register-excel"
-          },
-          {
-            "label": "Register Lance Table",
-            "slug": "nodes/data/datafusion/df-register-lance"
-          },
-          {
-            "label": "Register Table",
-            "slug": "nodes/data/datafusion/df-register-csv-table"
-          },
-          {
-            "label": "SQL Query",
-            "slug": "nodes/data/datafusion/df-sql-query"
-          }
-        ]
-      },
-      {
-        "label": "Database",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/database"
-          },
-          {
-            "label": "Delete",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/delete"
-              },
-              {
-                "label": "Delete",
-                "slug": "nodes/data/database/delete/filter-delete-local-db"
-              },
-              {
-                "label": "Drop Table",
-                "slug": "nodes/data/database/delete/drop-table-local-db"
-              },
-              {
-                "label": "Purge",
-                "slug": "nodes/data/database/delete/purge-local-db"
-              }
-            ]
-          },
-          {
-            "label": "Graph",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/graph"
-              },
-              {
-                "label": "Meta",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/data/database/graph/meta"
-                  },
-                  {
-                    "label": "Graph Schema",
-                    "slug": "nodes/data/database/graph/meta/graph-schema"
-                  },
-                  {
-                    "label": "List Graph Overlays",
-                    "slug": "nodes/data/database/graph/meta/list-graph-overlays"
-                  }
-                ]
-              },
-              {
-                "label": "Query",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/data/database/graph/query"
-                  },
-                  {
-                    "label": "Cypher Query",
-                    "slug": "nodes/data/database/graph/query/graph-cypher-query"
-                  },
-                  {
-                    "label": "Find Paths",
-                    "slug": "nodes/data/database/graph/query/graph-paths"
-                  },
-                  {
-                    "label": "Graph Analytics",
-                    "slug": "nodes/data/database/graph/query/graph-analytics"
-                  },
-                  {
-                    "label": "Graph Neighbors",
-                    "slug": "nodes/data/database/graph/query/graph-neighbors"
-                  },
-                  {
-                    "label": "Graph Sample",
-                    "slug": "nodes/data/database/graph/query/graph-sample"
-                  },
-                  {
-                    "label": "Graph Search",
-                    "slug": "nodes/data/database/graph/query/graph-search"
-                  },
-                  {
-                    "label": "Graph Subgraph",
-                    "slug": "nodes/data/database/graph/query/graph-subgraph"
-                  },
-                  {
-                    "label": "SQL Query (Graph)",
-                    "slug": "nodes/data/database/graph/query/graph-sql-query"
-                  }
-                ]
-              },
-              {
-                "label": "Write",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/data/database/graph/write"
-                  },
-                  {
-                    "label": "Upsert Graph Edge",
-                    "slug": "nodes/data/database/graph/write/upsert-graph-edge"
-                  },
-                  {
-                    "label": "Upsert Graph Node",
-                    "slug": "nodes/data/database/graph/write/upsert-graph-node"
-                  }
-                ]
-              },
-              {
-                "label": "Create Graph Overlay",
-                "slug": "nodes/data/database/graph/create-graph-overlay"
-              },
-              {
-                "label": "Drop Graph Overlay",
-                "slug": "nodes/data/database/graph/drop-graph-overlay"
-              },
-              {
-                "label": "Open Graph Overlay",
-                "slug": "nodes/data/database/graph/open-graph-overlay"
-              }
-            ]
-          },
-          {
-            "label": "Insert",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/insert"
-              },
-              {
-                "label": "Batch Insert",
-                "slug": "nodes/data/database/insert/batch-insert-local-db"
-              },
-              {
-                "label": "Batch Insert (CSV)",
-                "slug": "nodes/data/database/insert/csv-insert-local-db"
-              },
-              {
-                "label": "Batch Insert (TDMS)",
-                "slug": "nodes/data/database/insert/tdms-insert-local-db"
-              },
-              {
-                "label": "Batch Upsert",
-                "slug": "nodes/data/database/insert/batch-upsert-local-db"
-              },
-              {
-                "label": "Insert",
-                "slug": "nodes/data/database/insert/insert-local-db"
-              },
-              {
-                "label": "Upsert",
-                "slug": "nodes/data/database/insert/upsert-local-db"
-              }
-            ]
-          },
-          {
-            "label": "Meta",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/meta"
-              },
-              {
-                "label": "Count",
-                "slug": "nodes/data/database/meta/count-local-db"
-              },
-              {
-                "label": "Get Schema",
-                "slug": "nodes/data/database/meta/schema-local-db"
-              },
-              {
-                "label": "List",
-                "slug": "nodes/data/database/meta/list-local-db"
-              },
-              {
-                "label": "List Indices",
-                "slug": "nodes/data/database/meta/list-indices-db"
-              },
-              {
-                "label": "List Tables",
-                "slug": "nodes/data/database/meta/list-tables-db"
-              }
-            ]
-          },
-          {
-            "label": "Optimization",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/optimization"
-              },
-              {
-                "label": "Build Index",
-                "slug": "nodes/data/database/optimization/index-local-db"
-              },
-              {
-                "label": "Drop Index",
-                "slug": "nodes/data/database/optimization/drop-index-db"
-              },
-              {
-                "label": "Flush Database",
-                "slug": "nodes/data/database/optimization/flush-local-db"
-              },
-              {
-                "label": "Optimize and Update",
-                "slug": "nodes/data/database/optimization/optimize-local-db"
-              }
-            ]
-          },
-          {
-            "label": "Schema",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/schema"
-              },
-              {
-                "label": "Add Column",
-                "slug": "nodes/data/database/schema/add-column-local-db"
-              },
-              {
-                "label": "Drop Column",
-                "slug": "nodes/data/database/schema/drop-column-local-db"
-              },
-              {
-                "label": "Make Column Optional",
-                "slug": "nodes/data/database/schema/make-column-optional-local-db"
-              }
-            ]
-          },
-          {
-            "label": "Search",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/database/search"
-              },
-              {
-                "label": "(SQL) Filter Database",
-                "slug": "nodes/data/database/search/filter-local-db"
-              },
-              {
-                "label": "Full-Text Search",
-                "slug": "nodes/data/database/search/fts-search-local-db"
-              },
-              {
-                "label": "Hybrid Search",
-                "slug": "nodes/data/database/search/hybrid-search-local-db"
-              },
-              {
-                "label": "Vector Search",
-                "slug": "nodes/data/database/search/vector-search-local-db"
-              }
-            ]
-          },
-          {
-            "label": "Open Database",
-            "slug": "nodes/data/database/open-local-db"
-          },
-          {
-            "label": "Open Remote Database",
-            "slug": "nodes/data/database/open-remote-db"
-          }
-        ]
-      },
-      {
-        "label": "Databricks",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/databricks"
-          },
-          {
-            "label": "DBFS",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/databricks/dbfs"
-              },
-              {
-                "label": "Get DBFS Status",
-                "slug": "nodes/data/databricks/dbfs/data-databricks-get-dbfs-status"
-              },
-              {
-                "label": "List DBFS Files",
-                "slug": "nodes/data/databricks/dbfs/data-databricks-list-dbfs"
-              },
-              {
-                "label": "Read DBFS File",
-                "slug": "nodes/data/databricks/dbfs/data-databricks-read-dbfs"
-              }
-            ]
-          },
-          {
-            "label": "Unity Catalog",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/databricks/unity-catalog"
-              },
-              {
-                "label": "List Catalogs",
-                "slug": "nodes/data/databricks/unity-catalog/data-databricks-list-catalogs"
-              },
-              {
-                "label": "List Schemas",
-                "slug": "nodes/data/databricks/unity-catalog/data-databricks-list-schemas"
-              },
-              {
-                "label": "List Tables",
-                "slug": "nodes/data/databricks/unity-catalog/data-databricks-list-tables"
-              }
-            ]
-          },
-          {
-            "label": "Cancel Job Run",
-            "slug": "nodes/data/databricks/data-databricks-cancel-job-run"
-          },
-          {
-            "label": "Databricks (OAuth)",
-            "slug": "nodes/data/databricks/data-databricks-provider-oauth"
-          },
-          {
-            "label": "Databricks (PAT)",
-            "slug": "nodes/data/databricks/data-databricks-provider-pat"
-          },
-          {
-            "label": "Databricks (Service Principal)",
-            "slug": "nodes/data/databricks/data-databricks-provider-service-principal"
-          },
-          {
-            "label": "Databricks (Token)",
-            "slug": "nodes/data/databricks/data-databricks-provider-token"
-          },
-          {
-            "label": "Execute SQL",
-            "slug": "nodes/data/databricks/data-databricks-execute-sql"
-          },
-          {
-            "label": "Get Cluster",
-            "slug": "nodes/data/databricks/data-databricks-get-cluster"
-          },
-          {
-            "label": "Get Job Run",
-            "slug": "nodes/data/databricks/data-databricks-get-job-run"
-          },
-          {
-            "label": "List Clusters",
-            "slug": "nodes/data/databricks/data-databricks-list-clusters"
-          },
-          {
-            "label": "List Jobs",
-            "slug": "nodes/data/databricks/data-databricks-list-jobs"
-          },
-          {
-            "label": "List SQL Warehouses",
-            "slug": "nodes/data/databricks/data-databricks-list-sql-warehouses"
-          },
-          {
-            "label": "Run Job",
-            "slug": "nodes/data/databricks/data-databricks-run-job"
-          },
-          {
-            "label": "Start Cluster",
-            "slug": "nodes/data/databricks/data-databricks-start-cluster"
-          },
-          {
-            "label": "Start SQL Warehouse",
-            "slug": "nodes/data/databricks/data-databricks-start-sql-warehouse"
-          },
-          {
-            "label": "Stop Cluster",
-            "slug": "nodes/data/databricks/data-databricks-stop-cluster"
-          },
-          {
-            "label": "Stop SQL Warehouse",
-            "slug": "nodes/data/databricks/data-databricks-stop-sql-warehouse"
-          }
-        ]
-      },
-      {
-        "label": "Excel",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/excel"
-          },
-          {
-            "label": "Rows",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/excel/rows"
-              },
-              {
-                "label": "Get Row By Index",
-                "slug": "nodes/data/excel/rows/tables-get-row-by-index"
-              }
-            ]
-          },
-          {
-            "label": "Copy Worksheet",
-            "slug": "nodes/data/excel/files-spreadsheet-copy-worksheet"
-          },
-          {
-            "label": "Excel Read Cell",
-            "slug": "nodes/data/excel/excel-read-cell"
-          },
-          {
-            "label": "Excel Remove Column",
-            "slug": "nodes/data/excel/excel-remove-column"
-          },
-          {
-            "label": "Excel Remove Row",
-            "slug": "nodes/data/excel/excel-remove-row"
-          },
-          {
-            "label": "Excel Write Cell",
-            "slug": "nodes/data/excel/excel-write-cell"
-          },
-          {
-            "label": "Excel Write Cell (HTML)",
-            "slug": "nodes/data/excel/excel-write-cell-html"
-          },
-          {
-            "label": "Extract Tables (Excel)",
-            "slug": "nodes/data/excel/data-excel-extract-tables"
-          },
-          {
-            "label": "Extract Tables AI (Excel)",
-            "slug": "nodes/data/excel/data-excel-extract-tables-ai"
-          },
-          {
-            "label": "Get Sheet Names",
-            "slug": "nodes/data/excel/files-spreadsheet-get-sheet-names"
-          },
-          {
-            "label": "Insert Column(s)",
-            "slug": "nodes/data/excel/files-spreadsheet-insert-column"
-          },
-          {
-            "label": "Insert Row(s)",
-            "slug": "nodes/data/excel/files-spreadsheet-insert-row"
-          },
-          {
-            "label": "New Worksheet",
-            "slug": "nodes/data/excel/files-spreadsheet-new-worksheet"
-          }
-        ]
-      },
-      {
-        "label": "Files",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/files"
-          },
-          {
-            "label": "Content",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/files/content"
-              },
-              {
-                "label": "Read to Bytes",
-                "slug": "nodes/data/files/content/read-to-bytes"
-              },
-              {
-                "label": "Read to String",
-                "slug": "nodes/data/files/content/read-to-string"
-              },
-              {
-                "label": "Write Bytes",
-                "slug": "nodes/data/files/content/write-bytes"
-              },
-              {
-                "label": "Write String",
-                "slug": "nodes/data/files/content/write-string"
-              }
-            ]
-          },
-          {
-            "label": "Directories",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/files/directories"
-              },
-              {
-                "label": "Cache Dir",
-                "slug": "nodes/data/files/directories/path-from-cache-dir"
-              },
-              {
-                "label": "Storage Dir",
-                "slug": "nodes/data/files/directories/path-from-storage-dir"
-              },
-              {
-                "label": "Upload Dir",
-                "slug": "nodes/data/files/directories/path-from-upload-dir"
-              },
-              {
-                "label": "User Dir",
-                "slug": "nodes/data/files/directories/path-from-user-dir"
-              },
-              {
-                "label": "Virtual Dir",
-                "slug": "nodes/data/files/directories/path-virtual-dir"
-              }
-            ]
-          },
-          {
-            "label": "External",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/files/external"
-              },
-              {
-                "label": "Azure Blob Container",
-                "slug": "nodes/data/files/external/external-azure-blob-store"
-              },
-              {
-                "label": "GCS Bucket",
-                "slug": "nodes/data/files/external/external-gcp-storage-store"
-              },
-              {
-                "label": "R2 Bucket",
-                "slug": "nodes/data/files/external/external-r2-store"
-              },
-              {
-                "label": "S3 Bucket",
-                "slug": "nodes/data/files/external/external-s3-store"
-              },
-              {
-                "label": "S3 Express Bucket",
-                "slug": "nodes/data/files/external/external-s3-express-store"
-              },
-              {
-                "label": "SMB Share",
-                "slug": "nodes/data/files/external/external-smb-store"
-              }
-            ]
-          },
-          {
-            "label": "Operations",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/files/operations"
-              },
-              {
-                "label": "Copy",
-                "slug": "nodes/data/files/operations/storage-copy"
-              },
-              {
-                "label": "Delete",
-                "slug": "nodes/data/files/operations/storage-delete"
-              },
-              {
-                "label": "Diff Directory",
-                "slug": "nodes/data/files/operations/path-get-changes"
-              },
-              {
-                "label": "Get",
-                "slug": "nodes/data/files/operations/path-get"
-              },
-              {
-                "label": "Get Range",
-                "slug": "nodes/data/files/operations/path-get-range"
-              },
-              {
-                "label": "Hash File",
-                "slug": "nodes/data/files/operations/path-hash-file"
-              },
-              {
-                "label": "Head",
-                "slug": "nodes/data/files/operations/path-head"
-              },
-              {
-                "label": "List Folders",
-                "slug": "nodes/data/files/operations/path-list-folders"
-              },
-              {
-                "label": "List Paths",
-                "slug": "nodes/data/files/operations/path-list-paths"
-              },
-              {
-                "label": "List With Offset",
-                "slug": "nodes/data/files/operations/path-list-with-offset"
-              },
-              {
-                "label": "Path Exists?",
-                "slug": "nodes/data/files/operations/path-exists"
-              },
-              {
-                "label": "Put",
-                "slug": "nodes/data/files/operations/path-put"
-              },
-              {
-                "label": "Rename",
-                "slug": "nodes/data/files/operations/path-rename"
-              },
-              {
-                "label": "Sign URL",
-                "slug": "nodes/data/files/operations/sign-url"
-              },
-              {
-                "label": "Sign URLs",
-                "slug": "nodes/data/files/operations/sign-urls"
-              },
-              {
-                "label": "Write Directory Manifest",
-                "slug": "nodes/data/files/operations/path-write-manifest"
-              }
-            ]
-          },
-          {
-            "label": "Path",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/files/path"
-              },
-              {
-                "label": "Child",
-                "slug": "nodes/data/files/path/child"
-              },
-              {
-                "label": "Extension",
-                "slug": "nodes/data/files/path/extension"
-              },
-              {
-                "label": "Filename",
-                "slug": "nodes/data/files/path/filename"
-              },
-              {
-                "label": "From Raw Path",
-                "slug": "nodes/data/files/path/from-raw-path"
-              },
-              {
-                "label": "Parent",
-                "slug": "nodes/data/files/path/parent"
-              },
-              {
-                "label": "Raw Path",
-                "slug": "nodes/data/files/path/raw-path"
-              },
-              {
-                "label": "Replace Segment",
-                "slug": "nodes/data/files/path/path-replace-segment"
-              },
-              {
-                "label": "Set Extension",
-                "slug": "nodes/data/files/path/set-extension"
-              },
-              {
-                "label": "Set Filename",
-                "slug": "nodes/data/files/path/set-filename"
-              }
-            ]
-          },
-          {
-            "label": "Local Path to Path",
-            "slug": "nodes/data/files/pathbuf-to-path"
-          }
-        ]
-      },
-      {
-        "label": "GitHub",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/github"
-          },
-          {
-            "label": "Workflows",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/github/workflows"
-              },
-              {
-                "label": "Cancel Workflow Run",
-                "slug": "nodes/data/github/workflows/github-cancel-workflow-run"
-              },
-              {
-                "label": "Get Latest Workflow Run",
-                "slug": "nodes/data/github/workflows/github-get-latest-workflow-run"
-              },
-              {
-                "label": "Get Workflow Run",
-                "slug": "nodes/data/github/workflows/github-get-workflow-run"
-              },
-              {
-                "label": "List Workflow Runs",
-                "slug": "nodes/data/github/workflows/github-list-workflow-runs"
-              },
-              {
-                "label": "List Workflows",
-                "slug": "nodes/data/github/workflows/github-list-workflows"
-              },
-              {
-                "label": "Rerun Workflow",
-                "slug": "nodes/data/github/workflows/github-rerun-workflow"
-              },
-              {
-                "label": "Trigger Workflow",
-                "slug": "nodes/data/github/workflows/github-trigger-workflow"
-              }
-            ]
-          },
-          {
-            "label": "Add Issue Comment",
-            "slug": "nodes/data/github/data-github-add-issue-comment"
-          },
-          {
-            "label": "Clone Repository",
-            "slug": "nodes/data/github/data-github-clone-repo"
-          },
-          {
-            "label": "Compare Commits",
-            "slug": "nodes/data/github/data-github-compare-commits"
-          },
-          {
-            "label": "Create Branch",
-            "slug": "nodes/data/github/data-github-create-branch"
-          },
-          {
-            "label": "Create Issue",
-            "slug": "nodes/data/github/data-github-create-issue"
-          },
-          {
-            "label": "Create PR Review",
-            "slug": "nodes/data/github/data-github-create-pr-review"
-          },
-          {
-            "label": "Create Pull Request",
-            "slug": "nodes/data/github/data-github-create-pull-request"
-          },
-          {
-            "label": "Create Release",
-            "slug": "nodes/data/github/data-github-create-release"
-          },
-          {
-            "label": "Create/Update File",
-            "slug": "nodes/data/github/data-github-create-or-update-file"
-          },
-          {
-            "label": "Delete Branch",
-            "slug": "nodes/data/github/data-github-delete-branch"
-          },
-          {
-            "label": "Delete File",
-            "slug": "nodes/data/github/data-github-delete-file"
-          },
-          {
-            "label": "Download File",
-            "slug": "nodes/data/github/data-github-download-file"
-          },
-          {
-            "label": "Download Release Asset",
-            "slug": "nodes/data/github/data-github-download-release-asset"
-          },
-          {
-            "label": "Get Branch",
-            "slug": "nodes/data/github/data-github-get-branch"
-          },
-          {
-            "label": "Get Commit",
-            "slug": "nodes/data/github/data-github-get-commit"
-          },
-          {
-            "label": "Get File Contents",
-            "slug": "nodes/data/github/data-github-get-file-contents"
-          },
-          {
-            "label": "Get Issue",
-            "slug": "nodes/data/github/data-github-get-issue"
-          },
-          {
-            "label": "Get Latest Release",
-            "slug": "nodes/data/github/data-github-get-latest-release"
-          },
-          {
-            "label": "Get Pull Request",
-            "slug": "nodes/data/github/data-github-get-pull-request"
-          },
-          {
-            "label": "Get Release by Tag",
-            "slug": "nodes/data/github/data-github-get-release-by-tag"
-          },
-          {
-            "label": "Get Repository",
-            "slug": "nodes/data/github/data-github-get-repo"
-          },
-          {
-            "label": "Get User",
-            "slug": "nodes/data/github/data-github-get-user"
-          },
-          {
-            "label": "GitHub (App Token)",
-            "slug": "nodes/data/github/data-github-provider-app"
-          },
-          {
-            "label": "GitHub (OAuth)",
-            "slug": "nodes/data/github/data-github-provider-oauth"
-          },
-          {
-            "label": "GitHub (PAT)",
-            "slug": "nodes/data/github/data-github-provider-pat"
-          },
-          {
-            "label": "List Branches",
-            "slug": "nodes/data/github/data-github-list-branches"
-          },
-          {
-            "label": "List Commits",
-            "slug": "nodes/data/github/data-github-list-commits"
-          },
-          {
-            "label": "List Issue Comments",
-            "slug": "nodes/data/github/data-github-list-issue-comments"
-          },
-          {
-            "label": "List Issues",
-            "slug": "nodes/data/github/data-github-list-issues"
-          },
-          {
-            "label": "List PR Files",
-            "slug": "nodes/data/github/data-github-list-pr-files"
-          },
-          {
-            "label": "List PR Reviews",
-            "slug": "nodes/data/github/data-github-list-pr-reviews"
-          },
-          {
-            "label": "List Pull Requests",
-            "slug": "nodes/data/github/data-github-list-pull-requests"
-          },
-          {
-            "label": "List Release Assets",
-            "slug": "nodes/data/github/data-github-list-release-assets"
-          },
-          {
-            "label": "List Releases",
-            "slug": "nodes/data/github/data-github-list-releases"
-          },
-          {
-            "label": "List Repositories",
-            "slug": "nodes/data/github/data-github-list-repos"
-          },
-          {
-            "label": "Merge Pull Request",
-            "slug": "nodes/data/github/data-github-merge-pull-request"
-          },
-          {
-            "label": "Search Code",
-            "slug": "nodes/data/github/data-github-search-code"
-          },
-          {
-            "label": "Search Issues",
-            "slug": "nodes/data/github/data-github-search-issues"
-          },
-          {
-            "label": "Search Repositories",
-            "slug": "nodes/data/github/data-github-search-repos"
-          },
-          {
-            "label": "Update Issue",
-            "slug": "nodes/data/github/data-github-update-issue"
-          },
-          {
-            "label": "Update Pull Request",
-            "slug": "nodes/data/github/data-github-update-pull-request"
-          },
-          {
-            "label": "Upload Release Asset",
-            "slug": "nodes/data/github/data-github-upload-release-asset"
-          }
-        ]
-      },
-      {
-        "label": "Google",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/google"
-          },
-          {
-            "label": "Calendar",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/calendar"
-              },
-              {
-                "label": "Create Event",
-                "slug": "nodes/data/google/calendar/data-google-calendar-create-event"
-              },
-              {
-                "label": "Delete Event",
-                "slug": "nodes/data/google/calendar/data-google-calendar-delete-event"
-              },
-              {
-                "label": "Get Event",
-                "slug": "nodes/data/google/calendar/data-google-calendar-get-event"
-              },
-              {
-                "label": "List Calendars",
-                "slug": "nodes/data/google/calendar/data-google-calendar-list"
-              },
-              {
-                "label": "List Events",
-                "slug": "nodes/data/google/calendar/data-google-calendar-list-events"
-              },
-              {
-                "label": "Query Free/Busy",
-                "slug": "nodes/data/google/calendar/data-google-calendar-free-busy"
-              },
-              {
-                "label": "Quick Add Event",
-                "slug": "nodes/data/google/calendar/data-google-calendar-quick-add"
-              },
-              {
-                "label": "Update Event",
-                "slug": "nodes/data/google/calendar/data-google-calendar-update-event"
-              }
-            ]
-          },
-          {
-            "label": "Docs",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/docs"
-              },
-              {
-                "label": "Create Document",
-                "slug": "nodes/data/google/docs/data-google-docs-create"
-              },
-              {
-                "label": "Delete Text",
-                "slug": "nodes/data/google/docs/data-google-docs-delete-text"
-              },
-              {
-                "label": "Export Document",
-                "slug": "nodes/data/google/docs/data-google-docs-export"
-              },
-              {
-                "label": "Get Document",
-                "slug": "nodes/data/google/docs/data-google-docs-get"
-              },
-              {
-                "label": "Get Document Text",
-                "slug": "nodes/data/google/docs/data-google-docs-get-text"
-              },
-              {
-                "label": "Insert Text",
-                "slug": "nodes/data/google/docs/data-google-docs-insert-text"
-              },
-              {
-                "label": "Replace All Text",
-                "slug": "nodes/data/google/docs/data-google-docs-replace-text"
-              }
-            ]
-          },
-          {
-            "label": "Drive",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/drive"
-              },
-              {
-                "label": "Copy File",
-                "slug": "nodes/data/google/drive/data-google-drive-copy-file"
-              },
-              {
-                "label": "Create Folder",
-                "slug": "nodes/data/google/drive/data-google-drive-create-folder"
-              },
-              {
-                "label": "Delete File",
-                "slug": "nodes/data/google/drive/data-google-drive-delete-file"
-              },
-              {
-                "label": "Download File",
-                "slug": "nodes/data/google/drive/data-google-drive-download"
-              },
-              {
-                "label": "Get File Metadata",
-                "slug": "nodes/data/google/drive/data-google-drive-get-metadata"
-              },
-              {
-                "label": "List Google Drive Files",
-                "slug": "nodes/data/google/drive/data-google-drive-list-files"
-              },
-              {
-                "label": "Move File",
-                "slug": "nodes/data/google/drive/data-google-drive-move-file"
-              },
-              {
-                "label": "Read Google Drive File",
-                "slug": "nodes/data/google/drive/data-google-drive-read-file"
-              },
-              {
-                "label": "Search Drive",
-                "slug": "nodes/data/google/drive/data-google-drive-search"
-              },
-              {
-                "label": "Upload File",
-                "slug": "nodes/data/google/drive/data-google-drive-upload"
-              }
-            ]
-          },
-          {
-            "label": "Forms",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/forms"
-              },
-              {
-                "label": "Create Form",
-                "slug": "nodes/data/google/forms/data-google-forms-create"
-              },
-              {
-                "label": "Get Form",
-                "slug": "nodes/data/google/forms/data-google-forms-get"
-              },
-              {
-                "label": "Get Form Response",
-                "slug": "nodes/data/google/forms/data-google-forms-get-response"
-              },
-              {
-                "label": "List Form Responses",
-                "slug": "nodes/data/google/forms/data-google-forms-list-responses"
-              },
-              {
-                "label": "Update Form Info",
-                "slug": "nodes/data/google/forms/data-google-forms-update-info"
-              }
-            ]
-          },
-          {
-            "label": "Gmail",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/gmail"
-              },
-              {
-                "label": "Create Draft",
-                "slug": "nodes/data/google/gmail/data-google-gmail-create-draft"
-              },
-              {
-                "label": "List Labels",
-                "slug": "nodes/data/google/gmail/data-google-gmail-list-labels"
-              },
-              {
-                "label": "Send Email",
-                "slug": "nodes/data/google/gmail/data-google-gmail-send"
-              }
-            ]
-          },
-          {
-            "label": "Meet",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/meet"
-              },
-              {
-                "label": "Add Meet to Event",
-                "slug": "nodes/data/google/meet/data-google-meet-add-to-event"
-              },
-              {
-                "label": "Create Instant Meeting",
-                "slug": "nodes/data/google/meet/data-google-meet-instant"
-              },
-              {
-                "label": "Create Meeting",
-                "slug": "nodes/data/google/meet/data-google-meet-create"
-              },
-              {
-                "label": "Get Meeting Details",
-                "slug": "nodes/data/google/meet/data-google-meet-get"
-              }
-            ]
-          },
-          {
-            "label": "Sheets",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/sheets"
-              },
-              {
-                "label": "Add Sheet",
-                "slug": "nodes/data/google/sheets/data-google-sheets-add-sheet"
-              },
-              {
-                "label": "Append Rows",
-                "slug": "nodes/data/google/sheets/data-google-sheets-append-rows"
-              },
-              {
-                "label": "Clear Range",
-                "slug": "nodes/data/google/sheets/data-google-sheets-clear-range"
-              },
-              {
-                "label": "Create Spreadsheet",
-                "slug": "nodes/data/google/sheets/data-google-sheets-create"
-              },
-              {
-                "label": "Delete Sheet",
-                "slug": "nodes/data/google/sheets/data-google-sheets-delete-sheet"
-              },
-              {
-                "label": "Get Spreadsheet",
-                "slug": "nodes/data/google/sheets/data-google-sheets-get"
-              },
-              {
-                "label": "Read Range",
-                "slug": "nodes/data/google/sheets/data-google-sheets-read-range"
-              },
-              {
-                "label": "Write Range",
-                "slug": "nodes/data/google/sheets/data-google-sheets-write-range"
-              }
-            ]
-          },
-          {
-            "label": "Slides",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/slides"
-              },
-              {
-                "label": "Add Slide",
-                "slug": "nodes/data/google/slides/data-google-slides-add-slide"
-              },
-              {
-                "label": "Add Text to Slide",
-                "slug": "nodes/data/google/slides/data-google-slides-add-text"
-              },
-              {
-                "label": "Create Presentation",
-                "slug": "nodes/data/google/slides/data-google-slides-create"
-              },
-              {
-                "label": "Delete Slide",
-                "slug": "nodes/data/google/slides/data-google-slides-delete-slide"
-              },
-              {
-                "label": "Export Presentation",
-                "slug": "nodes/data/google/slides/data-google-slides-export"
-              },
-              {
-                "label": "Get Presentation",
-                "slug": "nodes/data/google/slides/data-google-slides-get"
-              }
-            ]
-          },
-          {
-            "label": "YouTube",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/google/youtube"
-              },
-              {
-                "label": "Add to Playlist",
-                "slug": "nodes/data/google/youtube/data-google-youtube-add-to-playlist"
-              },
-              {
-                "label": "Get Channel",
-                "slug": "nodes/data/google/youtube/data-google-youtube-get-channel"
-              },
-              {
-                "label": "Get Playlist Items",
-                "slug": "nodes/data/google/youtube/data-google-youtube-get-playlist-items"
-              },
-              {
-                "label": "Get Video",
-                "slug": "nodes/data/google/youtube/data-google-youtube-get-video"
-              },
-              {
-                "label": "List My Videos",
-                "slug": "nodes/data/google/youtube/data-google-youtube-list-my-videos"
-              },
-              {
-                "label": "List Playlists",
-                "slug": "nodes/data/google/youtube/data-google-youtube-list-playlists"
-              },
-              {
-                "label": "Remove from Playlist",
-                "slug": "nodes/data/google/youtube/data-google-youtube-remove-from-playlist"
-              },
-              {
-                "label": "Search Videos",
-                "slug": "nodes/data/google/youtube/data-google-youtube-search"
-              }
-            ]
-          },
-          {
-            "label": "Google",
-            "slug": "nodes/data/google/data-google-provider"
-          }
-        ]
-      },
-      {
-        "label": "LinkedIn",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/linkedin"
-          },
-          {
-            "label": "Get Me",
-            "slug": "nodes/data/linkedin/data-linkedin-get-me"
-          },
-          {
-            "label": "LinkedIn (OAuth)",
-            "slug": "nodes/data/linkedin/data-linkedin-provider-oauth"
-          },
-          {
-            "label": "Share Article",
-            "slug": "nodes/data/linkedin/data-linkedin-share-article"
-          },
-          {
-            "label": "Share Text Post",
-            "slug": "nodes/data/linkedin/data-linkedin-share-text"
-          }
-        ]
-      },
-      {
-        "label": "Microsoft",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/microsoft"
-          },
-          {
-            "label": "Calendar",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/calendar"
-              },
-              {
-                "label": "Create Calendar",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-create-calendar"
-              },
-              {
-                "label": "Create Event",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-create-event"
-              },
-              {
-                "label": "Delete Event",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-delete-event"
-              },
-              {
-                "label": "Find Meeting Times",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-find-meeting-times"
-              },
-              {
-                "label": "Get Schedule",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-get-schedule"
-              },
-              {
-                "label": "List Calendars",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-list-calendars"
-              },
-              {
-                "label": "List Events",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-list-events"
-              },
-              {
-                "label": "Update Event",
-                "slug": "nodes/data/microsoft/calendar/data-microsoft-calendar-update-event"
-              }
-            ]
-          },
-          {
-            "label": "Copilot",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/copilot"
-              },
-              {
-                "label": "Copilot Chat",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-chat"
-              },
-              {
-                "label": "Copilot Search",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-semantic-search"
-              },
-              {
-                "label": "Filter Copilot Interactions",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-filter-interactions"
-              },
-              {
-                "label": "Get Copilot Interactions",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-get-interactions"
-              },
-              {
-                "label": "Get Meeting Insight",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-get-meeting-insight"
-              },
-              {
-                "label": "Get User Copilot Settings",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-get-user-settings"
-              },
-              {
-                "label": "List Meeting Insights",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-list-meeting-insights"
-              },
-              {
-                "label": "Subscribe Copilot Notifications",
-                "slug": "nodes/data/microsoft/copilot/data-microsoft-copilot-subscribe-notifications"
-              }
-            ]
-          },
-          {
-            "label": "Excel",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/excel"
-              },
-              {
-                "label": "Add Excel Table Row",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-add-table-row"
-              },
-              {
-                "label": "Get Excel Table",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-get-table"
-              },
-              {
-                "label": "Get Excel Used Range",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-used-range"
-              },
-              {
-                "label": "List Excel Worksheets",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-list-worksheets"
-              },
-              {
-                "label": "Read Excel Range",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-read-range"
-              },
-              {
-                "label": "Write Excel Range",
-                "slug": "nodes/data/microsoft/excel/data-microsoft-excel-write-range"
-              }
-            ]
-          },
-          {
-            "label": "OneDrive",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/onedrive"
-              },
-              {
-                "label": "Copy Item",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-copy"
-              },
-              {
-                "label": "Create Folder",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-create-folder"
-              },
-              {
-                "label": "Delete Item",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-delete"
-              },
-              {
-                "label": "Download File",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-download"
-              },
-              {
-                "label": "Get OneDrive Item",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-get-item"
-              },
-              {
-                "label": "List OneDrive Items",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-list-items"
-              },
-              {
-                "label": "Move Item",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-move"
-              },
-              {
-                "label": "Search OneDrive",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-search"
-              },
-              {
-                "label": "Upload File",
-                "slug": "nodes/data/microsoft/onedrive/data-microsoft-onedrive-upload"
-              }
-            ]
-          },
-          {
-            "label": "OneNote",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/onenote"
-              },
-              {
-                "label": "Create Notebook",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-create-notebook"
-              },
-              {
-                "label": "Create Page",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-create-page"
-              },
-              {
-                "label": "Create Section",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-create-section"
-              },
-              {
-                "label": "Delete Page",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-delete-page"
-              },
-              {
-                "label": "Get Page Content",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-get-page-content"
-              },
-              {
-                "label": "List Notebooks",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-list-notebooks"
-              },
-              {
-                "label": "List Pages",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-list-pages"
-              },
-              {
-                "label": "List Sections",
-                "slug": "nodes/data/microsoft/onenote/data-microsoft-onenote-list-sections"
-              }
-            ]
-          },
-          {
-            "label": "Outlook",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/outlook"
-              },
-              {
-                "label": "Attachment → Fields",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-attachment-fields"
-              },
-              {
-                "label": "Create Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-create-calendar-event"
-              },
-              {
-                "label": "Delete Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-delete-calendar-event"
-              },
-              {
-                "label": "Forward Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-forward-calendar-event"
-              },
-              {
-                "label": "Get Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-get-calendar-event"
-              },
-              {
-                "label": "Get Message",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-get-message"
-              },
-              {
-                "label": "Get Message Attachments",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-get-message-attachments"
-              },
-              {
-                "label": "List Calendar Events",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-list-calendar-events"
-              },
-              {
-                "label": "List Contacts",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-list-contacts"
-              },
-              {
-                "label": "List Mail Folders",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-list-mail-folders"
-              },
-              {
-                "label": "List Messages",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-list-messages"
-              },
-              {
-                "label": "RSVP Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-rsvp-calendar-event"
-              },
-              {
-                "label": "Send Message",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-send-message"
-              },
-              {
-                "label": "Update Calendar Event",
-                "slug": "nodes/data/microsoft/outlook/data-microsoft-outlook-update-calendar-event"
-              }
-            ]
-          },
-          {
-            "label": "Planner",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/planner"
-              },
-              {
-                "label": "Create Bucket",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-create-bucket"
-              },
-              {
-                "label": "Create Planner Task",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-create-task"
-              },
-              {
-                "label": "Get Plan",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-get-plan"
-              },
-              {
-                "label": "List My Plans",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-list-my-plans"
-              },
-              {
-                "label": "List My Tasks",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-list-my-tasks"
-              },
-              {
-                "label": "List Plan Buckets",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-list-buckets"
-              },
-              {
-                "label": "List Plan Tasks",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-list-tasks"
-              },
-              {
-                "label": "Update Planner Task",
-                "slug": "nodes/data/microsoft/planner/data-microsoft-planner-update-task"
-              }
-            ]
-          },
-          {
-            "label": "Search",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/search"
-              },
-              {
-                "label": "Microsoft Search",
-                "slug": "nodes/data/microsoft/search/data-microsoft-graph-search"
-              }
-            ]
-          },
-          {
-            "label": "SharePoint",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/sharepoint"
-              },
-              {
-                "label": "Copy Drive Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-copy-drive-item"
-              },
-              {
-                "label": "Create List Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-create-list-item"
-              },
-              {
-                "label": "Create SharePoint Folder",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-create-folder"
-              },
-              {
-                "label": "Delete Drive Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-delete-drive-item"
-              },
-              {
-                "label": "Delete List Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-delete-list-item"
-              },
-              {
-                "label": "Download SharePoint File",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-download-file"
-              },
-              {
-                "label": "Get Drive Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-drive-item"
-              },
-              {
-                "label": "Get List Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-list-item"
-              },
-              {
-                "label": "Get List Items",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-list-items"
-              },
-              {
-                "label": "Get SharePoint Site",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-site"
-              },
-              {
-                "label": "List Drive Items",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-drive-items"
-              },
-              {
-                "label": "List SharePoint Drives",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-drives"
-              },
-              {
-                "label": "List SharePoint Lists",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-lists"
-              },
-              {
-                "label": "Move Drive Item",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-move-drive-item"
-              },
-              {
-                "label": "Search Drive Items",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-search-drive-items"
-              },
-              {
-                "label": "Search SharePoint Sites",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-search-sites"
-              },
-              {
-                "label": "Update List Item Fields",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-update-list-item-fields"
-              },
-              {
-                "label": "Upload SharePoint File",
-                "slug": "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-upload-file"
-              }
-            ]
-          },
-          {
-            "label": "Teams",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/teams"
-              },
-              {
-                "label": "Create Channel",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-create-channel"
-              },
-              {
-                "label": "Create Team",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-create-team"
-              },
-              {
-                "label": "Get Channel Messages",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-get-messages"
-              },
-              {
-                "label": "List Joined Teams",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-list-joined"
-              },
-              {
-                "label": "List Team Channels",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-list-channels"
-              },
-              {
-                "label": "Send Channel Message",
-                "slug": "nodes/data/microsoft/teams/data-microsoft-teams-send-message"
-              }
-            ]
-          },
-          {
-            "label": "To Do",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/data/microsoft/to-do"
-              },
-              {
-                "label": "Complete Task",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-complete-task"
-              },
-              {
-                "label": "Create Task",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-create-task"
-              },
-              {
-                "label": "Create Task List",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-create-list"
-              },
-              {
-                "label": "Delete Task",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-delete-task"
-              },
-              {
-                "label": "List Task Lists",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-list-lists"
-              },
-              {
-                "label": "List Tasks",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-list-tasks"
-              },
-              {
-                "label": "Update Task",
-                "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-update-task"
-              }
-            ]
-          },
-          {
-            "label": "Graph Request",
-            "slug": "nodes/data/microsoft/data-microsoft-graph-request"
-          },
-          {
-            "label": "Microsoft Graph (OAuth)",
-            "slug": "nodes/data/microsoft/data-microsoft-provider-oauth"
-          },
-          {
-            "label": "Microsoft Graph (Token)",
-            "slug": "nodes/data/microsoft/data-microsoft-provider-token"
-          }
-        ]
-      },
-      {
-        "label": "Notion",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/notion"
-          },
-          {
-            "label": "Append Notion Block Children",
-            "slug": "nodes/data/notion/data-notion-append-block-children"
-          },
-          {
-            "label": "Create Notion Data Source",
-            "slug": "nodes/data/notion/data-notion-create-data-source"
-          },
-          {
-            "label": "Create Notion Page",
-            "slug": "nodes/data/notion/data-notion-create-page"
-          },
-          {
-            "label": "Delete Notion Block",
-            "slug": "nodes/data/notion/data-notion-delete-block"
-          },
-          {
-            "label": "Download Notion File",
-            "slug": "nodes/data/notion/data-notion-download-file"
-          },
-          {
-            "label": "Get Notion Data Source",
-            "slug": "nodes/data/notion/data-notion-get-data-source"
-          },
-          {
-            "label": "Get Notion Database",
-            "slug": "nodes/data/notion/data-notion-get-database"
-          },
-          {
-            "label": "Get Notion Page",
-            "slug": "nodes/data/notion/data-notion-get-page"
-          },
-          {
-            "label": "List Notion Block Children",
-            "slug": "nodes/data/notion/data-notion-list-block-children"
-          },
-          {
-            "label": "List Notion Databases",
-            "slug": "nodes/data/notion/data-notion-list-databases"
-          },
-          {
-            "label": "Notion (API Key)",
-            "slug": "nodes/data/notion/data-notion-provider-api-key"
-          },
-          {
-            "label": "Notion (OAuth)",
-            "slug": "nodes/data/notion/data-notion-provider-oauth"
-          },
-          {
-            "label": "Query Notion Data Source",
-            "slug": "nodes/data/notion/data-notion-query-data-source"
-          },
-          {
-            "label": "Query Notion Database",
-            "slug": "nodes/data/notion/data-notion-query-database"
-          },
-          {
-            "label": "Search Notion",
-            "slug": "nodes/data/notion/data-notion-search"
-          },
-          {
-            "label": "Update Notion Block",
-            "slug": "nodes/data/notion/data-notion-update-block"
-          },
-          {
-            "label": "Update Notion Data Source",
-            "slug": "nodes/data/notion/data-notion-update-data-source"
-          },
-          {
-            "label": "Update Notion Page",
-            "slug": "nodes/data/notion/data-notion-update-page"
-          },
-          {
-            "label": "Upload Notion File",
-            "slug": "nodes/data/notion/data-notion-upload-file"
-          }
-        ]
-      },
-      {
-        "label": "Providers",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/providers"
-          },
-          {
-            "label": "AWS Provider",
-            "slug": "nodes/data/providers/data-aws-provider"
-          },
-          {
-            "label": "Azure Provider",
-            "slug": "nodes/data/providers/data-azure-provider"
-          },
-          {
-            "label": "Cloudflare Provider",
-            "slug": "nodes/data/providers/data-cloudflare-provider"
-          },
-          {
-            "label": "GCP Provider",
-            "slug": "nodes/data/providers/data-gcp-provider"
-          }
-        ]
-      },
-      {
-        "label": "QR",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/qr"
-          },
-          {
-            "label": "Write Barcode",
-            "slug": "nodes/data/qr/write-qrcode"
-          }
-        ]
-      },
-      {
-        "label": "TDMS",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data/tdms"
-          },
-          {
-            "label": "TDMS Metadata",
-            "slug": "nodes/data/tdms/tdms-metadata"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Data Studio",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/data-studio"
-      },
-      {
-        "label": "Actions",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data-studio/actions"
-          },
-          {
-            "label": "Ontology Action Input",
-            "slug": "nodes/data-studio/actions/ontology-action-input"
-          },
-          {
-            "label": "Prepare Ontology Action",
-            "slug": "nodes/data-studio/actions/ontology-action-request"
-          }
-        ]
-      },
-      {
-        "label": "Objects",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data-studio/objects"
-          },
-          {
-            "label": "Query Ontology Objects",
-            "slug": "nodes/data-studio/objects/ontology-query-objects"
-          }
-        ]
-      },
-      {
-        "label": "Remote Actions",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data-studio/remote-actions"
-          },
-          {
-            "label": "Invoke Remote Ontology Action",
-            "slug": "nodes/data-studio/remote-actions/ontology-action-request-remote"
-          }
-        ]
-      },
-      {
-        "label": "Remote Objects",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/data-studio/remote-objects"
-          },
-          {
-            "label": "Query Remote Ontology Children",
-            "slug": "nodes/data-studio/remote-objects/ontology-query-remote-children"
-          },
-          {
-            "label": "Query Remote Ontology Objects",
-            "slug": "nodes/data-studio/remote-objects/ontology-query-remote-objects"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Diagnostics",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/diagnostics"
-      },
-      {
-        "label": "Pick Codec Backend",
-        "slug": "nodes/diagnostics/video-pick-codec-backend"
-      },
-      {
-        "label": "Probe Codec Backends",
-        "slug": "nodes/diagnostics/video-probe-codec-backends"
-      },
-      {
-        "label": "Probe Platform Codec",
-        "slug": "nodes/diagnostics/video-probe-platform-codec"
-      }
-    ]
-  },
-  {
-    "label": "Document",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/document"
-      },
-      {
-        "label": "DOCX",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/document/docx"
-          },
-          {
-            "label": "Add Hyperlink",
-            "slug": "nodes/document/docx/docx-add-hyperlink"
-          },
-          {
-            "label": "Add Image",
-            "slug": "nodes/document/docx/docx-add-image"
-          },
-          {
-            "label": "Add Page Break",
-            "slug": "nodes/document/docx/docx-add-page-break"
-          },
-          {
-            "label": "Add Paragraph",
-            "slug": "nodes/document/docx/docx-add-paragraph"
-          },
-          {
-            "label": "Add Table",
-            "slug": "nodes/document/docx/docx-add-table"
-          },
-          {
-            "label": "Add Table of Contents",
-            "slug": "nodes/document/docx/docx-add-toc"
-          },
-          {
-            "label": "Create Document",
-            "slug": "nodes/document/docx/docx-create"
-          },
-          {
-            "label": "Extract Text",
-            "slug": "nodes/document/docx/docx-extract-text"
-          },
-          {
-            "label": "Get Metadata",
-            "slug": "nodes/document/docx/docx-get-metadata"
-          },
-          {
-            "label": "List Placeholders",
-            "slug": "nodes/document/docx/docx-list-placeholders"
-          },
-          {
-            "label": "Merge DOCX",
-            "slug": "nodes/document/docx/docx-merge"
-          },
-          {
-            "label": "Remove Paragraph",
-            "slug": "nodes/document/docx/docx-remove-paragraph"
-          },
-          {
-            "label": "Replace Image in DOCX",
-            "slug": "nodes/document/docx/docx-replace-image"
-          },
-          {
-            "label": "Replace Table Row",
-            "slug": "nodes/document/docx/docx-replace-table-row"
-          },
-          {
-            "label": "Replace Text in DOCX",
-            "slug": "nodes/document/docx/docx-replace-text"
-          },
-          {
-            "label": "Set Header/Footer",
-            "slug": "nodes/document/docx/docx-add-header-footer"
-          },
-          {
-            "label": "Set Metadata",
-            "slug": "nodes/document/docx/docx-set-metadata"
-          }
-        ]
-      },
-      {
-        "label": "PDF",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/document/pdf"
-          },
-          {
-            "label": "Add Image Stamp",
-            "slug": "nodes/document/pdf/pdf-add-image-stamp"
-          },
-          {
-            "label": "Add Page Numbers",
-            "slug": "nodes/document/pdf/pdf-add-page-numbers"
-          },
-          {
-            "label": "Add Text Watermark",
-            "slug": "nodes/document/pdf/pdf-add-watermark"
-          },
-          {
-            "label": "Compress PDF",
-            "slug": "nodes/document/pdf/pdf-compress"
-          },
-          {
-            "label": "Create PDF from Markdown",
-            "slug": "nodes/document/pdf/pdf-create-from-markdown"
-          },
-          {
-            "label": "Decrypt PDF",
-            "slug": "nodes/document/pdf/pdf-decrypt"
-          },
-          {
-            "label": "Encrypt PDF",
-            "slug": "nodes/document/pdf/pdf-encrypt"
-          },
-          {
-            "label": "Extract Pages",
-            "slug": "nodes/document/pdf/pdf-extract-pages"
-          },
-          {
-            "label": "Extract Text",
-            "slug": "nodes/document/pdf/pdf-extract-text"
-          },
-          {
-            "label": "Fill PDF Form Field",
-            "slug": "nodes/document/pdf/pdf-fill-form"
-          },
-          {
-            "label": "Get Metadata",
-            "slug": "nodes/document/pdf/pdf-get-metadata"
-          },
-          {
-            "label": "List PDF Form Fields",
-            "slug": "nodes/document/pdf/pdf-list-form-fields"
-          },
-          {
-            "label": "Merge PDFs",
-            "slug": "nodes/document/pdf/pdf-merge"
-          },
-          {
-            "label": "Replace Image in PDF",
-            "slug": "nodes/document/pdf/pdf-replace-image"
-          },
-          {
-            "label": "Replace Text in PDF",
-            "slug": "nodes/document/pdf/pdf-replace-text"
-          },
-          {
-            "label": "Rotate Pages",
-            "slug": "nodes/document/pdf/pdf-rotate-pages"
-          },
-          {
-            "label": "Set Metadata",
-            "slug": "nodes/document/pdf/pdf-set-metadata"
-          },
-          {
-            "label": "Split PDF",
-            "slug": "nodes/document/pdf/pdf-split"
-          }
-        ]
-      },
-      {
-        "label": "PPTX",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/document/pptx"
-          },
-          {
-            "label": "Add Chart",
-            "slug": "nodes/document/pptx/pptx-add-chart"
-          },
-          {
-            "label": "Add Image to Slide",
-            "slug": "nodes/document/pptx/pptx-add-image-to-slide"
-          },
-          {
-            "label": "Add Shape",
-            "slug": "nodes/document/pptx/pptx-add-shape"
-          },
-          {
-            "label": "Add Slide",
-            "slug": "nodes/document/pptx/pptx-add-slide"
-          },
-          {
-            "label": "Add Table to Slide",
-            "slug": "nodes/document/pptx/pptx-add-table-to-slide"
-          },
-          {
-            "label": "Add Text Box",
-            "slug": "nodes/document/pptx/pptx-add-text-box"
-          },
-          {
-            "label": "Create PPTX",
-            "slug": "nodes/document/pptx/pptx-create"
-          },
-          {
-            "label": "Delete Slide",
-            "slug": "nodes/document/pptx/pptx-delete-slide"
-          },
-          {
-            "label": "Duplicate Slide",
-            "slug": "nodes/document/pptx/pptx-duplicate-slide"
-          },
-          {
-            "label": "Extract Text",
-            "slug": "nodes/document/pptx/pptx-extract-text"
-          },
-          {
-            "label": "Get Metadata",
-            "slug": "nodes/document/pptx/pptx-get-metadata"
-          },
-          {
-            "label": "List Placeholders",
-            "slug": "nodes/document/pptx/pptx-list-placeholders"
-          },
-          {
-            "label": "Merge Presentations",
-            "slug": "nodes/document/pptx/pptx-merge"
-          },
-          {
-            "label": "Reorder Slides",
-            "slug": "nodes/document/pptx/pptx-reorder-slides"
-          },
-          {
-            "label": "Replace Image in PPTX",
-            "slug": "nodes/document/pptx/pptx-replace-image"
-          },
-          {
-            "label": "Replace Table Data",
-            "slug": "nodes/document/pptx/pptx-replace-table-data"
-          },
-          {
-            "label": "Replace Text in PPTX",
-            "slug": "nodes/document/pptx/pptx-replace-text"
-          },
-          {
-            "label": "Set Metadata",
-            "slug": "nodes/document/pptx/pptx-set-metadata"
-          },
-          {
-            "label": "Set Speaker Notes",
-            "slug": "nodes/document/pptx/pptx-add-notes"
-          },
-          {
-            "label": "Slide Count",
-            "slug": "nodes/document/pptx/pptx-slide-count"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Email",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/email"
-      },
-      {
-        "label": "Access",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/email/access"
-          },
-          {
-            "label": "Attachment → Fields",
-            "slug": "nodes/email/access/attachment-fields"
-          },
-          {
-            "label": "Email → Attachments",
-            "slug": "nodes/email/access/email-get-attachments"
-          },
-          {
-            "label": "Email → Content",
-            "slug": "nodes/email/access/email-get-content"
-          },
-          {
-            "label": "Email → Headers",
-            "slug": "nodes/email/access/email-get-headers"
-          },
-          {
-            "label": "Mail → Reference",
-            "slug": "nodes/email/access/mail-imap-inbox-mail-to-reference"
-          },
-          {
-            "label": "MailAddress → Fields",
-            "slug": "nodes/email/access/mail-address-fields"
-          }
-        ]
-      },
-      {
-        "label": "IMAP",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/email/imap"
-          },
-          {
-            "label": "Calendar",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/email/imap/calendar"
-              },
-              {
-                "label": "Create Calendar Event",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-create-event"
-              },
-              {
-                "label": "Delete Calendar Event",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-delete-event"
-              },
-              {
-                "label": "Get Calendar Event",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-get-event"
-              },
-              {
-                "label": "IMAP List Calendars",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-list"
-              },
-              {
-                "label": "List Calendar Events",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-list-events"
-              },
-              {
-                "label": "Subscribe to Calendar URL",
-                "slug": "nodes/email/imap/calendar/mail-imap-calendar-subscribe"
-              }
-            ]
-          },
-          {
-            "label": "Copy Mail to Mailbox",
-            "slug": "nodes/email/imap/email-imap-copy-message"
-          },
-          {
-            "label": "Create Draft",
-            "slug": "nodes/email/imap/email-imap-create-draft"
-          },
-          {
-            "label": "Delete Mail",
-            "slug": "nodes/email/imap/email-imap-delete-message"
-          },
-          {
-            "label": "Fetch Mail",
-            "slug": "nodes/email/imap/email-imap-inbox-fetch-mail"
-          },
-          {
-            "label": "IMAP Connect",
-            "slug": "nodes/email/imap/email-imap-connect"
-          },
-          {
-            "label": "IMAP Create Mailbox (If Missing)",
-            "slug": "nodes/email/imap/mail-imap-create-mailbox"
-          },
-          {
-            "label": "IMAP Inbox",
-            "slug": "nodes/email/imap/mail-imap-inbox"
-          },
-          {
-            "label": "IMAP List Inboxes",
-            "slug": "nodes/email/imap/mail-imap-list-inboxes"
-          },
-          {
-            "label": "List Mails",
-            "slug": "nodes/email/imap/mail-imap-list"
-          },
-          {
-            "label": "Mark Mail as Seen",
-            "slug": "nodes/email/imap/email-imap-mark-seen"
-          },
-          {
-            "label": "Move Mail to Mailbox",
-            "slug": "nodes/email/imap/email-imap-move-message"
-          }
-        ]
-      },
-      {
-        "label": "SMTP",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/email/smtp"
-          },
-          {
-            "label": "SMTP Connect",
-            "slug": "nodes/email/smtp/email-smtp-connect"
-          },
-          {
-            "label": "Send Mail",
-            "slug": "nodes/email/smtp/email-smtp-send"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Events",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/events"
-      },
-      {
-        "label": "Chat",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/events/chat"
-          },
-          {
-            "label": "Attachments",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/events/chat/attachments"
-              },
-              {
-                "label": "From Path",
-                "slug": "nodes/events/chat/attachments/events-chat-attachment-from-path"
-              },
-              {
-                "label": "From Signed URL",
-                "slug": "nodes/events/chat/attachments/events-chat-attachment-from-signed-url"
-              },
-              {
-                "label": "To Signed URL",
-                "slug": "nodes/events/chat/attachments/events-chat-attachment-to-signed-url"
-              }
-            ]
-          },
-          {
-            "label": "Interaction",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/events/chat/interaction"
-              },
-              {
-                "label": "Chat Form",
-                "slug": "nodes/events/chat/interaction/interaction-form"
-              },
-              {
-                "label": "Multiple Choice",
-                "slug": "nodes/events/chat/interaction/interaction-multiple-choice"
-              },
-              {
-                "label": "Single Choice",
-                "slug": "nodes/events/chat/interaction/interaction-single-choice"
-              }
-            ]
-          },
-          {
-            "label": "Extract Attachments",
-            "slug": "nodes/events/chat/ai-gen-llm-history-extract-attachments"
-          },
-          {
-            "label": "Push Attachment",
-            "slug": "nodes/events/chat/events-chat-push-attachment"
-          },
-          {
-            "label": "Push Attachments",
-            "slug": "nodes/events/chat/events-chat-push-attachments"
-          },
-          {
-            "label": "Push Chunk",
-            "slug": "nodes/events/chat/events-chat-push-response-chunk"
-          },
-          {
-            "label": "Push Global Session",
-            "slug": "nodes/events/chat/events-chat-push-global-session"
-          },
-          {
-            "label": "Push Local Session",
-            "slug": "nodes/events/chat/events-chat-push-local-session"
-          },
-          {
-            "label": "Push Reasoning",
-            "slug": "nodes/events/chat/events-chat-push-reasoning"
-          },
-          {
-            "label": "Push Response",
-            "slug": "nodes/events/chat/events-chat-push-response"
-          },
-          {
-            "label": "Push Stat",
-            "slug": "nodes/events/chat/events-chat-push-stat"
-          },
-          {
-            "label": "Push Stats",
-            "slug": "nodes/events/chat/events-chat-push-stats"
-          },
-          {
-            "label": "Push Step",
-            "slug": "nodes/events/chat/events-chat-push-step"
-          },
-          {
-            "label": "Push Text to Step",
-            "slug": "nodes/events/chat/events-chat-push-text-to-step"
-          },
-          {
-            "label": "Push Widget",
-            "slug": "nodes/events/chat/events-chat-push-widget"
-          },
-          {
-            "label": "Push Widgets",
-            "slug": "nodes/events/chat/events-chat-push-widgets"
-          },
-          {
-            "label": "Remove Step",
-            "slug": "nodes/events/chat/events-chat-remove-step"
-          }
-        ]
-      },
-      {
-        "label": "Generic",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/events/generic"
-          },
-          {
-            "label": "Return Generic Result",
-            "slug": "nodes/events/generic/events-generic-return-result"
-          }
-        ]
-      },
-      {
-        "label": "Remote",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/events/remote"
-          },
-          {
-            "label": "Call Remote API",
-            "slug": "nodes/events/remote/call-remote-api"
-          },
-          {
-            "label": "Call Remote Chat",
-            "slug": "nodes/events/remote/call-remote-chat"
-          },
-          {
-            "label": "Call Remote Event",
-            "slug": "nodes/events/remote/call-remote-event"
-          }
-        ]
-      },
-      {
-        "label": "Widget",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/events/widget"
-          },
-          {
-            "label": "Extract Action Context Field",
-            "slug": "nodes/events/widget/events-extract-action-context"
-          },
-          {
-            "label": "Extract Input Value",
-            "slug": "nodes/events/widget/events-extract-input-value"
-          }
-        ]
-      },
-      {
-        "label": "Chat Event",
-        "slug": "nodes/events/events-chat"
-      },
-      {
-        "label": "Generic Event",
-        "slug": "nodes/events/events-generic"
-      },
-      {
-        "label": "Simple Event",
-        "slug": "nodes/events/events-simple"
-      },
-      {
-        "label": "Widget Action Event",
-        "slug": "nodes/events/events-widget-action"
-      }
-    ]
-  },
-  {
-    "label": "Image",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/image"
-      },
-      {
-        "label": "Annotate",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/annotate"
-          },
-          {
-            "label": "Draw Boxes",
-            "slug": "nodes/image/annotate/draw-boxes"
-          },
-          {
-            "label": "Make Box",
-            "slug": "nodes/image/annotate/make-boxe"
-          }
-        ]
-      },
-      {
-        "label": "Content",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/content"
-          },
-          {
-            "label": "Read Image",
-            "slug": "nodes/image/content/read-image"
-          },
-          {
-            "label": "Read Image (URL)",
-            "slug": "nodes/image/content/read-image-url"
-          },
-          {
-            "label": "Read QR-/Barcode",
-            "slug": "nodes/image/content/read-barcodes"
-          },
-          {
-            "label": "Write Image",
-            "slug": "nodes/image/content/write-image"
-          }
-        ]
-      },
-      {
-        "label": "Metadata",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/metadata"
-          },
-          {
-            "label": "Get Dimensions",
-            "slug": "nodes/image/metadata/get-dimensions"
-          }
-        ]
-      },
-      {
-        "label": "Overlay",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/overlay"
-          },
-          {
-            "label": "Image Overlay",
-            "slug": "nodes/image/overlay/image-overlay"
-          },
-          {
-            "label": "Text Overlay",
-            "slug": "nodes/image/overlay/text-overlay"
-          }
-        ]
-      },
-      {
-        "label": "PDF",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/pdf"
-          },
-          {
-            "label": "PDF Page Count",
-            "slug": "nodes/image/pdf/pdf-page-count"
-          },
-          {
-            "label": "PDF Page To Image",
-            "slug": "nodes/image/pdf/pdf-page-to-image"
-          },
-          {
-            "label": "PDF To Images",
-            "slug": "nodes/image/pdf/pdf-to-images"
-          }
-        ]
-      },
-      {
-        "label": "Transform",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/image/transform"
-          },
-          {
-            "label": "Color Convert",
-            "slug": "nodes/image/transform/convert-image"
-          },
-          {
-            "label": "Contrast",
-            "slug": "nodes/image/transform/contrast-image"
-          },
-          {
-            "label": "Crop Image",
-            "slug": "nodes/image/transform/crop-image"
-          },
-          {
-            "label": "Resize Image",
-            "slug": "nodes/image/transform/resize-image"
-          }
-        ]
-      },
-      {
-        "label": "Convert Image Format",
-        "slug": "nodes/image/video-convert-image-format"
-      },
-      {
-        "label": "Transform Image",
-        "slug": "nodes/image/video-transform-image"
-      }
-    ]
-  },
-  {
-    "label": "Logging",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/logging"
-      },
-      {
-        "label": "Log Error",
-        "slug": "nodes/logging/log-error"
-      },
-      {
-        "label": "Log Warning",
-        "slug": "nodes/logging/log-warning"
-      },
-      {
-        "label": "Print Info",
-        "slug": "nodes/logging/log-info"
-      },
-      {
-        "label": "Progress Done",
-        "slug": "nodes/logging/log-progress-done"
-      },
-      {
-        "label": "Show Progress",
-        "slug": "nodes/logging/log-progress"
-      }
-    ]
-  },
-  {
-    "label": "Math",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/math"
-      },
-      {
-        "label": "Float",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/math/float"
-          },
-          {
-            "label": "Comparison",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/math/float/comparison"
-              },
-              {
-                "label": "!=",
-                "slug": "nodes/math/float/comparison/float-unequal"
-              },
-              {
-                "label": "<",
-                "slug": "nodes/math/float/comparison/float-less-than"
-              },
-              {
-                "label": "<=",
-                "slug": "nodes/math/float/comparison/float-less-than-or-equal"
-              },
-              {
-                "label": "==",
-                "slug": "nodes/math/float/comparison/float-equal"
-              },
-              {
-                "label": ">",
-                "slug": "nodes/math/float/comparison/float-greater-than"
-              },
-              {
-                "label": ">=",
-                "slug": "nodes/math/float/comparison/float-greater-than-or-equal"
-              }
-            ]
-          },
-          {
-            "label": "Random",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/math/float/random"
-              },
-              {
-                "label": "Random Float in Range",
-                "slug": "nodes/math/float/random/float-random-in-range"
-              }
-            ]
-          },
-          {
-            "label": "*",
-            "slug": "nodes/math/float/float-multiply"
-          },
-          {
-            "label": "+",
-            "slug": "nodes/math/float/float-add"
-          },
-          {
-            "label": "-",
-            "slug": "nodes/math/float/float-subtract"
-          },
-          {
-            "label": "/",
-            "slug": "nodes/math/float/float-divide"
-          },
-          {
-            "label": "Abs",
-            "slug": "nodes/math/float/float-abs"
-          },
-          {
-            "label": "Ceil",
-            "slug": "nodes/math/float/float-ceil"
-          },
-          {
-            "label": "Clamp",
-            "slug": "nodes/math/float/float-clamp"
-          },
-          {
-            "label": "Floor",
-            "slug": "nodes/math/float/float-floor"
-          },
-          {
-            "label": "Max",
-            "slug": "nodes/math/float/float-max"
-          },
-          {
-            "label": "Min",
-            "slug": "nodes/math/float/float-min"
-          },
-          {
-            "label": "Power",
-            "slug": "nodes/math/float/float-power"
-          },
-          {
-            "label": "Root",
-            "slug": "nodes/math/float/float-root"
-          },
-          {
-            "label": "Round",
-            "slug": "nodes/math/float/float-round"
-          }
-        ]
-      },
-      {
-        "label": "Int",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/math/int"
-          },
-          {
-            "label": "Random",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/math/int/random"
-              },
-              {
-                "label": "Random Integer in Range",
-                "slug": "nodes/math/int/random/int-random-in-range"
-              }
-            ]
-          },
-          {
-            "label": "!=",
-            "slug": "nodes/math/int/int-unequal"
-          },
-          {
-            "label": "%",
-            "slug": "nodes/math/int/int-modulo"
-          },
-          {
-            "label": "*",
-            "slug": "nodes/math/int/int-multiply"
-          },
-          {
-            "label": "+",
-            "slug": "nodes/math/int/int-add"
-          },
-          {
-            "label": "-",
-            "slug": "nodes/math/int/int-subtract"
-          },
-          {
-            "label": "/",
-            "slug": "nodes/math/int/int-divide"
-          },
-          {
-            "label": "<",
-            "slug": "nodes/math/int/int-less-than"
-          },
-          {
-            "label": "<=",
-            "slug": "nodes/math/int/int-less-than-or-equal"
-          },
-          {
-            "label": "==",
-            "slug": "nodes/math/int/int-equal"
-          },
-          {
-            "label": ">",
-            "slug": "nodes/math/int/int-greater-than"
-          },
-          {
-            "label": ">=",
-            "slug": "nodes/math/int/int-greater-than-or-equal"
-          },
-          {
-            "label": "Absolute",
-            "slug": "nodes/math/int/int-abs"
-          },
-          {
-            "label": "Clamp",
-            "slug": "nodes/math/int/int-clamp"
-          },
-          {
-            "label": "Max",
-            "slug": "nodes/math/int/int-max"
-          },
-          {
-            "label": "Min",
-            "slug": "nodes/math/int/int-min"
-          },
-          {
-            "label": "Power",
-            "slug": "nodes/math/int/int-power"
-          },
-          {
-            "label": "Root",
-            "slug": "nodes/math/int/int-root"
-          }
-        ]
-      },
-      {
-        "label": "Evaluate Expression",
-        "slug": "nodes/math/eval"
-      }
-    ]
-  },
-  {
-    "label": "Notifications",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/notifications"
-      },
-      {
-        "label": "Notify Project User",
-        "slug": "nodes/notifications/notify-project-user"
-      },
-      {
-        "label": "Notify User",
-        "slug": "nodes/notifications/notify-user"
-      }
-    ]
-  },
-  {
-    "label": "Processing",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/processing"
-      },
-      {
-        "label": "Privacy",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/processing/privacy"
-          },
-          {
-            "label": "PII Detection Options",
-            "slug": "nodes/processing/privacy/processing-pii-detection-options"
-          },
-          {
-            "label": "PII Mask (Regex)",
-            "slug": "nodes/processing/privacy/processing-pii-mask-regex"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Streaming",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/streaming"
-      },
-      {
-        "label": "Package HLS VOD",
-        "slug": "nodes/streaming/video-package-hls-vod"
-      }
-    ]
-  },
-  {
-    "label": "Structs",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/structs"
-      },
-      {
-        "label": "Fields",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/structs/fields"
-          },
-          {
-            "label": "Get Field",
-            "slug": "nodes/structs/fields/struct-get"
-          },
-          {
-            "label": "Get Fields",
-            "slug": "nodes/structs/fields/struct-get-fields"
-          },
-          {
-            "label": "Has Field",
-            "slug": "nodes/structs/fields/struct-has"
-          },
-          {
-            "label": "Remove Field",
-            "slug": "nodes/structs/fields/struct-remove"
-          },
-          {
-            "label": "Set Field",
-            "slug": "nodes/structs/fields/struct-set"
-          }
-        ]
-      },
-      {
-        "label": "Break Struct",
-        "slug": "nodes/structs/struct-break"
-      },
-      {
-        "label": "Make Struct",
-        "slug": "nodes/structs/struct-make"
-      },
-      {
-        "label": "Make Struct (Schema)",
-        "slug": "nodes/structs/struct-make-from-schema"
-      }
-    ]
-  },
-  {
-    "label": "Subtitles",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/subtitles"
-      },
-      {
-        "label": "Add Subtitle Track",
-        "slug": "nodes/subtitles/video-add-subtitle-track"
-      },
-      {
-        "label": "Burn Subtitles Into Video",
-        "slug": "nodes/subtitles/video-burn-subtitles"
-      },
-      {
-        "label": "Extract Subtitle Track",
-        "slug": "nodes/subtitles/video-extract-subtitle-track"
-      },
-      {
-        "label": "Parse Subtitles",
-        "slug": "nodes/subtitles/video-parse-subtitles"
-      },
-      {
-        "label": "Shift Subtitle File",
-        "slug": "nodes/subtitles/video-shift-subtitle-file"
-      },
-      {
-        "label": "Write Subtitles",
-        "slug": "nodes/subtitles/video-write-subtitles"
-      }
-    ]
-  },
-  {
-    "label": "UI",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/ui"
-      },
-      {
-        "label": "Component",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/component"
-          },
-          {
-            "label": "Create Component",
-            "slug": "nodes/ui/component/a2ui-create-component"
-          }
-        ]
-      },
-      {
-        "label": "Container",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/container"
-          },
-          {
-            "label": "Get Widget Element",
-            "slug": "nodes/ui/container/a2ui-widget-get-element"
-          },
-          {
-            "label": "Instantiate Widget",
-            "slug": "nodes/ui/container/a2ui-instantiate-widget"
-          },
-          {
-            "label": "Push To Container",
-            "slug": "nodes/ui/container/a2ui-push-to-container"
-          },
-          {
-            "label": "Query Widget",
-            "slug": "nodes/ui/container/a2ui-widget-query"
-          },
-          {
-            "label": "Remove From Container",
-            "slug": "nodes/ui/container/a2ui-remove-from-container"
-          },
-          {
-            "label": "Set Widget Text",
-            "slug": "nodes/ui/container/a2ui-widget-set-text"
-          },
-          {
-            "label": "Update Widget Inputs",
-            "slug": "nodes/ui/container/a2ui-widget-update-inputs"
-          }
-        ]
-      },
-      {
-        "label": "Data",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/data"
-          },
-          {
-            "label": "Data Update",
-            "slug": "nodes/ui/data/a2ui-data-update"
-          },
-          {
-            "label": "Request Elements",
-            "slug": "nodes/ui/data/a2ui-request-elements"
-          },
-          {
-            "label": "Upsert Element",
-            "slug": "nodes/ui/data/a2ui-upsert-element"
-          }
-        ]
-      },
-      {
-        "label": "Elements",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/elements"
-          },
-          {
-            "label": "Button",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/button"
-              },
-              {
-                "label": "Get Button Disabled",
-                "slug": "nodes/ui/elements/button/a2ui-get-button-disabled"
-              },
-              {
-                "label": "Get Button Label",
-                "slug": "nodes/ui/elements/button/a2ui-get-button-label"
-              },
-              {
-                "label": "Get Button Loading",
-                "slug": "nodes/ui/elements/button/a2ui-get-button-loading"
-              },
-              {
-                "label": "Set Button Label",
-                "slug": "nodes/ui/elements/button/a2ui-set-button-label"
-              }
-            ]
-          },
-          {
-            "label": "Calendar",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/calendar"
-              },
-              {
-                "label": "Update Calendar",
-                "slug": "nodes/ui/elements/calendar/a2ui-update-calendar"
-              }
-            ]
-          },
-          {
-            "label": "Charts",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/charts"
-              },
-              {
-                "label": "Agent",
-                "collapsed": true,
-                "items": [
-                  {
-                    "label": "Overview",
-                    "slug": "nodes/ui/elements/charts/agent"
-                  },
-                  {
-                    "label": "Chart Data Agent",
-                    "slug": "nodes/ui/elements/charts/agent/a2ui-chart-data-agent"
-                  }
-                ]
-              },
-              {
-                "label": "Push Data to Chart",
-                "slug": "nodes/ui/elements/charts/a2ui-push-csv-to-chart"
-              },
-              {
-                "label": "Set Chart Layout",
-                "slug": "nodes/ui/elements/charts/a2ui-set-chart-layout"
-              },
-              {
-                "label": "Set Chart Style",
-                "slug": "nodes/ui/elements/charts/a2ui-set-chart-style"
-              },
-              {
-                "label": "Set Nivo Chart Config",
-                "slug": "nodes/ui/elements/charts/a2ui-set-nivo-config"
-              }
-            ]
-          },
-          {
-            "label": "Checkbox",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/checkbox"
-              },
-              {
-                "label": "Update Toggle",
-                "slug": "nodes/ui/elements/checkbox/a2ui-update-toggle"
-              }
-            ]
-          },
-          {
-            "label": "Containers",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/containers"
-              },
-              {
-                "label": "Clear Children",
-                "slug": "nodes/ui/elements/containers/a2ui-clear-children"
-              },
-              {
-                "label": "Get Child At Index",
-                "slug": "nodes/ui/elements/containers/a2ui-get-child-at-index"
-              },
-              {
-                "label": "Insert Child At Index",
-                "slug": "nodes/ui/elements/containers/a2ui-push-child-at-index"
-              },
-              {
-                "label": "Push Child",
-                "slug": "nodes/ui/elements/containers/a2ui-push-child"
-              },
-              {
-                "label": "Remove Child At Index",
-                "slug": "nodes/ui/elements/containers/a2ui-remove-child-at-index"
-              }
-            ]
-          },
-          {
-            "label": "Display",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/display"
-              },
-              {
-                "label": "Set Badge Content",
-                "slug": "nodes/ui/elements/display/a2ui-set-badge-content"
-              },
-              {
-                "label": "Set Diff Content",
-                "slug": "nodes/ui/elements/display/a2ui-set-diff-content"
-              },
-              {
-                "label": "Set Icon",
-                "slug": "nodes/ui/elements/display/a2ui-set-icon"
-              },
-              {
-                "label": "Set Markdown Content",
-                "slug": "nodes/ui/elements/display/a2ui-set-markdown-content"
-              },
-              {
-                "label": "Set Progress",
-                "slug": "nodes/ui/elements/display/a2ui-set-progress"
-              }
-            ]
-          },
-          {
-            "label": "Files",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/files"
-              },
-              {
-                "label": "Get File Input Files",
-                "slug": "nodes/ui/elements/files/a2ui-get-file-input-files"
-              }
-            ]
-          },
-          {
-            "label": "Game",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/game"
-              },
-              {
-                "label": "Update Model3D",
-                "slug": "nodes/ui/elements/game/a2ui-update-model3d"
-              },
-              {
-                "label": "Update Scene3D",
-                "slug": "nodes/ui/elements/game/a2ui-update-scene3d"
-              },
-              {
-                "label": "Update Sprite",
-                "slug": "nodes/ui/elements/game/a2ui-update-sprite"
-              }
-            ]
-          },
-          {
-            "label": "Gantt",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/gantt"
-              },
-              {
-                "label": "Update Gantt",
-                "slug": "nodes/ui/elements/gantt/a2ui-update-gantt"
-              }
-            ]
-          },
-          {
-            "label": "GeoMap",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/geomap"
-              },
-              {
-                "label": "Update GeoMap",
-                "slug": "nodes/ui/elements/geomap/a2ui-update-geomap"
-              }
-            ]
-          },
-          {
-            "label": "Get",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/get"
-              },
-              {
-                "label": "Get Iframe Src",
-                "slug": "nodes/ui/elements/get/a2ui-get-iframe-src"
-              },
-              {
-                "label": "Get Tooltip Content",
-                "slug": "nodes/ui/elements/get/a2ui-get-tooltip-content"
-              }
-            ]
-          },
-          {
-            "label": "Graph",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/graph"
-              },
-              {
-                "label": "Update Graph",
-                "slug": "nodes/ui/elements/graph/a2ui-update-graph"
-              }
-            ]
-          },
-          {
-            "label": "Hotspot",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/hotspot"
-              },
-              {
-                "label": "Update Hotspot",
-                "slug": "nodes/ui/elements/hotspot/a2ui-update-hotspot"
-              }
-            ]
-          },
-          {
-            "label": "Input",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/input"
-              },
-              {
-                "label": "Clear Input",
-                "slug": "nodes/ui/elements/input/a2ui-clear-input"
-              },
-              {
-                "label": "Get Input Placeholder",
-                "slug": "nodes/ui/elements/input/a2ui-get-input-placeholder"
-              },
-              {
-                "label": "Set Input Placeholder",
-                "slug": "nodes/ui/elements/input/a2ui-set-input-placeholder"
-              },
-              {
-                "label": "Set TextField Error",
-                "slug": "nodes/ui/elements/input/a2ui-set-textfield-error"
-              }
-            ]
-          },
-          {
-            "label": "Labeler",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/labeler"
-              },
-              {
-                "label": "Update Labeler",
-                "slug": "nodes/ui/elements/labeler/a2ui-update-labeler"
-              }
-            ]
-          },
-          {
-            "label": "Media",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/media"
-              },
-              {
-                "label": "Set Iframe HTML",
-                "slug": "nodes/ui/elements/media/a2ui-set-iframe-srcdoc"
-              },
-              {
-                "label": "Set Iframe Src",
-                "slug": "nodes/ui/elements/media/a2ui-set-iframe-src"
-              },
-              {
-                "label": "Set Media Source",
-                "slug": "nodes/ui/elements/media/a2ui-set-media-source"
-              }
-            ]
-          },
-          {
-            "label": "Overlay",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/overlay"
-              },
-              {
-                "label": "Set Bounding Boxes",
-                "slug": "nodes/ui/elements/overlay/a2ui-update-overlay"
-              }
-            ]
-          },
-          {
-            "label": "Query",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/query"
-              },
-              {
-                "label": "Query Children",
-                "slug": "nodes/ui/elements/query/a2ui-query-children"
-              },
-              {
-                "label": "Query Elements by ID",
-                "slug": "nodes/ui/elements/query/a2ui-query-elements-by-id"
-              },
-              {
-                "label": "Query Elements by Type",
-                "slug": "nodes/ui/elements/query/a2ui-query-elements-by-type"
-              },
-              {
-                "label": "Query Parent",
-                "slug": "nodes/ui/elements/query/a2ui-query-parent"
-              }
-            ]
-          },
-          {
-            "label": "Select",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/select"
-              },
-              {
-                "label": "Get Select Value",
-                "slug": "nodes/ui/elements/select/a2ui-get-select-value"
-              },
-              {
-                "label": "Set Select Options",
-                "slug": "nodes/ui/elements/select/a2ui-set-select-options"
-              },
-              {
-                "label": "Set Select Value",
-                "slug": "nodes/ui/elements/select/a2ui-set-select-value"
-              }
-            ]
-          },
-          {
-            "label": "Set",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/set"
-              },
-              {
-                "label": "Set Tooltip Content",
-                "slug": "nodes/ui/elements/set/a2ui-set-tooltip-content"
-              }
-            ]
-          },
-          {
-            "label": "Slider",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/slider"
-              },
-              {
-                "label": "Set Slider Value",
-                "slug": "nodes/ui/elements/slider/a2ui-set-slider-value"
-              }
-            ]
-          },
-          {
-            "label": "Table",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/ui/elements/table"
-              },
-              {
-                "label": "Push CSV to Table",
-                "slug": "nodes/ui/elements/table/a2ui-write-csv-to-table"
-              },
-              {
-                "label": "Update Table",
-                "slug": "nodes/ui/elements/table/a2ui-update-table"
-              }
-            ]
-          },
-          {
-            "label": "Clone Element",
-            "slug": "nodes/ui/elements/a2ui-clone-element"
-          },
-          {
-            "label": "Create Element",
-            "slug": "nodes/ui/elements/a2ui-create-element"
-          },
-          {
-            "label": "Get Element",
-            "slug": "nodes/ui/elements/a2ui-get-element"
-          },
-          {
-            "label": "Get Element Text",
-            "slug": "nodes/ui/elements/a2ui-get-element-text"
-          },
-          {
-            "label": "Get Element Value",
-            "slug": "nodes/ui/elements/a2ui-get-element-value"
-          },
-          {
-            "label": "Remove Element",
-            "slug": "nodes/ui/elements/a2ui-remove-element"
-          },
-          {
-            "label": "Set Element Action",
-            "slug": "nodes/ui/elements/a2ui-set-element-action"
-          },
-          {
-            "label": "Set Element Disabled",
-            "slug": "nodes/ui/elements/a2ui-set-element-disabled"
-          },
-          {
-            "label": "Set Element Loading",
-            "slug": "nodes/ui/elements/a2ui-set-element-loading"
-          },
-          {
-            "label": "Set Element Style",
-            "slug": "nodes/ui/elements/a2ui-set-element-style"
-          },
-          {
-            "label": "Set Element Text",
-            "slug": "nodes/ui/elements/a2ui-set-element-text"
-          },
-          {
-            "label": "Set Element Value",
-            "slug": "nodes/ui/elements/a2ui-set-element-value"
-          },
-          {
-            "label": "Set Element Visibility",
-            "slug": "nodes/ui/elements/a2ui-set-element-visibility"
-          }
-        ]
-      },
-      {
-        "label": "Navigation",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/navigation"
-          },
-          {
-            "label": "Close Dialog",
-            "slug": "nodes/ui/navigation/a2ui-close-dialog"
-          },
-          {
-            "label": "Get Current Route",
-            "slug": "nodes/ui/navigation/a2ui-get-current-route"
-          },
-          {
-            "label": "Get Query Params",
-            "slug": "nodes/ui/navigation/a2ui-get-query-params"
-          },
-          {
-            "label": "Get Route Params",
-            "slug": "nodes/ui/navigation/a2ui-get-route-params"
-          },
-          {
-            "label": "Navigate To",
-            "slug": "nodes/ui/navigation/a2ui-navigate-to"
-          },
-          {
-            "label": "Open Dialog",
-            "slug": "nodes/ui/navigation/a2ui-open-dialog"
-          },
-          {
-            "label": "Set Query Param",
-            "slug": "nodes/ui/navigation/a2ui-set-query-param"
-          },
-          {
-            "label": "URL Decode",
-            "slug": "nodes/ui/navigation/a2ui-url-decode"
-          },
-          {
-            "label": "URL Encode",
-            "slug": "nodes/ui/navigation/a2ui-url-encode"
-          }
-        ]
-      },
-      {
-        "label": "State",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/state"
-          },
-          {
-            "label": "Get Global State",
-            "slug": "nodes/ui/state/a2ui-get-global-state"
-          },
-          {
-            "label": "Get Page State",
-            "slug": "nodes/ui/state/a2ui-get-page-state"
-          },
-          {
-            "label": "Set Global State",
-            "slug": "nodes/ui/state/a2ui-set-global-state"
-          },
-          {
-            "label": "Set Page State",
-            "slug": "nodes/ui/state/a2ui-set-page-state"
-          }
-        ]
-      },
-      {
-        "label": "Surface",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/ui/surface"
-          },
-          {
-            "label": "Begin Rendering",
-            "slug": "nodes/ui/surface/a2ui-begin-rendering"
-          },
-          {
-            "label": "Create Surface",
-            "slug": "nodes/ui/surface/a2ui-create-surface"
-          },
-          {
-            "label": "Delete Surface",
-            "slug": "nodes/ui/surface/a2ui-delete-surface"
-          },
-          {
-            "label": "Set Surface Custom CSS",
-            "slug": "nodes/ui/surface/a2ui-set-surface-custom-css"
-          },
-          {
-            "label": "Show Screen",
-            "slug": "nodes/ui/surface/a2ui-show-screen"
-          },
-          {
-            "label": "Surface Update",
-            "slug": "nodes/ui/surface/a2ui-surface-update"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Utils",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/utils"
-      },
-      {
-        "label": "Array",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/array"
-          },
-          {
-            "label": "Batch",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/array/batch"
-              },
-              {
-                "label": "Batch Push",
-                "slug": "nodes/utils/array/batch/array-batch-push"
-              },
-              {
-                "label": "Batch Remove",
-                "slug": "nodes/utils/array/batch/array-batch-remove"
-              },
-              {
-                "label": "Batch Set",
-                "slug": "nodes/utils/array/batch/array-batch-set"
-              }
-            ]
-          },
-          {
-            "label": "By Reference",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/array/by-reference"
-              },
-              {
-                "label": "Clear (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-clear-ref"
-              },
-              {
-                "label": "Extend (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-extend-ref"
-              },
-              {
-                "label": "Pop (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-pop-ref"
-              },
-              {
-                "label": "Push (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-push-ref"
-              },
-              {
-                "label": "Remove Index (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-remove-index-ref"
-              },
-              {
-                "label": "Set Index (By Ref)",
-                "slug": "nodes/utils/array/by-reference/array-set-index-ref"
-              }
-            ]
-          },
-          {
-            "label": "Array Length",
-            "slug": "nodes/utils/array/array-length"
-          },
-          {
-            "label": "Clear Array",
-            "slug": "nodes/utils/array/array-clear"
-          },
-          {
-            "label": "Construct Array",
-            "slug": "nodes/utils/array/construct-array"
-          },
-          {
-            "label": "Extend",
-            "slug": "nodes/utils/array/array-extend"
-          },
-          {
-            "label": "Filter Array Field",
-            "slug": "nodes/utils/array/array-filter-field"
-          },
-          {
-            "label": "Filter Array Fields",
-            "slug": "nodes/utils/array/array-filter-fields"
-          },
-          {
-            "label": "Find Item",
-            "slug": "nodes/utils/array/array-find-item"
-          },
-          {
-            "label": "Get Element",
-            "slug": "nodes/utils/array/array-get"
-          },
-          {
-            "label": "Includes",
-            "slug": "nodes/utils/array/array-includes"
-          },
-          {
-            "label": "Make Array",
-            "slug": "nodes/utils/array/make-array"
-          },
-          {
-            "label": "Pop",
-            "slug": "nodes/utils/array/array-pop"
-          },
-          {
-            "label": "Push",
-            "slug": "nodes/utils/array/array-push"
-          },
-          {
-            "label": "Remove Index",
-            "slug": "nodes/utils/array/array-remove-index"
-          },
-          {
-            "label": "Set Index",
-            "slug": "nodes/utils/array/array-set-index"
-          },
-          {
-            "label": "Shuffle",
-            "slug": "nodes/utils/array/array-shuffle"
-          }
-        ]
-      },
-      {
-        "label": "Bool",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/bool"
-          },
-          {
-            "label": "!",
-            "slug": "nodes/utils/bool/bool-not"
-          },
-          {
-            "label": "==",
-            "slug": "nodes/utils/bool/bool-equal"
-          },
-          {
-            "label": "And",
-            "slug": "nodes/utils/bool/bool-and"
-          },
-          {
-            "label": "Or",
-            "slug": "nodes/utils/bool/bool-or"
-          },
-          {
-            "label": "Random Boolean",
-            "slug": "nodes/utils/bool/random-bool"
-          },
-          {
-            "label": "^",
-            "slug": "nodes/utils/bool/bool-xor"
-          }
-        ]
-      },
-      {
-        "label": "CSV",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/csv"
-          },
-          {
-            "label": "Buffered CSV Reader",
-            "slug": "nodes/utils/csv/csv-buffered-reader"
-          }
-        ]
-      },
-      {
-        "label": "Conversions",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/conversions"
-          },
-          {
-            "label": "From Bytes",
-            "slug": "nodes/utils/conversions/val-from-bytes"
-          },
-          {
-            "label": "From String",
-            "slug": "nodes/utils/conversions/val-from-string"
-          },
-          {
-            "label": "To Bytes",
-            "slug": "nodes/utils/conversions/val-to-bytes"
-          },
-          {
-            "label": "To String",
-            "slug": "nodes/utils/conversions/val-to-string"
-          }
-        ]
-      },
-      {
-        "label": "Crypto",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/crypto"
-          },
-          {
-            "label": "AES-256-GCM Decrypt",
-            "slug": "nodes/utils/crypto/crypto-aes-decrypt-bytes"
-          },
-          {
-            "label": "AES-256-GCM Decrypt Value",
-            "slug": "nodes/utils/crypto/crypto-aes-decrypt-value"
-          },
-          {
-            "label": "AES-256-GCM Encrypt",
-            "slug": "nodes/utils/crypto/crypto-aes-encrypt-bytes"
-          },
-          {
-            "label": "AES-256-GCM Encrypt Value",
-            "slug": "nodes/utils/crypto/crypto-aes-encrypt-value"
-          },
-          {
-            "label": "Generate Encryption Key",
-            "slug": "nodes/utils/crypto/crypto-generate-key"
-          },
-          {
-            "label": "XChaCha20-Poly1305 Decrypt",
-            "slug": "nodes/utils/crypto/crypto-xchacha20-decrypt-bytes"
-          },
-          {
-            "label": "XChaCha20-Poly1305 Decrypt Value",
-            "slug": "nodes/utils/crypto/crypto-xchacha20-decrypt-value"
-          },
-          {
-            "label": "XChaCha20-Poly1305 Encrypt",
-            "slug": "nodes/utils/crypto/crypto-xchacha20-encrypt-bytes"
-          },
-          {
-            "label": "XChaCha20-Poly1305 Encrypt Value",
-            "slug": "nodes/utils/crypto/crypto-xchacha20-encrypt-value"
-          }
-        ]
-      },
-      {
-        "label": "DateTime",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/datetime"
-          },
-          {
-            "label": "Add Duration",
-            "slug": "nodes/utils/datetime/utils-datetime-duration"
-          },
-          {
-            "label": "DateTime Difference",
-            "slug": "nodes/utils/datetime/utils-datetime-diff"
-          },
-          {
-            "label": "Format DateTime",
-            "slug": "nodes/utils/datetime/utils-datetime-format"
-          },
-          {
-            "label": "Now",
-            "slug": "nodes/utils/datetime/utils-datetime-now"
-          },
-          {
-            "label": "Parse DateTime",
-            "slug": "nodes/utils/datetime/utils-datetime-parse"
-          },
-          {
-            "label": "To Date",
-            "slug": "nodes/utils/datetime/utils-datetime-to-date"
-          },
-          {
-            "label": "To Time",
-            "slug": "nodes/utils/datetime/utils-datetime-to-time"
-          }
-        ]
-      },
-      {
-        "label": "Encoding",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/encoding"
-          },
-          {
-            "label": "Base64 Decode",
-            "slug": "nodes/utils/encoding/utils-encoding-base64-decode"
-          },
-          {
-            "label": "Base64 Decode to Bytes",
-            "slug": "nodes/utils/encoding/utils-encoding-base64-decode-bytes"
-          },
-          {
-            "label": "Base64 Encode",
-            "slug": "nodes/utils/encoding/utils-encoding-base64-encode"
-          },
-          {
-            "label": "Base64 Encode Bytes",
-            "slug": "nodes/utils/encoding/utils-encoding-base64-encode-bytes"
-          },
-          {
-            "label": "HTML Decode",
-            "slug": "nodes/utils/encoding/utils-encoding-html-decode"
-          },
-          {
-            "label": "HTML Encode",
-            "slug": "nodes/utils/encoding/utils-encoding-html-encode"
-          },
-          {
-            "label": "Hex Decode",
-            "slug": "nodes/utils/encoding/utils-encoding-hex-decode"
-          },
-          {
-            "label": "Hex Decode to Bytes",
-            "slug": "nodes/utils/encoding/utils-encoding-hex-decode-bytes"
-          },
-          {
-            "label": "Hex Encode",
-            "slug": "nodes/utils/encoding/utils-encoding-hex-encode"
-          },
-          {
-            "label": "Hex Encode Bytes",
-            "slug": "nodes/utils/encoding/utils-encoding-hex-encode-bytes"
-          },
-          {
-            "label": "URL Decode",
-            "slug": "nodes/utils/encoding/utils-encoding-url-decode"
-          },
-          {
-            "label": "URL Encode",
-            "slug": "nodes/utils/encoding/utils-encoding-url-encode"
-          }
-        ]
-      },
-      {
-        "label": "Execution",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/execution"
-          },
-          {
-            "label": "Get App ID",
-            "slug": "nodes/utils/execution/utils-execution-get-app-id"
-          },
-          {
-            "label": "Get Execution Environment",
-            "slug": "nodes/utils/execution/utils-execution-get-environment"
-          },
-          {
-            "label": "Get Execution Mode",
-            "slug": "nodes/utils/execution/utils-execution-get-mode"
-          },
-          {
-            "label": "Get Run ID",
-            "slug": "nodes/utils/execution/utils-execution-get-run-id"
-          },
-          {
-            "label": "Get User ID",
-            "slug": "nodes/utils/execution/utils-execution-get-user-id"
-          },
-          {
-            "label": "Is Local Environment",
-            "slug": "nodes/utils/execution/utils-execution-is-local-environment"
-          },
-          {
-            "label": "Is Mobile Environment",
-            "slug": "nodes/utils/execution/utils-execution-is-mobile-environment"
-          },
-          {
-            "label": "Is Server Environment",
-            "slug": "nodes/utils/execution/utils-execution-is-server-environment"
-          }
-        ]
-      },
-      {
-        "label": "Faker",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/faker"
-          },
-          {
-            "label": "Address",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/address"
-              },
-              {
-                "label": "Fake City Name",
-                "slug": "nodes/utils/faker/address/faker-city-name"
-              },
-              {
-                "label": "Fake Country Code",
-                "slug": "nodes/utils/faker/address/faker-country-code"
-              },
-              {
-                "label": "Fake Country Name",
-                "slug": "nodes/utils/faker/address/faker-country-name"
-              },
-              {
-                "label": "Fake Latitude",
-                "slug": "nodes/utils/faker/address/faker-latitude"
-              },
-              {
-                "label": "Fake Longitude",
-                "slug": "nodes/utils/faker/address/faker-longitude"
-              },
-              {
-                "label": "Fake Post Code",
-                "slug": "nodes/utils/faker/address/faker-post-code"
-              },
-              {
-                "label": "Fake State Name",
-                "slug": "nodes/utils/faker/address/faker-state-name"
-              },
-              {
-                "label": "Fake Street Address",
-                "slug": "nodes/utils/faker/address/faker-street-address"
-              },
-              {
-                "label": "Fake Street Name",
-                "slug": "nodes/utils/faker/address/faker-street-name"
-              }
-            ]
-          },
-          {
-            "label": "Company",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/company"
-              },
-              {
-                "label": "Fake Buzzword",
-                "slug": "nodes/utils/faker/company/faker-buzzword"
-              },
-              {
-                "label": "Fake Catch Phrase",
-                "slug": "nodes/utils/faker/company/faker-catch-phrase"
-              },
-              {
-                "label": "Fake Company Name",
-                "slug": "nodes/utils/faker/company/faker-company-name"
-              },
-              {
-                "label": "Fake Industry",
-                "slug": "nodes/utils/faker/company/faker-industry"
-              },
-              {
-                "label": "Fake Profession",
-                "slug": "nodes/utils/faker/company/faker-profession"
-              }
-            ]
-          },
-          {
-            "label": "Internet",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/internet"
-              },
-              {
-                "label": "Fake Domain Suffix",
-                "slug": "nodes/utils/faker/internet/faker-domain-suffix"
-              },
-              {
-                "label": "Fake Email",
-                "slug": "nodes/utils/faker/internet/faker-email"
-              },
-              {
-                "label": "Fake IPv4",
-                "slug": "nodes/utils/faker/internet/faker-ipv4"
-              },
-              {
-                "label": "Fake IPv6",
-                "slug": "nodes/utils/faker/internet/faker-ipv6"
-              },
-              {
-                "label": "Fake Password",
-                "slug": "nodes/utils/faker/internet/faker-password"
-              },
-              {
-                "label": "Fake User Agent",
-                "slug": "nodes/utils/faker/internet/faker-user-agent"
-              },
-              {
-                "label": "Fake Username",
-                "slug": "nodes/utils/faker/internet/faker-username"
-              }
-            ]
-          },
-          {
-            "label": "Lorem",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/lorem"
-              },
-              {
-                "label": "Fake Paragraph",
-                "slug": "nodes/utils/faker/lorem/faker-paragraph"
-              },
-              {
-                "label": "Fake Paragraphs",
-                "slug": "nodes/utils/faker/lorem/faker-paragraphs"
-              },
-              {
-                "label": "Fake Sentence",
-                "slug": "nodes/utils/faker/lorem/faker-sentence"
-              },
-              {
-                "label": "Fake Sentences",
-                "slug": "nodes/utils/faker/lorem/faker-sentences"
-              },
-              {
-                "label": "Fake Word",
-                "slug": "nodes/utils/faker/lorem/faker-word"
-              },
-              {
-                "label": "Fake Words",
-                "slug": "nodes/utils/faker/lorem/faker-words"
-              }
-            ]
-          },
-          {
-            "label": "Name",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/name"
-              },
-              {
-                "label": "Fake First Name",
-                "slug": "nodes/utils/faker/name/faker-first-name"
-              },
-              {
-                "label": "Fake Full Name",
-                "slug": "nodes/utils/faker/name/faker-full-name"
-              },
-              {
-                "label": "Fake Last Name",
-                "slug": "nodes/utils/faker/name/faker-last-name"
-              },
-              {
-                "label": "Fake Title",
-                "slug": "nodes/utils/faker/name/faker-title"
-              }
-            ]
-          },
-          {
-            "label": "Number",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/number"
-              },
-              {
-                "label": "Fake Boolean",
-                "slug": "nodes/utils/faker/number/faker-boolean"
-              },
-              {
-                "label": "Fake Digit",
-                "slug": "nodes/utils/faker/number/faker-digit"
-              },
-              {
-                "label": "Fake Float",
-                "slug": "nodes/utils/faker/number/faker-float"
-              },
-              {
-                "label": "Fake Integer",
-                "slug": "nodes/utils/faker/number/faker-integer"
-              }
-            ]
-          },
-          {
-            "label": "Phone",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/faker/phone"
-              },
-              {
-                "label": "Fake Cell Number",
-                "slug": "nodes/utils/faker/phone/faker-cell-number"
-              },
-              {
-                "label": "Fake Phone Number",
-                "slug": "nodes/utils/faker/phone/faker-phone-number"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "Hash",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/hash"
-          },
-          {
-            "label": "AHash",
-            "slug": "nodes/utils/hash/utils-hash-ahash"
-          },
-          {
-            "label": "Blake3 Hash",
-            "slug": "nodes/utils/hash/utils-hash-blake3"
-          },
-          {
-            "label": "MD5 Hash",
-            "slug": "nodes/utils/hash/utils-hash-md5"
-          },
-          {
-            "label": "SHA-256 Hash",
-            "slug": "nodes/utils/hash/utils-hash-sha256"
-          },
-          {
-            "label": "SHA-512 Hash",
-            "slug": "nodes/utils/hash/utils-hash-sha512"
-          }
-        ]
-      },
-      {
-        "label": "JSON",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/json"
-          },
-          {
-            "label": "Make Tool Schema",
-            "slug": "nodes/utils/json/utils-json-make-schema"
-          },
-          {
-            "label": "Parse JSON with Schema",
-            "slug": "nodes/utils/json/parse-with-schema"
-          },
-          {
-            "label": "Repair Parse JSON",
-            "slug": "nodes/utils/json/repair-parse"
-          }
-        ]
-      },
-      {
-        "label": "Map",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/map"
-          },
-          {
-            "label": "By Reference",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/map/by-reference"
-              },
-              {
-                "label": "Clear (By Ref)",
-                "slug": "nodes/utils/map/by-reference/map-clear-ref"
-              },
-              {
-                "label": "Remove Key (By Ref)",
-                "slug": "nodes/utils/map/by-reference/map-remove-ref"
-              },
-              {
-                "label": "Set Value (By Ref)",
-                "slug": "nodes/utils/map/by-reference/map-set-ref"
-              }
-            ]
-          },
-          {
-            "label": "Clear Map",
-            "slug": "nodes/utils/map/map-clear"
-          },
-          {
-            "label": "Get Value",
-            "slug": "nodes/utils/map/map-get"
-          },
-          {
-            "label": "Has Key",
-            "slug": "nodes/utils/map/map-has-key"
-          },
-          {
-            "label": "Keys",
-            "slug": "nodes/utils/map/map-keys"
-          },
-          {
-            "label": "Make Map",
-            "slug": "nodes/utils/map/make-map"
-          },
-          {
-            "label": "Remove Key",
-            "slug": "nodes/utils/map/map-remove"
-          },
-          {
-            "label": "Set Value",
-            "slug": "nodes/utils/map/map-set"
-          },
-          {
-            "label": "Size",
-            "slug": "nodes/utils/map/map-size"
-          },
-          {
-            "label": "Values",
-            "slug": "nodes/utils/map/map-values"
-          }
-        ]
-      },
-      {
-        "label": "Markdown",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/markdown"
-          },
-          {
-            "label": "HTML to Markdown",
-            "slug": "nodes/utils/markdown/utils-md-html-to-md"
-          },
-          {
-            "label": "Markdown to HTML",
-            "slug": "nodes/utils/markdown/utils-md-md-to-html"
-          },
-          {
-            "label": "Rich Text to HTML",
-            "slug": "nodes/utils/markdown/utils-md-plate-to-html"
-          },
-          {
-            "label": "Rich Text to Markdown",
-            "slug": "nodes/utils/markdown/utils-md-plate-to-md"
-          }
-        ]
-      },
-      {
-        "label": "Math",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/math"
-          },
-          {
-            "label": "Vector",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/math/vector"
-              },
-              {
-                "label": "Addition",
-                "slug": "nodes/utils/math/vector/float-vector-addition"
-              },
-              {
-                "label": "Cosine Similarity",
-                "slug": "nodes/utils/math/vector/float-vector-cosine-similarity"
-              },
-              {
-                "label": "Cross Product",
-                "slug": "nodes/utils/math/vector/float-vector-cross-product"
-              },
-              {
-                "label": "Dot Product",
-                "slug": "nodes/utils/math/vector/float-vector-dot-product"
-              },
-              {
-                "label": "Multiplication",
-                "slug": "nodes/utils/math/vector/float-vector-multiplication"
-              },
-              {
-                "label": "Normalize",
-                "slug": "nodes/utils/math/vector/float-vector-normalize"
-              },
-              {
-                "label": "Subtraction",
-                "slug": "nodes/utils/math/vector/float-vector-subtraction"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "Set",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/set"
-          },
-          {
-            "label": "By Reference",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/set/by-reference"
-              },
-              {
-                "label": "Clear (By Ref)",
-                "slug": "nodes/utils/set/by-reference/set-clear-ref"
-              },
-              {
-                "label": "Discard (By Ref)",
-                "slug": "nodes/utils/set/by-reference/set-discard-ref"
-              },
-              {
-                "label": "Insert (By Ref)",
-                "slug": "nodes/utils/set/by-reference/set-insert-ref"
-              }
-            ]
-          },
-          {
-            "label": "Array to Set",
-            "slug": "nodes/utils/set/array-to-set"
-          },
-          {
-            "label": "Clear set",
-            "slug": "nodes/utils/set/set-clear"
-          },
-          {
-            "label": "Difference",
-            "slug": "nodes/utils/set/difference"
-          },
-          {
-            "label": "Discard",
-            "slug": "nodes/utils/set/set-discard"
-          },
-          {
-            "label": "Get Size",
-            "slug": "nodes/utils/set/set-get-size"
-          },
-          {
-            "label": "Has Element",
-            "slug": "nodes/utils/set/set-has"
-          },
-          {
-            "label": "Insert Element",
-            "slug": "nodes/utils/set/insert"
-          },
-          {
-            "label": "Is Empty",
-            "slug": "nodes/utils/set/set-is-empty"
-          },
-          {
-            "label": "Is Mutual",
-            "slug": "nodes/utils/set/is-mutual"
-          },
-          {
-            "label": "Is Subset",
-            "slug": "nodes/utils/set/set-is-subset"
-          },
-          {
-            "label": "Is Superset",
-            "slug": "nodes/utils/set/set-is-superset"
-          },
-          {
-            "label": "Make Set",
-            "slug": "nodes/utils/set/make-set"
-          },
-          {
-            "label": "Pop",
-            "slug": "nodes/utils/set/set-pop"
-          },
-          {
-            "label": "Set to Array",
-            "slug": "nodes/utils/set/set-to-array"
-          },
-          {
-            "label": "Union",
-            "slug": "nodes/utils/set/union"
-          }
-        ]
-      },
-      {
-        "label": "String",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/string"
-          },
-          {
-            "label": "Similarity",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/utils/string/similarity"
-              },
-              {
-                "label": "Damerau-Levenshtein Distance",
-                "slug": "nodes/utils/string/similarity/damerau-levenshtein-distance"
-              },
-              {
-                "label": "Hamming Distance",
-                "slug": "nodes/utils/string/similarity/hamming-distance"
-              },
-              {
-                "label": "Jaro Distance",
-                "slug": "nodes/utils/string/similarity/jaro-distance"
-              },
-              {
-                "label": "Jaro-Winkler Distance",
-                "slug": "nodes/utils/string/similarity/jaro-winkler-distance"
-              },
-              {
-                "label": "Levenshtein Distance",
-                "slug": "nodes/utils/string/similarity/levenshtein-distance"
-              },
-              {
-                "label": "Optimal String Alignment Distance",
-                "slug": "nodes/utils/string/similarity/optimal-string-alignment-distance"
-              },
-              {
-                "label": "Sørensen-Dice Coefficient",
-                "slug": "nodes/utils/string/similarity/sorensen-dice-coefficient"
-              }
-            ]
-          },
-          {
-            "label": "!=",
-            "slug": "nodes/utils/string/not-equal-string"
-          },
-          {
-            "label": "==",
-            "slug": "nodes/utils/string/equal-string"
-          },
-          {
-            "label": "Contains",
-            "slug": "nodes/utils/string/string-contains"
-          },
-          {
-            "label": "Ends With",
-            "slug": "nodes/utils/string/string-ends-with"
-          },
-          {
-            "label": "Escape String",
-            "slug": "nodes/utils/string/string-escape"
-          },
-          {
-            "label": "Format String",
-            "slug": "nodes/utils/string/string-format"
-          },
-          {
-            "label": "From UTF-8 Lossy",
-            "slug": "nodes/utils/string/utf8-lossy"
-          },
-          {
-            "label": "Join Strings",
-            "slug": "nodes/utils/string/string-join"
-          },
-          {
-            "label": "Render Template",
-            "slug": "nodes/utils/string/string-render-template"
-          },
-          {
-            "label": "Replace String",
-            "slug": "nodes/utils/string/string-replace"
-          },
-          {
-            "label": "Split String",
-            "slug": "nodes/utils/string/string-split"
-          },
-          {
-            "label": "Starts With",
-            "slug": "nodes/utils/string/string-starts-with"
-          },
-          {
-            "label": "String Length",
-            "slug": "nodes/utils/string/string-length"
-          },
-          {
-            "label": "To Lower Case",
-            "slug": "nodes/utils/string/string-to-lower"
-          },
-          {
-            "label": "To Upper Case",
-            "slug": "nodes/utils/string/string-to-upper"
-          },
-          {
-            "label": "Trim String",
-            "slug": "nodes/utils/string/string-trim"
-          },
-          {
-            "label": "Unescape String",
-            "slug": "nodes/utils/string/string-unescape"
-          }
-        ]
-      },
-      {
-        "label": "Types",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/types"
-          },
-          {
-            "label": "Fallback",
-            "slug": "nodes/utils/types/utils-types-fallback"
-          },
-          {
-            "label": "Select",
-            "slug": "nodes/utils/types/utils-types-select"
-          },
-          {
-            "label": "Try Transform",
-            "slug": "nodes/utils/types/utils-types-try-transform"
-          }
-        ]
-      },
-      {
-        "label": "User",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/utils/user"
-          },
-          {
-            "label": "Check User Has Role",
-            "slug": "nodes/utils/user/utils-user-check-user-has-role"
-          },
-          {
-            "label": "Check User Permission",
-            "slug": "nodes/utils/user/utils-user-check-user-permission"
-          },
-          {
-            "label": "Get Current User",
-            "slug": "nodes/utils/user/utils-user-get-current-user"
-          },
-          {
-            "label": "Get Current User Info",
-            "slug": "nodes/utils/user/utils-user-get-current-user-info"
-          },
-          {
-            "label": "Get Effective User Permissions",
-            "slug": "nodes/utils/user/utils-user-get-effective-user-permissions"
-          },
-          {
-            "label": "Get Executing User",
-            "slug": "nodes/utils/user/utils-user-get-executing-user"
-          },
-          {
-            "label": "Get Project User",
-            "slug": "nodes/utils/user/utils-user-get-project-user"
-          },
-          {
-            "label": "Get User Attribute",
-            "slug": "nodes/utils/user/utils-user-get-user-attribute"
-          },
-          {
-            "label": "Get User Attributes",
-            "slug": "nodes/utils/user/utils-user-get-user-attributes"
-          },
-          {
-            "label": "Get User Roles",
-            "slug": "nodes/utils/user/utils-user-get-user-roles"
-          },
-          {
-            "label": "Has Attribute",
-            "slug": "nodes/utils/user/utils-user-has-attribute"
-          },
-          {
-            "label": "Has Permission",
-            "slug": "nodes/utils/user/utils-user-has-permission"
-          },
-          {
-            "label": "Is Technical User",
-            "slug": "nodes/utils/user/utils-user-is-technical-user"
-          },
-          {
-            "label": "List Project Users",
-            "slug": "nodes/utils/user/utils-user-list-project-users"
-          },
-          {
-            "label": "List Users with Attribute",
-            "slug": "nodes/utils/user/utils-user-list-users-with-attribute"
-          },
-          {
-            "label": "List Users with Role",
-            "slug": "nodes/utils/user/utils-user-list-users-with-role"
-          },
-          {
-            "label": "Resolve User",
-            "slug": "nodes/utils/user/utils-user-resolve-user"
-          },
-          {
-            "label": "Search Users",
-            "slug": "nodes/utils/user/utils-user-search-users"
-          }
-        ]
-      },
-      {
-        "label": "CUID v2",
-        "slug": "nodes/utils/cuid"
-      }
-    ]
-  },
-  {
-    "label": "Variable",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/variable"
-      },
-      {
-        "label": "Get Variable",
-        "slug": "nodes/variable/variable-get"
-      },
-      {
-        "label": "Set Variable",
-        "slug": "nodes/variable/variable-set"
-      }
-    ]
-  },
-  {
-    "label": "Video",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/video"
-      },
-      {
-        "label": "Containers",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/containers"
-          },
-          {
-            "label": "Remux Video",
-            "slug": "nodes/video/containers/video-remux"
-          }
-        ]
-      },
-      {
-        "label": "Editing",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/editing"
-          },
-          {
-            "label": "Concatenate Videos",
-            "slug": "nodes/video/editing/video-concat"
-          },
-          {
-            "label": "Trim On Keyframes",
-            "slug": "nodes/video/editing/video-trim-keyframes"
-          }
-        ]
-      },
-      {
-        "label": "Inspect",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/inspect"
-          },
-          {
-            "label": "Detect Video Container",
-            "slug": "nodes/video/inspect/video-detect-container"
-          },
-          {
-            "label": "Probe Media Info",
-            "slug": "nodes/video/inspect/video-probe-media-info"
-          }
-        ]
-      },
-      {
-        "label": "Packets",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/packets"
-          },
-          {
-            "label": "Bitstream Convert",
-            "slug": "nodes/video/packets/video-bitstream-convert"
-          },
-          {
-            "label": "Normalize Timestamps",
-            "slug": "nodes/video/packets/video-normalize-timestamps"
-          }
-        ]
-      },
-      {
-        "label": "Planning",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/planning"
-          },
-          {
-            "label": "Check Remux Compatibility",
-            "slug": "nodes/video/planning/video-check-remux-compatibility"
-          }
-        ]
-      },
-      {
-        "label": "Preview",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/preview"
-          },
-          {
-            "label": "Contact Sheet",
-            "slug": "nodes/video/preview/video-contact-sheet"
-          },
-          {
-            "label": "Extract Thumbnail",
-            "slug": "nodes/video/preview/video-extract-thumbnail"
-          }
-        ]
-      },
-      {
-        "label": "Tracks",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/tracks"
-          },
-          {
-            "label": "Extract Track",
-            "slug": "nodes/video/tracks/video-extract-track"
-          }
-        ]
-      },
-      {
-        "label": "Transcode",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/video/transcode"
-          },
-          {
-            "label": "Encode AV1",
-            "slug": "nodes/video/transcode/video-encode-av1"
-          },
-          {
-            "label": "Transcode Video",
-            "slug": "nodes/video/transcode/video-transcode-video"
-          },
-          {
-            "label": "Transform Video",
-            "slug": "nodes/video/transcode/video-transform-video"
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "label": "Web",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "nodes/web"
-      },
-      {
-        "label": "API",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/api"
-          },
-          {
-            "label": "Request",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/api/request"
-              },
-              {
-                "label": "Get Header",
-                "slug": "nodes/web/api/request/http-get-header"
-              },
-              {
-                "label": "Get Headers",
-                "slug": "nodes/web/api/request/http-get-headers"
-              },
-              {
-                "label": "Get Method",
-                "slug": "nodes/web/api/request/http-get-method"
-              },
-              {
-                "label": "Get Url",
-                "slug": "nodes/web/api/request/http-get-url"
-              },
-              {
-                "label": "Make Request",
-                "slug": "nodes/web/api/request/http-make-request"
-              },
-              {
-                "label": "Set Accept",
-                "slug": "nodes/web/api/request/http-set-accept"
-              },
-              {
-                "label": "Set Bearer Auth",
-                "slug": "nodes/web/api/request/http-set-bearer-auth"
-              },
-              {
-                "label": "Set Bytes Body",
-                "slug": "nodes/web/api/request/http-set-bytes-body"
-              },
-              {
-                "label": "Set Content-Type",
-                "slug": "nodes/web/api/request/http-set-content-type"
-              },
-              {
-                "label": "Set Form Body",
-                "slug": "nodes/web/api/request/http-set-form-body"
-              },
-              {
-                "label": "Set Header",
-                "slug": "nodes/web/api/request/http-set-header"
-              },
-              {
-                "label": "Set Headers",
-                "slug": "nodes/web/api/request/http-set-headers"
-              },
-              {
-                "label": "Set Method",
-                "slug": "nodes/web/api/request/http-set-method"
-              },
-              {
-                "label": "Set String Body",
-                "slug": "nodes/web/api/request/http-set-string-body"
-              },
-              {
-                "label": "Set Struct Body",
-                "slug": "nodes/web/api/request/http-set-struct-body"
-              },
-              {
-                "label": "Set Url",
-                "slug": "nodes/web/api/request/http-set-url"
-              }
-            ]
-          },
-          {
-            "label": "Response",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/api/response"
-              },
-              {
-                "label": "Get Header",
-                "slug": "nodes/web/api/response/http-response-get-header"
-              },
-              {
-                "label": "Get Headers",
-                "slug": "nodes/web/api/response/http-response-get-headers"
-              },
-              {
-                "label": "Get Status Code",
-                "slug": "nodes/web/api/response/http-response-get-status"
-              },
-              {
-                "label": "Is Success",
-                "slug": "nodes/web/api/response/http-response-is-success"
-              },
-              {
-                "label": "To Bytes",
-                "slug": "nodes/web/api/response/http-response-to-bytes"
-              },
-              {
-                "label": "To Struct",
-                "slug": "nodes/web/api/response/http-response-to-json"
-              },
-              {
-                "label": "To Text",
-                "slug": "nodes/web/api/response/http-response-to-text"
-              }
-            ]
-          },
-          {
-            "label": "API Call",
-            "slug": "nodes/web/api/http-fetch"
-          },
-          {
-            "label": "Streaming API Call",
-            "slug": "nodes/web/api/streaming-http-fetch"
-          }
-        ]
-      },
-      {
-        "label": "Auth",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/auth"
-          },
-          {
-            "label": "API Key Auth",
-            "slug": "nodes/web/auth/api-key-auth"
-          },
-          {
-            "label": "Basic Auth",
-            "slug": "nodes/web/auth/basic-auth"
-          },
-          {
-            "label": "Bearer Token Auth",
-            "slug": "nodes/web/auth/bearer-token-auth"
-          },
-          {
-            "label": "HMAC SHA-256 Auth",
-            "slug": "nodes/web/auth/hmac-sha256-auth"
-          },
-          {
-            "label": "OAuth JWKS File Auth",
-            "slug": "nodes/web/auth/oauth-jwks-file-auth"
-          },
-          {
-            "label": "OAuth JWKS URL Auth",
-            "slug": "nodes/web/auth/oauth-jwks-url-auth"
-          },
-          {
-            "label": "OIDC Discovery Auth",
-            "slug": "nodes/web/auth/oidc-discovery-auth"
-          }
-        ]
-      },
-      {
-        "label": "Camera",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/camera"
-          },
-          {
-            "label": "Grab IP-Camera Frame",
-            "slug": "nodes/web/camera/web-camera-grab-frame"
-          },
-          {
-            "label": "Grab RTSP Frame",
-            "slug": "nodes/web/camera/web-camera-grab-rtsp-frame"
-          },
-          {
-            "label": "Write Image to Data URL",
-            "slug": "nodes/web/camera/image-write-dataurl"
-          }
-        ]
-      },
-      {
-        "label": "Geo",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/geo"
-          },
-          {
-            "label": "H3",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/geo/h3"
-              },
-              {
-                "label": "H3 Cell Area",
-                "slug": "nodes/web/geo/h3/h3-cell-area"
-              },
-              {
-                "label": "H3 Cell Boundary",
-                "slug": "nodes/web/geo/h3/h3-cell-to-boundary"
-              },
-              {
-                "label": "H3 Cell Children",
-                "slug": "nodes/web/geo/h3/h3-cell-to-children"
-              },
-              {
-                "label": "H3 Cell Parent",
-                "slug": "nodes/web/geo/h3/h3-cell-to-parent"
-              },
-              {
-                "label": "H3 Cell to Lat/Lng",
-                "slug": "nodes/web/geo/h3/h3-cell-to-latlng"
-              },
-              {
-                "label": "H3 Cells to Polygon",
-                "slug": "nodes/web/geo/h3/h3-cells-to-multi-polygon"
-              },
-              {
-                "label": "H3 Compact Cells",
-                "slug": "nodes/web/geo/h3/h3-compact-cells"
-              },
-              {
-                "label": "H3 Edge Length",
-                "slug": "nodes/web/geo/h3/h3-edge-length"
-              },
-              {
-                "label": "H3 Grid Disk",
-                "slug": "nodes/web/geo/h3/h3-grid-disk"
-              },
-              {
-                "label": "H3 Grid Distance",
-                "slug": "nodes/web/geo/h3/h3-grid-distance"
-              },
-              {
-                "label": "H3 Grid Path",
-                "slug": "nodes/web/geo/h3/h3-grid-path"
-              },
-              {
-                "label": "Lat/Lng to H3 Cell",
-                "slug": "nodes/web/geo/h3/h3-latlng-to-cell"
-              }
-            ]
-          },
-          {
-            "label": "Map",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/geo/map"
-              },
-              {
-                "label": "Get Map Image",
-                "slug": "nodes/web/geo/map/geo-get-map-image"
-              }
-            ]
-          },
-          {
-            "label": "Routing",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/geo/routing"
-              },
-              {
-                "label": "OSRM Match Trace",
-                "slug": "nodes/web/geo/routing/geo-osrm-match-trace"
-              },
-              {
-                "label": "OSRM Nearest",
-                "slug": "nodes/web/geo/routing/geo-osrm-nearest"
-              },
-              {
-                "label": "OSRM Table",
-                "slug": "nodes/web/geo/routing/geo-osrm-table"
-              },
-              {
-                "label": "OSRM Tile",
-                "slug": "nodes/web/geo/routing/geo-osrm-tile"
-              },
-              {
-                "label": "OSRM Trip",
-                "slug": "nodes/web/geo/routing/geo-osrm-trip"
-              },
-              {
-                "label": "Plan Route",
-                "slug": "nodes/web/geo/routing/geo-plan-route"
-              }
-            ]
-          },
-          {
-            "label": "Search",
-            "collapsed": true,
-            "items": [
-              {
-                "label": "Overview",
-                "slug": "nodes/web/geo/search"
-              },
-              {
-                "label": "Reverse Geocode",
-                "slug": "nodes/web/geo/search/geo-reverse-geocode"
-              },
-              {
-                "label": "Search Location",
-                "slug": "nodes/web/geo/search/geo-search-location"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "label": "MCP",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/mcp"
-          },
-          {
-            "label": "MCP Server",
-            "slug": "nodes/web/mcp/mcp-server"
-          },
-          {
-            "label": "MCP Server Config",
-            "slug": "nodes/web/mcp/mcp-server-config"
-          },
-          {
-            "label": "Register MCP Auth",
-            "slug": "nodes/web/mcp/mcp-register-auth"
-          },
-          {
-            "label": "Register MCP Functions",
-            "slug": "nodes/web/mcp/mcp-register-functions"
-          },
-          {
-            "label": "Register MCP Prompt",
-            "slug": "nodes/web/mcp/mcp-register-prompt"
-          },
-          {
-            "label": "Register MCP Resource",
-            "slug": "nodes/web/mcp/mcp-register-resource"
-          }
-        ]
-      },
-      {
-        "label": "MQTT",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/mqtt"
-          },
-          {
-            "label": "MQTT Broker",
-            "slug": "nodes/web/mqtt/mqtt-broker"
-          },
-          {
-            "label": "MQTT Connect",
-            "slug": "nodes/web/mqtt/mqtt-connect"
-          },
-          {
-            "label": "MQTT Disconnect",
-            "slug": "nodes/web/mqtt/mqtt-disconnect"
-          },
-          {
-            "label": "MQTT Publish",
-            "slug": "nodes/web/mqtt/mqtt-publish"
-          },
-          {
-            "label": "MQTT Subscribe",
-            "slug": "nodes/web/mqtt/mqtt-subscribe"
-          }
-        ]
-      },
-      {
-        "label": "REST",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/rest"
-          },
-          {
-            "label": "REST Server",
-            "slug": "nodes/web/rest/rest-server"
-          },
-          {
-            "label": "REST Server Config",
-            "slug": "nodes/web/rest/rest-server-config"
-          },
-          {
-            "label": "Register REST Auth",
-            "slug": "nodes/web/rest/rest-register-auth"
-          },
-          {
-            "label": "Register REST Files",
-            "slug": "nodes/web/rest/rest-register-files"
-          },
-          {
-            "label": "Register REST Function",
-            "slug": "nodes/web/rest/rest-register-function"
-          },
-          {
-            "label": "Register REST OpenAPI",
-            "slug": "nodes/web/rest/rest-register-open-api"
-          }
-        ]
-      },
-      {
-        "label": "Scraping",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/scraping"
-          },
-          {
-            "label": "Extract Links",
-            "slug": "nodes/web/scraping/web-scrape-extract-links"
-          }
-        ]
-      },
-      {
-        "label": "TCP",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/tcp"
-          },
-          {
-            "label": "TCP Close",
-            "slug": "nodes/web/tcp/tcp-close"
-          },
-          {
-            "label": "TCP Connect",
-            "slug": "nodes/web/tcp/tcp-connect"
-          },
-          {
-            "label": "TCP Listen",
-            "slug": "nodes/web/tcp/tcp-listen"
-          },
-          {
-            "label": "TCP Send",
-            "slug": "nodes/web/tcp/tcp-send"
-          },
-          {
-            "label": "TCP Server",
-            "slug": "nodes/web/tcp/tcp-server"
-          }
-        ]
-      },
-      {
-        "label": "TLS",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/tls"
-          },
-          {
-            "label": "Create CA Certificate",
-            "slug": "nodes/web/tls/create-ca-certificate"
-          },
-          {
-            "label": "Create CA-Signed Certificate",
-            "slug": "nodes/web/tls/create-ca-signed-certificate"
-          },
-          {
-            "label": "Create Self-Signed Certificate",
-            "slug": "nodes/web/tls/create-self-signed-certificate"
-          }
-        ]
-      },
-      {
-        "label": "UDP",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/udp"
-          },
-          {
-            "label": "UDP Bind",
-            "slug": "nodes/web/udp/udp-bind"
-          },
-          {
-            "label": "UDP Close",
-            "slug": "nodes/web/udp/udp-close"
-          },
-          {
-            "label": "UDP Receive",
-            "slug": "nodes/web/udp/udp-receive"
-          },
-          {
-            "label": "UDP Send To",
-            "slug": "nodes/web/udp/udp-send-to"
-          },
-          {
-            "label": "UDP Server",
-            "slug": "nodes/web/udp/udp-server"
-          }
-        ]
-      },
-      {
-        "label": "WebSocket",
-        "collapsed": true,
-        "items": [
-          {
-            "label": "Overview",
-            "slug": "nodes/web/websocket"
-          },
-          {
-            "label": "WebSocket Close",
-            "slug": "nodes/web/websocket/websocket-close"
-          },
-          {
-            "label": "WebSocket Connect",
-            "slug": "nodes/web/websocket/websocket-connect"
-          },
-          {
-            "label": "WebSocket Send",
-            "slug": "nodes/web/websocket/websocket-send"
-          },
-          {
-            "label": "WebSocket Server",
-            "slug": "nodes/web/websocket/websocket-server"
-          }
-        ]
-      },
-      {
-        "label": "HTTP Download",
-        "slug": "nodes/web/http-download"
-      }
-    ]
-  }
+	{
+		label: "AI",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/ai",
+			},
+			{
+				label: "Agents",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/agents",
+					},
+					{
+						label: "Builder",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/agents/builder",
+							},
+							{
+								label: "Add DataFusion",
+								slug: "nodes/ai/agents/builder/add-datafusion-to-agent",
+							},
+							{
+								label: "Agent from Model",
+								slug: "nodes/ai/agents/builder/agent-from-model",
+							},
+							{
+								label: "Lazy Register Function Tools",
+								slug: "nodes/ai/agents/builder/agent-lazy-register-function-tools",
+							},
+							{
+								label: "Register Function Tools",
+								slug: "nodes/ai/agents/builder/agent-register-function-tools",
+							},
+							{
+								label: "Register KG Traverse Tool",
+								slug: "nodes/ai/agents/builder/kg-traverse-tool",
+							},
+							{
+								label: "Register MCP Tools",
+								slug: "nodes/ai/agents/builder/agent-register-mcp-tools",
+							},
+							{
+								label: "Register Memory",
+								slug: "nodes/ai/agents/builder/agent-register-memory",
+							},
+							{
+								label: "Register Remote MCP Tools",
+								slug: "nodes/ai/agents/builder/agent-register-remote-mcp-tools",
+							},
+							{
+								label: "Register Thinking Tool",
+								slug: "nodes/ai/agents/builder/agent-register-thinking",
+							},
+							{
+								label: "Set Agent System Prompt",
+								slug: "nodes/ai/agents/builder/agent-set-system-prompt",
+							},
+						],
+					},
+					{
+						label: "Invoke Agent",
+						slug: "nodes/ai/agents/agent-invoke",
+					},
+					{
+						label: "Simple Agent",
+						slug: "nodes/ai/agents/simple-agent",
+					},
+					{
+						label: "Stream Invoke Agent",
+						slug: "nodes/ai/agents/agent-stream-invoke",
+					},
+				],
+			},
+			{
+				label: "Embedding",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/embedding",
+					},
+					{
+						label: "Embed Document",
+						slug: "nodes/ai/embedding/embed-document",
+					},
+					{
+						label: "Embed Image",
+						slug: "nodes/ai/embedding/embed-image",
+					},
+					{
+						label: "Embed Query",
+						slug: "nodes/ai/embedding/embed-query",
+					},
+					{
+						label: "Load Embedding Model",
+						slug: "nodes/ai/embedding/load-model",
+					},
+				],
+			},
+			{
+				label: "Generative",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/generative",
+					},
+					{
+						label: "Audio",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/audio",
+							},
+							{
+								label: "Options",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/audio/options",
+									},
+									{
+										label: "Google STT Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-stt-options-google",
+									},
+									{
+										label: "Google TTS Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-tts-options-google",
+									},
+									{
+										label: "Hugging Face TTS Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-tts-options-huggingface",
+									},
+									{
+										label: "Mistral TTS Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-tts-options-mistral",
+									},
+									{
+										label: "OpenAI-Compatible STT Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-stt-options-openai-compatible",
+									},
+									{
+										label: "OpenAI-Compatible TTS Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-tts-options-openai-compatible",
+									},
+									{
+										label: "xAI STT Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-stt-options-xai",
+									},
+									{
+										label: "xAI TTS Options",
+										slug: "nodes/ai/generative/audio/options/ai-audio-tts-options-xai",
+									},
+								],
+							},
+							{
+								label: "Local Speech to Text",
+								slug: "nodes/ai/generative/audio/ai-audio-local-speech-to-text",
+							},
+							{
+								label: "Local Text to Speech",
+								slug: "nodes/ai/generative/audio/ai-audio-local-text-to-speech",
+							},
+							{
+								label: "Speech to Text",
+								slug: "nodes/ai/generative/audio/ai-audio-speech-to-text",
+							},
+							{
+								label: "Text to Speech",
+								slug: "nodes/ai/generative/audio/ai-audio-text-to-speech",
+							},
+						],
+					},
+					{
+						label: "History",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/history",
+							},
+							{
+								label: "Message",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/history/message",
+									},
+									{
+										label: "Extract Content",
+										slug: "nodes/ai/generative/history/message/ai-generative-message-extract-content",
+									},
+									{
+										label: "Make Message",
+										slug: "nodes/ai/generative/history/message/ai-generative-make-history-message",
+									},
+									{
+										label: "Push Content",
+										slug: "nodes/ai/generative/history/message/ai-generative-push-content",
+									},
+								],
+							},
+							{
+								label: "Clear History",
+								slug: "nodes/ai/generative/history/ai-generative-clear-history",
+							},
+							{
+								label: "From Messages",
+								slug: "nodes/ai/generative/history/ai-generative-from-messages",
+							},
+							{
+								label: "Get System Prompt",
+								slug: "nodes/ai/generative/history/ai-generative-get-system-prompt",
+							},
+							{
+								label: "History From String",
+								slug: "nodes/ai/generative/history/ai-generative-history-from-string",
+							},
+							{
+								label: "Make History",
+								slug: "nodes/ai/generative/history/ai-generative-make-history",
+							},
+							{
+								label: "Pop Message from History",
+								slug: "nodes/ai/generative/history/ai-generative-pop-history-message",
+							},
+							{
+								label: "Push Message",
+								slug: "nodes/ai/generative/history/ai-generative-add-history-message",
+							},
+							{
+								label: "Set History Frequency Penalty",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-frequency-penalty",
+							},
+							{
+								label: "Set History N",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-n",
+							},
+							{
+								label: "Set History Presence Penalty",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-presence-penalty",
+							},
+							{
+								label: "Set History Temperature",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-temperature",
+							},
+							{
+								label: "Set History Thinking",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-thinking",
+							},
+							{
+								label: "Set History Top P",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-top-p",
+							},
+							{
+								label: "Set History User",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-user",
+							},
+							{
+								label: "Set Max Tokens",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-max-tokens",
+							},
+							{
+								label: "Set Response Format",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-response-format",
+							},
+							{
+								label: "Set Seed",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-seed",
+							},
+							{
+								label: "Set Stop Words",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-stop-words",
+							},
+							{
+								label: "Set Stream",
+								slug: "nodes/ai/generative/history/ai-generative-set-history-stream",
+							},
+							{
+								label: "Set System Message",
+								slug: "nodes/ai/generative/history/ai-generative-set-system-prompt-message",
+							},
+						],
+					},
+					{
+						label: "Image",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/image",
+							},
+							{
+								label: "Options",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/image/options",
+									},
+									{
+										label: "AWS Bedrock Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-aws-bedrock",
+									},
+									{
+										label: "Google Imagen Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-google-imagen",
+									},
+									{
+										label: "Hugging Face Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-huggingface",
+									},
+									{
+										label: "OpenAI Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-openai",
+									},
+									{
+										label: "OpenRouter Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-openrouter",
+									},
+									{
+										label: "Together Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-together",
+									},
+									{
+										label: "xAI Image Options",
+										slug: "nodes/ai/generative/image/options/ai-image-options-xai",
+									},
+								],
+							},
+							{
+								label: "Generate Image",
+								slug: "nodes/ai/generative/image/ai-image-generate",
+							},
+						],
+					},
+					{
+						label: "Preferences",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/preferences",
+							},
+							{
+								label: "Make Preferences",
+								slug: "nodes/ai/generative/preferences/ai-generative-make-preferences",
+							},
+							{
+								label: "Set Model Hint",
+								slug: "nodes/ai/generative/preferences/ai-generative-set-model-hint",
+							},
+							{
+								label: "Set Preference Weight",
+								slug: "nodes/ai/generative/preferences/ai-generative-set-preference-weight",
+							},
+						],
+					},
+					{
+						label: "Provider",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/provider",
+							},
+							{
+								label: "AWS Bedrock Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-bedrock",
+							},
+							{
+								label: "Anthropic Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-anthropic",
+							},
+							{
+								label: "Atlas Cloud Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-atlascloud",
+							},
+							{
+								label: "Cohere Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-cohere",
+							},
+							{
+								label: "Deepseek Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-deepseek",
+							},
+							{
+								label: "Galadriel Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-galadriel",
+							},
+							{
+								label: "Gemini Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-gemini",
+							},
+							{
+								label: "Groq Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-groq",
+							},
+							{
+								label: "Huggingface Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-huggingface",
+							},
+							{
+								label: "Hyperbolic Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-hyperbolic",
+							},
+							{
+								label: "LM Studio Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-lmstudio",
+							},
+							{
+								label: "MiniMax Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-minimax",
+							},
+							{
+								label: "Mira Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-mira",
+							},
+							{
+								label: "Mistral Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-mistral",
+							},
+							{
+								label: "Moonshot AI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-moonshot",
+							},
+							{
+								label: "Mozilla any-llm Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-mozilla",
+							},
+							{
+								label: "Ollama Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-ollama",
+							},
+							{
+								label: "OpenAI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-openai",
+							},
+							{
+								label: "OpenRouter Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-openrouter",
+							},
+							{
+								label: "Perplexity Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-perplexity",
+							},
+							{
+								label: "Together AI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-together",
+							},
+							{
+								label: "Vertex AI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-vertex",
+							},
+							{
+								label: "VoyageAI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-voyageai",
+							},
+							{
+								label: "xAI Model",
+								slug: "nodes/ai/generative/provider/ai-generative-build-xai",
+							},
+						],
+					},
+					{
+						label: "Response",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/response",
+							},
+							{
+								label: "Chunk",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/response/chunk",
+									},
+									{
+										label: "Get Token",
+										slug: "nodes/ai/generative/response/chunk/ai-generative-llm-response-chunk-get-token",
+									},
+								],
+							},
+							{
+								label: "Message",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/response/message",
+									},
+									{
+										label: "Get Content",
+										slug: "nodes/ai/generative/response/message/ai-generative-llm-response-message-get-content",
+									},
+									{
+										label: "Get Role",
+										slug: "nodes/ai/generative/response/message/ai-generative-llm-response-message-get-role",
+									},
+								],
+							},
+							{
+								label: "Chunk From String",
+								slug: "nodes/ai/generative/response/ai-generative-llm-chunk-from-string",
+							},
+							{
+								label: "Last Content",
+								slug: "nodes/ai/generative/response/ai-generative-llm-response-last-content",
+							},
+							{
+								label: "Last Message",
+								slug: "nodes/ai/generative/response/ai-generative-llm-response-last-message",
+							},
+							{
+								label: "Make Response",
+								slug: "nodes/ai/generative/response/ai-generative-llm-response-make",
+							},
+							{
+								label: "Push Chunk",
+								slug: "nodes/ai/generative/response/ai-generative-llm-response-push-chunk",
+							},
+							{
+								label: "Response From String",
+								slug: "nodes/ai/generative/response/ai-generative-llm-response-from-string",
+							},
+						],
+					},
+					{
+						label: "Video",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/generative/video",
+							},
+							{
+								label: "Options",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/video/options",
+									},
+									{
+										label: "OpenAI Sora Options",
+										slug: "nodes/ai/generative/video/options/ai-video-options-openai-sora",
+									},
+									{
+										label: "Replicate Video Options",
+										slug: "nodes/ai/generative/video/options/ai-video-options-replicate",
+									},
+									{
+										label: "Runway Options",
+										slug: "nodes/ai/generative/video/options/ai-video-options-runway",
+									},
+									{
+										label: "Vertex Veo Options",
+										slug: "nodes/ai/generative/video/options/ai-video-options-vertex-veo",
+									},
+									{
+										label: "fal Video Options",
+										slug: "nodes/ai/generative/video/options/ai-video-options-fal",
+									},
+								],
+							},
+							{
+								label: "Provider",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/generative/video/provider",
+									},
+									{
+										label: "Replicate Video Model",
+										slug: "nodes/ai/generative/video/provider/ai-video-build-replicate",
+									},
+									{
+										label: "Runway Video Model",
+										slug: "nodes/ai/generative/video/provider/ai-video-build-runway",
+									},
+									{
+										label: "fal Video Model",
+										slug: "nodes/ai/generative/video/provider/ai-video-build-fal",
+									},
+								],
+							},
+							{
+								label: "Generate Video",
+								slug: "nodes/ai/generative/video/ai-video-generate",
+							},
+						],
+					},
+					{
+						label: "AI Extractor",
+						slug: "nodes/ai/generative/llm-extractor",
+					},
+					{
+						label: "AI Extractor from History",
+						slug: "nodes/ai/generative/llm-extractor-history",
+					},
+					{
+						label: "Add Model Headers",
+						slug: "nodes/ai/generative/ai-generative-add-headers",
+					},
+					{
+						label: "Find Model",
+						slug: "nodes/ai/generative/ai-generative-find-model",
+					},
+					{
+						label: "Invoke Model",
+						slug: "nodes/ai/generative/ai-generative-invoke",
+					},
+					{
+						label: "Invoke Simple",
+						slug: "nodes/ai/generative/ai-generative-invoke-simple",
+					},
+					{
+						label: "Invoke with Tools",
+						slug: "nodes/ai/generative/invoke-llm-with-tools",
+					},
+					{
+						label: "LLM Branch",
+						slug: "nodes/ai/generative/llm-branch",
+					},
+					{
+						label: "Summarize",
+						slug: "nodes/ai/generative/ai-llm-summarize",
+					},
+				],
+			},
+			{
+				label: "GitHub",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/github",
+					},
+					{
+						label: "Copilot",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/github/copilot",
+							},
+							{
+								label: "Chat",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/chat",
+									},
+									{
+										label: "Abort",
+										slug: "nodes/ai/github/copilot/chat/copilot-abort",
+									},
+									{
+										label: "Send Message",
+										slug: "nodes/ai/github/copilot/chat/copilot-send-and-wait",
+									},
+									{
+										label: "Stream Message",
+										slug: "nodes/ai/github/copilot/chat/copilot-send-streaming",
+									},
+								],
+							},
+							{
+								label: "Client",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/client",
+									},
+									{
+										label: "Local Client Config",
+										slug: "nodes/ai/github/copilot/client/copilot-local-client-builder",
+									},
+									{
+										label: "Server Client Config",
+										slug: "nodes/ai/github/copilot/client/copilot-server-client-builder",
+									},
+									{
+										label: "Start Local Client",
+										slug: "nodes/ai/github/copilot/client/copilot-local-client-start",
+									},
+									{
+										label: "Start Server Client",
+										slug: "nodes/ai/github/copilot/client/copilot-server-client-start",
+									},
+									{
+										label: "Stop Client",
+										slug: "nodes/ai/github/copilot/client/copilot-client-stop",
+									},
+								],
+							},
+							{
+								label: "Config",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/config",
+									},
+									{
+										label: "Custom Agent Config",
+										slug: "nodes/ai/github/copilot/config/copilot-custom-agent",
+									},
+									{
+										label: "Infinite Session Config",
+										slug: "nodes/ai/github/copilot/config/copilot-infinite-session",
+									},
+									{
+										label: "Provider Config (BYOK)",
+										slug: "nodes/ai/github/copilot/config/copilot-provider-config",
+									},
+									{
+										label: "System Message Config",
+										slug: "nodes/ai/github/copilot/config/copilot-system-message",
+									},
+								],
+							},
+							{
+								label: "MCP",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/mcp",
+									},
+									{
+										label: "MCP HTTP Server",
+										slug: "nodes/ai/github/copilot/mcp/copilot-mcp-http-server",
+									},
+									{
+										label: "MCP Local Server",
+										slug: "nodes/ai/github/copilot/mcp/copilot-mcp-local-server",
+									},
+								],
+							},
+							{
+								label: "Session",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/session",
+									},
+									{
+										label: "Create Session",
+										slug: "nodes/ai/github/copilot/session/copilot-create-session",
+									},
+									{
+										label: "Destroy Session",
+										slug: "nodes/ai/github/copilot/session/copilot-destroy-session",
+									},
+									{
+										label: "Session Builder",
+										slug: "nodes/ai/github/copilot/session/copilot-session-builder",
+									},
+								],
+							},
+							{
+								label: "Tools",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/tools",
+									},
+									{
+										label: "Tool Config",
+										slug: "nodes/ai/github/copilot/tools/copilot-tool-config",
+									},
+									{
+										label: "Tool List Builder",
+										slug: "nodes/ai/github/copilot/tools/copilot-tool-list",
+									},
+								],
+							},
+							{
+								label: "Utilities",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/github/copilot/utilities",
+									},
+									{
+										label: "Client Status",
+										slug: "nodes/ai/github/copilot/utilities/copilot-client-status",
+									},
+									{
+										label: "Get Auth Status",
+										slug: "nodes/ai/github/copilot/utilities/copilot-get-auth-status",
+									},
+									{
+										label: "Get Models",
+										slug: "nodes/ai/github/copilot/utilities/copilot-get-models",
+									},
+									{
+										label: "Get Version",
+										slug: "nodes/ai/github/copilot/utilities/copilot-get-version",
+									},
+								],
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "ML",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/ml",
+					},
+					{
+						label: "Classification",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/classification",
+							},
+							{
+								label: "Fit Novelty Detection (One-Class SVM)",
+								slug: "nodes/ai/ml/classification/fit-one-class-svm",
+							},
+							{
+								label: "Train Classifier (AdaBoost)",
+								slug: "nodes/ai/ml/classification/fit-adaboost",
+							},
+							{
+								label: "Train Classifier (Decision Tree)",
+								slug: "nodes/ai/ml/classification/fit-decision-tree",
+							},
+							{
+								label: "Train Classifier (K-Nearest Neighbours)",
+								slug: "nodes/ai/ml/classification/fit-knn-classifier",
+							},
+							{
+								label: "Train Classifier (Logistic Regression)",
+								slug: "nodes/ai/ml/classification/fit-logistic-regression",
+							},
+							{
+								label: "Train Classifier (Multinomial Naive Bayes)",
+								slug: "nodes/ai/ml/classification/fit-multinomial-naive-bayes",
+							},
+							{
+								label: "Train Classifier (Naive Bayes)",
+								slug: "nodes/ai/ml/classification/fit-naive-bayes",
+							},
+							{
+								label: "Train Classifier (Random Forest)",
+								slug: "nodes/ai/ml/classification/fit-random-forest",
+							},
+							{
+								label: "Train Classifier (SVM)",
+								slug: "nodes/ai/ml/classification/fit-svm-multi-class",
+							},
+						],
+					},
+					{
+						label: "Clustering",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/clustering",
+							},
+							{
+								label: "Fit Clustering (Gaussian Mixture)",
+								slug: "nodes/ai/ml/clustering/fit-gaussian-mixture",
+							},
+							{
+								label: "Train Clustering (DBSCAN)",
+								slug: "nodes/ai/ml/clustering/fit-dbscan",
+							},
+							{
+								label: "Train Clustering (KMeans)",
+								slug: "nodes/ai/ml/clustering/fit-kmeans",
+							},
+						],
+					},
+					{
+						label: "Dataset",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/dataset",
+							},
+							{
+								label: "K-Fold Split",
+								slug: "nodes/ai/ml/dataset/ai-ml-dataset-kfold",
+							},
+							{
+								label: "Sample Dataset",
+								slug: "nodes/ai/ml/dataset/ai-ml-dataset-sample",
+							},
+							{
+								label: "Shuffle Dataset",
+								slug: "nodes/ai/ml/dataset/ai-ml-dataset-shuffle",
+							},
+							{
+								label: "Split Dataset",
+								slug: "nodes/ai/ml/dataset/ai-ml-dataset-split",
+							},
+							{
+								label: "Stratified Split",
+								slug: "nodes/ai/ml/dataset/ai-ml-dataset-stratified-split",
+							},
+						],
+					},
+					{
+						label: "Metrics",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/metrics",
+							},
+							{
+								label: "Accuracy",
+								slug: "nodes/ai/ml/metrics/ml-eval-accuracy",
+							},
+							{
+								label: "Confusion Matrix",
+								slug: "nodes/ai/ml/metrics/ml-eval-confusion-matrix",
+							},
+							{
+								label: "ROC-AUC & Log Loss",
+								slug: "nodes/ai/ml/metrics/ml-roc-auc",
+							},
+							{
+								label: "Regression Metrics",
+								slug: "nodes/ai/ml/metrics/ml-eval-regression",
+							},
+							{
+								label: "Silhouette Score",
+								slug: "nodes/ai/ml/metrics/ml-silhouette-score",
+							},
+						],
+					},
+					{
+						label: "Model Info",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/model-info",
+							},
+							{
+								label: "Feature Importance",
+								slug: "nodes/ai/ml/model-info/ml-feature-importance",
+							},
+							{
+								label: "Get Centroids",
+								slug: "nodes/ai/ml/model-info/ml-get-kmeans-centroids",
+							},
+							{
+								label: "Get Coefficients",
+								slug: "nodes/ai/ml/model-info/ml-get-linear-coefficients",
+							},
+							{
+								label: "Model Info",
+								slug: "nodes/ai/ml/model-info/ml-model-info",
+							},
+						],
+					},
+					{
+						label: "ONNX",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/onnx",
+							},
+							{
+								label: "Audio",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/audio",
+									},
+									{
+										label: "Audio to Mel Spectrogram",
+										slug: "nodes/ai/ml/onnx/audio/audio-to-mel-spectrogram",
+									},
+									{
+										label: "Load Audio",
+										slug: "nodes/ai/ml/onnx/audio/load-audio",
+									},
+									{
+										label: "Resample Audio",
+										slug: "nodes/ai/ml/onnx/audio/resample-audio",
+									},
+									{
+										label: "Trim Audio",
+										slug: "nodes/ai/ml/onnx/audio/trim-audio",
+									},
+									{
+										label: "Voice Activity Detection",
+										slug: "nodes/ai/ml/onnx/audio/onnx-vad",
+									},
+								],
+							},
+							{
+								label: "Batch",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/batch",
+									},
+									{
+										label: "Batch Image Inference",
+										slug: "nodes/ai/ml/onnx/batch/onnx-batch-image-inference",
+									},
+								],
+							},
+							{
+								label: "Face",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/face",
+									},
+									{
+										label: "Analyze Faces",
+										slug: "nodes/ai/ml/onnx/face/face-id-analyze",
+									},
+									{
+										label: "Compare Faces",
+										slug: "nodes/ai/ml/onnx/face/compare-faces",
+									},
+									{
+										label: "Crop Faces",
+										slug: "nodes/ai/ml/onnx/face/crop-faces",
+									},
+									{
+										label: "Face Detection",
+										slug: "nodes/ai/ml/onnx/face/onnx-face-detection",
+									},
+									{
+										label: "Face Embedding",
+										slug: "nodes/ai/ml/onnx/face/onnx-face-embedding",
+									},
+									{
+										label: "Load Face Analyzer",
+										slug: "nodes/ai/ml/onnx/face/face-id-load-analyzer",
+									},
+									{
+										label: "Unload Face Analyzer",
+										slug: "nodes/ai/ml/onnx/face/face-id-unload-analyzer",
+									},
+								],
+							},
+							{
+								label: "NLP",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/nlp",
+									},
+									{
+										label: "Named Entity Recognition",
+										slug: "nodes/ai/ml/onnx/nlp/onnx-ner",
+									},
+									{
+										label: "Zero-Shot NER (GLiNER)",
+										slug: "nodes/ai/ml/onnx/nlp/onnx-gliner",
+									},
+								],
+							},
+							{
+								label: "OCR",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/ocr",
+									},
+									{
+										label: "Crop Text Regions",
+										slug: "nodes/ai/ml/onnx/ocr/crop-text-regions",
+									},
+									{
+										label: "Text Detection",
+										slug: "nodes/ai/ml/onnx/ocr/onnx-text-detection",
+									},
+									{
+										label: "Text Recognition",
+										slug: "nodes/ai/ml/onnx/ocr/onnx-text-recognition",
+									},
+								],
+							},
+							{
+								label: "Vision",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ai/ml/onnx/vision",
+									},
+									{
+										label: "Colorize Depth",
+										slug: "nodes/ai/ml/onnx/vision/depth-colorize",
+									},
+									{
+										label: "Depth Estimation",
+										slug: "nodes/ai/ml/onnx/vision/onnx-depth-estimation",
+									},
+									{
+										label: "Depth to Point Cloud",
+										slug: "nodes/ai/ml/onnx/vision/depth-to-point-cloud",
+									},
+								],
+							},
+							{
+								label: "Extract Keypoint",
+								slug: "nodes/ai/ml/onnx/extract-keypoint",
+							},
+							{
+								label: "Feature Extraction",
+								slug: "nodes/ai/ml/onnx/feature-extraction",
+							},
+							{
+								label: "Feature Similarity",
+								slug: "nodes/ai/ml/onnx/feature-similarity",
+							},
+							{
+								label: "Image Classification",
+								slug: "nodes/ai/ml/onnx/image-classification",
+							},
+							{
+								label: "Load ONNX",
+								slug: "nodes/ai/ml/onnx/load-onnx",
+							},
+							{
+								label: "Model Info",
+								slug: "nodes/ai/ml/onnx/onnx-model-info",
+							},
+							{
+								label: "Object Detection",
+								slug: "nodes/ai/ml/onnx/object-detection",
+							},
+							{
+								label: "Pose Estimation",
+								slug: "nodes/ai/ml/onnx/pose-estimation",
+							},
+							{
+								label: "Semantic Segmentation",
+								slug: "nodes/ai/ml/onnx/semantic-segmentation",
+							},
+							{
+								label: "Session Info",
+								slug: "nodes/ai/ml/onnx/onnx-session-info",
+							},
+							{
+								label: "Unload ONNX",
+								slug: "nodes/ai/ml/onnx/unload-onnx",
+							},
+						],
+					},
+					{
+						label: "Ordinal",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/ordinal",
+							},
+							{
+								label: "Ordinal Metrics",
+								slug: "nodes/ai/ml/ordinal/ml-ordinal-metrics",
+							},
+							{
+								label: "Train Ordinal Model (Adjacent Category)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-adjacent-category",
+							},
+							{
+								label: "Train Ordinal Model (Continuation Ratio)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio",
+							},
+							{
+								label: "Train Ordinal Model (Frank & Hall)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-frank-hall",
+							},
+							{
+								label: "Train Ordinal Model (Neural CORAL/CORN)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-neural",
+							},
+							{
+								label: "Train Ordinal Model (Proportional Odds)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-logistic",
+							},
+							{
+								label: "Train Ordinal Model (Ridge)",
+								slug: "nodes/ai/ml/ordinal/fit-ordinal-ridge",
+							},
+						],
+					},
+					{
+						label: "Preprocessing",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/preprocessing",
+							},
+							{
+								label: "Apply Transform",
+								slug: "nodes/ai/ml/preprocessing/ml-apply-transform",
+							},
+							{
+								label: "Fit Feature Scaler",
+								slug: "nodes/ai/ml/preprocessing/fit-feature-scaler",
+							},
+							{
+								label: "Fit TF-IDF Vectorizer",
+								slug: "nodes/ai/ml/preprocessing/fit-tfidf-vectorizer",
+							},
+						],
+					},
+					{
+						label: "Reduction",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/reduction",
+							},
+							{
+								label: "PCA Reduction",
+								slug: "nodes/ai/ml/reduction/fit-pca",
+							},
+							{
+								label: "t-SNE Reduction",
+								slug: "nodes/ai/ml/reduction/fit-tsne",
+							},
+						],
+					},
+					{
+						label: "Regression",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/regression",
+							},
+							{
+								label: "Train Regression (Linear)",
+								slug: "nodes/ai/ml/regression/fit-linear-regression",
+							},
+							{
+								label: "Train Regressor (GLM / Tweedie)",
+								slug: "nodes/ai/ml/regression/fit-glm",
+							},
+							{
+								label: "Train Regressor (K-Nearest Neighbours)",
+								slug: "nodes/ai/ml/regression/fit-knn-regressor",
+							},
+							{
+								label: "Train Regressor (Ridge/Lasso/ElasticNet)",
+								slug: "nodes/ai/ml/regression/fit-elastic-net",
+							},
+							{
+								label: "Train Regressor (SVM)",
+								slug: "nodes/ai/ml/regression/fit-svm-regression",
+							},
+						],
+					},
+					{
+						label: "Teachable Machine",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/teachable-machine",
+							},
+							{
+								label: "Prediction Score",
+								slug: "nodes/ai/ml/teachable-machine/ai-ml-pred-score",
+							},
+						],
+					},
+					{
+						label: "Tuning",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/ml/tuning",
+							},
+							{
+								label: "Auto Classifier",
+								slug: "nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier",
+							},
+							{
+								label: "Auto Ordinal",
+								slug: "nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal",
+							},
+							{
+								label: "Grid Search",
+								slug: "nodes/ai/ml/tuning/ai-ml-tuning-grid-search",
+							},
+							{
+								label: "Ordinal Grid Search",
+								slug: "nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search",
+							},
+						],
+					},
+					{
+						label: "Load Model",
+						slug: "nodes/ai/ml/load-ml-model",
+					},
+					{
+						label: "Load Model (Binary)",
+						slug: "nodes/ai/ml/load-ml-model-binary",
+					},
+					{
+						label: "Predict",
+						slug: "nodes/ai/ml/ml-predict",
+					},
+					{
+						label: "Prediction Class/Label",
+						slug: "nodes/ai/ml/ai-ml-pred-class-or-label",
+					},
+					{
+						label: "Save Model",
+						slug: "nodes/ai/ml/save-ml-model",
+					},
+					{
+						label: "Save Model (Binary)",
+						slug: "nodes/ai/ml/save-ml-model-binary",
+					},
+					{
+						label: "Teachable Machine",
+						slug: "nodes/ai/ml/ai-ml-teachable-machine",
+					},
+				],
+			},
+			{
+				label: "Memory",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/memory",
+					},
+					{
+						label: "Graph",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ai/memory/graph",
+							},
+							{
+								label: "KG Extract",
+								slug: "nodes/ai/memory/graph/kg-extract",
+							},
+							{
+								label: "KG Retrieve",
+								slug: "nodes/ai/memory/graph/kg-retrieve",
+							},
+							{
+								label: "KG Summarize",
+								slug: "nodes/ai/memory/graph/kg-summarize",
+							},
+						],
+					},
+					{
+						label: "Build Memory Context",
+						slug: "nodes/ai/memory/memory-build-context",
+					},
+					{
+						label: "Compress Memory",
+						slug: "nodes/ai/memory/memory-compress",
+					},
+					{
+						label: "Create Memory Config",
+						slug: "nodes/ai/memory/memory-create-config",
+					},
+					{
+						label: "Optimize Memory",
+						slug: "nodes/ai/memory/memory-optimize",
+					},
+					{
+						label: "Search Memory",
+						slug: "nodes/ai/memory/memory-search",
+					},
+					{
+						label: "Store Memory",
+						slug: "nodes/ai/memory/memory-store",
+					},
+				],
+			},
+			{
+				label: "Preprocessing",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/preprocessing",
+					},
+					{
+						label: "Character Chunk Text",
+						slug: "nodes/ai/preprocessing/chunk-text-char",
+					},
+					{
+						label: "Chunk Text",
+						slug: "nodes/ai/preprocessing/chunk-text",
+					},
+				],
+			},
+			{
+				label: "Processing",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ai/processing",
+					},
+					{
+						label: "AI Extract Document",
+						slug: "nodes/ai/processing/ai-processing-extract-document-ai",
+					},
+					{
+						label: "AI Extract Documents",
+						slug: "nodes/ai/processing/ai-processing-extract-documents-ai",
+					},
+					{
+						label: "AI Keywords",
+						slug: "nodes/ai/processing/ai-processing-ai-keyword-extraction",
+					},
+					{
+						label: "Extract Content Sections",
+						slug: "nodes/ai/processing/ai-processing-extract-content-sections",
+					},
+					{
+						label: "Extract Document",
+						slug: "nodes/ai/processing/ai-processing-extract-document",
+					},
+					{
+						label: "Extract Documents",
+						slug: "nodes/ai/processing/ai-processing-extract-documents",
+					},
+					{
+						label: "PII Mask (AI)",
+						slug: "nodes/ai/processing/processing-pii-mask-ai",
+					},
+					{
+						label: "Pages to Markdown",
+						slug: "nodes/ai/processing/ai-processing-pages-to-markdown",
+					},
+					{
+						label: "RAKE Keywords",
+						slug: "nodes/ai/processing/ai-processing-rake-extraction",
+					},
+					{
+						label: "Summarize Document",
+						slug: "nodes/ai/processing/ai-processing-summarize-document",
+					},
+					{
+						label: "YAKE Keywords",
+						slug: "nodes/ai/processing/ai-processing-yake-extraction",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Audio",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/audio",
+			},
+			{
+				label: "Analyze Audio",
+				slug: "nodes/audio/video-analyze-audio",
+			},
+			{
+				label: "Audio To WAV",
+				slug: "nodes/audio/video-audio-to-wav",
+			},
+			{
+				label: "Detect Silence",
+				slug: "nodes/audio/video-detect-silence",
+			},
+			{
+				label: "Transform Audio",
+				slug: "nodes/audio/video-transform-audio",
+			},
+		],
+	},
+	{
+		label: "Automation",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/automation",
+			},
+			{
+				label: "Browser",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/browser",
+					},
+					{
+						label: "Auth",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/auth",
+							},
+							{
+								label: "Clear Cookies",
+								slug: "nodes/automation/browser/auth/browser-clear-cookies",
+							},
+							{
+								label: "Load Cookies",
+								slug: "nodes/automation/browser/auth/browser-load-cookies",
+							},
+							{
+								label: "Save Cookies",
+								slug: "nodes/automation/browser/auth/browser-save-cookies",
+							},
+							{
+								label: "Set Basic Auth",
+								slug: "nodes/automation/browser/auth/browser-set-basic-auth",
+							},
+						],
+					},
+					{
+						label: "Capture",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/capture",
+							},
+							{
+								label: "Screenshot Element",
+								slug: "nodes/automation/browser/capture/browser-screenshot-element",
+							},
+							{
+								label: "Take Screenshot",
+								slug: "nodes/automation/browser/capture/browser-screenshot",
+							},
+						],
+					},
+					{
+						label: "Extract",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/extract",
+							},
+							{
+								label: "Execute JavaScript",
+								slug: "nodes/automation/browser/extract/browser-execute-js",
+							},
+							{
+								label: "Get Attribute",
+								slug: "nodes/automation/browser/extract/browser-get-attribute",
+							},
+							{
+								label: "Get HTML",
+								slug: "nodes/automation/browser/extract/browser-get-html",
+							},
+							{
+								label: "Get Text",
+								slug: "nodes/automation/browser/extract/browser-get-text",
+							},
+						],
+					},
+					{
+						label: "Files",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/files",
+							},
+							{
+								label: "Set Download Directory",
+								slug: "nodes/automation/browser/files/browser-set-download-dir",
+							},
+							{
+								label: "Trigger Download",
+								slug: "nodes/automation/browser/files/browser-trigger-download",
+							},
+							{
+								label: "Upload File",
+								slug: "nodes/automation/browser/files/browser-upload-file",
+							},
+							{
+								label: "Upload Multiple Files",
+								slug: "nodes/automation/browser/files/browser-upload-multiple-files",
+							},
+							{
+								label: "Wait For Download",
+								slug: "nodes/automation/browser/files/browser-wait-for-download",
+							},
+						],
+					},
+					{
+						label: "Input",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/input",
+							},
+							{
+								label: "Press Key",
+								slug: "nodes/automation/browser/input/browser-press-key",
+							},
+							{
+								label: "Select Option",
+								slug: "nodes/automation/browser/input/browser-select-option",
+							},
+							{
+								label: "Type Text",
+								slug: "nodes/automation/browser/input/browser-type-text",
+							},
+						],
+					},
+					{
+						label: "Interact",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/interact",
+							},
+							{
+								label: "Click Element",
+								slug: "nodes/automation/browser/interact/browser-click",
+							},
+							{
+								label: "Double Click Element",
+								slug: "nodes/automation/browser/interact/browser-double-click",
+							},
+							{
+								label: "Hover Element",
+								slug: "nodes/automation/browser/interact/browser-hover",
+							},
+							{
+								label: "Scroll Into View",
+								slug: "nodes/automation/browser/interact/browser-scroll-into-view",
+							},
+						],
+					},
+					{
+						label: "Navigation",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/navigation",
+							},
+							{
+								label: "Go Back",
+								slug: "nodes/automation/browser/navigation/browser-back",
+							},
+							{
+								label: "Go Forward",
+								slug: "nodes/automation/browser/navigation/browser-forward",
+							},
+							{
+								label: "Go To URL",
+								slug: "nodes/automation/browser/navigation/browser-goto",
+							},
+							{
+								label: "Reload",
+								slug: "nodes/automation/browser/navigation/browser-reload",
+							},
+						],
+					},
+					{
+						label: "Observe",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/observe",
+							},
+							{
+								label: "Clear Console Logs",
+								slug: "nodes/automation/browser/observe/browser-clear-console-logs",
+							},
+							{
+								label: "Get Console Logs",
+								slug: "nodes/automation/browser/observe/browser-get-console-logs",
+							},
+							{
+								label: "Get Network Requests",
+								slug: "nodes/automation/browser/observe/browser-get-network-requests",
+							},
+							{
+								label: "Start Network Observer",
+								slug: "nodes/automation/browser/observe/browser-start-network-observer",
+							},
+							{
+								label: "Wait For Network Idle",
+								slug: "nodes/automation/browser/observe/browser-wait-for-network-idle",
+							},
+						],
+					},
+					{
+						label: "Snapshot",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/snapshot",
+							},
+							{
+								label: "Get Accessibility Snapshot",
+								slug: "nodes/automation/browser/snapshot/browser-get-accessibility-snapshot",
+							},
+							{
+								label: "Get DOM Snapshot",
+								slug: "nodes/automation/browser/snapshot/browser-get-dom-snapshot",
+							},
+							{
+								label: "Get Element Snapshot",
+								slug: "nodes/automation/browser/snapshot/browser-get-element-snapshot",
+							},
+						],
+					},
+					{
+						label: "Storage",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/storage",
+							},
+							{
+								label: "Clear Storage",
+								slug: "nodes/automation/browser/storage/browser-clear-storage",
+							},
+							{
+								label: "Get All Storage",
+								slug: "nodes/automation/browser/storage/browser-get-all-storage",
+							},
+							{
+								label: "Get Local Storage",
+								slug: "nodes/automation/browser/storage/browser-get-local-storage",
+							},
+							{
+								label: "Get Session Storage",
+								slug: "nodes/automation/browser/storage/browser-get-session-storage",
+							},
+							{
+								label: "Set Local Storage",
+								slug: "nodes/automation/browser/storage/browser-set-local-storage",
+							},
+							{
+								label: "Set Session Storage",
+								slug: "nodes/automation/browser/storage/browser-set-session-storage",
+							},
+						],
+					},
+					{
+						label: "Wait",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/browser/wait",
+							},
+							{
+								label: "Wait Delay",
+								slug: "nodes/automation/browser/wait/browser-wait-delay",
+							},
+							{
+								label: "Wait For Selector",
+								slug: "nodes/automation/browser/wait/browser-wait-for",
+							},
+						],
+					},
+					{
+						label: "Close Browser",
+						slug: "nodes/automation/browser/browser-close",
+					},
+					{
+						label: "Close Page",
+						slug: "nodes/automation/browser/browser-close-page",
+					},
+					{
+						label: "New Page",
+						slug: "nodes/automation/browser/browser-new-page",
+					},
+					{
+						label: "Open Browser",
+						slug: "nodes/automation/browser/browser-open",
+					},
+				],
+			},
+			{
+				label: "Computer",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/computer",
+					},
+					{
+						label: "Accessibility",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/accessibility",
+							},
+							{
+								label: "Find Accessibility Element",
+								slug: "nodes/automation/computer/accessibility/computer-find-accessibility-element",
+							},
+							{
+								label: "Get Accessibility Tree",
+								slug: "nodes/automation/computer/accessibility/computer-get-accessibility-tree",
+							},
+						],
+					},
+					{
+						label: "Capture",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/capture",
+							},
+							{
+								label: "Screenshot",
+								slug: "nodes/automation/computer/capture/computer-screenshot",
+							},
+						],
+					},
+					{
+						label: "Clipboard",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/clipboard",
+							},
+							{
+								label: "Get Clipboard Image",
+								slug: "nodes/automation/computer/clipboard/computer-clipboard-get-image",
+							},
+							{
+								label: "Get Clipboard Text",
+								slug: "nodes/automation/computer/clipboard/computer-clipboard-get-text",
+							},
+							{
+								label: "Set Clipboard Image",
+								slug: "nodes/automation/computer/clipboard/computer-clipboard-set-image",
+							},
+							{
+								label: "Set Clipboard Text",
+								slug: "nodes/automation/computer/clipboard/computer-clipboard-set-text",
+							},
+						],
+					},
+					{
+						label: "Display",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/display",
+							},
+							{
+								label: "Get Display",
+								slug: "nodes/automation/computer/display/computer-get-display",
+							},
+							{
+								label: "Get Primary Display",
+								slug: "nodes/automation/computer/display/computer-get-primary-display",
+							},
+							{
+								label: "List Displays",
+								slug: "nodes/automation/computer/display/computer-list-displays",
+							},
+						],
+					},
+					{
+						label: "Keyboard",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/keyboard",
+							},
+							{
+								label: "Key Press",
+								slug: "nodes/automation/computer/keyboard/computer-key-press",
+							},
+							{
+								label: "Type Text",
+								slug: "nodes/automation/computer/keyboard/computer-key-type",
+							},
+						],
+					},
+					{
+						label: "Mouse",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/mouse",
+							},
+							{
+								label: "Mouse Click",
+								slug: "nodes/automation/computer/mouse/computer-mouse-click",
+							},
+							{
+								label: "Mouse Double Click",
+								slug: "nodes/automation/computer/mouse/computer-mouse-double-click",
+							},
+							{
+								label: "Mouse Drag",
+								slug: "nodes/automation/computer/mouse/computer-mouse-drag",
+							},
+							{
+								label: "Mouse Move",
+								slug: "nodes/automation/computer/mouse/computer-mouse-move",
+							},
+							{
+								label: "Natural Mouse Move",
+								slug: "nodes/automation/computer/mouse/computer-natural-mouse-move",
+							},
+							{
+								label: "Scroll",
+								slug: "nodes/automation/computer/mouse/computer-scroll",
+							},
+						],
+					},
+					{
+						label: "Wait",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/wait",
+							},
+							{
+								label: "Wait",
+								slug: "nodes/automation/computer/wait/computer-wait",
+							},
+						],
+					},
+					{
+						label: "Window",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/computer/window",
+							},
+							{
+								label: "Capture Window",
+								slug: "nodes/automation/computer/window/computer-capture-window",
+							},
+							{
+								label: "Find Window By Title",
+								slug: "nodes/automation/computer/window/computer-find-window-by-title",
+							},
+							{
+								label: "Focus Window",
+								slug: "nodes/automation/computer/window/computer-focus-window",
+							},
+							{
+								label: "Get Active Window",
+								slug: "nodes/automation/computer/window/computer-get-active-window",
+							},
+							{
+								label: "Launch Application",
+								slug: "nodes/automation/computer/window/computer-launch-app",
+							},
+							{
+								label: "List Windows",
+								slug: "nodes/automation/computer/window/computer-list-windows",
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "Fingerprint",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/fingerprint",
+					},
+					{
+						label: "Compare Fingerprints",
+						slug: "nodes/automation/fingerprint/fingerprint-compare",
+					},
+					{
+						label: "Compute Fingerprint Hash",
+						slug: "nodes/automation/fingerprint/fingerprint-compute-hash",
+					},
+					{
+						label: "Create Fingerprint",
+						slug: "nodes/automation/fingerprint/fingerprint-create",
+					},
+					{
+						label: "Extract Fingerprint Data",
+						slug: "nodes/automation/fingerprint/fingerprint-extract-data",
+					},
+					{
+						label: "Fingerprint From JSON",
+						slug: "nodes/automation/fingerprint/fingerprint-from-json",
+					},
+					{
+						label: "Fingerprint To JSON",
+						slug: "nodes/automation/fingerprint/fingerprint-to-json",
+					},
+					{
+						label: "Match Fingerprint",
+						slug: "nodes/automation/fingerprint/fingerprint-match",
+					},
+					{
+						label: "Match Options",
+						slug: "nodes/automation/fingerprint/fingerprint-match-options",
+					},
+					{
+						label: "Record Fingerprint Match",
+						slug: "nodes/automation/fingerprint/fingerprint-record-match",
+					},
+					{
+						label: "Update Fingerprint",
+						slug: "nodes/automation/fingerprint/fingerprint-update",
+					},
+				],
+			},
+			{
+				label: "LLM",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/llm",
+					},
+					{
+						label: "Healing",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/llm/healing",
+							},
+							{
+								label: "LLM Diagnose & Heal",
+								slug: "nodes/automation/llm/healing/llm-diagnose-and-heal",
+							},
+							{
+								label: "LLM Heal Selector",
+								slug: "nodes/automation/llm/healing/llm-heal-selector",
+							},
+							{
+								label: "LLM Heal Template",
+								slug: "nodes/automation/llm/healing/llm-heal-template",
+							},
+						],
+					},
+					{
+						label: "Planning",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/llm/planning",
+							},
+							{
+								label: "LLM Plan Actions",
+								slug: "nodes/automation/llm/planning/llm-plan-actions",
+							},
+							{
+								label: "LLM Suggest Next Step",
+								slug: "nodes/automation/llm/planning/llm-suggest-next-step",
+							},
+						],
+					},
+					{
+						label: "Vision",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/automation/llm/vision",
+							},
+							{
+								label: "LLM Classify Screen",
+								slug: "nodes/automation/llm/vision/llm-classify-screen",
+							},
+							{
+								label: "LLM Describe Element",
+								slug: "nodes/automation/llm/vision/llm-describe-element",
+							},
+							{
+								label: "LLM Extract From Screen",
+								slug: "nodes/automation/llm/vision/llm-extract-from-screen",
+							},
+							{
+								label: "LLM Find Element",
+								slug: "nodes/automation/llm/vision/llm-find-element",
+							},
+							{
+								label: "LLM Observe Screen",
+								slug: "nodes/automation/llm/vision/llm-observe-screen",
+							},
+							{
+								label: "LLM Rank Candidates",
+								slug: "nodes/automation/llm/vision/llm-rank-candidates",
+							},
+							{
+								label: "LLM Resolve Element",
+								slug: "nodes/automation/llm/vision/llm-resolve-element",
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "RPA",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/rpa",
+					},
+					{
+						label: "Assert Color At Position",
+						slug: "nodes/automation/rpa/rpa-assert-color",
+					},
+					{
+						label: "Assert Template Exists",
+						slug: "nodes/automation/rpa/rpa-assert-template-exists",
+					},
+					{
+						label: "Calculate Elapsed",
+						slug: "nodes/automation/rpa/rpa-calculate-elapsed",
+					},
+					{
+						label: "Click At Position",
+						slug: "nodes/automation/rpa/rpa-click-at-position",
+					},
+					{
+						label: "Delay",
+						slug: "nodes/automation/rpa/rpa-delay",
+					},
+					{
+						label: "Diagnose Failure",
+						slug: "nodes/automation/rpa/rpa-diagnose-failure",
+					},
+					{
+						label: "Drag And Drop",
+						slug: "nodes/automation/rpa/rpa-drag-drop",
+					},
+					{
+						label: "Error Recovery",
+						slug: "nodes/automation/rpa/rpa-error-recovery",
+					},
+					{
+						label: "Locate By Color",
+						slug: "nodes/automation/rpa/rpa-locate-color",
+					},
+					{
+						label: "Locate By Template",
+						slug: "nodes/automation/rpa/rpa-locate-template",
+					},
+					{
+						label: "Log Action",
+						slug: "nodes/automation/rpa/rpa-log-action",
+					},
+					{
+						label: "Parse Checkpoint",
+						slug: "nodes/automation/rpa/rpa-parse-checkpoint",
+					},
+					{
+						label: "Retry Loop",
+						slug: "nodes/automation/rpa/rpa-retry-loop",
+					},
+					{
+						label: "Save Checkpoint",
+						slug: "nodes/automation/rpa/rpa-save-checkpoint",
+					},
+					{
+						label: "Scroll",
+						slug: "nodes/automation/rpa/rpa-scroll",
+					},
+					{
+						label: "Start Timer",
+						slug: "nodes/automation/rpa/rpa-start-timer",
+					},
+					{
+						label: "Take Snapshot",
+						slug: "nodes/automation/rpa/rpa-take-snapshot",
+					},
+					{
+						label: "Try Catch",
+						slug: "nodes/automation/rpa/rpa-try-catch",
+					},
+					{
+						label: "Type Text",
+						slug: "nodes/automation/rpa/rpa-type-text",
+					},
+					{
+						label: "Wait For Color",
+						slug: "nodes/automation/rpa/rpa-wait-for-color",
+					},
+					{
+						label: "Wait For Template",
+						slug: "nodes/automation/rpa/rpa-wait-for-template",
+					},
+					{
+						label: "With Timeout",
+						slug: "nodes/automation/rpa/rpa-with-timeout",
+					},
+				],
+			},
+			{
+				label: "Selector",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/selector",
+					},
+					{
+						label: "Add To Selector Set",
+						slug: "nodes/automation/selector/selector-add-to-set",
+					},
+					{
+						label: "Build Selector",
+						slug: "nodes/automation/selector/selector-build",
+					},
+					{
+						label: "Create Selector Set",
+						slug: "nodes/automation/selector/selector-create-set",
+					},
+					{
+						label: "Get Best Selector",
+						slug: "nodes/automation/selector/selector-get-best",
+					},
+					{
+						label: "Get Primary Selector",
+						slug: "nodes/automation/selector/selector-get-primary",
+					},
+					{
+						label: "Rank Selectors",
+						slug: "nodes/automation/selector/selector-rank",
+					},
+					{
+						label: "Ranked To Selector Set",
+						slug: "nodes/automation/selector/selector-ranked-to-set",
+					},
+					{
+						label: "Selector To String",
+						slug: "nodes/automation/selector/selector-to-string",
+					},
+					{
+						label: "Validate Selector",
+						slug: "nodes/automation/selector/selector-validate",
+					},
+				],
+			},
+			{
+				label: "Vision",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/automation/vision",
+					},
+					{
+						label: "Click Template",
+						slug: "nodes/automation/vision/vision-click-template",
+					},
+					{
+						label: "Find All Templates",
+						slug: "nodes/automation/vision/vision-find-all-templates",
+					},
+					{
+						label: "Find Template",
+						slug: "nodes/automation/vision/vision-find-template",
+					},
+					{
+						label: "Get Pixel Color",
+						slug: "nodes/automation/vision/vision-get-pixel-color",
+					},
+					{
+						label: "Get Screen Size",
+						slug: "nodes/automation/vision/vision-get-screen-size",
+					},
+					{
+						label: "Screenshot Region",
+						slug: "nodes/automation/vision/vision-screenshot-region",
+					},
+					{
+						label: "Screenshot To File",
+						slug: "nodes/automation/vision/vision-screenshot-to-file",
+					},
+					{
+						label: "Wait For Template",
+						slug: "nodes/automation/vision/vision-wait-template",
+					},
+					{
+						label: "Wait Template Disappear",
+						slug: "nodes/automation/vision/vision-wait-template-disappear",
+					},
+				],
+			},
+			{
+				label: "Start Automation Session",
+				slug: "nodes/automation/automation-start-session",
+			},
+			{
+				label: "Stop Automation Session",
+				slug: "nodes/automation/automation-stop-session",
+			},
+		],
+	},
+	{
+		label: "Bit",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/bit",
+			},
+			{
+				label: "Is Bit of Type",
+				slug: "nodes/bit/is-bit-of-type",
+			},
+			{
+				label: "Load Bit",
+				slug: "nodes/bit/bit-from-string",
+			},
+			{
+				label: "Switch on Bit",
+				slug: "nodes/bit/switch-on-bit",
+			},
+		],
+	},
+	{
+		label: "Control",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/control",
+			},
+			{
+				label: "Call",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/control/call",
+					},
+					{
+						label: "Call Reference",
+						slug: "nodes/control/call/control-call-reference",
+					},
+				],
+			},
+			{
+				label: "Flow",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/control/flow",
+					},
+					{
+						label: "Do N",
+						slug: "nodes/control/flow/control-do-n",
+					},
+					{
+						label: "Do Once",
+						slug: "nodes/control/flow/control-do-once",
+					},
+					{
+						label: "Flip Flop",
+						slug: "nodes/control/flow/control-flip-flop",
+					},
+					{
+						label: "Gate",
+						slug: "nodes/control/flow/control-gate",
+					},
+				],
+			},
+			{
+				label: "Functions",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/control/functions",
+					},
+					{
+						label: "Call Function",
+						slug: "nodes/control/functions/control-call-function",
+					},
+				],
+			},
+			{
+				label: "Parallel",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/control/parallel",
+					},
+					{
+						label: "Gather",
+						slug: "nodes/control/parallel/control-gather",
+					},
+				],
+			},
+			{
+				label: "Branch",
+				slug: "nodes/control/control-branch",
+			},
+			{
+				label: "Delay",
+				slug: "nodes/control/delay",
+			},
+			{
+				label: "For Each",
+				slug: "nodes/control/control-for-each",
+			},
+			{
+				label: "For Each (Batch)",
+				slug: "nodes/control/control-for-each-batch",
+			},
+			{
+				label: "For Each (Break)",
+				slug: "nodes/control/control-for-each-with-break",
+			},
+			{
+				label: "For Each Row",
+				slug: "nodes/control/control-for-each-row",
+			},
+			{
+				label: "Parallel Execution",
+				slug: "nodes/control/control-par-execution",
+			},
+			{
+				label: "Parallel For Each",
+				slug: "nodes/control/control-par-for-each",
+			},
+			{
+				label: "Parallel For Each (Batch)",
+				slug: "nodes/control/control-par-for-each-batch",
+			},
+			{
+				label: "Reroute",
+				slug: "nodes/control/reroute",
+			},
+			{
+				label: "Sequence",
+				slug: "nodes/control/control-sequence",
+			},
+			{
+				label: "Timeout",
+				slug: "nodes/control/control-timeout",
+			},
+			{
+				label: "While Loop",
+				slug: "nodes/control/control-while-loop",
+			},
+		],
+	},
+	{
+		label: "Data",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/data",
+			},
+			{
+				label: "Atlassian",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/atlassian",
+					},
+					{
+						label: "Confluence",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/atlassian/confluence",
+							},
+							{
+								label: "Add Comment",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-add-comment",
+							},
+							{
+								label: "Add Label",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-add-label",
+							},
+							{
+								label: "Create Confluence Page",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-create-page",
+							},
+							{
+								label: "Delete Attachment",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-delete-attachment",
+							},
+							{
+								label: "Delete Page",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-delete-page",
+							},
+							{
+								label: "Download Attachment",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-download-attachment",
+							},
+							{
+								label: "Get Comments",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-comments",
+							},
+							{
+								label: "Get Confluence Page",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page",
+							},
+							{
+								label: "Get Current User",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-current-user",
+							},
+							{
+								label: "Get Labels",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-labels",
+							},
+							{
+								label: "Get Page Ancestors",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page-ancestors",
+							},
+							{
+								label: "Get Page Children",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-get-page-children",
+							},
+							{
+								label: "List Attachments",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-list-attachments",
+							},
+							{
+								label: "List Confluence Spaces",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-list-spaces",
+							},
+							{
+								label: "Remove Label",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-remove-label",
+							},
+							{
+								label: "Search Confluence",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-search",
+							},
+							{
+								label: "Search Users",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-search-users",
+							},
+							{
+								label: "Update Confluence Page",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-update-page",
+							},
+							{
+								label: "Upload Attachment",
+								slug: "nodes/data/atlassian/confluence/data-atlassian-confluence-upload-attachment",
+							},
+						],
+					},
+					{
+						label: "Jira",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/atlassian/jira",
+							},
+							{
+								label: "Agile",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/data/atlassian/jira/agile",
+									},
+									{
+										label: "Create Sprint",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-create-sprint",
+									},
+									{
+										label: "Get Backlog",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-backlog",
+									},
+									{
+										label: "Get Board Issues",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-board-issues",
+									},
+									{
+										label: "Get Boards",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-boards",
+									},
+									{
+										label: "Get Sprint Issues",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-sprint-issues",
+									},
+									{
+										label: "Get Sprints",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-get-sprints",
+									},
+									{
+										label: "Move to Sprint",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-move-to-sprint",
+									},
+									{
+										label: "Update Sprint",
+										slug: "nodes/data/atlassian/jira/agile/data-atlassian-jira-update-sprint",
+									},
+								],
+							},
+							{
+								label: "Add Comment",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-add-comment",
+							},
+							{
+								label: "Add Worklog",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-add-worklog",
+							},
+							{
+								label: "Batch Create Issues",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-batch-create-issues",
+							},
+							{
+								label: "Batch Create Versions",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-batch-create-versions",
+							},
+							{
+								label: "Batch Get Changelogs",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-batch-get-changelogs",
+							},
+							{
+								label: "Create Issue Link",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-create-issue-link",
+							},
+							{
+								label: "Create Jira Issue",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-create-issue",
+							},
+							{
+								label: "Create Version",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-create-version",
+							},
+							{
+								label: "Delete Attachment",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-delete-attachment",
+							},
+							{
+								label: "Delete Issue",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-delete-issue",
+							},
+							{
+								label: "Download Attachment",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-download-attachment",
+							},
+							{
+								label: "Get Attachments",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-attachments",
+							},
+							{
+								label: "Get Changelog",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-changelog",
+							},
+							{
+								label: "Get Current User",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-current-user",
+							},
+							{
+								label: "Get Epic Issues",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-epic-issues",
+							},
+							{
+								label: "Get Fields",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-fields",
+							},
+							{
+								label: "Get Issue Links",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-issue-links",
+							},
+							{
+								label: "Get Jira Issue",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-issue",
+							},
+							{
+								label: "Get Link Types",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-link-types",
+							},
+							{
+								label: "Get Project Issues",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-project-issues",
+							},
+							{
+								label: "Get Transitions",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-transitions",
+							},
+							{
+								label: "Get Versions",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-versions",
+							},
+							{
+								label: "Get Worklog",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-get-worklog",
+							},
+							{
+								label: "Link to Epic",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-link-to-epic",
+							},
+							{
+								label: "List Jira Projects",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-list-projects",
+							},
+							{
+								label: "Remove Issue Link",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-remove-issue-link",
+							},
+							{
+								label: "Search Fields",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-search-fields",
+							},
+							{
+								label: "Search Jira Issues",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-search-issues",
+							},
+							{
+								label: "Transition Jira Issue",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-transition-issue",
+							},
+							{
+								label: "Unlink from Epic",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-unlink-from-epic",
+							},
+							{
+								label: "Update Jira Issue",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-update-issue",
+							},
+							{
+								label: "Update Version",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-update-version",
+							},
+							{
+								label: "Upload Attachment",
+								slug: "nodes/data/atlassian/jira/data-atlassian-jira-upload-attachment",
+							},
+						],
+					},
+					{
+						label: "Atlassian (API Token)",
+						slug: "nodes/data/atlassian/data-atlassian-provider-api-token",
+					},
+					{
+						label: "Atlassian (OAuth)",
+						slug: "nodes/data/atlassian/data-atlassian-provider-oauth",
+					},
+					{
+						label: "Get Me",
+						slug: "nodes/data/atlassian/data-atlassian-get-me",
+					},
+				],
+			},
+			{
+				label: "Cache",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/cache",
+					},
+					{
+						label: "Delete Cache Entry",
+						slug: "nodes/data/cache/cache-delete",
+					},
+					{
+						label: "Get or Write Cache",
+						slug: "nodes/data/cache/cache-get-or-write",
+					},
+					{
+						label: "Has Cache Entry",
+						slug: "nodes/data/cache/cache-has",
+					},
+					{
+						label: "Invalidate Cache Namespace",
+						slug: "nodes/data/cache/cache-invalidate-namespace",
+					},
+					{
+						label: "Open Cache",
+						slug: "nodes/data/cache/cache-open",
+					},
+					{
+						label: "Read Cache",
+						slug: "nodes/data/cache/cache-read",
+					},
+					{
+						label: "Write Cache",
+						slug: "nodes/data/cache/cache-write",
+					},
+				],
+			},
+			{
+				label: "DataFusion",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/datafusion",
+					},
+					{
+						label: "Aggregation",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/datafusion/aggregation",
+							},
+							{
+								label: "Date Truncate Aggregation",
+								slug: "nodes/data/datafusion/aggregation/df-date-trunc-aggregation",
+							},
+							{
+								label: "Time Bin Aggregation",
+								slug: "nodes/data/datafusion/aggregation/df-time-bin-aggregation",
+							},
+							{
+								label: "Window Aggregation",
+								slug: "nodes/data/datafusion/aggregation/df-window-aggregation",
+							},
+						],
+					},
+					{
+						label: "Databases",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/datafusion/databases",
+							},
+							{
+								label: "Mount Athena S3 Results",
+								slug: "nodes/data/datafusion/databases/df-mount-athena-query",
+							},
+							{
+								label: "Register Athena Table",
+								slug: "nodes/data/datafusion/databases/df-register-athena",
+							},
+							{
+								label: "Register BigQuery",
+								slug: "nodes/data/datafusion/databases/df-register-bigquery",
+							},
+							{
+								label: "Register ClickHouse",
+								slug: "nodes/data/datafusion/databases/df-register-clickhouse",
+							},
+							{
+								label: "Register DuckDB",
+								slug: "nodes/data/datafusion/databases/df-register-duckdb",
+							},
+							{
+								label: "Register FlightSQL",
+								slug: "nodes/data/datafusion/databases/df-register-flightsql",
+							},
+							{
+								label: "Register MySQL",
+								slug: "nodes/data/datafusion/databases/df-register-mysql",
+							},
+							{
+								label: "Register Oracle",
+								slug: "nodes/data/datafusion/databases/df-register-oracle",
+							},
+							{
+								label: "Register PostgreSQL",
+								slug: "nodes/data/datafusion/databases/df-register-postgres",
+							},
+							{
+								label: "Register SQLite",
+								slug: "nodes/data/datafusion/databases/df-register-sqlite",
+							},
+						],
+					},
+					{
+						label: "Lakes",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/datafusion/lakes",
+							},
+							{
+								label: "Delta Table Info",
+								slug: "nodes/data/datafusion/lakes/df-delta-info",
+							},
+							{
+								label: "Delta Time Travel",
+								slug: "nodes/data/datafusion/lakes/df-delta-time-travel",
+							},
+							{
+								label: "Iceberg Table Info",
+								slug: "nodes/data/datafusion/lakes/df-iceberg-info",
+							},
+							{
+								label: "Iceberg Time Travel",
+								slug: "nodes/data/datafusion/lakes/df-iceberg-time-travel",
+							},
+							{
+								label: "Register Delta Table",
+								slug: "nodes/data/datafusion/lakes/df-register-delta",
+							},
+							{
+								label: "Register Hive Parquet",
+								slug: "nodes/data/datafusion/lakes/df-register-hive-parquet",
+							},
+							{
+								label: "Register Iceberg Table",
+								slug: "nodes/data/datafusion/lakes/df-register-iceberg",
+							},
+							{
+								label: "Register Partitioned JSON",
+								slug: "nodes/data/datafusion/lakes/df-register-partitioned-json",
+							},
+							{
+								label: "Write Delta Table",
+								slug: "nodes/data/datafusion/lakes/df-write-delta",
+							},
+						],
+					},
+					{
+						label: "Time",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/datafusion/time",
+							},
+							{
+								label: "DateTime to SQL Timestamp",
+								slug: "nodes/data/datafusion/time/df-datetime-to-timestamp",
+							},
+							{
+								label: "Time Range Filter",
+								slug: "nodes/data/datafusion/time/df-time-range-filter",
+							},
+						],
+					},
+					{
+						label: "Tools",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/datafusion/tools",
+							},
+							{
+								label: "Describe Table",
+								slug: "nodes/data/datafusion/tools/df-describe-table",
+							},
+							{
+								label: "Execute SQL",
+								slug: "nodes/data/datafusion/tools/df-execute-sql",
+							},
+							{
+								label: "List Tables",
+								slug: "nodes/data/datafusion/tools/df-list-tables",
+							},
+						],
+					},
+					{
+						label: "Cached SQL Query",
+						slug: "nodes/data/datafusion/df-sql-query-cached",
+					},
+					{
+						label: "Create DataFusion Session",
+						slug: "nodes/data/datafusion/df-create-session",
+					},
+					{
+						label: "Mount CSV",
+						slug: "nodes/data/datafusion/df-mount-csv",
+					},
+					{
+						label: "Mount JSON",
+						slug: "nodes/data/datafusion/df-mount-json",
+					},
+					{
+						label: "Mount Parquet",
+						slug: "nodes/data/datafusion/df-mount-parquet",
+					},
+					{
+						label: "Register Excel (DataFusion)",
+						slug: "nodes/data/datafusion/df-register-excel",
+					},
+					{
+						label: "Register Lance Table",
+						slug: "nodes/data/datafusion/df-register-lance",
+					},
+					{
+						label: "Register Table",
+						slug: "nodes/data/datafusion/df-register-csv-table",
+					},
+					{
+						label: "SQL Query",
+						slug: "nodes/data/datafusion/df-sql-query",
+					},
+				],
+			},
+			{
+				label: "Database",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/database",
+					},
+					{
+						label: "Delete",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/delete",
+							},
+							{
+								label: "Delete",
+								slug: "nodes/data/database/delete/filter-delete-local-db",
+							},
+							{
+								label: "Drop Table",
+								slug: "nodes/data/database/delete/drop-table-local-db",
+							},
+							{
+								label: "Purge",
+								slug: "nodes/data/database/delete/purge-local-db",
+							},
+						],
+					},
+					{
+						label: "Graph",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/graph",
+							},
+							{
+								label: "Meta",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/data/database/graph/meta",
+									},
+									{
+										label: "Graph Schema",
+										slug: "nodes/data/database/graph/meta/graph-schema",
+									},
+									{
+										label: "List Graph Overlays",
+										slug: "nodes/data/database/graph/meta/list-graph-overlays",
+									},
+								],
+							},
+							{
+								label: "Query",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/data/database/graph/query",
+									},
+									{
+										label: "Cypher Query",
+										slug: "nodes/data/database/graph/query/graph-cypher-query",
+									},
+									{
+										label: "Find Paths",
+										slug: "nodes/data/database/graph/query/graph-paths",
+									},
+									{
+										label: "Graph Analytics",
+										slug: "nodes/data/database/graph/query/graph-analytics",
+									},
+									{
+										label: "Graph Neighbors",
+										slug: "nodes/data/database/graph/query/graph-neighbors",
+									},
+									{
+										label: "Graph Sample",
+										slug: "nodes/data/database/graph/query/graph-sample",
+									},
+									{
+										label: "Graph Search",
+										slug: "nodes/data/database/graph/query/graph-search",
+									},
+									{
+										label: "Graph Subgraph",
+										slug: "nodes/data/database/graph/query/graph-subgraph",
+									},
+									{
+										label: "SQL Query (Graph)",
+										slug: "nodes/data/database/graph/query/graph-sql-query",
+									},
+								],
+							},
+							{
+								label: "Write",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/data/database/graph/write",
+									},
+									{
+										label: "Upsert Graph Edge",
+										slug: "nodes/data/database/graph/write/upsert-graph-edge",
+									},
+									{
+										label: "Upsert Graph Node",
+										slug: "nodes/data/database/graph/write/upsert-graph-node",
+									},
+								],
+							},
+							{
+								label: "Create Graph Overlay",
+								slug: "nodes/data/database/graph/create-graph-overlay",
+							},
+							{
+								label: "Drop Graph Overlay",
+								slug: "nodes/data/database/graph/drop-graph-overlay",
+							},
+							{
+								label: "Open Graph Overlay",
+								slug: "nodes/data/database/graph/open-graph-overlay",
+							},
+						],
+					},
+					{
+						label: "Insert",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/insert",
+							},
+							{
+								label: "Batch Insert",
+								slug: "nodes/data/database/insert/batch-insert-local-db",
+							},
+							{
+								label: "Batch Insert (CSV)",
+								slug: "nodes/data/database/insert/csv-insert-local-db",
+							},
+							{
+								label: "Batch Insert (TDMS)",
+								slug: "nodes/data/database/insert/tdms-insert-local-db",
+							},
+							{
+								label: "Batch Upsert",
+								slug: "nodes/data/database/insert/batch-upsert-local-db",
+							},
+							{
+								label: "Insert",
+								slug: "nodes/data/database/insert/insert-local-db",
+							},
+							{
+								label: "Upsert",
+								slug: "nodes/data/database/insert/upsert-local-db",
+							},
+						],
+					},
+					{
+						label: "Meta",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/meta",
+							},
+							{
+								label: "Count",
+								slug: "nodes/data/database/meta/count-local-db",
+							},
+							{
+								label: "Get Schema",
+								slug: "nodes/data/database/meta/schema-local-db",
+							},
+							{
+								label: "List",
+								slug: "nodes/data/database/meta/list-local-db",
+							},
+							{
+								label: "List Indices",
+								slug: "nodes/data/database/meta/list-indices-db",
+							},
+							{
+								label: "List Tables",
+								slug: "nodes/data/database/meta/list-tables-db",
+							},
+						],
+					},
+					{
+						label: "Optimization",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/optimization",
+							},
+							{
+								label: "Build Index",
+								slug: "nodes/data/database/optimization/index-local-db",
+							},
+							{
+								label: "Drop Index",
+								slug: "nodes/data/database/optimization/drop-index-db",
+							},
+							{
+								label: "Flush Database",
+								slug: "nodes/data/database/optimization/flush-local-db",
+							},
+							{
+								label: "Optimize and Update",
+								slug: "nodes/data/database/optimization/optimize-local-db",
+							},
+						],
+					},
+					{
+						label: "Schema",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/schema",
+							},
+							{
+								label: "Add Column",
+								slug: "nodes/data/database/schema/add-column-local-db",
+							},
+							{
+								label: "Drop Column",
+								slug: "nodes/data/database/schema/drop-column-local-db",
+							},
+							{
+								label: "Make Column Optional",
+								slug: "nodes/data/database/schema/make-column-optional-local-db",
+							},
+						],
+					},
+					{
+						label: "Search",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/database/search",
+							},
+							{
+								label: "(SQL) Filter Database",
+								slug: "nodes/data/database/search/filter-local-db",
+							},
+							{
+								label: "Full-Text Search",
+								slug: "nodes/data/database/search/fts-search-local-db",
+							},
+							{
+								label: "Hybrid Search",
+								slug: "nodes/data/database/search/hybrid-search-local-db",
+							},
+							{
+								label: "Vector Search",
+								slug: "nodes/data/database/search/vector-search-local-db",
+							},
+						],
+					},
+					{
+						label: "Open Database",
+						slug: "nodes/data/database/open-local-db",
+					},
+					{
+						label: "Open Remote Database",
+						slug: "nodes/data/database/open-remote-db",
+					},
+				],
+			},
+			{
+				label: "Databricks",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/databricks",
+					},
+					{
+						label: "DBFS",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/databricks/dbfs",
+							},
+							{
+								label: "Get DBFS Status",
+								slug: "nodes/data/databricks/dbfs/data-databricks-get-dbfs-status",
+							},
+							{
+								label: "List DBFS Files",
+								slug: "nodes/data/databricks/dbfs/data-databricks-list-dbfs",
+							},
+							{
+								label: "Read DBFS File",
+								slug: "nodes/data/databricks/dbfs/data-databricks-read-dbfs",
+							},
+						],
+					},
+					{
+						label: "Unity Catalog",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/databricks/unity-catalog",
+							},
+							{
+								label: "List Catalogs",
+								slug: "nodes/data/databricks/unity-catalog/data-databricks-list-catalogs",
+							},
+							{
+								label: "List Schemas",
+								slug: "nodes/data/databricks/unity-catalog/data-databricks-list-schemas",
+							},
+							{
+								label: "List Tables",
+								slug: "nodes/data/databricks/unity-catalog/data-databricks-list-tables",
+							},
+						],
+					},
+					{
+						label: "Cancel Job Run",
+						slug: "nodes/data/databricks/data-databricks-cancel-job-run",
+					},
+					{
+						label: "Databricks (OAuth)",
+						slug: "nodes/data/databricks/data-databricks-provider-oauth",
+					},
+					{
+						label: "Databricks (PAT)",
+						slug: "nodes/data/databricks/data-databricks-provider-pat",
+					},
+					{
+						label: "Databricks (Service Principal)",
+						slug: "nodes/data/databricks/data-databricks-provider-service-principal",
+					},
+					{
+						label: "Databricks (Token)",
+						slug: "nodes/data/databricks/data-databricks-provider-token",
+					},
+					{
+						label: "Execute SQL",
+						slug: "nodes/data/databricks/data-databricks-execute-sql",
+					},
+					{
+						label: "Get Cluster",
+						slug: "nodes/data/databricks/data-databricks-get-cluster",
+					},
+					{
+						label: "Get Job Run",
+						slug: "nodes/data/databricks/data-databricks-get-job-run",
+					},
+					{
+						label: "List Clusters",
+						slug: "nodes/data/databricks/data-databricks-list-clusters",
+					},
+					{
+						label: "List Jobs",
+						slug: "nodes/data/databricks/data-databricks-list-jobs",
+					},
+					{
+						label: "List SQL Warehouses",
+						slug: "nodes/data/databricks/data-databricks-list-sql-warehouses",
+					},
+					{
+						label: "Run Job",
+						slug: "nodes/data/databricks/data-databricks-run-job",
+					},
+					{
+						label: "Start Cluster",
+						slug: "nodes/data/databricks/data-databricks-start-cluster",
+					},
+					{
+						label: "Start SQL Warehouse",
+						slug: "nodes/data/databricks/data-databricks-start-sql-warehouse",
+					},
+					{
+						label: "Stop Cluster",
+						slug: "nodes/data/databricks/data-databricks-stop-cluster",
+					},
+					{
+						label: "Stop SQL Warehouse",
+						slug: "nodes/data/databricks/data-databricks-stop-sql-warehouse",
+					},
+				],
+			},
+			{
+				label: "Excel",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/excel",
+					},
+					{
+						label: "Rows",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/excel/rows",
+							},
+							{
+								label: "Get Row By Index",
+								slug: "nodes/data/excel/rows/tables-get-row-by-index",
+							},
+						],
+					},
+					{
+						label: "Copy Worksheet",
+						slug: "nodes/data/excel/files-spreadsheet-copy-worksheet",
+					},
+					{
+						label: "Excel Read Cell",
+						slug: "nodes/data/excel/excel-read-cell",
+					},
+					{
+						label: "Excel Remove Column",
+						slug: "nodes/data/excel/excel-remove-column",
+					},
+					{
+						label: "Excel Remove Row",
+						slug: "nodes/data/excel/excel-remove-row",
+					},
+					{
+						label: "Excel Write Cell",
+						slug: "nodes/data/excel/excel-write-cell",
+					},
+					{
+						label: "Excel Write Cell (HTML)",
+						slug: "nodes/data/excel/excel-write-cell-html",
+					},
+					{
+						label: "Extract Tables (Excel)",
+						slug: "nodes/data/excel/data-excel-extract-tables",
+					},
+					{
+						label: "Extract Tables AI (Excel)",
+						slug: "nodes/data/excel/data-excel-extract-tables-ai",
+					},
+					{
+						label: "Get Sheet Names",
+						slug: "nodes/data/excel/files-spreadsheet-get-sheet-names",
+					},
+					{
+						label: "Insert Column(s)",
+						slug: "nodes/data/excel/files-spreadsheet-insert-column",
+					},
+					{
+						label: "Insert Row(s)",
+						slug: "nodes/data/excel/files-spreadsheet-insert-row",
+					},
+					{
+						label: "New Worksheet",
+						slug: "nodes/data/excel/files-spreadsheet-new-worksheet",
+					},
+				],
+			},
+			{
+				label: "Files",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/files",
+					},
+					{
+						label: "Content",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/files/content",
+							},
+							{
+								label: "Read to Bytes",
+								slug: "nodes/data/files/content/read-to-bytes",
+							},
+							{
+								label: "Read to String",
+								slug: "nodes/data/files/content/read-to-string",
+							},
+							{
+								label: "Write Bytes",
+								slug: "nodes/data/files/content/write-bytes",
+							},
+							{
+								label: "Write String",
+								slug: "nodes/data/files/content/write-string",
+							},
+						],
+					},
+					{
+						label: "Directories",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/files/directories",
+							},
+							{
+								label: "Cache Dir",
+								slug: "nodes/data/files/directories/path-from-cache-dir",
+							},
+							{
+								label: "Storage Dir",
+								slug: "nodes/data/files/directories/path-from-storage-dir",
+							},
+							{
+								label: "Upload Dir",
+								slug: "nodes/data/files/directories/path-from-upload-dir",
+							},
+							{
+								label: "User Dir",
+								slug: "nodes/data/files/directories/path-from-user-dir",
+							},
+							{
+								label: "Virtual Dir",
+								slug: "nodes/data/files/directories/path-virtual-dir",
+							},
+						],
+					},
+					{
+						label: "External",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/files/external",
+							},
+							{
+								label: "Azure Blob Container",
+								slug: "nodes/data/files/external/external-azure-blob-store",
+							},
+							{
+								label: "GCS Bucket",
+								slug: "nodes/data/files/external/external-gcp-storage-store",
+							},
+							{
+								label: "R2 Bucket",
+								slug: "nodes/data/files/external/external-r2-store",
+							},
+							{
+								label: "S3 Bucket",
+								slug: "nodes/data/files/external/external-s3-store",
+							},
+							{
+								label: "S3 Express Bucket",
+								slug: "nodes/data/files/external/external-s3-express-store",
+							},
+							{
+								label: "SMB Share",
+								slug: "nodes/data/files/external/external-smb-store",
+							},
+						],
+					},
+					{
+						label: "Operations",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/files/operations",
+							},
+							{
+								label: "Copy",
+								slug: "nodes/data/files/operations/storage-copy",
+							},
+							{
+								label: "Delete",
+								slug: "nodes/data/files/operations/storage-delete",
+							},
+							{
+								label: "Diff Directory",
+								slug: "nodes/data/files/operations/path-get-changes",
+							},
+							{
+								label: "Get",
+								slug: "nodes/data/files/operations/path-get",
+							},
+							{
+								label: "Get Range",
+								slug: "nodes/data/files/operations/path-get-range",
+							},
+							{
+								label: "Hash File",
+								slug: "nodes/data/files/operations/path-hash-file",
+							},
+							{
+								label: "Head",
+								slug: "nodes/data/files/operations/path-head",
+							},
+							{
+								label: "List Folders",
+								slug: "nodes/data/files/operations/path-list-folders",
+							},
+							{
+								label: "List Paths",
+								slug: "nodes/data/files/operations/path-list-paths",
+							},
+							{
+								label: "List With Offset",
+								slug: "nodes/data/files/operations/path-list-with-offset",
+							},
+							{
+								label: "Path Exists?",
+								slug: "nodes/data/files/operations/path-exists",
+							},
+							{
+								label: "Put",
+								slug: "nodes/data/files/operations/path-put",
+							},
+							{
+								label: "Rename",
+								slug: "nodes/data/files/operations/path-rename",
+							},
+							{
+								label: "Sign URL",
+								slug: "nodes/data/files/operations/sign-url",
+							},
+							{
+								label: "Sign URLs",
+								slug: "nodes/data/files/operations/sign-urls",
+							},
+							{
+								label: "Write Directory Manifest",
+								slug: "nodes/data/files/operations/path-write-manifest",
+							},
+						],
+					},
+					{
+						label: "Path",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/files/path",
+							},
+							{
+								label: "Child",
+								slug: "nodes/data/files/path/child",
+							},
+							{
+								label: "Extension",
+								slug: "nodes/data/files/path/extension",
+							},
+							{
+								label: "Filename",
+								slug: "nodes/data/files/path/filename",
+							},
+							{
+								label: "From Raw Path",
+								slug: "nodes/data/files/path/from-raw-path",
+							},
+							{
+								label: "Parent",
+								slug: "nodes/data/files/path/parent",
+							},
+							{
+								label: "Raw Path",
+								slug: "nodes/data/files/path/raw-path",
+							},
+							{
+								label: "Replace Segment",
+								slug: "nodes/data/files/path/path-replace-segment",
+							},
+							{
+								label: "Set Extension",
+								slug: "nodes/data/files/path/set-extension",
+							},
+							{
+								label: "Set Filename",
+								slug: "nodes/data/files/path/set-filename",
+							},
+						],
+					},
+					{
+						label: "Local Path to Path",
+						slug: "nodes/data/files/pathbuf-to-path",
+					},
+				],
+			},
+			{
+				label: "GitHub",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/github",
+					},
+					{
+						label: "Workflows",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/github/workflows",
+							},
+							{
+								label: "Cancel Workflow Run",
+								slug: "nodes/data/github/workflows/github-cancel-workflow-run",
+							},
+							{
+								label: "Get Latest Workflow Run",
+								slug: "nodes/data/github/workflows/github-get-latest-workflow-run",
+							},
+							{
+								label: "Get Workflow Run",
+								slug: "nodes/data/github/workflows/github-get-workflow-run",
+							},
+							{
+								label: "List Workflow Runs",
+								slug: "nodes/data/github/workflows/github-list-workflow-runs",
+							},
+							{
+								label: "List Workflows",
+								slug: "nodes/data/github/workflows/github-list-workflows",
+							},
+							{
+								label: "Rerun Workflow",
+								slug: "nodes/data/github/workflows/github-rerun-workflow",
+							},
+							{
+								label: "Trigger Workflow",
+								slug: "nodes/data/github/workflows/github-trigger-workflow",
+							},
+						],
+					},
+					{
+						label: "Add Issue Comment",
+						slug: "nodes/data/github/data-github-add-issue-comment",
+					},
+					{
+						label: "Clone Repository",
+						slug: "nodes/data/github/data-github-clone-repo",
+					},
+					{
+						label: "Compare Commits",
+						slug: "nodes/data/github/data-github-compare-commits",
+					},
+					{
+						label: "Create Branch",
+						slug: "nodes/data/github/data-github-create-branch",
+					},
+					{
+						label: "Create Issue",
+						slug: "nodes/data/github/data-github-create-issue",
+					},
+					{
+						label: "Create PR Review",
+						slug: "nodes/data/github/data-github-create-pr-review",
+					},
+					{
+						label: "Create Pull Request",
+						slug: "nodes/data/github/data-github-create-pull-request",
+					},
+					{
+						label: "Create Release",
+						slug: "nodes/data/github/data-github-create-release",
+					},
+					{
+						label: "Create/Update File",
+						slug: "nodes/data/github/data-github-create-or-update-file",
+					},
+					{
+						label: "Delete Branch",
+						slug: "nodes/data/github/data-github-delete-branch",
+					},
+					{
+						label: "Delete File",
+						slug: "nodes/data/github/data-github-delete-file",
+					},
+					{
+						label: "Download File",
+						slug: "nodes/data/github/data-github-download-file",
+					},
+					{
+						label: "Download Release Asset",
+						slug: "nodes/data/github/data-github-download-release-asset",
+					},
+					{
+						label: "Get Branch",
+						slug: "nodes/data/github/data-github-get-branch",
+					},
+					{
+						label: "Get Commit",
+						slug: "nodes/data/github/data-github-get-commit",
+					},
+					{
+						label: "Get File Contents",
+						slug: "nodes/data/github/data-github-get-file-contents",
+					},
+					{
+						label: "Get Issue",
+						slug: "nodes/data/github/data-github-get-issue",
+					},
+					{
+						label: "Get Latest Release",
+						slug: "nodes/data/github/data-github-get-latest-release",
+					},
+					{
+						label: "Get Pull Request",
+						slug: "nodes/data/github/data-github-get-pull-request",
+					},
+					{
+						label: "Get Release by Tag",
+						slug: "nodes/data/github/data-github-get-release-by-tag",
+					},
+					{
+						label: "Get Repository",
+						slug: "nodes/data/github/data-github-get-repo",
+					},
+					{
+						label: "Get User",
+						slug: "nodes/data/github/data-github-get-user",
+					},
+					{
+						label: "GitHub (App Token)",
+						slug: "nodes/data/github/data-github-provider-app",
+					},
+					{
+						label: "GitHub (OAuth)",
+						slug: "nodes/data/github/data-github-provider-oauth",
+					},
+					{
+						label: "GitHub (PAT)",
+						slug: "nodes/data/github/data-github-provider-pat",
+					},
+					{
+						label: "List Branches",
+						slug: "nodes/data/github/data-github-list-branches",
+					},
+					{
+						label: "List Commits",
+						slug: "nodes/data/github/data-github-list-commits",
+					},
+					{
+						label: "List Issue Comments",
+						slug: "nodes/data/github/data-github-list-issue-comments",
+					},
+					{
+						label: "List Issues",
+						slug: "nodes/data/github/data-github-list-issues",
+					},
+					{
+						label: "List PR Files",
+						slug: "nodes/data/github/data-github-list-pr-files",
+					},
+					{
+						label: "List PR Reviews",
+						slug: "nodes/data/github/data-github-list-pr-reviews",
+					},
+					{
+						label: "List Pull Requests",
+						slug: "nodes/data/github/data-github-list-pull-requests",
+					},
+					{
+						label: "List Release Assets",
+						slug: "nodes/data/github/data-github-list-release-assets",
+					},
+					{
+						label: "List Releases",
+						slug: "nodes/data/github/data-github-list-releases",
+					},
+					{
+						label: "List Repositories",
+						slug: "nodes/data/github/data-github-list-repos",
+					},
+					{
+						label: "Merge Pull Request",
+						slug: "nodes/data/github/data-github-merge-pull-request",
+					},
+					{
+						label: "Search Code",
+						slug: "nodes/data/github/data-github-search-code",
+					},
+					{
+						label: "Search Issues",
+						slug: "nodes/data/github/data-github-search-issues",
+					},
+					{
+						label: "Search Repositories",
+						slug: "nodes/data/github/data-github-search-repos",
+					},
+					{
+						label: "Update Issue",
+						slug: "nodes/data/github/data-github-update-issue",
+					},
+					{
+						label: "Update Pull Request",
+						slug: "nodes/data/github/data-github-update-pull-request",
+					},
+					{
+						label: "Upload Release Asset",
+						slug: "nodes/data/github/data-github-upload-release-asset",
+					},
+				],
+			},
+			{
+				label: "Google",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/google",
+					},
+					{
+						label: "Calendar",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/calendar",
+							},
+							{
+								label: "Create Event",
+								slug: "nodes/data/google/calendar/data-google-calendar-create-event",
+							},
+							{
+								label: "Delete Event",
+								slug: "nodes/data/google/calendar/data-google-calendar-delete-event",
+							},
+							{
+								label: "Get Event",
+								slug: "nodes/data/google/calendar/data-google-calendar-get-event",
+							},
+							{
+								label: "List Calendars",
+								slug: "nodes/data/google/calendar/data-google-calendar-list",
+							},
+							{
+								label: "List Events",
+								slug: "nodes/data/google/calendar/data-google-calendar-list-events",
+							},
+							{
+								label: "Query Free/Busy",
+								slug: "nodes/data/google/calendar/data-google-calendar-free-busy",
+							},
+							{
+								label: "Quick Add Event",
+								slug: "nodes/data/google/calendar/data-google-calendar-quick-add",
+							},
+							{
+								label: "Update Event",
+								slug: "nodes/data/google/calendar/data-google-calendar-update-event",
+							},
+						],
+					},
+					{
+						label: "Docs",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/docs",
+							},
+							{
+								label: "Create Document",
+								slug: "nodes/data/google/docs/data-google-docs-create",
+							},
+							{
+								label: "Delete Text",
+								slug: "nodes/data/google/docs/data-google-docs-delete-text",
+							},
+							{
+								label: "Export Document",
+								slug: "nodes/data/google/docs/data-google-docs-export",
+							},
+							{
+								label: "Get Document",
+								slug: "nodes/data/google/docs/data-google-docs-get",
+							},
+							{
+								label: "Get Document Text",
+								slug: "nodes/data/google/docs/data-google-docs-get-text",
+							},
+							{
+								label: "Insert Text",
+								slug: "nodes/data/google/docs/data-google-docs-insert-text",
+							},
+							{
+								label: "Replace All Text",
+								slug: "nodes/data/google/docs/data-google-docs-replace-text",
+							},
+						],
+					},
+					{
+						label: "Drive",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/drive",
+							},
+							{
+								label: "Copy File",
+								slug: "nodes/data/google/drive/data-google-drive-copy-file",
+							},
+							{
+								label: "Create Folder",
+								slug: "nodes/data/google/drive/data-google-drive-create-folder",
+							},
+							{
+								label: "Delete File",
+								slug: "nodes/data/google/drive/data-google-drive-delete-file",
+							},
+							{
+								label: "Download File",
+								slug: "nodes/data/google/drive/data-google-drive-download",
+							},
+							{
+								label: "Get File Metadata",
+								slug: "nodes/data/google/drive/data-google-drive-get-metadata",
+							},
+							{
+								label: "List Google Drive Files",
+								slug: "nodes/data/google/drive/data-google-drive-list-files",
+							},
+							{
+								label: "Move File",
+								slug: "nodes/data/google/drive/data-google-drive-move-file",
+							},
+							{
+								label: "Read Google Drive File",
+								slug: "nodes/data/google/drive/data-google-drive-read-file",
+							},
+							{
+								label: "Search Drive",
+								slug: "nodes/data/google/drive/data-google-drive-search",
+							},
+							{
+								label: "Upload File",
+								slug: "nodes/data/google/drive/data-google-drive-upload",
+							},
+						],
+					},
+					{
+						label: "Forms",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/forms",
+							},
+							{
+								label: "Create Form",
+								slug: "nodes/data/google/forms/data-google-forms-create",
+							},
+							{
+								label: "Get Form",
+								slug: "nodes/data/google/forms/data-google-forms-get",
+							},
+							{
+								label: "Get Form Response",
+								slug: "nodes/data/google/forms/data-google-forms-get-response",
+							},
+							{
+								label: "List Form Responses",
+								slug: "nodes/data/google/forms/data-google-forms-list-responses",
+							},
+							{
+								label: "Update Form Info",
+								slug: "nodes/data/google/forms/data-google-forms-update-info",
+							},
+						],
+					},
+					{
+						label: "Gmail",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/gmail",
+							},
+							{
+								label: "Create Draft",
+								slug: "nodes/data/google/gmail/data-google-gmail-create-draft",
+							},
+							{
+								label: "List Labels",
+								slug: "nodes/data/google/gmail/data-google-gmail-list-labels",
+							},
+							{
+								label: "Send Email",
+								slug: "nodes/data/google/gmail/data-google-gmail-send",
+							},
+						],
+					},
+					{
+						label: "Meet",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/meet",
+							},
+							{
+								label: "Add Meet to Event",
+								slug: "nodes/data/google/meet/data-google-meet-add-to-event",
+							},
+							{
+								label: "Create Instant Meeting",
+								slug: "nodes/data/google/meet/data-google-meet-instant",
+							},
+							{
+								label: "Create Meeting",
+								slug: "nodes/data/google/meet/data-google-meet-create",
+							},
+							{
+								label: "Get Meeting Details",
+								slug: "nodes/data/google/meet/data-google-meet-get",
+							},
+						],
+					},
+					{
+						label: "Sheets",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/sheets",
+							},
+							{
+								label: "Add Sheet",
+								slug: "nodes/data/google/sheets/data-google-sheets-add-sheet",
+							},
+							{
+								label: "Append Rows",
+								slug: "nodes/data/google/sheets/data-google-sheets-append-rows",
+							},
+							{
+								label: "Clear Range",
+								slug: "nodes/data/google/sheets/data-google-sheets-clear-range",
+							},
+							{
+								label: "Create Spreadsheet",
+								slug: "nodes/data/google/sheets/data-google-sheets-create",
+							},
+							{
+								label: "Delete Sheet",
+								slug: "nodes/data/google/sheets/data-google-sheets-delete-sheet",
+							},
+							{
+								label: "Get Spreadsheet",
+								slug: "nodes/data/google/sheets/data-google-sheets-get",
+							},
+							{
+								label: "Read Range",
+								slug: "nodes/data/google/sheets/data-google-sheets-read-range",
+							},
+							{
+								label: "Write Range",
+								slug: "nodes/data/google/sheets/data-google-sheets-write-range",
+							},
+						],
+					},
+					{
+						label: "Slides",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/slides",
+							},
+							{
+								label: "Add Slide",
+								slug: "nodes/data/google/slides/data-google-slides-add-slide",
+							},
+							{
+								label: "Add Text to Slide",
+								slug: "nodes/data/google/slides/data-google-slides-add-text",
+							},
+							{
+								label: "Create Presentation",
+								slug: "nodes/data/google/slides/data-google-slides-create",
+							},
+							{
+								label: "Delete Slide",
+								slug: "nodes/data/google/slides/data-google-slides-delete-slide",
+							},
+							{
+								label: "Export Presentation",
+								slug: "nodes/data/google/slides/data-google-slides-export",
+							},
+							{
+								label: "Get Presentation",
+								slug: "nodes/data/google/slides/data-google-slides-get",
+							},
+						],
+					},
+					{
+						label: "YouTube",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/google/youtube",
+							},
+							{
+								label: "Add to Playlist",
+								slug: "nodes/data/google/youtube/data-google-youtube-add-to-playlist",
+							},
+							{
+								label: "Get Channel",
+								slug: "nodes/data/google/youtube/data-google-youtube-get-channel",
+							},
+							{
+								label: "Get Playlist Items",
+								slug: "nodes/data/google/youtube/data-google-youtube-get-playlist-items",
+							},
+							{
+								label: "Get Video",
+								slug: "nodes/data/google/youtube/data-google-youtube-get-video",
+							},
+							{
+								label: "List My Videos",
+								slug: "nodes/data/google/youtube/data-google-youtube-list-my-videos",
+							},
+							{
+								label: "List Playlists",
+								slug: "nodes/data/google/youtube/data-google-youtube-list-playlists",
+							},
+							{
+								label: "Remove from Playlist",
+								slug: "nodes/data/google/youtube/data-google-youtube-remove-from-playlist",
+							},
+							{
+								label: "Search Videos",
+								slug: "nodes/data/google/youtube/data-google-youtube-search",
+							},
+						],
+					},
+					{
+						label: "Google",
+						slug: "nodes/data/google/data-google-provider",
+					},
+				],
+			},
+			{
+				label: "LinkedIn",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/linkedin",
+					},
+					{
+						label: "Get Me",
+						slug: "nodes/data/linkedin/data-linkedin-get-me",
+					},
+					{
+						label: "LinkedIn (OAuth)",
+						slug: "nodes/data/linkedin/data-linkedin-provider-oauth",
+					},
+					{
+						label: "Share Article",
+						slug: "nodes/data/linkedin/data-linkedin-share-article",
+					},
+					{
+						label: "Share Text Post",
+						slug: "nodes/data/linkedin/data-linkedin-share-text",
+					},
+				],
+			},
+			{
+				label: "Microsoft",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/microsoft",
+					},
+					{
+						label: "Calendar",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/calendar",
+							},
+							{
+								label: "Create Calendar",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-create-calendar",
+							},
+							{
+								label: "Create Event",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-create-event",
+							},
+							{
+								label: "Delete Event",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-delete-event",
+							},
+							{
+								label: "Find Meeting Times",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-find-meeting-times",
+							},
+							{
+								label: "Get Schedule",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-get-schedule",
+							},
+							{
+								label: "List Calendars",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-list-calendars",
+							},
+							{
+								label: "List Events",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-list-events",
+							},
+							{
+								label: "Update Event",
+								slug: "nodes/data/microsoft/calendar/data-microsoft-calendar-update-event",
+							},
+						],
+					},
+					{
+						label: "Copilot",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/copilot",
+							},
+							{
+								label: "Copilot Chat",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-chat",
+							},
+							{
+								label: "Copilot Search",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-semantic-search",
+							},
+							{
+								label: "Filter Copilot Interactions",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-filter-interactions",
+							},
+							{
+								label: "Get Copilot Interactions",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-get-interactions",
+							},
+							{
+								label: "Get Meeting Insight",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-get-meeting-insight",
+							},
+							{
+								label: "Get User Copilot Settings",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-get-user-settings",
+							},
+							{
+								label: "List Meeting Insights",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-list-meeting-insights",
+							},
+							{
+								label: "Subscribe Copilot Notifications",
+								slug: "nodes/data/microsoft/copilot/data-microsoft-copilot-subscribe-notifications",
+							},
+						],
+					},
+					{
+						label: "Excel",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/excel",
+							},
+							{
+								label: "Add Excel Table Row",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-add-table-row",
+							},
+							{
+								label: "Get Excel Table",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-get-table",
+							},
+							{
+								label: "Get Excel Used Range",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-used-range",
+							},
+							{
+								label: "List Excel Worksheets",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-list-worksheets",
+							},
+							{
+								label: "Read Excel Range",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-read-range",
+							},
+							{
+								label: "Write Excel Range",
+								slug: "nodes/data/microsoft/excel/data-microsoft-excel-write-range",
+							},
+						],
+					},
+					{
+						label: "OneDrive",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/onedrive",
+							},
+							{
+								label: "Copy Item",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-copy",
+							},
+							{
+								label: "Create Folder",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-create-folder",
+							},
+							{
+								label: "Delete Item",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-delete",
+							},
+							{
+								label: "Download File",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-download",
+							},
+							{
+								label: "Get OneDrive Item",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-get-item",
+							},
+							{
+								label: "List OneDrive Items",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-list-items",
+							},
+							{
+								label: "Move Item",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-move",
+							},
+							{
+								label: "Search OneDrive",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-search",
+							},
+							{
+								label: "Upload File",
+								slug: "nodes/data/microsoft/onedrive/data-microsoft-onedrive-upload",
+							},
+						],
+					},
+					{
+						label: "OneNote",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/onenote",
+							},
+							{
+								label: "Create Notebook",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-create-notebook",
+							},
+							{
+								label: "Create Page",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-create-page",
+							},
+							{
+								label: "Create Section",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-create-section",
+							},
+							{
+								label: "Delete Page",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-delete-page",
+							},
+							{
+								label: "Get Page Content",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-get-page-content",
+							},
+							{
+								label: "List Notebooks",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-list-notebooks",
+							},
+							{
+								label: "List Pages",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-list-pages",
+							},
+							{
+								label: "List Sections",
+								slug: "nodes/data/microsoft/onenote/data-microsoft-onenote-list-sections",
+							},
+						],
+					},
+					{
+						label: "Outlook",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/outlook",
+							},
+							{
+								label: "Attachment → Fields",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-attachment-fields",
+							},
+							{
+								label: "Create Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-create-calendar-event",
+							},
+							{
+								label: "Delete Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-delete-calendar-event",
+							},
+							{
+								label: "Forward Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-forward-calendar-event",
+							},
+							{
+								label: "Get Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-get-calendar-event",
+							},
+							{
+								label: "Get Message",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-get-message",
+							},
+							{
+								label: "Get Message Attachments",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-get-message-attachments",
+							},
+							{
+								label: "List Calendar Events",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-list-calendar-events",
+							},
+							{
+								label: "List Contacts",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-list-contacts",
+							},
+							{
+								label: "List Mail Folders",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-list-mail-folders",
+							},
+							{
+								label: "List Messages",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-list-messages",
+							},
+							{
+								label: "RSVP Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-rsvp-calendar-event",
+							},
+							{
+								label: "Send Message",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-send-message",
+							},
+							{
+								label: "Update Calendar Event",
+								slug: "nodes/data/microsoft/outlook/data-microsoft-outlook-update-calendar-event",
+							},
+						],
+					},
+					{
+						label: "Planner",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/planner",
+							},
+							{
+								label: "Create Bucket",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-create-bucket",
+							},
+							{
+								label: "Create Planner Task",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-create-task",
+							},
+							{
+								label: "Get Plan",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-get-plan",
+							},
+							{
+								label: "List My Plans",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-list-my-plans",
+							},
+							{
+								label: "List My Tasks",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-list-my-tasks",
+							},
+							{
+								label: "List Plan Buckets",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-list-buckets",
+							},
+							{
+								label: "List Plan Tasks",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-list-tasks",
+							},
+							{
+								label: "Update Planner Task",
+								slug: "nodes/data/microsoft/planner/data-microsoft-planner-update-task",
+							},
+						],
+					},
+					{
+						label: "Search",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/search",
+							},
+							{
+								label: "Microsoft Search",
+								slug: "nodes/data/microsoft/search/data-microsoft-graph-search",
+							},
+						],
+					},
+					{
+						label: "SharePoint",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/sharepoint",
+							},
+							{
+								label: "Copy Drive Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-copy-drive-item",
+							},
+							{
+								label: "Create List Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-create-list-item",
+							},
+							{
+								label: "Create SharePoint Folder",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-create-folder",
+							},
+							{
+								label: "Delete Drive Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-delete-drive-item",
+							},
+							{
+								label: "Delete List Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-delete-list-item",
+							},
+							{
+								label: "Download SharePoint File",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-download-file",
+							},
+							{
+								label: "Get Drive Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-drive-item",
+							},
+							{
+								label: "Get List Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-list-item",
+							},
+							{
+								label: "Get List Items",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-list-items",
+							},
+							{
+								label: "Get SharePoint Site",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-get-site",
+							},
+							{
+								label: "List Drive Items",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-drive-items",
+							},
+							{
+								label: "List SharePoint Drives",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-drives",
+							},
+							{
+								label: "List SharePoint Lists",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-list-lists",
+							},
+							{
+								label: "Move Drive Item",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-move-drive-item",
+							},
+							{
+								label: "Search Drive Items",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-search-drive-items",
+							},
+							{
+								label: "Search SharePoint Sites",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-search-sites",
+							},
+							{
+								label: "Update List Item Fields",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-update-list-item-fields",
+							},
+							{
+								label: "Upload SharePoint File",
+								slug: "nodes/data/microsoft/sharepoint/data-microsoft-sharepoint-upload-file",
+							},
+						],
+					},
+					{
+						label: "Teams",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/teams",
+							},
+							{
+								label: "Create Channel",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-create-channel",
+							},
+							{
+								label: "Create Team",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-create-team",
+							},
+							{
+								label: "Get Channel Messages",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-get-messages",
+							},
+							{
+								label: "List Joined Teams",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-list-joined",
+							},
+							{
+								label: "List Team Channels",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-list-channels",
+							},
+							{
+								label: "Send Channel Message",
+								slug: "nodes/data/microsoft/teams/data-microsoft-teams-send-message",
+							},
+						],
+					},
+					{
+						label: "To Do",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/data/microsoft/to-do",
+							},
+							{
+								label: "Complete Task",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-complete-task",
+							},
+							{
+								label: "Create Task",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-create-task",
+							},
+							{
+								label: "Create Task List",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-create-list",
+							},
+							{
+								label: "Delete Task",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-delete-task",
+							},
+							{
+								label: "List Task Lists",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-list-lists",
+							},
+							{
+								label: "List Tasks",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-list-tasks",
+							},
+							{
+								label: "Update Task",
+								slug: "nodes/data/microsoft/to-do/data-microsoft-todo-update-task",
+							},
+						],
+					},
+					{
+						label: "Graph Request",
+						slug: "nodes/data/microsoft/data-microsoft-graph-request",
+					},
+					{
+						label: "Microsoft Graph (OAuth)",
+						slug: "nodes/data/microsoft/data-microsoft-provider-oauth",
+					},
+					{
+						label: "Microsoft Graph (Token)",
+						slug: "nodes/data/microsoft/data-microsoft-provider-token",
+					},
+				],
+			},
+			{
+				label: "Notion",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/notion",
+					},
+					{
+						label: "Append Notion Block Children",
+						slug: "nodes/data/notion/data-notion-append-block-children",
+					},
+					{
+						label: "Create Notion Data Source",
+						slug: "nodes/data/notion/data-notion-create-data-source",
+					},
+					{
+						label: "Create Notion Page",
+						slug: "nodes/data/notion/data-notion-create-page",
+					},
+					{
+						label: "Delete Notion Block",
+						slug: "nodes/data/notion/data-notion-delete-block",
+					},
+					{
+						label: "Download Notion File",
+						slug: "nodes/data/notion/data-notion-download-file",
+					},
+					{
+						label: "Get Notion Data Source",
+						slug: "nodes/data/notion/data-notion-get-data-source",
+					},
+					{
+						label: "Get Notion Database",
+						slug: "nodes/data/notion/data-notion-get-database",
+					},
+					{
+						label: "Get Notion Page",
+						slug: "nodes/data/notion/data-notion-get-page",
+					},
+					{
+						label: "List Notion Block Children",
+						slug: "nodes/data/notion/data-notion-list-block-children",
+					},
+					{
+						label: "List Notion Databases",
+						slug: "nodes/data/notion/data-notion-list-databases",
+					},
+					{
+						label: "Notion (API Key)",
+						slug: "nodes/data/notion/data-notion-provider-api-key",
+					},
+					{
+						label: "Notion (OAuth)",
+						slug: "nodes/data/notion/data-notion-provider-oauth",
+					},
+					{
+						label: "Query Notion Data Source",
+						slug: "nodes/data/notion/data-notion-query-data-source",
+					},
+					{
+						label: "Query Notion Database",
+						slug: "nodes/data/notion/data-notion-query-database",
+					},
+					{
+						label: "Search Notion",
+						slug: "nodes/data/notion/data-notion-search",
+					},
+					{
+						label: "Update Notion Block",
+						slug: "nodes/data/notion/data-notion-update-block",
+					},
+					{
+						label: "Update Notion Data Source",
+						slug: "nodes/data/notion/data-notion-update-data-source",
+					},
+					{
+						label: "Update Notion Page",
+						slug: "nodes/data/notion/data-notion-update-page",
+					},
+					{
+						label: "Upload Notion File",
+						slug: "nodes/data/notion/data-notion-upload-file",
+					},
+				],
+			},
+			{
+				label: "Providers",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/providers",
+					},
+					{
+						label: "AWS Provider",
+						slug: "nodes/data/providers/data-aws-provider",
+					},
+					{
+						label: "Azure Provider",
+						slug: "nodes/data/providers/data-azure-provider",
+					},
+					{
+						label: "Cloudflare Provider",
+						slug: "nodes/data/providers/data-cloudflare-provider",
+					},
+					{
+						label: "GCP Provider",
+						slug: "nodes/data/providers/data-gcp-provider",
+					},
+				],
+			},
+			{
+				label: "QR",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/qr",
+					},
+					{
+						label: "Write Barcode",
+						slug: "nodes/data/qr/write-qrcode",
+					},
+				],
+			},
+			{
+				label: "TDMS",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data/tdms",
+					},
+					{
+						label: "TDMS Metadata",
+						slug: "nodes/data/tdms/tdms-metadata",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Data Studio",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/data-studio",
+			},
+			{
+				label: "Actions",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data-studio/actions",
+					},
+					{
+						label: "Ontology Action Input",
+						slug: "nodes/data-studio/actions/ontology-action-input",
+					},
+					{
+						label: "Prepare Ontology Action",
+						slug: "nodes/data-studio/actions/ontology-action-request",
+					},
+				],
+			},
+			{
+				label: "Objects",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data-studio/objects",
+					},
+					{
+						label: "Query Ontology Objects",
+						slug: "nodes/data-studio/objects/ontology-query-objects",
+					},
+				],
+			},
+			{
+				label: "Remote Actions",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data-studio/remote-actions",
+					},
+					{
+						label: "Invoke Remote Ontology Action",
+						slug: "nodes/data-studio/remote-actions/ontology-action-request-remote",
+					},
+				],
+			},
+			{
+				label: "Remote Objects",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/data-studio/remote-objects",
+					},
+					{
+						label: "Query Remote Ontology Children",
+						slug: "nodes/data-studio/remote-objects/ontology-query-remote-children",
+					},
+					{
+						label: "Query Remote Ontology Objects",
+						slug: "nodes/data-studio/remote-objects/ontology-query-remote-objects",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Diagnostics",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/diagnostics",
+			},
+			{
+				label: "Pick Codec Backend",
+				slug: "nodes/diagnostics/video-pick-codec-backend",
+			},
+			{
+				label: "Probe Codec Backends",
+				slug: "nodes/diagnostics/video-probe-codec-backends",
+			},
+			{
+				label: "Probe Platform Codec",
+				slug: "nodes/diagnostics/video-probe-platform-codec",
+			},
+		],
+	},
+	{
+		label: "Document",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/document",
+			},
+			{
+				label: "DOCX",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/document/docx",
+					},
+					{
+						label: "Add Hyperlink",
+						slug: "nodes/document/docx/docx-add-hyperlink",
+					},
+					{
+						label: "Add Image",
+						slug: "nodes/document/docx/docx-add-image",
+					},
+					{
+						label: "Add Page Break",
+						slug: "nodes/document/docx/docx-add-page-break",
+					},
+					{
+						label: "Add Paragraph",
+						slug: "nodes/document/docx/docx-add-paragraph",
+					},
+					{
+						label: "Add Table",
+						slug: "nodes/document/docx/docx-add-table",
+					},
+					{
+						label: "Add Table of Contents",
+						slug: "nodes/document/docx/docx-add-toc",
+					},
+					{
+						label: "Create Document",
+						slug: "nodes/document/docx/docx-create",
+					},
+					{
+						label: "Extract Text",
+						slug: "nodes/document/docx/docx-extract-text",
+					},
+					{
+						label: "Get Metadata",
+						slug: "nodes/document/docx/docx-get-metadata",
+					},
+					{
+						label: "List Placeholders",
+						slug: "nodes/document/docx/docx-list-placeholders",
+					},
+					{
+						label: "Merge DOCX",
+						slug: "nodes/document/docx/docx-merge",
+					},
+					{
+						label: "Remove Paragraph",
+						slug: "nodes/document/docx/docx-remove-paragraph",
+					},
+					{
+						label: "Replace Image in DOCX",
+						slug: "nodes/document/docx/docx-replace-image",
+					},
+					{
+						label: "Replace Table Row",
+						slug: "nodes/document/docx/docx-replace-table-row",
+					},
+					{
+						label: "Replace Text in DOCX",
+						slug: "nodes/document/docx/docx-replace-text",
+					},
+					{
+						label: "Set Header/Footer",
+						slug: "nodes/document/docx/docx-add-header-footer",
+					},
+					{
+						label: "Set Metadata",
+						slug: "nodes/document/docx/docx-set-metadata",
+					},
+				],
+			},
+			{
+				label: "PDF",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/document/pdf",
+					},
+					{
+						label: "Add Image Stamp",
+						slug: "nodes/document/pdf/pdf-add-image-stamp",
+					},
+					{
+						label: "Add Page Numbers",
+						slug: "nodes/document/pdf/pdf-add-page-numbers",
+					},
+					{
+						label: "Add Text Watermark",
+						slug: "nodes/document/pdf/pdf-add-watermark",
+					},
+					{
+						label: "Compress PDF",
+						slug: "nodes/document/pdf/pdf-compress",
+					},
+					{
+						label: "Create PDF from Markdown",
+						slug: "nodes/document/pdf/pdf-create-from-markdown",
+					},
+					{
+						label: "Decrypt PDF",
+						slug: "nodes/document/pdf/pdf-decrypt",
+					},
+					{
+						label: "Encrypt PDF",
+						slug: "nodes/document/pdf/pdf-encrypt",
+					},
+					{
+						label: "Extract Pages",
+						slug: "nodes/document/pdf/pdf-extract-pages",
+					},
+					{
+						label: "Extract Text",
+						slug: "nodes/document/pdf/pdf-extract-text",
+					},
+					{
+						label: "Fill PDF Form Field",
+						slug: "nodes/document/pdf/pdf-fill-form",
+					},
+					{
+						label: "Get Metadata",
+						slug: "nodes/document/pdf/pdf-get-metadata",
+					},
+					{
+						label: "List PDF Form Fields",
+						slug: "nodes/document/pdf/pdf-list-form-fields",
+					},
+					{
+						label: "Merge PDFs",
+						slug: "nodes/document/pdf/pdf-merge",
+					},
+					{
+						label: "Replace Image in PDF",
+						slug: "nodes/document/pdf/pdf-replace-image",
+					},
+					{
+						label: "Replace Text in PDF",
+						slug: "nodes/document/pdf/pdf-replace-text",
+					},
+					{
+						label: "Rotate Pages",
+						slug: "nodes/document/pdf/pdf-rotate-pages",
+					},
+					{
+						label: "Set Metadata",
+						slug: "nodes/document/pdf/pdf-set-metadata",
+					},
+					{
+						label: "Split PDF",
+						slug: "nodes/document/pdf/pdf-split",
+					},
+				],
+			},
+			{
+				label: "PPTX",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/document/pptx",
+					},
+					{
+						label: "Add Chart",
+						slug: "nodes/document/pptx/pptx-add-chart",
+					},
+					{
+						label: "Add Image to Slide",
+						slug: "nodes/document/pptx/pptx-add-image-to-slide",
+					},
+					{
+						label: "Add Shape",
+						slug: "nodes/document/pptx/pptx-add-shape",
+					},
+					{
+						label: "Add Slide",
+						slug: "nodes/document/pptx/pptx-add-slide",
+					},
+					{
+						label: "Add Table to Slide",
+						slug: "nodes/document/pptx/pptx-add-table-to-slide",
+					},
+					{
+						label: "Add Text Box",
+						slug: "nodes/document/pptx/pptx-add-text-box",
+					},
+					{
+						label: "Create PPTX",
+						slug: "nodes/document/pptx/pptx-create",
+					},
+					{
+						label: "Delete Slide",
+						slug: "nodes/document/pptx/pptx-delete-slide",
+					},
+					{
+						label: "Duplicate Slide",
+						slug: "nodes/document/pptx/pptx-duplicate-slide",
+					},
+					{
+						label: "Extract Text",
+						slug: "nodes/document/pptx/pptx-extract-text",
+					},
+					{
+						label: "Get Metadata",
+						slug: "nodes/document/pptx/pptx-get-metadata",
+					},
+					{
+						label: "List Placeholders",
+						slug: "nodes/document/pptx/pptx-list-placeholders",
+					},
+					{
+						label: "Merge Presentations",
+						slug: "nodes/document/pptx/pptx-merge",
+					},
+					{
+						label: "Reorder Slides",
+						slug: "nodes/document/pptx/pptx-reorder-slides",
+					},
+					{
+						label: "Replace Image in PPTX",
+						slug: "nodes/document/pptx/pptx-replace-image",
+					},
+					{
+						label: "Replace Table Data",
+						slug: "nodes/document/pptx/pptx-replace-table-data",
+					},
+					{
+						label: "Replace Text in PPTX",
+						slug: "nodes/document/pptx/pptx-replace-text",
+					},
+					{
+						label: "Set Metadata",
+						slug: "nodes/document/pptx/pptx-set-metadata",
+					},
+					{
+						label: "Set Speaker Notes",
+						slug: "nodes/document/pptx/pptx-add-notes",
+					},
+					{
+						label: "Slide Count",
+						slug: "nodes/document/pptx/pptx-slide-count",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Email",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/email",
+			},
+			{
+				label: "Access",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/email/access",
+					},
+					{
+						label: "Attachment → Fields",
+						slug: "nodes/email/access/attachment-fields",
+					},
+					{
+						label: "Email → Attachments",
+						slug: "nodes/email/access/email-get-attachments",
+					},
+					{
+						label: "Email → Content",
+						slug: "nodes/email/access/email-get-content",
+					},
+					{
+						label: "Email → Headers",
+						slug: "nodes/email/access/email-get-headers",
+					},
+					{
+						label: "Mail → Reference",
+						slug: "nodes/email/access/mail-imap-inbox-mail-to-reference",
+					},
+					{
+						label: "MailAddress → Fields",
+						slug: "nodes/email/access/mail-address-fields",
+					},
+				],
+			},
+			{
+				label: "IMAP",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/email/imap",
+					},
+					{
+						label: "Calendar",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/email/imap/calendar",
+							},
+							{
+								label: "Create Calendar Event",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-create-event",
+							},
+							{
+								label: "Delete Calendar Event",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-delete-event",
+							},
+							{
+								label: "Get Calendar Event",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-get-event",
+							},
+							{
+								label: "IMAP List Calendars",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-list",
+							},
+							{
+								label: "List Calendar Events",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-list-events",
+							},
+							{
+								label: "Subscribe to Calendar URL",
+								slug: "nodes/email/imap/calendar/mail-imap-calendar-subscribe",
+							},
+						],
+					},
+					{
+						label: "Copy Mail to Mailbox",
+						slug: "nodes/email/imap/email-imap-copy-message",
+					},
+					{
+						label: "Create Draft",
+						slug: "nodes/email/imap/email-imap-create-draft",
+					},
+					{
+						label: "Delete Mail",
+						slug: "nodes/email/imap/email-imap-delete-message",
+					},
+					{
+						label: "Fetch Mail",
+						slug: "nodes/email/imap/email-imap-inbox-fetch-mail",
+					},
+					{
+						label: "IMAP Connect",
+						slug: "nodes/email/imap/email-imap-connect",
+					},
+					{
+						label: "IMAP Create Mailbox (If Missing)",
+						slug: "nodes/email/imap/mail-imap-create-mailbox",
+					},
+					{
+						label: "IMAP Inbox",
+						slug: "nodes/email/imap/mail-imap-inbox",
+					},
+					{
+						label: "IMAP List Inboxes",
+						slug: "nodes/email/imap/mail-imap-list-inboxes",
+					},
+					{
+						label: "List Mails",
+						slug: "nodes/email/imap/mail-imap-list",
+					},
+					{
+						label: "Mark Mail as Seen",
+						slug: "nodes/email/imap/email-imap-mark-seen",
+					},
+					{
+						label: "Move Mail to Mailbox",
+						slug: "nodes/email/imap/email-imap-move-message",
+					},
+				],
+			},
+			{
+				label: "SMTP",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/email/smtp",
+					},
+					{
+						label: "SMTP Connect",
+						slug: "nodes/email/smtp/email-smtp-connect",
+					},
+					{
+						label: "Send Mail",
+						slug: "nodes/email/smtp/email-smtp-send",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Events",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/events",
+			},
+			{
+				label: "Chat",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/events/chat",
+					},
+					{
+						label: "Attachments",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/events/chat/attachments",
+							},
+							{
+								label: "From Path",
+								slug: "nodes/events/chat/attachments/events-chat-attachment-from-path",
+							},
+							{
+								label: "From Signed URL",
+								slug: "nodes/events/chat/attachments/events-chat-attachment-from-signed-url",
+							},
+							{
+								label: "To Signed URL",
+								slug: "nodes/events/chat/attachments/events-chat-attachment-to-signed-url",
+							},
+						],
+					},
+					{
+						label: "Interaction",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/events/chat/interaction",
+							},
+							{
+								label: "Chat Form",
+								slug: "nodes/events/chat/interaction/interaction-form",
+							},
+							{
+								label: "Multiple Choice",
+								slug: "nodes/events/chat/interaction/interaction-multiple-choice",
+							},
+							{
+								label: "Single Choice",
+								slug: "nodes/events/chat/interaction/interaction-single-choice",
+							},
+						],
+					},
+					{
+						label: "Extract Attachments",
+						slug: "nodes/events/chat/ai-gen-llm-history-extract-attachments",
+					},
+					{
+						label: "Push Attachment",
+						slug: "nodes/events/chat/events-chat-push-attachment",
+					},
+					{
+						label: "Push Attachments",
+						slug: "nodes/events/chat/events-chat-push-attachments",
+					},
+					{
+						label: "Push Chunk",
+						slug: "nodes/events/chat/events-chat-push-response-chunk",
+					},
+					{
+						label: "Push Global Session",
+						slug: "nodes/events/chat/events-chat-push-global-session",
+					},
+					{
+						label: "Push Local Session",
+						slug: "nodes/events/chat/events-chat-push-local-session",
+					},
+					{
+						label: "Push Reasoning",
+						slug: "nodes/events/chat/events-chat-push-reasoning",
+					},
+					{
+						label: "Push Response",
+						slug: "nodes/events/chat/events-chat-push-response",
+					},
+					{
+						label: "Push Stat",
+						slug: "nodes/events/chat/events-chat-push-stat",
+					},
+					{
+						label: "Push Stats",
+						slug: "nodes/events/chat/events-chat-push-stats",
+					},
+					{
+						label: "Push Step",
+						slug: "nodes/events/chat/events-chat-push-step",
+					},
+					{
+						label: "Push Text to Step",
+						slug: "nodes/events/chat/events-chat-push-text-to-step",
+					},
+					{
+						label: "Push Widget",
+						slug: "nodes/events/chat/events-chat-push-widget",
+					},
+					{
+						label: "Push Widgets",
+						slug: "nodes/events/chat/events-chat-push-widgets",
+					},
+					{
+						label: "Remove Step",
+						slug: "nodes/events/chat/events-chat-remove-step",
+					},
+				],
+			},
+			{
+				label: "Generic",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/events/generic",
+					},
+					{
+						label: "Return Generic Result",
+						slug: "nodes/events/generic/events-generic-return-result",
+					},
+				],
+			},
+			{
+				label: "Remote",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/events/remote",
+					},
+					{
+						label: "Call Remote API",
+						slug: "nodes/events/remote/call-remote-api",
+					},
+					{
+						label: "Call Remote Chat",
+						slug: "nodes/events/remote/call-remote-chat",
+					},
+					{
+						label: "Call Remote Event",
+						slug: "nodes/events/remote/call-remote-event",
+					},
+				],
+			},
+			{
+				label: "Widget",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/events/widget",
+					},
+					{
+						label: "Extract Action Context Field",
+						slug: "nodes/events/widget/events-extract-action-context",
+					},
+					{
+						label: "Extract Input Value",
+						slug: "nodes/events/widget/events-extract-input-value",
+					},
+				],
+			},
+			{
+				label: "Chat Event",
+				slug: "nodes/events/events-chat",
+			},
+			{
+				label: "Generic Event",
+				slug: "nodes/events/events-generic",
+			},
+			{
+				label: "Simple Event",
+				slug: "nodes/events/events-simple",
+			},
+			{
+				label: "Widget Action Event",
+				slug: "nodes/events/events-widget-action",
+			},
+		],
+	},
+	{
+		label: "Image",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/image",
+			},
+			{
+				label: "Annotate",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/annotate",
+					},
+					{
+						label: "Draw Boxes",
+						slug: "nodes/image/annotate/draw-boxes",
+					},
+					{
+						label: "Make Box",
+						slug: "nodes/image/annotate/make-boxe",
+					},
+				],
+			},
+			{
+				label: "Content",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/content",
+					},
+					{
+						label: "Read Image",
+						slug: "nodes/image/content/read-image",
+					},
+					{
+						label: "Read Image (URL)",
+						slug: "nodes/image/content/read-image-url",
+					},
+					{
+						label: "Read QR-/Barcode",
+						slug: "nodes/image/content/read-barcodes",
+					},
+					{
+						label: "Write Image",
+						slug: "nodes/image/content/write-image",
+					},
+				],
+			},
+			{
+				label: "Metadata",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/metadata",
+					},
+					{
+						label: "Get Dimensions",
+						slug: "nodes/image/metadata/get-dimensions",
+					},
+				],
+			},
+			{
+				label: "Overlay",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/overlay",
+					},
+					{
+						label: "Image Overlay",
+						slug: "nodes/image/overlay/image-overlay",
+					},
+					{
+						label: "Text Overlay",
+						slug: "nodes/image/overlay/text-overlay",
+					},
+				],
+			},
+			{
+				label: "PDF",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/pdf",
+					},
+					{
+						label: "PDF Page Count",
+						slug: "nodes/image/pdf/pdf-page-count",
+					},
+					{
+						label: "PDF Page To Image",
+						slug: "nodes/image/pdf/pdf-page-to-image",
+					},
+					{
+						label: "PDF To Images",
+						slug: "nodes/image/pdf/pdf-to-images",
+					},
+				],
+			},
+			{
+				label: "Transform",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/image/transform",
+					},
+					{
+						label: "Color Convert",
+						slug: "nodes/image/transform/convert-image",
+					},
+					{
+						label: "Contrast",
+						slug: "nodes/image/transform/contrast-image",
+					},
+					{
+						label: "Crop Image",
+						slug: "nodes/image/transform/crop-image",
+					},
+					{
+						label: "Resize Image",
+						slug: "nodes/image/transform/resize-image",
+					},
+				],
+			},
+			{
+				label: "Convert Image Format",
+				slug: "nodes/image/video-convert-image-format",
+			},
+			{
+				label: "Transform Image",
+				slug: "nodes/image/video-transform-image",
+			},
+		],
+	},
+	{
+		label: "Logging",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/logging",
+			},
+			{
+				label: "Log Error",
+				slug: "nodes/logging/log-error",
+			},
+			{
+				label: "Log Warning",
+				slug: "nodes/logging/log-warning",
+			},
+			{
+				label: "Print Info",
+				slug: "nodes/logging/log-info",
+			},
+			{
+				label: "Progress Done",
+				slug: "nodes/logging/log-progress-done",
+			},
+			{
+				label: "Show Progress",
+				slug: "nodes/logging/log-progress",
+			},
+		],
+	},
+	{
+		label: "Math",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/math",
+			},
+			{
+				label: "Float",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/math/float",
+					},
+					{
+						label: "Comparison",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/math/float/comparison",
+							},
+							{
+								label: "!=",
+								slug: "nodes/math/float/comparison/float-unequal",
+							},
+							{
+								label: "<",
+								slug: "nodes/math/float/comparison/float-less-than",
+							},
+							{
+								label: "<=",
+								slug: "nodes/math/float/comparison/float-less-than-or-equal",
+							},
+							{
+								label: "==",
+								slug: "nodes/math/float/comparison/float-equal",
+							},
+							{
+								label: ">",
+								slug: "nodes/math/float/comparison/float-greater-than",
+							},
+							{
+								label: ">=",
+								slug: "nodes/math/float/comparison/float-greater-than-or-equal",
+							},
+						],
+					},
+					{
+						label: "Random",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/math/float/random",
+							},
+							{
+								label: "Random Float in Range",
+								slug: "nodes/math/float/random/float-random-in-range",
+							},
+						],
+					},
+					{
+						label: "*",
+						slug: "nodes/math/float/float-multiply",
+					},
+					{
+						label: "+",
+						slug: "nodes/math/float/float-add",
+					},
+					{
+						label: "-",
+						slug: "nodes/math/float/float-subtract",
+					},
+					{
+						label: "/",
+						slug: "nodes/math/float/float-divide",
+					},
+					{
+						label: "Abs",
+						slug: "nodes/math/float/float-abs",
+					},
+					{
+						label: "Ceil",
+						slug: "nodes/math/float/float-ceil",
+					},
+					{
+						label: "Clamp",
+						slug: "nodes/math/float/float-clamp",
+					},
+					{
+						label: "Floor",
+						slug: "nodes/math/float/float-floor",
+					},
+					{
+						label: "Max",
+						slug: "nodes/math/float/float-max",
+					},
+					{
+						label: "Min",
+						slug: "nodes/math/float/float-min",
+					},
+					{
+						label: "Power",
+						slug: "nodes/math/float/float-power",
+					},
+					{
+						label: "Root",
+						slug: "nodes/math/float/float-root",
+					},
+					{
+						label: "Round",
+						slug: "nodes/math/float/float-round",
+					},
+				],
+			},
+			{
+				label: "Int",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/math/int",
+					},
+					{
+						label: "Random",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/math/int/random",
+							},
+							{
+								label: "Random Integer in Range",
+								slug: "nodes/math/int/random/int-random-in-range",
+							},
+						],
+					},
+					{
+						label: "!=",
+						slug: "nodes/math/int/int-unequal",
+					},
+					{
+						label: "%",
+						slug: "nodes/math/int/int-modulo",
+					},
+					{
+						label: "*",
+						slug: "nodes/math/int/int-multiply",
+					},
+					{
+						label: "+",
+						slug: "nodes/math/int/int-add",
+					},
+					{
+						label: "-",
+						slug: "nodes/math/int/int-subtract",
+					},
+					{
+						label: "/",
+						slug: "nodes/math/int/int-divide",
+					},
+					{
+						label: "<",
+						slug: "nodes/math/int/int-less-than",
+					},
+					{
+						label: "<=",
+						slug: "nodes/math/int/int-less-than-or-equal",
+					},
+					{
+						label: "==",
+						slug: "nodes/math/int/int-equal",
+					},
+					{
+						label: ">",
+						slug: "nodes/math/int/int-greater-than",
+					},
+					{
+						label: ">=",
+						slug: "nodes/math/int/int-greater-than-or-equal",
+					},
+					{
+						label: "Absolute",
+						slug: "nodes/math/int/int-abs",
+					},
+					{
+						label: "Clamp",
+						slug: "nodes/math/int/int-clamp",
+					},
+					{
+						label: "Max",
+						slug: "nodes/math/int/int-max",
+					},
+					{
+						label: "Min",
+						slug: "nodes/math/int/int-min",
+					},
+					{
+						label: "Power",
+						slug: "nodes/math/int/int-power",
+					},
+					{
+						label: "Root",
+						slug: "nodes/math/int/int-root",
+					},
+				],
+			},
+			{
+				label: "Evaluate Expression",
+				slug: "nodes/math/eval",
+			},
+		],
+	},
+	{
+		label: "Notifications",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/notifications",
+			},
+			{
+				label: "Notify Project User",
+				slug: "nodes/notifications/notify-project-user",
+			},
+			{
+				label: "Notify User",
+				slug: "nodes/notifications/notify-user",
+			},
+		],
+	},
+	{
+		label: "Processing",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/processing",
+			},
+			{
+				label: "Privacy",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/processing/privacy",
+					},
+					{
+						label: "PII Detection Options",
+						slug: "nodes/processing/privacy/processing-pii-detection-options",
+					},
+					{
+						label: "PII Mask (Regex)",
+						slug: "nodes/processing/privacy/processing-pii-mask-regex",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Streaming",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/streaming",
+			},
+			{
+				label: "Package HLS VOD",
+				slug: "nodes/streaming/video-package-hls-vod",
+			},
+		],
+	},
+	{
+		label: "Structs",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/structs",
+			},
+			{
+				label: "Fields",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/structs/fields",
+					},
+					{
+						label: "Get Field",
+						slug: "nodes/structs/fields/struct-get",
+					},
+					{
+						label: "Get Fields",
+						slug: "nodes/structs/fields/struct-get-fields",
+					},
+					{
+						label: "Has Field",
+						slug: "nodes/structs/fields/struct-has",
+					},
+					{
+						label: "Remove Field",
+						slug: "nodes/structs/fields/struct-remove",
+					},
+					{
+						label: "Set Field",
+						slug: "nodes/structs/fields/struct-set",
+					},
+				],
+			},
+			{
+				label: "Break Struct",
+				slug: "nodes/structs/struct-break",
+			},
+			{
+				label: "Make Struct",
+				slug: "nodes/structs/struct-make",
+			},
+			{
+				label: "Make Struct (Schema)",
+				slug: "nodes/structs/struct-make-from-schema",
+			},
+		],
+	},
+	{
+		label: "Subtitles",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/subtitles",
+			},
+			{
+				label: "Add Subtitle Track",
+				slug: "nodes/subtitles/video-add-subtitle-track",
+			},
+			{
+				label: "Burn Subtitles Into Video",
+				slug: "nodes/subtitles/video-burn-subtitles",
+			},
+			{
+				label: "Extract Subtitle Track",
+				slug: "nodes/subtitles/video-extract-subtitle-track",
+			},
+			{
+				label: "Parse Subtitles",
+				slug: "nodes/subtitles/video-parse-subtitles",
+			},
+			{
+				label: "Shift Subtitle File",
+				slug: "nodes/subtitles/video-shift-subtitle-file",
+			},
+			{
+				label: "Write Subtitles",
+				slug: "nodes/subtitles/video-write-subtitles",
+			},
+		],
+	},
+	{
+		label: "UI",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/ui",
+			},
+			{
+				label: "Component",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/component",
+					},
+					{
+						label: "Create Component",
+						slug: "nodes/ui/component/a2ui-create-component",
+					},
+				],
+			},
+			{
+				label: "Container",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/container",
+					},
+					{
+						label: "Get Widget Element",
+						slug: "nodes/ui/container/a2ui-widget-get-element",
+					},
+					{
+						label: "Instantiate Widget",
+						slug: "nodes/ui/container/a2ui-instantiate-widget",
+					},
+					{
+						label: "Push To Container",
+						slug: "nodes/ui/container/a2ui-push-to-container",
+					},
+					{
+						label: "Query Widget",
+						slug: "nodes/ui/container/a2ui-widget-query",
+					},
+					{
+						label: "Remove From Container",
+						slug: "nodes/ui/container/a2ui-remove-from-container",
+					},
+					{
+						label: "Set Widget Text",
+						slug: "nodes/ui/container/a2ui-widget-set-text",
+					},
+					{
+						label: "Update Widget Inputs",
+						slug: "nodes/ui/container/a2ui-widget-update-inputs",
+					},
+				],
+			},
+			{
+				label: "Data",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/data",
+					},
+					{
+						label: "Data Update",
+						slug: "nodes/ui/data/a2ui-data-update",
+					},
+					{
+						label: "Request Elements",
+						slug: "nodes/ui/data/a2ui-request-elements",
+					},
+					{
+						label: "Upsert Element",
+						slug: "nodes/ui/data/a2ui-upsert-element",
+					},
+				],
+			},
+			{
+				label: "Elements",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/elements",
+					},
+					{
+						label: "Button",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/button",
+							},
+							{
+								label: "Get Button Disabled",
+								slug: "nodes/ui/elements/button/a2ui-get-button-disabled",
+							},
+							{
+								label: "Get Button Label",
+								slug: "nodes/ui/elements/button/a2ui-get-button-label",
+							},
+							{
+								label: "Get Button Loading",
+								slug: "nodes/ui/elements/button/a2ui-get-button-loading",
+							},
+							{
+								label: "Set Button Label",
+								slug: "nodes/ui/elements/button/a2ui-set-button-label",
+							},
+						],
+					},
+					{
+						label: "Calendar",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/calendar",
+							},
+							{
+								label: "Update Calendar",
+								slug: "nodes/ui/elements/calendar/a2ui-update-calendar",
+							},
+						],
+					},
+					{
+						label: "Charts",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/charts",
+							},
+							{
+								label: "Agent",
+								collapsed: true,
+								items: [
+									{
+										label: "Overview",
+										slug: "nodes/ui/elements/charts/agent",
+									},
+									{
+										label: "Chart Data Agent",
+										slug: "nodes/ui/elements/charts/agent/a2ui-chart-data-agent",
+									},
+								],
+							},
+							{
+								label: "Push Data to Chart",
+								slug: "nodes/ui/elements/charts/a2ui-push-csv-to-chart",
+							},
+							{
+								label: "Set Chart Layout",
+								slug: "nodes/ui/elements/charts/a2ui-set-chart-layout",
+							},
+							{
+								label: "Set Chart Style",
+								slug: "nodes/ui/elements/charts/a2ui-set-chart-style",
+							},
+							{
+								label: "Set Nivo Chart Config",
+								slug: "nodes/ui/elements/charts/a2ui-set-nivo-config",
+							},
+						],
+					},
+					{
+						label: "Checkbox",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/checkbox",
+							},
+							{
+								label: "Update Toggle",
+								slug: "nodes/ui/elements/checkbox/a2ui-update-toggle",
+							},
+						],
+					},
+					{
+						label: "Containers",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/containers",
+							},
+							{
+								label: "Clear Children",
+								slug: "nodes/ui/elements/containers/a2ui-clear-children",
+							},
+							{
+								label: "Get Child At Index",
+								slug: "nodes/ui/elements/containers/a2ui-get-child-at-index",
+							},
+							{
+								label: "Insert Child At Index",
+								slug: "nodes/ui/elements/containers/a2ui-push-child-at-index",
+							},
+							{
+								label: "Push Child",
+								slug: "nodes/ui/elements/containers/a2ui-push-child",
+							},
+							{
+								label: "Remove Child At Index",
+								slug: "nodes/ui/elements/containers/a2ui-remove-child-at-index",
+							},
+						],
+					},
+					{
+						label: "Display",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/display",
+							},
+							{
+								label: "Set Badge Content",
+								slug: "nodes/ui/elements/display/a2ui-set-badge-content",
+							},
+							{
+								label: "Set Diff Content",
+								slug: "nodes/ui/elements/display/a2ui-set-diff-content",
+							},
+							{
+								label: "Set Icon",
+								slug: "nodes/ui/elements/display/a2ui-set-icon",
+							},
+							{
+								label: "Set Markdown Content",
+								slug: "nodes/ui/elements/display/a2ui-set-markdown-content",
+							},
+							{
+								label: "Set Progress",
+								slug: "nodes/ui/elements/display/a2ui-set-progress",
+							},
+						],
+					},
+					{
+						label: "Files",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/files",
+							},
+							{
+								label: "Get File Input Files",
+								slug: "nodes/ui/elements/files/a2ui-get-file-input-files",
+							},
+						],
+					},
+					{
+						label: "Game",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/game",
+							},
+							{
+								label: "Update Model3D",
+								slug: "nodes/ui/elements/game/a2ui-update-model3d",
+							},
+							{
+								label: "Update Scene3D",
+								slug: "nodes/ui/elements/game/a2ui-update-scene3d",
+							},
+							{
+								label: "Update Sprite",
+								slug: "nodes/ui/elements/game/a2ui-update-sprite",
+							},
+						],
+					},
+					{
+						label: "Gantt",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/gantt",
+							},
+							{
+								label: "Update Gantt",
+								slug: "nodes/ui/elements/gantt/a2ui-update-gantt",
+							},
+						],
+					},
+					{
+						label: "GeoMap",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/geomap",
+							},
+							{
+								label: "Update GeoMap",
+								slug: "nodes/ui/elements/geomap/a2ui-update-geomap",
+							},
+						],
+					},
+					{
+						label: "Get",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/get",
+							},
+							{
+								label: "Get Iframe Src",
+								slug: "nodes/ui/elements/get/a2ui-get-iframe-src",
+							},
+							{
+								label: "Get Tooltip Content",
+								slug: "nodes/ui/elements/get/a2ui-get-tooltip-content",
+							},
+						],
+					},
+					{
+						label: "Graph",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/graph",
+							},
+							{
+								label: "Update Graph",
+								slug: "nodes/ui/elements/graph/a2ui-update-graph",
+							},
+						],
+					},
+					{
+						label: "Hotspot",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/hotspot",
+							},
+							{
+								label: "Update Hotspot",
+								slug: "nodes/ui/elements/hotspot/a2ui-update-hotspot",
+							},
+						],
+					},
+					{
+						label: "Input",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/input",
+							},
+							{
+								label: "Clear Input",
+								slug: "nodes/ui/elements/input/a2ui-clear-input",
+							},
+							{
+								label: "Get Input Placeholder",
+								slug: "nodes/ui/elements/input/a2ui-get-input-placeholder",
+							},
+							{
+								label: "Set Input Placeholder",
+								slug: "nodes/ui/elements/input/a2ui-set-input-placeholder",
+							},
+							{
+								label: "Set TextField Error",
+								slug: "nodes/ui/elements/input/a2ui-set-textfield-error",
+							},
+						],
+					},
+					{
+						label: "Labeler",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/labeler",
+							},
+							{
+								label: "Update Labeler",
+								slug: "nodes/ui/elements/labeler/a2ui-update-labeler",
+							},
+						],
+					},
+					{
+						label: "Media",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/media",
+							},
+							{
+								label: "Set Iframe HTML",
+								slug: "nodes/ui/elements/media/a2ui-set-iframe-srcdoc",
+							},
+							{
+								label: "Set Iframe Src",
+								slug: "nodes/ui/elements/media/a2ui-set-iframe-src",
+							},
+							{
+								label: "Set Media Source",
+								slug: "nodes/ui/elements/media/a2ui-set-media-source",
+							},
+						],
+					},
+					{
+						label: "Overlay",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/overlay",
+							},
+							{
+								label: "Set Bounding Boxes",
+								slug: "nodes/ui/elements/overlay/a2ui-update-overlay",
+							},
+						],
+					},
+					{
+						label: "Query",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/query",
+							},
+							{
+								label: "Query Children",
+								slug: "nodes/ui/elements/query/a2ui-query-children",
+							},
+							{
+								label: "Query Elements by ID",
+								slug: "nodes/ui/elements/query/a2ui-query-elements-by-id",
+							},
+							{
+								label: "Query Elements by Type",
+								slug: "nodes/ui/elements/query/a2ui-query-elements-by-type",
+							},
+							{
+								label: "Query Parent",
+								slug: "nodes/ui/elements/query/a2ui-query-parent",
+							},
+						],
+					},
+					{
+						label: "Select",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/select",
+							},
+							{
+								label: "Get Select Value",
+								slug: "nodes/ui/elements/select/a2ui-get-select-value",
+							},
+							{
+								label: "Set Select Options",
+								slug: "nodes/ui/elements/select/a2ui-set-select-options",
+							},
+							{
+								label: "Set Select Value",
+								slug: "nodes/ui/elements/select/a2ui-set-select-value",
+							},
+						],
+					},
+					{
+						label: "Set",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/set",
+							},
+							{
+								label: "Set Tooltip Content",
+								slug: "nodes/ui/elements/set/a2ui-set-tooltip-content",
+							},
+						],
+					},
+					{
+						label: "Slider",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/slider",
+							},
+							{
+								label: "Set Slider Value",
+								slug: "nodes/ui/elements/slider/a2ui-set-slider-value",
+							},
+						],
+					},
+					{
+						label: "Table",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/ui/elements/table",
+							},
+							{
+								label: "Push CSV to Table",
+								slug: "nodes/ui/elements/table/a2ui-write-csv-to-table",
+							},
+							{
+								label: "Update Table",
+								slug: "nodes/ui/elements/table/a2ui-update-table",
+							},
+						],
+					},
+					{
+						label: "Clone Element",
+						slug: "nodes/ui/elements/a2ui-clone-element",
+					},
+					{
+						label: "Create Element",
+						slug: "nodes/ui/elements/a2ui-create-element",
+					},
+					{
+						label: "Get Element",
+						slug: "nodes/ui/elements/a2ui-get-element",
+					},
+					{
+						label: "Get Element Text",
+						slug: "nodes/ui/elements/a2ui-get-element-text",
+					},
+					{
+						label: "Get Element Value",
+						slug: "nodes/ui/elements/a2ui-get-element-value",
+					},
+					{
+						label: "Remove Element",
+						slug: "nodes/ui/elements/a2ui-remove-element",
+					},
+					{
+						label: "Set Element Action",
+						slug: "nodes/ui/elements/a2ui-set-element-action",
+					},
+					{
+						label: "Set Element Disabled",
+						slug: "nodes/ui/elements/a2ui-set-element-disabled",
+					},
+					{
+						label: "Set Element Loading",
+						slug: "nodes/ui/elements/a2ui-set-element-loading",
+					},
+					{
+						label: "Set Element Style",
+						slug: "nodes/ui/elements/a2ui-set-element-style",
+					},
+					{
+						label: "Set Element Text",
+						slug: "nodes/ui/elements/a2ui-set-element-text",
+					},
+					{
+						label: "Set Element Value",
+						slug: "nodes/ui/elements/a2ui-set-element-value",
+					},
+					{
+						label: "Set Element Visibility",
+						slug: "nodes/ui/elements/a2ui-set-element-visibility",
+					},
+				],
+			},
+			{
+				label: "Navigation",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/navigation",
+					},
+					{
+						label: "Close Dialog",
+						slug: "nodes/ui/navigation/a2ui-close-dialog",
+					},
+					{
+						label: "Get Current Route",
+						slug: "nodes/ui/navigation/a2ui-get-current-route",
+					},
+					{
+						label: "Get Query Params",
+						slug: "nodes/ui/navigation/a2ui-get-query-params",
+					},
+					{
+						label: "Get Route Params",
+						slug: "nodes/ui/navigation/a2ui-get-route-params",
+					},
+					{
+						label: "Navigate To",
+						slug: "nodes/ui/navigation/a2ui-navigate-to",
+					},
+					{
+						label: "Open Dialog",
+						slug: "nodes/ui/navigation/a2ui-open-dialog",
+					},
+					{
+						label: "Set Query Param",
+						slug: "nodes/ui/navigation/a2ui-set-query-param",
+					},
+					{
+						label: "URL Decode",
+						slug: "nodes/ui/navigation/a2ui-url-decode",
+					},
+					{
+						label: "URL Encode",
+						slug: "nodes/ui/navigation/a2ui-url-encode",
+					},
+				],
+			},
+			{
+				label: "State",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/state",
+					},
+					{
+						label: "Get Global State",
+						slug: "nodes/ui/state/a2ui-get-global-state",
+					},
+					{
+						label: "Get Page State",
+						slug: "nodes/ui/state/a2ui-get-page-state",
+					},
+					{
+						label: "Set Global State",
+						slug: "nodes/ui/state/a2ui-set-global-state",
+					},
+					{
+						label: "Set Page State",
+						slug: "nodes/ui/state/a2ui-set-page-state",
+					},
+				],
+			},
+			{
+				label: "Surface",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/ui/surface",
+					},
+					{
+						label: "Begin Rendering",
+						slug: "nodes/ui/surface/a2ui-begin-rendering",
+					},
+					{
+						label: "Create Surface",
+						slug: "nodes/ui/surface/a2ui-create-surface",
+					},
+					{
+						label: "Delete Surface",
+						slug: "nodes/ui/surface/a2ui-delete-surface",
+					},
+					{
+						label: "Set Surface Custom CSS",
+						slug: "nodes/ui/surface/a2ui-set-surface-custom-css",
+					},
+					{
+						label: "Show Screen",
+						slug: "nodes/ui/surface/a2ui-show-screen",
+					},
+					{
+						label: "Surface Update",
+						slug: "nodes/ui/surface/a2ui-surface-update",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Utils",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/utils",
+			},
+			{
+				label: "Array",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/array",
+					},
+					{
+						label: "Batch",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/array/batch",
+							},
+							{
+								label: "Batch Push",
+								slug: "nodes/utils/array/batch/array-batch-push",
+							},
+							{
+								label: "Batch Remove",
+								slug: "nodes/utils/array/batch/array-batch-remove",
+							},
+							{
+								label: "Batch Set",
+								slug: "nodes/utils/array/batch/array-batch-set",
+							},
+						],
+					},
+					{
+						label: "By Reference",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/array/by-reference",
+							},
+							{
+								label: "Clear (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-clear-ref",
+							},
+							{
+								label: "Extend (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-extend-ref",
+							},
+							{
+								label: "Pop (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-pop-ref",
+							},
+							{
+								label: "Push (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-push-ref",
+							},
+							{
+								label: "Remove Index (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-remove-index-ref",
+							},
+							{
+								label: "Set Index (By Ref)",
+								slug: "nodes/utils/array/by-reference/array-set-index-ref",
+							},
+						],
+					},
+					{
+						label: "Array Length",
+						slug: "nodes/utils/array/array-length",
+					},
+					{
+						label: "Clear Array",
+						slug: "nodes/utils/array/array-clear",
+					},
+					{
+						label: "Construct Array",
+						slug: "nodes/utils/array/construct-array",
+					},
+					{
+						label: "Extend",
+						slug: "nodes/utils/array/array-extend",
+					},
+					{
+						label: "Filter Array Field",
+						slug: "nodes/utils/array/array-filter-field",
+					},
+					{
+						label: "Filter Array Fields",
+						slug: "nodes/utils/array/array-filter-fields",
+					},
+					{
+						label: "Find Item",
+						slug: "nodes/utils/array/array-find-item",
+					},
+					{
+						label: "Get Element",
+						slug: "nodes/utils/array/array-get",
+					},
+					{
+						label: "Includes",
+						slug: "nodes/utils/array/array-includes",
+					},
+					{
+						label: "Make Array",
+						slug: "nodes/utils/array/make-array",
+					},
+					{
+						label: "Pop",
+						slug: "nodes/utils/array/array-pop",
+					},
+					{
+						label: "Push",
+						slug: "nodes/utils/array/array-push",
+					},
+					{
+						label: "Remove Index",
+						slug: "nodes/utils/array/array-remove-index",
+					},
+					{
+						label: "Set Index",
+						slug: "nodes/utils/array/array-set-index",
+					},
+					{
+						label: "Shuffle",
+						slug: "nodes/utils/array/array-shuffle",
+					},
+				],
+			},
+			{
+				label: "Bool",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/bool",
+					},
+					{
+						label: "!",
+						slug: "nodes/utils/bool/bool-not",
+					},
+					{
+						label: "==",
+						slug: "nodes/utils/bool/bool-equal",
+					},
+					{
+						label: "And",
+						slug: "nodes/utils/bool/bool-and",
+					},
+					{
+						label: "Or",
+						slug: "nodes/utils/bool/bool-or",
+					},
+					{
+						label: "Random Boolean",
+						slug: "nodes/utils/bool/random-bool",
+					},
+					{
+						label: "^",
+						slug: "nodes/utils/bool/bool-xor",
+					},
+				],
+			},
+			{
+				label: "CSV",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/csv",
+					},
+					{
+						label: "Buffered CSV Reader",
+						slug: "nodes/utils/csv/csv-buffered-reader",
+					},
+				],
+			},
+			{
+				label: "Conversions",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/conversions",
+					},
+					{
+						label: "From Bytes",
+						slug: "nodes/utils/conversions/val-from-bytes",
+					},
+					{
+						label: "From String",
+						slug: "nodes/utils/conversions/val-from-string",
+					},
+					{
+						label: "To Bytes",
+						slug: "nodes/utils/conversions/val-to-bytes",
+					},
+					{
+						label: "To String",
+						slug: "nodes/utils/conversions/val-to-string",
+					},
+				],
+			},
+			{
+				label: "Crypto",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/crypto",
+					},
+					{
+						label: "AES-256-GCM Decrypt",
+						slug: "nodes/utils/crypto/crypto-aes-decrypt-bytes",
+					},
+					{
+						label: "AES-256-GCM Decrypt Value",
+						slug: "nodes/utils/crypto/crypto-aes-decrypt-value",
+					},
+					{
+						label: "AES-256-GCM Encrypt",
+						slug: "nodes/utils/crypto/crypto-aes-encrypt-bytes",
+					},
+					{
+						label: "AES-256-GCM Encrypt Value",
+						slug: "nodes/utils/crypto/crypto-aes-encrypt-value",
+					},
+					{
+						label: "Generate Encryption Key",
+						slug: "nodes/utils/crypto/crypto-generate-key",
+					},
+					{
+						label: "XChaCha20-Poly1305 Decrypt",
+						slug: "nodes/utils/crypto/crypto-xchacha20-decrypt-bytes",
+					},
+					{
+						label: "XChaCha20-Poly1305 Decrypt Value",
+						slug: "nodes/utils/crypto/crypto-xchacha20-decrypt-value",
+					},
+					{
+						label: "XChaCha20-Poly1305 Encrypt",
+						slug: "nodes/utils/crypto/crypto-xchacha20-encrypt-bytes",
+					},
+					{
+						label: "XChaCha20-Poly1305 Encrypt Value",
+						slug: "nodes/utils/crypto/crypto-xchacha20-encrypt-value",
+					},
+				],
+			},
+			{
+				label: "DateTime",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/datetime",
+					},
+					{
+						label: "Add Duration",
+						slug: "nodes/utils/datetime/utils-datetime-duration",
+					},
+					{
+						label: "DateTime Difference",
+						slug: "nodes/utils/datetime/utils-datetime-diff",
+					},
+					{
+						label: "Format DateTime",
+						slug: "nodes/utils/datetime/utils-datetime-format",
+					},
+					{
+						label: "Now",
+						slug: "nodes/utils/datetime/utils-datetime-now",
+					},
+					{
+						label: "Parse DateTime",
+						slug: "nodes/utils/datetime/utils-datetime-parse",
+					},
+					{
+						label: "To Date",
+						slug: "nodes/utils/datetime/utils-datetime-to-date",
+					},
+					{
+						label: "To Time",
+						slug: "nodes/utils/datetime/utils-datetime-to-time",
+					},
+				],
+			},
+			{
+				label: "Encoding",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/encoding",
+					},
+					{
+						label: "Base64 Decode",
+						slug: "nodes/utils/encoding/utils-encoding-base64-decode",
+					},
+					{
+						label: "Base64 Decode to Bytes",
+						slug: "nodes/utils/encoding/utils-encoding-base64-decode-bytes",
+					},
+					{
+						label: "Base64 Encode",
+						slug: "nodes/utils/encoding/utils-encoding-base64-encode",
+					},
+					{
+						label: "Base64 Encode Bytes",
+						slug: "nodes/utils/encoding/utils-encoding-base64-encode-bytes",
+					},
+					{
+						label: "HTML Decode",
+						slug: "nodes/utils/encoding/utils-encoding-html-decode",
+					},
+					{
+						label: "HTML Encode",
+						slug: "nodes/utils/encoding/utils-encoding-html-encode",
+					},
+					{
+						label: "Hex Decode",
+						slug: "nodes/utils/encoding/utils-encoding-hex-decode",
+					},
+					{
+						label: "Hex Decode to Bytes",
+						slug: "nodes/utils/encoding/utils-encoding-hex-decode-bytes",
+					},
+					{
+						label: "Hex Encode",
+						slug: "nodes/utils/encoding/utils-encoding-hex-encode",
+					},
+					{
+						label: "Hex Encode Bytes",
+						slug: "nodes/utils/encoding/utils-encoding-hex-encode-bytes",
+					},
+					{
+						label: "URL Decode",
+						slug: "nodes/utils/encoding/utils-encoding-url-decode",
+					},
+					{
+						label: "URL Encode",
+						slug: "nodes/utils/encoding/utils-encoding-url-encode",
+					},
+				],
+			},
+			{
+				label: "Execution",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/execution",
+					},
+					{
+						label: "Get App ID",
+						slug: "nodes/utils/execution/utils-execution-get-app-id",
+					},
+					{
+						label: "Get Execution Environment",
+						slug: "nodes/utils/execution/utils-execution-get-environment",
+					},
+					{
+						label: "Get Execution Mode",
+						slug: "nodes/utils/execution/utils-execution-get-mode",
+					},
+					{
+						label: "Get Run ID",
+						slug: "nodes/utils/execution/utils-execution-get-run-id",
+					},
+					{
+						label: "Get User ID",
+						slug: "nodes/utils/execution/utils-execution-get-user-id",
+					},
+					{
+						label: "Is Local Environment",
+						slug: "nodes/utils/execution/utils-execution-is-local-environment",
+					},
+					{
+						label: "Is Mobile Environment",
+						slug: "nodes/utils/execution/utils-execution-is-mobile-environment",
+					},
+					{
+						label: "Is Server Environment",
+						slug: "nodes/utils/execution/utils-execution-is-server-environment",
+					},
+				],
+			},
+			{
+				label: "Faker",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/faker",
+					},
+					{
+						label: "Address",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/address",
+							},
+							{
+								label: "Fake City Name",
+								slug: "nodes/utils/faker/address/faker-city-name",
+							},
+							{
+								label: "Fake Country Code",
+								slug: "nodes/utils/faker/address/faker-country-code",
+							},
+							{
+								label: "Fake Country Name",
+								slug: "nodes/utils/faker/address/faker-country-name",
+							},
+							{
+								label: "Fake Latitude",
+								slug: "nodes/utils/faker/address/faker-latitude",
+							},
+							{
+								label: "Fake Longitude",
+								slug: "nodes/utils/faker/address/faker-longitude",
+							},
+							{
+								label: "Fake Post Code",
+								slug: "nodes/utils/faker/address/faker-post-code",
+							},
+							{
+								label: "Fake State Name",
+								slug: "nodes/utils/faker/address/faker-state-name",
+							},
+							{
+								label: "Fake Street Address",
+								slug: "nodes/utils/faker/address/faker-street-address",
+							},
+							{
+								label: "Fake Street Name",
+								slug: "nodes/utils/faker/address/faker-street-name",
+							},
+						],
+					},
+					{
+						label: "Company",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/company",
+							},
+							{
+								label: "Fake Buzzword",
+								slug: "nodes/utils/faker/company/faker-buzzword",
+							},
+							{
+								label: "Fake Catch Phrase",
+								slug: "nodes/utils/faker/company/faker-catch-phrase",
+							},
+							{
+								label: "Fake Company Name",
+								slug: "nodes/utils/faker/company/faker-company-name",
+							},
+							{
+								label: "Fake Industry",
+								slug: "nodes/utils/faker/company/faker-industry",
+							},
+							{
+								label: "Fake Profession",
+								slug: "nodes/utils/faker/company/faker-profession",
+							},
+						],
+					},
+					{
+						label: "Internet",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/internet",
+							},
+							{
+								label: "Fake Domain Suffix",
+								slug: "nodes/utils/faker/internet/faker-domain-suffix",
+							},
+							{
+								label: "Fake Email",
+								slug: "nodes/utils/faker/internet/faker-email",
+							},
+							{
+								label: "Fake IPv4",
+								slug: "nodes/utils/faker/internet/faker-ipv4",
+							},
+							{
+								label: "Fake IPv6",
+								slug: "nodes/utils/faker/internet/faker-ipv6",
+							},
+							{
+								label: "Fake Password",
+								slug: "nodes/utils/faker/internet/faker-password",
+							},
+							{
+								label: "Fake User Agent",
+								slug: "nodes/utils/faker/internet/faker-user-agent",
+							},
+							{
+								label: "Fake Username",
+								slug: "nodes/utils/faker/internet/faker-username",
+							},
+						],
+					},
+					{
+						label: "Lorem",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/lorem",
+							},
+							{
+								label: "Fake Paragraph",
+								slug: "nodes/utils/faker/lorem/faker-paragraph",
+							},
+							{
+								label: "Fake Paragraphs",
+								slug: "nodes/utils/faker/lorem/faker-paragraphs",
+							},
+							{
+								label: "Fake Sentence",
+								slug: "nodes/utils/faker/lorem/faker-sentence",
+							},
+							{
+								label: "Fake Sentences",
+								slug: "nodes/utils/faker/lorem/faker-sentences",
+							},
+							{
+								label: "Fake Word",
+								slug: "nodes/utils/faker/lorem/faker-word",
+							},
+							{
+								label: "Fake Words",
+								slug: "nodes/utils/faker/lorem/faker-words",
+							},
+						],
+					},
+					{
+						label: "Name",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/name",
+							},
+							{
+								label: "Fake First Name",
+								slug: "nodes/utils/faker/name/faker-first-name",
+							},
+							{
+								label: "Fake Full Name",
+								slug: "nodes/utils/faker/name/faker-full-name",
+							},
+							{
+								label: "Fake Last Name",
+								slug: "nodes/utils/faker/name/faker-last-name",
+							},
+							{
+								label: "Fake Title",
+								slug: "nodes/utils/faker/name/faker-title",
+							},
+						],
+					},
+					{
+						label: "Number",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/number",
+							},
+							{
+								label: "Fake Boolean",
+								slug: "nodes/utils/faker/number/faker-boolean",
+							},
+							{
+								label: "Fake Digit",
+								slug: "nodes/utils/faker/number/faker-digit",
+							},
+							{
+								label: "Fake Float",
+								slug: "nodes/utils/faker/number/faker-float",
+							},
+							{
+								label: "Fake Integer",
+								slug: "nodes/utils/faker/number/faker-integer",
+							},
+						],
+					},
+					{
+						label: "Phone",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/faker/phone",
+							},
+							{
+								label: "Fake Cell Number",
+								slug: "nodes/utils/faker/phone/faker-cell-number",
+							},
+							{
+								label: "Fake Phone Number",
+								slug: "nodes/utils/faker/phone/faker-phone-number",
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "Hash",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/hash",
+					},
+					{
+						label: "AHash",
+						slug: "nodes/utils/hash/utils-hash-ahash",
+					},
+					{
+						label: "Blake3 Hash",
+						slug: "nodes/utils/hash/utils-hash-blake3",
+					},
+					{
+						label: "MD5 Hash",
+						slug: "nodes/utils/hash/utils-hash-md5",
+					},
+					{
+						label: "SHA-256 Hash",
+						slug: "nodes/utils/hash/utils-hash-sha256",
+					},
+					{
+						label: "SHA-512 Hash",
+						slug: "nodes/utils/hash/utils-hash-sha512",
+					},
+				],
+			},
+			{
+				label: "JSON",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/json",
+					},
+					{
+						label: "Make Tool Schema",
+						slug: "nodes/utils/json/utils-json-make-schema",
+					},
+					{
+						label: "Parse JSON with Schema",
+						slug: "nodes/utils/json/parse-with-schema",
+					},
+					{
+						label: "Repair Parse JSON",
+						slug: "nodes/utils/json/repair-parse",
+					},
+				],
+			},
+			{
+				label: "Map",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/map",
+					},
+					{
+						label: "By Reference",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/map/by-reference",
+							},
+							{
+								label: "Clear (By Ref)",
+								slug: "nodes/utils/map/by-reference/map-clear-ref",
+							},
+							{
+								label: "Remove Key (By Ref)",
+								slug: "nodes/utils/map/by-reference/map-remove-ref",
+							},
+							{
+								label: "Set Value (By Ref)",
+								slug: "nodes/utils/map/by-reference/map-set-ref",
+							},
+						],
+					},
+					{
+						label: "Clear Map",
+						slug: "nodes/utils/map/map-clear",
+					},
+					{
+						label: "Get Value",
+						slug: "nodes/utils/map/map-get",
+					},
+					{
+						label: "Has Key",
+						slug: "nodes/utils/map/map-has-key",
+					},
+					{
+						label: "Keys",
+						slug: "nodes/utils/map/map-keys",
+					},
+					{
+						label: "Make Map",
+						slug: "nodes/utils/map/make-map",
+					},
+					{
+						label: "Remove Key",
+						slug: "nodes/utils/map/map-remove",
+					},
+					{
+						label: "Set Value",
+						slug: "nodes/utils/map/map-set",
+					},
+					{
+						label: "Size",
+						slug: "nodes/utils/map/map-size",
+					},
+					{
+						label: "Values",
+						slug: "nodes/utils/map/map-values",
+					},
+				],
+			},
+			{
+				label: "Markdown",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/markdown",
+					},
+					{
+						label: "HTML to Markdown",
+						slug: "nodes/utils/markdown/utils-md-html-to-md",
+					},
+					{
+						label: "Markdown to HTML",
+						slug: "nodes/utils/markdown/utils-md-md-to-html",
+					},
+					{
+						label: "Rich Text to HTML",
+						slug: "nodes/utils/markdown/utils-md-plate-to-html",
+					},
+					{
+						label: "Rich Text to Markdown",
+						slug: "nodes/utils/markdown/utils-md-plate-to-md",
+					},
+				],
+			},
+			{
+				label: "Math",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/math",
+					},
+					{
+						label: "Vector",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/math/vector",
+							},
+							{
+								label: "Addition",
+								slug: "nodes/utils/math/vector/float-vector-addition",
+							},
+							{
+								label: "Cosine Similarity",
+								slug: "nodes/utils/math/vector/float-vector-cosine-similarity",
+							},
+							{
+								label: "Cross Product",
+								slug: "nodes/utils/math/vector/float-vector-cross-product",
+							},
+							{
+								label: "Dot Product",
+								slug: "nodes/utils/math/vector/float-vector-dot-product",
+							},
+							{
+								label: "Multiplication",
+								slug: "nodes/utils/math/vector/float-vector-multiplication",
+							},
+							{
+								label: "Normalize",
+								slug: "nodes/utils/math/vector/float-vector-normalize",
+							},
+							{
+								label: "Subtraction",
+								slug: "nodes/utils/math/vector/float-vector-subtraction",
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "Set",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/set",
+					},
+					{
+						label: "By Reference",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/set/by-reference",
+							},
+							{
+								label: "Clear (By Ref)",
+								slug: "nodes/utils/set/by-reference/set-clear-ref",
+							},
+							{
+								label: "Discard (By Ref)",
+								slug: "nodes/utils/set/by-reference/set-discard-ref",
+							},
+							{
+								label: "Insert (By Ref)",
+								slug: "nodes/utils/set/by-reference/set-insert-ref",
+							},
+						],
+					},
+					{
+						label: "Array to Set",
+						slug: "nodes/utils/set/array-to-set",
+					},
+					{
+						label: "Clear set",
+						slug: "nodes/utils/set/set-clear",
+					},
+					{
+						label: "Difference",
+						slug: "nodes/utils/set/difference",
+					},
+					{
+						label: "Discard",
+						slug: "nodes/utils/set/set-discard",
+					},
+					{
+						label: "Get Size",
+						slug: "nodes/utils/set/set-get-size",
+					},
+					{
+						label: "Has Element",
+						slug: "nodes/utils/set/set-has",
+					},
+					{
+						label: "Insert Element",
+						slug: "nodes/utils/set/insert",
+					},
+					{
+						label: "Is Empty",
+						slug: "nodes/utils/set/set-is-empty",
+					},
+					{
+						label: "Is Mutual",
+						slug: "nodes/utils/set/is-mutual",
+					},
+					{
+						label: "Is Subset",
+						slug: "nodes/utils/set/set-is-subset",
+					},
+					{
+						label: "Is Superset",
+						slug: "nodes/utils/set/set-is-superset",
+					},
+					{
+						label: "Make Set",
+						slug: "nodes/utils/set/make-set",
+					},
+					{
+						label: "Pop",
+						slug: "nodes/utils/set/set-pop",
+					},
+					{
+						label: "Set to Array",
+						slug: "nodes/utils/set/set-to-array",
+					},
+					{
+						label: "Union",
+						slug: "nodes/utils/set/union",
+					},
+				],
+			},
+			{
+				label: "String",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/string",
+					},
+					{
+						label: "Similarity",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/utils/string/similarity",
+							},
+							{
+								label: "Damerau-Levenshtein Distance",
+								slug: "nodes/utils/string/similarity/damerau-levenshtein-distance",
+							},
+							{
+								label: "Hamming Distance",
+								slug: "nodes/utils/string/similarity/hamming-distance",
+							},
+							{
+								label: "Jaro Distance",
+								slug: "nodes/utils/string/similarity/jaro-distance",
+							},
+							{
+								label: "Jaro-Winkler Distance",
+								slug: "nodes/utils/string/similarity/jaro-winkler-distance",
+							},
+							{
+								label: "Levenshtein Distance",
+								slug: "nodes/utils/string/similarity/levenshtein-distance",
+							},
+							{
+								label: "Optimal String Alignment Distance",
+								slug: "nodes/utils/string/similarity/optimal-string-alignment-distance",
+							},
+							{
+								label: "Sørensen-Dice Coefficient",
+								slug: "nodes/utils/string/similarity/sorensen-dice-coefficient",
+							},
+						],
+					},
+					{
+						label: "!=",
+						slug: "nodes/utils/string/not-equal-string",
+					},
+					{
+						label: "==",
+						slug: "nodes/utils/string/equal-string",
+					},
+					{
+						label: "Contains",
+						slug: "nodes/utils/string/string-contains",
+					},
+					{
+						label: "Ends With",
+						slug: "nodes/utils/string/string-ends-with",
+					},
+					{
+						label: "Escape String",
+						slug: "nodes/utils/string/string-escape",
+					},
+					{
+						label: "Format String",
+						slug: "nodes/utils/string/string-format",
+					},
+					{
+						label: "From UTF-8 Lossy",
+						slug: "nodes/utils/string/utf8-lossy",
+					},
+					{
+						label: "Join Strings",
+						slug: "nodes/utils/string/string-join",
+					},
+					{
+						label: "Render Template",
+						slug: "nodes/utils/string/string-render-template",
+					},
+					{
+						label: "Replace String",
+						slug: "nodes/utils/string/string-replace",
+					},
+					{
+						label: "Split String",
+						slug: "nodes/utils/string/string-split",
+					},
+					{
+						label: "Starts With",
+						slug: "nodes/utils/string/string-starts-with",
+					},
+					{
+						label: "String Length",
+						slug: "nodes/utils/string/string-length",
+					},
+					{
+						label: "To Lower Case",
+						slug: "nodes/utils/string/string-to-lower",
+					},
+					{
+						label: "To Upper Case",
+						slug: "nodes/utils/string/string-to-upper",
+					},
+					{
+						label: "Trim String",
+						slug: "nodes/utils/string/string-trim",
+					},
+					{
+						label: "Unescape String",
+						slug: "nodes/utils/string/string-unescape",
+					},
+				],
+			},
+			{
+				label: "Types",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/types",
+					},
+					{
+						label: "Fallback",
+						slug: "nodes/utils/types/utils-types-fallback",
+					},
+					{
+						label: "Select",
+						slug: "nodes/utils/types/utils-types-select",
+					},
+					{
+						label: "Try Transform",
+						slug: "nodes/utils/types/utils-types-try-transform",
+					},
+				],
+			},
+			{
+				label: "User",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/utils/user",
+					},
+					{
+						label: "Check User Has Role",
+						slug: "nodes/utils/user/utils-user-check-user-has-role",
+					},
+					{
+						label: "Check User Permission",
+						slug: "nodes/utils/user/utils-user-check-user-permission",
+					},
+					{
+						label: "Get Current User",
+						slug: "nodes/utils/user/utils-user-get-current-user",
+					},
+					{
+						label: "Get Current User Info",
+						slug: "nodes/utils/user/utils-user-get-current-user-info",
+					},
+					{
+						label: "Get Effective User Permissions",
+						slug: "nodes/utils/user/utils-user-get-effective-user-permissions",
+					},
+					{
+						label: "Get Executing User",
+						slug: "nodes/utils/user/utils-user-get-executing-user",
+					},
+					{
+						label: "Get Project User",
+						slug: "nodes/utils/user/utils-user-get-project-user",
+					},
+					{
+						label: "Get User Attribute",
+						slug: "nodes/utils/user/utils-user-get-user-attribute",
+					},
+					{
+						label: "Get User Attributes",
+						slug: "nodes/utils/user/utils-user-get-user-attributes",
+					},
+					{
+						label: "Get User Roles",
+						slug: "nodes/utils/user/utils-user-get-user-roles",
+					},
+					{
+						label: "Has Attribute",
+						slug: "nodes/utils/user/utils-user-has-attribute",
+					},
+					{
+						label: "Has Permission",
+						slug: "nodes/utils/user/utils-user-has-permission",
+					},
+					{
+						label: "Is Technical User",
+						slug: "nodes/utils/user/utils-user-is-technical-user",
+					},
+					{
+						label: "List Project Users",
+						slug: "nodes/utils/user/utils-user-list-project-users",
+					},
+					{
+						label: "List Users with Attribute",
+						slug: "nodes/utils/user/utils-user-list-users-with-attribute",
+					},
+					{
+						label: "List Users with Role",
+						slug: "nodes/utils/user/utils-user-list-users-with-role",
+					},
+					{
+						label: "Resolve User",
+						slug: "nodes/utils/user/utils-user-resolve-user",
+					},
+					{
+						label: "Search Users",
+						slug: "nodes/utils/user/utils-user-search-users",
+					},
+				],
+			},
+			{
+				label: "CUID v2",
+				slug: "nodes/utils/cuid",
+			},
+		],
+	},
+	{
+		label: "Variable",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/variable",
+			},
+			{
+				label: "Get Variable",
+				slug: "nodes/variable/variable-get",
+			},
+			{
+				label: "Set Variable",
+				slug: "nodes/variable/variable-set",
+			},
+		],
+	},
+	{
+		label: "Video",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/video",
+			},
+			{
+				label: "Containers",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/containers",
+					},
+					{
+						label: "Remux Video",
+						slug: "nodes/video/containers/video-remux",
+					},
+				],
+			},
+			{
+				label: "Editing",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/editing",
+					},
+					{
+						label: "Concatenate Videos",
+						slug: "nodes/video/editing/video-concat",
+					},
+					{
+						label: "Trim On Keyframes",
+						slug: "nodes/video/editing/video-trim-keyframes",
+					},
+				],
+			},
+			{
+				label: "Inspect",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/inspect",
+					},
+					{
+						label: "Detect Video Container",
+						slug: "nodes/video/inspect/video-detect-container",
+					},
+					{
+						label: "Probe Media Info",
+						slug: "nodes/video/inspect/video-probe-media-info",
+					},
+				],
+			},
+			{
+				label: "Packets",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/packets",
+					},
+					{
+						label: "Bitstream Convert",
+						slug: "nodes/video/packets/video-bitstream-convert",
+					},
+					{
+						label: "Normalize Timestamps",
+						slug: "nodes/video/packets/video-normalize-timestamps",
+					},
+				],
+			},
+			{
+				label: "Planning",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/planning",
+					},
+					{
+						label: "Check Remux Compatibility",
+						slug: "nodes/video/planning/video-check-remux-compatibility",
+					},
+				],
+			},
+			{
+				label: "Preview",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/preview",
+					},
+					{
+						label: "Contact Sheet",
+						slug: "nodes/video/preview/video-contact-sheet",
+					},
+					{
+						label: "Extract Thumbnail",
+						slug: "nodes/video/preview/video-extract-thumbnail",
+					},
+				],
+			},
+			{
+				label: "Tracks",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/tracks",
+					},
+					{
+						label: "Extract Track",
+						slug: "nodes/video/tracks/video-extract-track",
+					},
+				],
+			},
+			{
+				label: "Transcode",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/video/transcode",
+					},
+					{
+						label: "Encode AV1",
+						slug: "nodes/video/transcode/video-encode-av1",
+					},
+					{
+						label: "Transcode Video",
+						slug: "nodes/video/transcode/video-transcode-video",
+					},
+					{
+						label: "Transform Video",
+						slug: "nodes/video/transcode/video-transform-video",
+					},
+				],
+			},
+		],
+	},
+	{
+		label: "Web",
+		collapsed: true,
+		items: [
+			{
+				label: "Overview",
+				slug: "nodes/web",
+			},
+			{
+				label: "API",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/api",
+					},
+					{
+						label: "Request",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/api/request",
+							},
+							{
+								label: "Get Header",
+								slug: "nodes/web/api/request/http-get-header",
+							},
+							{
+								label: "Get Headers",
+								slug: "nodes/web/api/request/http-get-headers",
+							},
+							{
+								label: "Get Method",
+								slug: "nodes/web/api/request/http-get-method",
+							},
+							{
+								label: "Get Url",
+								slug: "nodes/web/api/request/http-get-url",
+							},
+							{
+								label: "Make Request",
+								slug: "nodes/web/api/request/http-make-request",
+							},
+							{
+								label: "Set Accept",
+								slug: "nodes/web/api/request/http-set-accept",
+							},
+							{
+								label: "Set Bearer Auth",
+								slug: "nodes/web/api/request/http-set-bearer-auth",
+							},
+							{
+								label: "Set Bytes Body",
+								slug: "nodes/web/api/request/http-set-bytes-body",
+							},
+							{
+								label: "Set Content-Type",
+								slug: "nodes/web/api/request/http-set-content-type",
+							},
+							{
+								label: "Set Form Body",
+								slug: "nodes/web/api/request/http-set-form-body",
+							},
+							{
+								label: "Set Header",
+								slug: "nodes/web/api/request/http-set-header",
+							},
+							{
+								label: "Set Headers",
+								slug: "nodes/web/api/request/http-set-headers",
+							},
+							{
+								label: "Set Method",
+								slug: "nodes/web/api/request/http-set-method",
+							},
+							{
+								label: "Set String Body",
+								slug: "nodes/web/api/request/http-set-string-body",
+							},
+							{
+								label: "Set Struct Body",
+								slug: "nodes/web/api/request/http-set-struct-body",
+							},
+							{
+								label: "Set Url",
+								slug: "nodes/web/api/request/http-set-url",
+							},
+						],
+					},
+					{
+						label: "Response",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/api/response",
+							},
+							{
+								label: "Get Header",
+								slug: "nodes/web/api/response/http-response-get-header",
+							},
+							{
+								label: "Get Headers",
+								slug: "nodes/web/api/response/http-response-get-headers",
+							},
+							{
+								label: "Get Status Code",
+								slug: "nodes/web/api/response/http-response-get-status",
+							},
+							{
+								label: "Is Success",
+								slug: "nodes/web/api/response/http-response-is-success",
+							},
+							{
+								label: "To Bytes",
+								slug: "nodes/web/api/response/http-response-to-bytes",
+							},
+							{
+								label: "To Struct",
+								slug: "nodes/web/api/response/http-response-to-json",
+							},
+							{
+								label: "To Text",
+								slug: "nodes/web/api/response/http-response-to-text",
+							},
+						],
+					},
+					{
+						label: "API Call",
+						slug: "nodes/web/api/http-fetch",
+					},
+					{
+						label: "Streaming API Call",
+						slug: "nodes/web/api/streaming-http-fetch",
+					},
+				],
+			},
+			{
+				label: "Auth",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/auth",
+					},
+					{
+						label: "API Key Auth",
+						slug: "nodes/web/auth/api-key-auth",
+					},
+					{
+						label: "Basic Auth",
+						slug: "nodes/web/auth/basic-auth",
+					},
+					{
+						label: "Bearer Token Auth",
+						slug: "nodes/web/auth/bearer-token-auth",
+					},
+					{
+						label: "HMAC SHA-256 Auth",
+						slug: "nodes/web/auth/hmac-sha256-auth",
+					},
+					{
+						label: "OAuth JWKS File Auth",
+						slug: "nodes/web/auth/oauth-jwks-file-auth",
+					},
+					{
+						label: "OAuth JWKS URL Auth",
+						slug: "nodes/web/auth/oauth-jwks-url-auth",
+					},
+					{
+						label: "OIDC Discovery Auth",
+						slug: "nodes/web/auth/oidc-discovery-auth",
+					},
+				],
+			},
+			{
+				label: "Camera",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/camera",
+					},
+					{
+						label: "Grab IP-Camera Frame",
+						slug: "nodes/web/camera/web-camera-grab-frame",
+					},
+					{
+						label: "Grab RTSP Frame",
+						slug: "nodes/web/camera/web-camera-grab-rtsp-frame",
+					},
+					{
+						label: "Write Image to Data URL",
+						slug: "nodes/web/camera/image-write-dataurl",
+					},
+				],
+			},
+			{
+				label: "Geo",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/geo",
+					},
+					{
+						label: "H3",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/geo/h3",
+							},
+							{
+								label: "H3 Cell Area",
+								slug: "nodes/web/geo/h3/h3-cell-area",
+							},
+							{
+								label: "H3 Cell Boundary",
+								slug: "nodes/web/geo/h3/h3-cell-to-boundary",
+							},
+							{
+								label: "H3 Cell Children",
+								slug: "nodes/web/geo/h3/h3-cell-to-children",
+							},
+							{
+								label: "H3 Cell Parent",
+								slug: "nodes/web/geo/h3/h3-cell-to-parent",
+							},
+							{
+								label: "H3 Cell to Lat/Lng",
+								slug: "nodes/web/geo/h3/h3-cell-to-latlng",
+							},
+							{
+								label: "H3 Cells to Polygon",
+								slug: "nodes/web/geo/h3/h3-cells-to-multi-polygon",
+							},
+							{
+								label: "H3 Compact Cells",
+								slug: "nodes/web/geo/h3/h3-compact-cells",
+							},
+							{
+								label: "H3 Edge Length",
+								slug: "nodes/web/geo/h3/h3-edge-length",
+							},
+							{
+								label: "H3 Grid Disk",
+								slug: "nodes/web/geo/h3/h3-grid-disk",
+							},
+							{
+								label: "H3 Grid Distance",
+								slug: "nodes/web/geo/h3/h3-grid-distance",
+							},
+							{
+								label: "H3 Grid Path",
+								slug: "nodes/web/geo/h3/h3-grid-path",
+							},
+							{
+								label: "Lat/Lng to H3 Cell",
+								slug: "nodes/web/geo/h3/h3-latlng-to-cell",
+							},
+						],
+					},
+					{
+						label: "Map",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/geo/map",
+							},
+							{
+								label: "Get Map Image",
+								slug: "nodes/web/geo/map/geo-get-map-image",
+							},
+						],
+					},
+					{
+						label: "Routing",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/geo/routing",
+							},
+							{
+								label: "OSRM Match Trace",
+								slug: "nodes/web/geo/routing/geo-osrm-match-trace",
+							},
+							{
+								label: "OSRM Nearest",
+								slug: "nodes/web/geo/routing/geo-osrm-nearest",
+							},
+							{
+								label: "OSRM Table",
+								slug: "nodes/web/geo/routing/geo-osrm-table",
+							},
+							{
+								label: "OSRM Tile",
+								slug: "nodes/web/geo/routing/geo-osrm-tile",
+							},
+							{
+								label: "OSRM Trip",
+								slug: "nodes/web/geo/routing/geo-osrm-trip",
+							},
+							{
+								label: "Plan Route",
+								slug: "nodes/web/geo/routing/geo-plan-route",
+							},
+						],
+					},
+					{
+						label: "Search",
+						collapsed: true,
+						items: [
+							{
+								label: "Overview",
+								slug: "nodes/web/geo/search",
+							},
+							{
+								label: "Reverse Geocode",
+								slug: "nodes/web/geo/search/geo-reverse-geocode",
+							},
+							{
+								label: "Search Location",
+								slug: "nodes/web/geo/search/geo-search-location",
+							},
+						],
+					},
+				],
+			},
+			{
+				label: "MCP",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/mcp",
+					},
+					{
+						label: "MCP Server",
+						slug: "nodes/web/mcp/mcp-server",
+					},
+					{
+						label: "MCP Server Config",
+						slug: "nodes/web/mcp/mcp-server-config",
+					},
+					{
+						label: "Register MCP Auth",
+						slug: "nodes/web/mcp/mcp-register-auth",
+					},
+					{
+						label: "Register MCP Functions",
+						slug: "nodes/web/mcp/mcp-register-functions",
+					},
+					{
+						label: "Register MCP Prompt",
+						slug: "nodes/web/mcp/mcp-register-prompt",
+					},
+					{
+						label: "Register MCP Resource",
+						slug: "nodes/web/mcp/mcp-register-resource",
+					},
+				],
+			},
+			{
+				label: "MQTT",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/mqtt",
+					},
+					{
+						label: "MQTT Broker",
+						slug: "nodes/web/mqtt/mqtt-broker",
+					},
+					{
+						label: "MQTT Connect",
+						slug: "nodes/web/mqtt/mqtt-connect",
+					},
+					{
+						label: "MQTT Disconnect",
+						slug: "nodes/web/mqtt/mqtt-disconnect",
+					},
+					{
+						label: "MQTT Publish",
+						slug: "nodes/web/mqtt/mqtt-publish",
+					},
+					{
+						label: "MQTT Subscribe",
+						slug: "nodes/web/mqtt/mqtt-subscribe",
+					},
+				],
+			},
+			{
+				label: "REST",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/rest",
+					},
+					{
+						label: "REST Server",
+						slug: "nodes/web/rest/rest-server",
+					},
+					{
+						label: "REST Server Config",
+						slug: "nodes/web/rest/rest-server-config",
+					},
+					{
+						label: "Register REST Auth",
+						slug: "nodes/web/rest/rest-register-auth",
+					},
+					{
+						label: "Register REST Files",
+						slug: "nodes/web/rest/rest-register-files",
+					},
+					{
+						label: "Register REST Function",
+						slug: "nodes/web/rest/rest-register-function",
+					},
+					{
+						label: "Register REST OpenAPI",
+						slug: "nodes/web/rest/rest-register-open-api",
+					},
+				],
+			},
+			{
+				label: "Scraping",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/scraping",
+					},
+					{
+						label: "Extract Links",
+						slug: "nodes/web/scraping/web-scrape-extract-links",
+					},
+				],
+			},
+			{
+				label: "TCP",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/tcp",
+					},
+					{
+						label: "TCP Close",
+						slug: "nodes/web/tcp/tcp-close",
+					},
+					{
+						label: "TCP Connect",
+						slug: "nodes/web/tcp/tcp-connect",
+					},
+					{
+						label: "TCP Listen",
+						slug: "nodes/web/tcp/tcp-listen",
+					},
+					{
+						label: "TCP Send",
+						slug: "nodes/web/tcp/tcp-send",
+					},
+					{
+						label: "TCP Server",
+						slug: "nodes/web/tcp/tcp-server",
+					},
+				],
+			},
+			{
+				label: "TLS",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/tls",
+					},
+					{
+						label: "Create CA Certificate",
+						slug: "nodes/web/tls/create-ca-certificate",
+					},
+					{
+						label: "Create CA-Signed Certificate",
+						slug: "nodes/web/tls/create-ca-signed-certificate",
+					},
+					{
+						label: "Create Self-Signed Certificate",
+						slug: "nodes/web/tls/create-self-signed-certificate",
+					},
+				],
+			},
+			{
+				label: "UDP",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/udp",
+					},
+					{
+						label: "UDP Bind",
+						slug: "nodes/web/udp/udp-bind",
+					},
+					{
+						label: "UDP Close",
+						slug: "nodes/web/udp/udp-close",
+					},
+					{
+						label: "UDP Receive",
+						slug: "nodes/web/udp/udp-receive",
+					},
+					{
+						label: "UDP Send To",
+						slug: "nodes/web/udp/udp-send-to",
+					},
+					{
+						label: "UDP Server",
+						slug: "nodes/web/udp/udp-server",
+					},
+				],
+			},
+			{
+				label: "WebSocket",
+				collapsed: true,
+				items: [
+					{
+						label: "Overview",
+						slug: "nodes/web/websocket",
+					},
+					{
+						label: "WebSocket Close",
+						slug: "nodes/web/websocket/websocket-close",
+					},
+					{
+						label: "WebSocket Connect",
+						slug: "nodes/web/websocket/websocket-connect",
+					},
+					{
+						label: "WebSocket Send",
+						slug: "nodes/web/websocket/websocket-send",
+					},
+					{
+						label: "WebSocket Server",
+						slug: "nodes/web/websocket/websocket-server",
+					},
+				],
+			},
+			{
+				label: "HTTP Download",
+				slug: "nodes/web/http-download",
+			},
+		],
+	},
 ];

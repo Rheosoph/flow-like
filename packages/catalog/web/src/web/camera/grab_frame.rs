@@ -119,7 +119,7 @@ impl NodeLogic for GrabFrameNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use flow_like_types::reqwest;
 
     use flow_like_types::{Bytes, tokio};

@@ -226,6 +226,7 @@ export const COMPONENT_PROPS = {
 		"helperText",
 		"accept",
 		"multiple",
+		"directory",
 		"maxSize",
 		"maxFiles",
 		"disabled",

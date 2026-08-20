@@ -239,8 +239,10 @@ pub async fn begin_online_fork(
     let bootstrap_result = async {
         let credentials = state.master_credentials().await?;
         let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
-        let mut metadata = Metadata::default();
-        metadata.name = "Forked app".to_string();
+        let metadata = Metadata {
+            name: "Forked app".to_string(),
+            ..Default::default()
+        };
         let mut drive_app = App::new(
             Some(new_app_id.clone()),
             metadata,

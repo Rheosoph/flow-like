@@ -165,19 +165,20 @@ function rebuildTemplate(
 	}
 
 	let unresolved = false;
-	const body = defaultArg.text.replace(
-		/\{\{\s*([^}]+?)\s*\}\}/g,
-		(_, token) => {
+	// Escape before substituting, so only the placeholders we inject stay live.
+	const body = defaultArg.text
+		.replace(/[\\`]/g, "\\$&")
+		.replace(/\$\{/g, "\\${")
+		.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token) => {
 			const expression = values.get(token);
 			if (expression === undefined) {
 				unresolved = true;
 				return "";
 			}
 			return `\${${expression}}`;
-		},
-	);
+		});
 	if (unresolved) return undefined;
-	return `\`${body.replace(/`/g, "\\`")}\``;
+	return `\`${body}\``;
 }
 
 /**

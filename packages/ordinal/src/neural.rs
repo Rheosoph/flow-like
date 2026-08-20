@@ -618,7 +618,7 @@ impl<F: Float> OrdinalNeural<F> {
                 output
                     .iter()
                     .map(|z| {
-                        running = running * sigmoid(*z);
+                        running *= sigmoid(*z);
                         running
                     })
                     .collect()
@@ -938,10 +938,9 @@ impl<F: Float> Backbone<F> {
             let input = &cache.inputs[layer];
             for (out_index, d) in delta.iter().enumerate() {
                 for (in_index, value) in input.iter().enumerate() {
-                    grad_weights[layer][[out_index, in_index]] =
-                        grad_weights[layer][[out_index, in_index]] + *d * *value;
+                    grad_weights[layer][[out_index, in_index]] += *d * *value;
                 }
-                grad_biases[layer][out_index] = grad_biases[layer][out_index] + *d;
+                grad_biases[layer][out_index] += *d;
             }
             if layer > 0 {
                 // dL/d(input of layer) = W' delta, then through the activation below it.
@@ -966,6 +965,10 @@ impl<F: Float> Backbone<F> {
     }
 }
 
+/// Objective value, gradients in the backbone weights and biases, and the gradient in the
+/// head parameters.
+type ObjectiveGradient<F> = (F, Vec<Array2<F>>, Vec<Array1<F>>, Array1<F>);
+
 /// Penalized objective and its gradient with respect to every parameter block.
 ///
 /// Both heads sum a binary cross-entropy over their tasks, written as `softplus(z) - t * z` rather
@@ -980,7 +983,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     head: OrdinalHead,
     n_classes: usize,
     alpha: F,
-) -> Result<(F, Vec<Array2<F>>, Vec<Array1<F>>, Array1<F>)> {
+) -> Result<ObjectiveGradient<F>> {
     let n_cuts = n_classes - 1;
     let (mut grad_weights, mut grad_biases) = backbone.zeros_like();
     let task_biases = coral_biases(head_params);
@@ -1002,8 +1005,8 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
                     objective = objective + softplus(z) - target * z;
 
                     let residual = sigmoid(z) - target;
-                    d_score = d_score + residual;
-                    grad_task_biases[cut] = grad_task_biases[cut] + residual;
+                    d_score += residual;
+                    grad_task_biases[cut] += residual;
                 }
                 delta[0] = d_score;
             }
@@ -1029,7 +1032,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let mut grad_head = Array1::<F>::zeros(head_params.len());
     let mut suffix = F::zero();
     for cut in (0..grad_task_biases.len()).rev() {
-        suffix = suffix + grad_task_biases[cut];
+        suffix += grad_task_biases[cut];
         grad_head[cut] = if cut == 0 {
             suffix
         } else {
@@ -1043,11 +1046,11 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let mut penalty = F::zero();
     for (layer, matrix) in backbone.weights.iter().enumerate() {
         for (index, value) in matrix.indexed_iter() {
-            penalty = penalty + *value * *value;
-            grad_weights[layer][index] = grad_weights[layer][index] + alpha * *value;
+            penalty += *value * *value;
+            grad_weights[layer][index] += alpha * *value;
         }
     }
-    objective = objective + half * alpha * penalty;
+    objective += half * alpha * penalty;
 
     let finite = grad_weights
         .iter()
@@ -1087,7 +1090,7 @@ fn adam_update<'a, F: Float + 'a>(
             beta2 * second_moment[index] + (F::one() - beta2) * *gradient * *gradient;
         let m_hat = first_moment[index] / correction1;
         let v_hat = second_moment[index] / correction2;
-        *parameter = *parameter - learning_rate * m_hat / (v_hat.sqrt() + eps);
+        *parameter -= learning_rate * m_hat / (v_hat.sqrt() + eps);
     }
 }
 
@@ -1415,6 +1418,9 @@ mod tests {
                             }
                         }
 
+                        // The index drives a fresh clone of the backbone and a second array
+                        // (`grad_biases`), so an iterator over one of them reads no better.
+                        #[allow(clippy::needless_range_loop)]
                         for index in 0..backbone.biases[layer].len() {
                             let mut shifted = backbone.clone();
                             shifted.biases[layer][index] += step;

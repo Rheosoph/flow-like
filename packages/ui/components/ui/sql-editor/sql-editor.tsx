@@ -101,7 +101,7 @@ export function SqlEditor({
 			onMount={handleMount}
 			options={{
 				readOnly,
-				ariaLabel: t('sqlQueryEditor', 'SQL query editor'),
+				ariaLabel: t("sqlQueryEditor", "SQL query editor"),
 				minimap: { enabled: false },
 				fontSize: 13,
 				fontFamily:

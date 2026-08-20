@@ -30,7 +30,7 @@ impl fmt::Display for ChartType {
 }
 
 impl ChartType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "bar" => Some(Self::Bar),
             "line" => Some(Self::Line),
@@ -183,7 +183,7 @@ fn parse_config(block: &str) -> ChartConfig {
         let value = line[colon + 1..].trim();
 
         match key {
-            "type" => config.chart_type = ChartType::from_str(value),
+            "type" => config.chart_type = ChartType::from_name(value),
             "title" => config.title = Some(value.to_string()),
             "xLabel" => config.x_label = Some(value.to_string()),
             "yLabel" => config.y_label = Some(value.to_string()),

@@ -159,7 +159,9 @@ function HeaderCell({
 						variant="ghost"
 						size="icon"
 						className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/head:opacity-100"
-						aria-label={t('nameColumnActions', '{{name}} column actions', { name })}
+						aria-label={t("nameColumnActions", "{{name}} column actions", {
+							name,
+						})}
 					>
 						<MoreHorizontal className="h-3.5 w-3.5" />
 					</Button>
@@ -170,7 +172,7 @@ function HeaderCell({
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem onClick={onCopyColumn}>
-						<Copy className="h-3.5 w-3.5" /> {t('copyColumn', 'Copy column')}
+						<Copy className="h-3.5 w-3.5" /> {t("copyColumn", "Copy column")}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -178,7 +180,7 @@ function HeaderCell({
 				<button
 					type="button"
 					tabIndex={-1}
-					aria-label={t('resizeNameColumn', 'Resize {{name}} column', { name })}
+					aria-label={t("resizeNameColumn", "Resize {{name}} column", { name })}
 					onMouseDown={onResizeStart}
 					onTouchStart={onResizeStart}
 					className={cn(
@@ -293,7 +295,9 @@ export function QueryResultTable({
 					className="table-fixed border-separate border-spacing-0 text-sm"
 					style={{ width: totalWidth, minWidth: "100%" }}
 				>
-					<caption className="sr-only">{t('queryResults', 'Query results')}</caption>
+					<caption className="sr-only">
+						{t("queryResults", "Query results")}
+					</caption>
 					<thead>
 						<tr aria-rowindex={1}>
 							<th
@@ -365,7 +369,9 @@ export function QueryResultTable({
 											type="button"
 											onClick={() => setInspect(row.original)}
 											className="flex h-full w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-											aria-label={t('inspectRowVal', 'Inspect row {{val}}', { val: virtualRow.index + 1 })}
+											aria-label={t("inspectRowVal", "Inspect row {{val}}", {
+												val: virtualRow.index + 1,
+											})}
 										>
 											{virtualRow.index + 1}
 										</button>
@@ -401,7 +407,7 @@ export function QueryResultTable({
 															copyText(cellToString(value), "Copied cell")
 														}
 														className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cell:opacity-100"
-														aria-label={t('copyCellValue', 'Copy cell value')}
+														aria-label={t("copyCellValue", "Copy cell value")}
 													>
 														<Copy className="h-3 w-3" />
 													</button>

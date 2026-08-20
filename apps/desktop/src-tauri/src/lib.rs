@@ -1,6 +1,7 @@
 mod deeplink;
 mod event_bus;
 mod event_sink;
+mod execution_identity;
 mod functions;
 mod profile;
 mod settings;
@@ -580,7 +581,7 @@ pub fn run() {
 
     #[cfg(not(debug_assertions))]
     {
-        #[cfg(all(target_os = "ios"))]
+        #[cfg(target_os = "ios")]
         { /* iOS Release: oslog is already set up above; Sentry init is deferred. */ }
 
         #[cfg(target_os = "android")]

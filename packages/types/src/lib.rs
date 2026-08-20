@@ -1,3 +1,6 @@
+// prost emits one oneof variant per component / page-content kind; their sizes differ by
+// design and the file is regenerated on every build, so the allow has to live at the include.
+#[allow(clippy::large_enum_variant)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/flow_like_types.rs"));
 }

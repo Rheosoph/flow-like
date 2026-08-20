@@ -1,5 +1,5 @@
 #[cfg(all(test, feature = "execute"))]
-mod tests {
+mod search_tests {
     use crate::geo::{
         BoundingBox, GeoCoordinate,
         search::reverse_geocode::{Address, ReverseGeocodeResult},
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_parse_bounding_box_from_strings() {
-        let bb_strings = vec![
+        let bb_strings = [
             "52.3".to_string(),
             "52.7".to_string(),
             "13.1".to_string(),

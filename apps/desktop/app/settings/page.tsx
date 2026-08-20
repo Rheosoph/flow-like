@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardDescription,
@@ -9,6 +8,7 @@ import {
 	DeveloperModeCard,
 	useDeveloperMode,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import {
 	BarChart3,
 	Bell,
@@ -217,9 +217,14 @@ export default function SettingsPage() {
 		<div className="h-full flex flex-col max-h-full overflow-auto min-h-0">
 			<div className="container mx-auto px-2 pb-4 flex flex-col gap-8">
 				<div className="flex flex-col gap-1 pt-2">
-					<h1 className="text-3xl font-bold tracking-tight">{t('settings', 'Settings')}</h1>
+					<h1 className="text-3xl font-bold tracking-tight">
+						{t("settings", "Settings")}
+					</h1>
 					<p className="text-muted-foreground">
-						{t('manageYourPreferencesModelsAndIntegrations', 'Manage your preferences, models, and integrations')}
+						{t(
+							"manageYourPreferencesModelsAndIntegrations",
+							"Manage your preferences, models, and integrations",
+						)}
 					</p>
 				</div>
 				{sections.map((section) => (
@@ -236,7 +241,7 @@ export default function SettingsPage() {
 				))}
 				<div className="flex flex-col gap-3">
 					<h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-						{t('developer', 'Developer')}
+						{t("developer", "Developer")}
 					</h2>
 					<DeveloperModeCard />
 				</div>

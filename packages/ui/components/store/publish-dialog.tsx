@@ -101,15 +101,23 @@ export function PublishDialog({
 					</DialogTitle>
 					<DialogDescription>
 						{isNewPackage
-							? t('publishPackagenameToTheRegistryForTheFirstTime', 'Publish {{packageName}} to the registry for the first time.', { packageName })
-							: t('publishANewVersionOfPackagename', 'Publish a new version of {{packageName}}.', { packageName })}
+							? t(
+									"publishPackagenameToTheRegistryForTheFirstTime",
+									"Publish {{packageName}} to the registry for the first time.",
+									{ packageName },
+								)
+							: t(
+									"publishANewVersionOfPackagename",
+									"Publish a new version of {{packageName}}.",
+									{ packageName },
+								)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-4 py-2">
 					{!isNewPackage && currentVersion && (
 						<div className="space-y-2">
-							<Label>{t('versionBump', 'Version Bump')}</Label>
+							<Label>{t("versionBump", "Version Bump")}</Label>
 							<div className="flex items-center gap-3">
 								<Select
 									value={versionBump}
@@ -119,9 +127,9 @@ export function PublishDialog({
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="patch">{t('patch', 'Patch')}</SelectItem>
-										<SelectItem value="minor">{t('minor', 'Minor')}</SelectItem>
-										<SelectItem value="major">{t('major', 'Major')}</SelectItem>
+										<SelectItem value="patch">{t("patch", "Patch")}</SelectItem>
+										<SelectItem value="minor">{t("minor", "Minor")}</SelectItem>
+										<SelectItem value="major">{t("major", "Major")}</SelectItem>
 									</SelectContent>
 								</Select>
 
@@ -135,10 +143,15 @@ export function PublishDialog({
 					)}
 
 					<div className="space-y-2">
-						<Label htmlFor="release-notes">{t('releaseNotes', 'Release Notes')}</Label>
+						<Label htmlFor="release-notes">
+							{t("releaseNotes", "Release Notes")}
+						</Label>
 						<Textarea
 							id="release-notes"
-							placeholder={t('describeWhatChangedInThisVersion', 'Describe what changed in this version…')}
+							placeholder={t(
+								"describeWhatChangedInThisVersion",
+								"Describe what changed in this version…",
+							)}
 							value={releaseNotes}
 							onChange={(e) => setReleaseNotes(e.target.value)}
 							rows={4}
@@ -163,13 +176,13 @@ export function PublishDialog({
 						onClick={() => handleOpenChange(false)}
 						disabled={isPublishing}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={handlePublish} disabled={!isValid || isPublishing}>
 						{isPublishing ? (
 							<>
 								<Loader2 className="h-4 w-4 mr-2 animate-spin" />
-								{t('publishing', 'Publishing…')}
+								{t("publishing", "Publishing…")}
 							</>
 						) : (
 							"Publish"

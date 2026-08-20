@@ -41,6 +41,17 @@ type SearchableNode = INode & {
 	pin_out_names: string[];
 };
 
+// MiniSearch's default tokenizer drops punctuation, so operator names like
+// "/" or "!=" would never be indexed nor matched. Keep operator runs as tokens.
+const SPACE_OR_PUNCTUATION = /[\n\r\p{Z}\p{P}]+/u;
+const OPERATOR_RUN = /[+\-*/%^!<>=&|~]+/g;
+function tokenizeWithOperators(text: string): string[] {
+	const tokens = text.split(SPACE_OR_PUNCTUATION).filter(Boolean);
+	const operators = text.match(OPERATOR_RUN);
+	if (operators) tokens.push(...operators);
+	return tokens;
+}
+
 interface MenuInputs {
 	startNodes: INode[];
 	variables: IVariable[];
@@ -397,6 +408,7 @@ export function FlowContextMenu({
 
 	const searchIndex = useMemo(() => {
 		const miniSearch = new MiniSearch<SearchableNode>({
+			tokenize: tokenizeWithOperators,
 			fields: [
 				"name",
 				"friendly_name",

@@ -144,11 +144,21 @@ export function BoardActivityIndicator({
 	const nodeDisplay =
 		currentlyExecuting > 0
 			? totalExecutionsCompleted > 0
-				? t('activeAndCompletedExecutions', '{{active}} active · {{completed}} completed', { active: currentlyExecuting, completed: totalExecutionsCompleted })
-				: t('currentlyexecutingActive', '{{currentlyExecuting}} active', { currentlyExecuting })
+				? t(
+						"activeAndCompletedExecutions",
+						"{{active}} active · {{completed}} completed",
+						{ active: currentlyExecuting, completed: totalExecutionsCompleted },
+					)
+				: t("currentlyexecutingActive", "{{currentlyExecuting}} active", {
+						currentlyExecuting,
+					})
 			: totalExecutionsCompleted > 0
-				? t('totalExecutionsCompleted', '{{totalExecutionsCompleted}} completed', { totalExecutionsCompleted })
-				: t('starting', 'Starting…');
+				? t(
+						"totalExecutionsCompleted",
+						"{{totalExecutionsCompleted}} completed",
+						{ totalExecutionsCompleted },
+					)
+				: t("starting", "Starting…");
 
 	// Only show time after 15 seconds
 	const showTime = timeSinceUpdate >= 15000;
@@ -159,12 +169,19 @@ export function BoardActivityIndicator({
 		>
 			<PuffLoader color="currentColor" size={14} className={colors.icon} />
 			<div className="flex flex-col">
-				<span className={`text-xs font-medium ${colors.text}`}>{t('countRuns', { defaultValue_one: '{{count}} run', defaultValue_other: '{{count}} runs', count: activeRunIds.length })} •{" "}
-					{nodeDisplay}
+				<span className={`text-xs font-medium ${colors.text}`}>
+					{t("countRuns", {
+						defaultValue_one: "{{count}} run",
+						defaultValue_other: "{{count}} runs",
+						count: activeRunIds.length,
+					})}{" "}
+					• {nodeDisplay}
 				</span>
 				{showTime && (
 					<span className={`text-[10px] ${colors.text} opacity-75`}>
-						{t('durationAgo', '{{duration}} ago', { duration: formatDuration(timeSinceUpdate) })}
+						{t("durationAgo", "{{duration}} ago", {
+							duration: formatDuration(timeSinceUpdate),
+						})}
 					</span>
 				)}
 			</div>

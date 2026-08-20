@@ -31,7 +31,9 @@ function ChartLoadingFallback() {
 	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center justify-center h-75 bg-muted/20 rounded-md animate-pulse">
-			<span className="text-muted-foreground text-sm">{t('loadingChart', 'Loading chart...')}</span>
+			<span className="text-muted-foreground text-sm">
+				{t("loadingChart", "Loading chart...")}
+			</span>
 		</div>
 	);
 }
@@ -60,7 +62,7 @@ function ChartModuleFallback({
 				onClick={onRetry}
 				className="rounded bg-background/80 px-3 py-1 text-xs text-foreground"
 			>
-				{t('retryChartLoad', 'Retry chart load')}
+				{t("retryChartLoad", "Retry chart load")}
 			</button>
 		</div>
 	);
@@ -122,7 +124,10 @@ export function ChartCodeBlock({
 				const component = (mod.default ?? null) as ChartPreviewComponent | null;
 				if (!component) {
 					setModuleError(
-						t('chartPreviewModuleLoadedWithoutADefaultExport', 'Chart preview module loaded without a default export.'),
+						t(
+							"chartPreviewModuleLoadedWithoutADefaultExport",
+							"Chart preview module loaded without a default export.",
+						),
 					);
 					return;
 				}
@@ -133,7 +138,7 @@ export function ChartCodeBlock({
 				const message =
 					error instanceof Error
 						? error.message
-						: t('failedToLoadChartPreview', 'Failed to load chart preview.');
+						: t("failedToLoadChartPreview", "Failed to load chart preview.");
 				setModuleError(message);
 			})
 			.finally(() => {
@@ -159,7 +164,7 @@ export function ChartCodeBlock({
 					onClick={() => setShowSource(false)}
 					className={TOGGLE_CLASS}
 				>
-					{t('showChart', 'Show Chart')}
+					{t("showChart", "Show Chart")}
 				</button>
 				<pre className="overflow-x-auto p-4 pt-10 font-mono text-sm bg-muted/50 rounded-md">
 					<code>{content}</code>
@@ -180,7 +185,7 @@ export function ChartCodeBlock({
 					"opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
 				)}
 			>
-				{t('viewSource', 'View Source')}
+				{t("viewSource", "View Source")}
 			</button>
 			{isModuleLoading ? <ChartLoadingFallback /> : null}
 			{!isModuleLoading && moduleError ? (

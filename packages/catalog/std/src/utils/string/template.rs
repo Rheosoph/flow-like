@@ -1,11 +1,11 @@
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
-    node::{Node, NodeLogic},
+    node::{Node, NodeLogic, dynamic_pin_source_literal, remove_unwired_pins},
     pin::PinType,
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, minijinja};
+use flow_like_types::{async_trait, json::json, minijinja};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -80,18 +80,19 @@ impl NodeLogic for TemplateStringNode {
     }
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        // A wired, absent or non-string template says nothing about which variables the node will
+        // actually be rendered with. Reading it as "no variables" would delete every derived pin
+        // along with the wires feeding them.
+        let Some(template_string) = dynamic_pin_source_literal(node, "template") else {
+            return;
+        };
+
         let pins: Vec<_> = node
             .pins
             .values()
             .filter(|p| p.name != "template" && p.pin_type == PinType::Input)
             .collect();
-
-        let template_string: String = node
-            .get_pin_by_name("template")
-            .and_then(|pin| pin.default_value.clone())
-            .and_then(|bytes| flow_like_types::json::from_slice::<Value>(&bytes).ok())
-            .and_then(|json| json.as_str().map(ToOwned::to_owned))
-            .unwrap_or_default();
 
         let mut current_placeholders = pins
             .iter()
@@ -118,6 +119,15 @@ impl NodeLogic for TemplateStringNode {
         let mut missing_placeholders = HashSet::new();
 
         for placeholder in template_placeholders {
+            // `{{ template }}` would otherwise mint a second pin named `template` and then
+            // `match_type` it, rewriting the type of the node's own template input.
+            if placeholder == "template" {
+                node.error = Some(
+                    "`template` is the name of this node's own input and cannot be a template variable. Rename it."
+                        .to_string(),
+                );
+                continue;
+            }
             all_placeholders.insert(placeholder.clone());
             if current_placeholders.remove(&placeholder).is_none() {
                 missing_placeholders.insert(placeholder.clone());
@@ -128,9 +138,7 @@ impl NodeLogic for TemplateStringNode {
             .values()
             .map(|p| p.id.clone())
             .collect::<Vec<_>>();
-        ids_to_remove.iter().for_each(|id| {
-            node.pins.remove(id);
-        });
+        remove_unwired_pins(node, &ids_to_remove);
 
         for placeholder in missing_placeholders {
             node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);

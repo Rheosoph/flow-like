@@ -162,7 +162,7 @@ const FlowDockMobile = memo(
 				</AnimatePresence>
 				<button
 					onClick={handleToggle}
-					aria-label={i18next.t('toggleActions', 'Toggle actions')}
+					aria-label={i18next.t("toggleActions", "Toggle actions")}
 					aria-expanded={open}
 					className="h-8 w-8 rounded-full bg-secondary hover:bg-secondary/80 flex items-center justify-center transition-colors"
 				>

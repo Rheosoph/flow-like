@@ -667,7 +667,7 @@ fn bounded_terminal_error(error: &CompilerError) -> String {
             .find(|index| message.is_char_boundary(*index))
             .unwrap_or(0);
         message.truncate(boundary);
-        message.push_str("…");
+        message.push('…');
     }
     message
 }
