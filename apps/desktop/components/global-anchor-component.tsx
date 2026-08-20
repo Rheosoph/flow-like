@@ -51,6 +51,10 @@ interface NavigableInfo {
 
 // Best-effort external opener that works on iOS; avoids blocking the user gesture.
 const openInBrowser = async (href: string) => {
+	// Hrefs come from page content, so the scheme allowlist is enforced here as
+	// well as at every call site — nothing that can execute script in a webview
+	// is ever handed on.
+	if (!isHttpish(href)) return false;
 	try {
 		await shellOpen(href);
 		return true;
@@ -60,10 +64,9 @@ const openInBrowser = async (href: string) => {
 			window.open(href, "_blank", "noopener,noreferrer");
 			return true;
 		} catch {
-			// Last-resort fallback; anchor hrefs are page content, so only
-			// navigate schemes that cannot execute script in this webview.
-			if (isHttpish(href)) location.href = href;
-			return true;
+			// Navigating this webview would strand the user on an external page
+			// inside the app shell, with no browser chrome to get back.
+			return false;
 		}
 	}
 };

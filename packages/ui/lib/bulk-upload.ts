@@ -37,6 +37,7 @@ const RETRY_MAX_DELAY_MS = 15_000;
 const PROGRESS_THROTTLE_MS = 100;
 /** Samples kept for the throughput estimate, ~3s of history at the throttle. */
 const RATE_WINDOW_SAMPLES = 30;
+const SLASH = 47;
 
 export interface IBulkUploadTask {
 	/** Destination path relative to the storage root, e.g. `photos/2024/a.jpg`. */
@@ -166,13 +167,22 @@ export function isRetryableUploadError(error: unknown): boolean {
 	return true;
 }
 
+/** Linear-time slash trim; a `/^\/+|\/+$/` regex backtracks on slash runs. */
+function trimSlashes(value: string): string {
+	let start = 0;
+	let end = value.length;
+	while (start < end && value.charCodeAt(start) === SLASH) start += 1;
+	while (end > start && value.charCodeAt(end - 1) === SLASH) end -= 1;
+	return value.slice(start, end);
+}
+
 /** Joins a prefix and a file's path, preserving folder structure. */
 export function buildUploadPath(prefix: string, file: File): string {
 	const relative =
 		file.webkitRelativePath && file.webkitRelativePath !== ""
 			? file.webkitRelativePath
 			: file.name;
-	const trimmed = prefix.replace(/^\/+|\/+$/g, "");
+	const trimmed = trimSlashes(prefix);
 	return trimmed ? `${trimmed}/${relative}` : relative;
 }
 
