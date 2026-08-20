@@ -1914,6 +1914,7 @@ fn create_plan_board_scope_tool() -> (Tool, ToolHandler) {
     (tool, handler)
 }
 
+#[allow(clippy::result_large_err)] // the Err IS the caller's return value; boxing would allocate only to immediately unbox
 fn parse_flowscript_arguments<T: DeserializeOwned>(
     arguments: Value,
     tool_name: &str,
@@ -4788,18 +4789,15 @@ fn get_component_schema_doc(component_type: &str) -> String {
 mod tests {
     use super::*;
     use flow_like::flow::{
-        board::{ExecutionMode, ExecutionStage},
         copilot::{
             FlowCapabilityRequirement, FlowIrArg, FlowIrDraftMode, FlowIrLiteral, FlowIrModule,
             FlowIrProgram, FlowIrStep, FlowIrValue, FlowModuleEstimate, FlowModuleKind,
             PinMetadata,
         },
-        execution::LogLevel,
         pin::ValueType,
         variable::{Variable, VariableType},
     };
     use flow_like::flow_like_storage::Path;
-    use std::time::SystemTime;
 
     #[test]
     fn specialist_direct_surfaces_exclude_global_public_web_research() {

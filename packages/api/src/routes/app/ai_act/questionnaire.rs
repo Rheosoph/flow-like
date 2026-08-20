@@ -91,6 +91,7 @@ pub mod keys {
     pub const HUMAN_OVERSIGHT: &str = "human_oversight";
     pub const PERSONAL_DATA: &str = "uses_personal_data";
     pub const INSTRUCTIONS: &str = "instructions_documented";
+    #[allow(dead_code)] // reserved stable answer key for the persisted questionnaire JSON
     pub const RESPONSIBLE: &str = "responsible_person";
 }
 
@@ -682,7 +683,7 @@ pub fn recommendations(
         }
     }
 
-    recs.sort_by(|a, b| b.potential_points.cmp(&a.potential_points));
+    recs.sort_by_key(|r| std::cmp::Reverse(r.potential_points));
     recs
 }
 

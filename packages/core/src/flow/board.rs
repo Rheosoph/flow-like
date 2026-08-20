@@ -249,7 +249,7 @@ impl Layer {
         let mut sorted_pins: Vec<_> = self.pins.iter().collect();
         sorted_pins.sort_by_key(|(id, _)| *id);
         for (_id, pin) in sorted_pins {
-            pin.hash(&mut hasher);
+            pin.hash_into(&mut hasher);
         }
 
         hasher.append(&self.coordinates.0.to_le_bytes());

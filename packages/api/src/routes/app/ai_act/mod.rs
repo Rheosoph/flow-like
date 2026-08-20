@@ -642,4 +642,5 @@ pub async fn suggest_assessment(
 pub use questionnaire::classify as classify_assessment;
 #[allow(unused_imports)]
 pub use signals::Signals as AiActSignals;
+#[allow(dead_code)] // completes the classify/Signals/Classification re-export façade above
 pub type AiActClassification = Classification;

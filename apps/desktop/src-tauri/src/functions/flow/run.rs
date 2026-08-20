@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::log::LogMessage;

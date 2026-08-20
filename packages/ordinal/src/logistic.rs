@@ -850,6 +850,10 @@ fn argmax<F: Float>(values: &[F]) -> usize {
     best
 }
 
+/// Objective value, gradient in the shared coefficients, gradient in the per-threshold
+/// coefficients, and gradient in the raw threshold parameters.
+type ObjectiveGradient<F> = (F, Array1<F>, Array2<F>, Vec<F>);
+
 /// Penalized objective and its gradient with respect to the shared coefficients, the
 /// per-threshold coefficients, and the raw threshold parameters.
 ///
@@ -868,7 +872,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     link: Link,
     loss: OrdinalLoss,
     margin: Margin,
-) -> Result<(F, Array1<F>, Array2<F>, Vec<F>)> {
+) -> Result<ObjectiveGradient<F>> {
     let n_cuts = n_classes - 1;
     let thresholds = thresholds_from_raw(raw);
 

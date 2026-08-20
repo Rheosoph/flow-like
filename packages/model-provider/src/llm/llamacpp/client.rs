@@ -754,9 +754,7 @@ impl CompletionModel {
                         part[separator_index + 1..].trim().to_string(),
                     )
                 } else {
-                    let Some(parameter_name) = ordered_parameter_names.get(positional_index) else {
-                        return None;
-                    };
+                    let parameter_name = ordered_parameter_names.get(positional_index)?;
                     positional_index += 1;
                     (parameter_name.clone(), part.to_string())
                 };
@@ -2913,7 +2911,7 @@ mod tests {
         }
 
         let client = LlamaCppClient::new(&test_base_url());
-        let agent = client.agent(&test_model()).build();
+        let agent = client.agent(test_model()).build();
 
         let mut history = Vec::<Message>::new();
         let response: String = agent
@@ -2932,7 +2930,7 @@ mod tests {
 
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client
-            .agent(&test_model())
+            .agent(test_model())
             .preamble("You are a pirate. Always respond in pirate speak.")
             .build();
 
@@ -2952,7 +2950,7 @@ mod tests {
         }
 
         let client = LlamaCppClient::new(&test_base_url());
-        let agent = client.agent(&test_model()).build();
+        let agent = client.agent(test_model()).build();
 
         let mut history = vec![
             Message::user("My name is Alice."),
@@ -2973,7 +2971,7 @@ mod tests {
         }
 
         let client = LlamaCppClient::new(&test_base_url());
-        let agent = client.agent(&test_model()).build();
+        let agent = client.agent(test_model()).build();
 
         let mut stream = agent
             .stream_chat("Count from 1 to 5.", Vec::<Message>::new())
@@ -2983,11 +2981,8 @@ mod tests {
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(content)) => {
-                    match content {
-                        rig::streaming::StreamedAssistantContent::Text(text) => {
-                            collected.push_str(&text.text);
-                        }
-                        _ => {}
+                    if let rig::streaming::StreamedAssistantContent::Text(text) = content {
+                        collected.push_str(&text.text);
                     }
                 }
                 Ok(_) => {}
@@ -3304,7 +3299,7 @@ mod tests {
         }
 
         let client = LlamaCppClient::new(&test_base_url());
-        let agent = client.agent(&test_model()).build();
+        let agent = client.agent(test_model()).build();
 
         let mut history = Vec::<Message>::new();
         let response: String = agent
@@ -3339,7 +3334,7 @@ mod tests {
         }
 
         let client = LlamaCppClient::new(&test_base_url());
-        let agent = client.agent(&test_model()).build();
+        let agent = client.agent(test_model()).build();
 
         let mut stream = agent
             .stream_chat(

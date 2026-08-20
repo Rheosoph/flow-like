@@ -224,6 +224,7 @@ async fn inbound_mcp(
 /// - A `PUBLIC` event on the proxy → 403 (call it via its public endpoint).
 /// - An `INTERNAL` event on the public router → 404 (never publicly exposed;
 ///   404 rather than 403 so its existence is not revealed).
+#[allow(clippy::result_large_err)] // Err is axum's Response, the currency type of this module
 fn enforce_exposure(event_row: &event::Model, is_public_surface: bool) -> Result<(), Response> {
     let internal = flow_like::flow::event::EventExposure::parse(&event_row.exposure).is_internal();
     if is_public_surface && internal {
@@ -1632,6 +1633,7 @@ async fn dispatch_rest_file(
     Ok(resp)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_rest_fn(
     state: &AppState,
     event_row: &event::Model,
@@ -2331,6 +2333,7 @@ async fn prune_expired_mcp_sessions() {
     sessions.retain(|_, session| session.created_at.elapsed() < TTL);
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mcp_handle_post(
     state: &AppState,
     event_row: &event::Model,

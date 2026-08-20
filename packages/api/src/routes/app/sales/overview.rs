@@ -21,6 +21,8 @@ pub struct StatsQuery {
     pub end_date: Option<String>,
     /// Aggregation period: "day", "week", "month"
     #[serde(default = "default_period")]
+    #[allow(dead_code)]
+    // OpenAPI/serde query parameter — registered in openapi.rs, documented in utoipa params()
     pub period: String,
 }
 

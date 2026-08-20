@@ -348,7 +348,7 @@ fn apply_pii_mask(
     }
 
     // Sort by start position descending so we replace from end to start
-    all_matches.sort_by(|a, b| b.0.cmp(&a.0));
+    all_matches.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
 
     // Remove overlapping matches (keep the longest one)
     let mut filtered_matches: Vec<(usize, usize, &str)> = Vec::new();

@@ -8,6 +8,9 @@ pub struct NFCSink {
     pub last_read_time: Option<String>,
 }
 
+// NDEF/ISO* are NFC protocol identifiers and double as the serde wire values for
+// persisted sink configs; renaming them would invalidate stored configs.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NFCReadMode {
     Any,

@@ -93,7 +93,7 @@ impl SelectorSet {
         Self::default()
     }
 
-    pub fn add(mut self, selector: Selector) -> Self {
+    pub fn with_selector(mut self, selector: Selector) -> Self {
         let idx = self.selectors.len();
         self.selectors.push(selector);
         self.fallback_order.push(idx);

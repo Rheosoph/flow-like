@@ -143,8 +143,9 @@ pub async fn report_progress(
     // Running is the atomic claim/renew operation for strict queue workers.
     // The Cosmos ETag write is the serialization point; a competing delivery
     // receives Busy until expiry, then may take over with a new token.
-    if matches!(&body.status, Some(ProgressStatus::Running)) && lease_identity.is_some() {
-        let (job_id, lease_token) = lease_identity.expect("lease identity was checked");
+    if matches!(&body.status, Some(ProgressStatus::Running))
+        && let Some((job_id, lease_token)) = lease_identity
+    {
         let lease_duration_ms = body.lease_duration_ms.ok_or_else(|| {
             ApiError::bad_request("lease_duration_ms is required for a queue lease claim")
         })?;
@@ -659,6 +660,7 @@ pub struct RunStatusResponse {
 // Tracking
 // ============================================================================
 
+#[allow(clippy::too_many_arguments)]
 async fn track_execution_usage(
     db: &sea_orm::DatabaseConnection,
     board_id: &str,

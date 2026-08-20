@@ -380,7 +380,7 @@ impl CatalogProvider for ServerCatalogProvider {
             }
         }
 
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored_matches
             .into_iter()
             .take(10)

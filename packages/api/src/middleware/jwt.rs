@@ -34,6 +34,7 @@ use crate::state::{AppState, CachedAuth, cached_openid_is_current};
 /// Client IP address extracted from the request for audit trail purposes.
 /// Checks X-Forwarded-For, X-Real-Ip, then falls back to the peer address.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClientIp(pub Option<String>);
 
 /// Header the AWS edge uses to forward the viewer's `Authorization` value.
@@ -940,11 +941,7 @@ pub async fn jwt_middleware(
     if let Some(token) = viewer_authorization(request.headers())
         && !token.starts_with("pat_")
     {
-        let token = if token.starts_with("Bearer ") {
-            &token[7..]
-        } else {
-            token
-        };
+        let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let token = token.trim();
         let cache_key = hash_token(token);
 
@@ -1102,11 +1099,7 @@ pub async fn jwt_middleware(
     // Try PAT auth
     if let Some(raw_token) = viewer_authorization(request.headers()) {
         // Strip "Bearer " prefix if present so PATs sent as standard Bearer tokens are recognized
-        let token = if raw_token.starts_with("Bearer ") {
-            &raw_token[7..]
-        } else {
-            raw_token
-        };
+        let token = raw_token.strip_prefix("Bearer ").unwrap_or(raw_token);
         let token = token.trim();
 
         if token.starts_with("pat_") {

@@ -112,9 +112,9 @@ pub async fn sync_sink(
         if config.path.is_some() {
             active_model.path = Set(config.path.clone());
         }
-        if is_http_sink {
-            active_model.auth_token = Set(auth_token.clone());
-        } else if config.auth_token.is_some() {
+        // HTTP sinks mirror the event config exactly (clearing the token clears the
+        // column); other sink types only overwrite when a token was supplied.
+        if is_http_sink || config.auth_token.is_some() {
             active_model.auth_token = Set(auth_token.clone());
         }
         if config.method.is_some() {
@@ -256,53 +256,6 @@ fn cron_schedule_needs_rebuild(
     // one-time sync as a rebuild to propagate date/time edits to the external
     // scheduler.
     new_scheduled_for.is_some()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::cron_schedule_needs_rebuild;
-
-    #[test]
-    fn rebuilds_on_timezone_change() {
-        assert!(cron_schedule_needs_rebuild(
-            &Some("0 9 * * *".to_string()),
-            &Some("0 9 * * *".to_string()),
-            &Some("UTC".to_string()),
-            &Some("Europe/Berlin".to_string()),
-            "cron",
-            "cron",
-            None,
-        ));
-    }
-
-    #[test]
-    fn rebuilds_for_one_time_schedules() {
-        assert!(cron_schedule_needs_rebuild(
-            &None,
-            &None,
-            &Some("UTC".to_string()),
-            &Some("UTC".to_string()),
-            "cron",
-            "cron",
-            Some(&flow_like_sinks::ScheduledLocal {
-                date: "2026-04-25".to_string(),
-                time: "09:00".to_string(),
-            }),
-        ));
-    }
-
-    #[test]
-    fn skips_rebuild_when_schedule_is_unchanged() {
-        assert!(!cron_schedule_needs_rebuild(
-            &Some("0 9 * * *".to_string()),
-            &Some("0 9 * * *".to_string()),
-            &Some("UTC".to_string()),
-            &Some("UTC".to_string()),
-            "cron",
-            "cron",
-            None,
-        ));
-    }
 }
 
 /// Delete a sink and its external scheduler
@@ -514,5 +467,52 @@ pub fn sink_type_from_event_type(event_type: &str) -> &str {
         "api" | "http" | "webhook" => sink_types::HTTP,
         // Default to HTTP for unknown types
         _ => sink_types::HTTP,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cron_schedule_needs_rebuild;
+
+    #[test]
+    fn rebuilds_on_timezone_change() {
+        assert!(cron_schedule_needs_rebuild(
+            &Some("0 9 * * *".to_string()),
+            &Some("0 9 * * *".to_string()),
+            &Some("UTC".to_string()),
+            &Some("Europe/Berlin".to_string()),
+            "cron",
+            "cron",
+            None,
+        ));
+    }
+
+    #[test]
+    fn rebuilds_for_one_time_schedules() {
+        assert!(cron_schedule_needs_rebuild(
+            &None,
+            &None,
+            &Some("UTC".to_string()),
+            &Some("UTC".to_string()),
+            "cron",
+            "cron",
+            Some(&flow_like_sinks::ScheduledLocal {
+                date: "2026-04-25".to_string(),
+                time: "09:00".to_string(),
+            }),
+        ));
+    }
+
+    #[test]
+    fn skips_rebuild_when_schedule_is_unchanged() {
+        assert!(!cron_schedule_needs_rebuild(
+            &Some("0 9 * * *".to_string()),
+            &Some("0 9 * * *".to_string()),
+            &Some("UTC".to_string()),
+            &Some("UTC".to_string()),
+            "cron",
+            "cron",
+            None,
+        ));
     }
 }

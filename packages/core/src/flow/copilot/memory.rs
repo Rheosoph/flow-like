@@ -5,6 +5,7 @@
 //! resolved through the same `EmbeddingFactory` the rest of the app uses. All of this is reachable
 //! without a flow `ExecutionContext`, so it plugs directly into the context-free `PlatformCopilot`.
 
+use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -207,7 +208,7 @@ impl AssistantMemory {
                 })
             })
             .collect();
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        entries.sort_by_key(|entry| Reverse(entry.timestamp));
         Ok(entries)
     }
 

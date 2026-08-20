@@ -495,6 +495,7 @@ where
 /// Creates or updates the internal, version-pinned events that make ontology
 /// actions executable through the existing event runtime. Callers must already
 /// have checked graph-write and event-write permissions.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn materialize_action_events(
     state: &AppState,
     sub: &str,
@@ -521,6 +522,7 @@ pub(crate) async fn materialize_action_events(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn materialize_action_events_with_mode(
     state: &AppState,
     sub: &str,
@@ -768,6 +770,7 @@ pub(crate) async fn remove_action_events(
 /// Best-effort compensation when ontology persistence fails after event files
 /// have already been updated. Newly created bindings are removed and reused
 /// bindings are restored to their previous definition.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn rollback_action_event_changes(
     state: &AppState,
     sub: &str,

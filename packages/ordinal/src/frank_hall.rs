@@ -503,7 +503,7 @@ mod tests {
     impl<F: Float> PredictInplace<Array2<F>, Array1<bool>> for MidpointSplit<F> {
         fn predict_inplace(&self, x: &Array2<F>, y: &mut Array1<bool>) {
             assert_eq!(x.nrows(), y.len());
-            for (answer, row) in y.iter_mut().zip(x.rows().into_iter()) {
+            for (answer, row) in y.iter_mut().zip(x.rows()) {
                 *answer = row[0] > self.cut;
             }
         }

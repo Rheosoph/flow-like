@@ -576,8 +576,7 @@ impl ObjectDetection for YoloV2GridLike {
             .ok_or_else(|| anyhow!("YOLOv2 grid output is not contiguous"))?;
         let anchor_dims = yolo_v2_anchors(self.num_classes);
         let mut bboxes = Vec::new();
-        for anchor in 0..anchors.min(anchor_dims.len()) {
-            let (anchor_w, anchor_h) = anchor_dims[anchor];
+        for (anchor, &(anchor_w, anchor_h)) in anchor_dims.iter().enumerate().take(anchors) {
             for gy in 0..grid_h {
                 for gx in 0..grid_w {
                     let base_channel = anchor * attrs;
@@ -729,7 +728,9 @@ impl ObjectDetection for YoloV4Like {
 
             for gy in 0..grid_h {
                 for gx in 0..grid_w {
-                    for anchor in 0..anchors.min(anchor_dims.len()) {
+                    for (anchor, &(anchor_w, anchor_h)) in
+                        anchor_dims.iter().enumerate().take(anchors)
+                    {
                         let base = ((gy * grid_w + gx) * anchors + anchor) * attrs;
                         let objectness = sigmoid(output[base + 4]);
                         let mut best_class = 0usize;
@@ -747,7 +748,6 @@ impl ObjectDetection for YoloV4Like {
                             continue;
                         }
 
-                        let (anchor_w, anchor_h) = anchor_dims[anchor];
                         let center_x = ((sigmoid(output[base]) * xyscale) - 0.5 * (xyscale - 1.0)
                             + gx as f32)
                             * stride;
@@ -930,7 +930,9 @@ impl RetinaNetLike {
 
             for gy in 0..grid_h {
                 for gx in 0..grid_w {
-                    for anchor in 0..anchors.min(anchor_dims.len()) {
+                    for (anchor, &(anchor_w, anchor_h)) in
+                        anchor_dims.iter().enumerate().take(anchors)
+                    {
                         let mut best_class = 0usize;
                         let mut best_score = f32::NEG_INFINITY;
                         for class_idx in 0..80usize {
@@ -952,7 +954,6 @@ impl RetinaNetLike {
                         let dy = nchw_value(boxes, box_channel + 1, gy, gx, grid_h, grid_w);
                         let dw = nchw_value(boxes, box_channel + 2, gy, gx, grid_h, grid_w);
                         let dh = nchw_value(boxes, box_channel + 3, gy, gx, grid_h, grid_w);
-                        let (anchor_w, anchor_h) = anchor_dims[anchor];
                         let anchor_cx = (gx as f32 + 0.5) * stride;
                         let anchor_cy = (gy as f32 + 0.5) * stride;
                         let center_x = dx * anchor_w + anchor_cx;
@@ -1211,6 +1212,7 @@ fn yolo_grid_value(
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 fn yolo_v3_selected_boxes(
     boxes: &[f32],
     boxes_batches: usize,

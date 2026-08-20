@@ -452,7 +452,7 @@ async fn load_tokenizer(
 
 #[cfg(test)]
 mod tests {
-    use flow_like_types::{sync::Mutex, tokio};
+    use flow_like_types::tokio;
 
     use super::*;
     use crate::{

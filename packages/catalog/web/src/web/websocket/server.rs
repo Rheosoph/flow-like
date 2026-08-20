@@ -127,6 +127,7 @@ impl NodeLogic for WebSocketServerNode {
     }
 
     #[cfg(feature = "execute")]
+    #[allow(clippy::result_large_err)] // Err type is tungstenite's ErrorResponse, fixed by the accept_hdr_async callback contract
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("on_listening").await?;
         context.deactivate_exec_pin("on_connect").await?;
@@ -461,6 +462,7 @@ async fn await_or_abort(mut handle: tokio::task::JoinHandle<()>) {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_server_message_reader(
     context: &ExecutionContext,
     mut stream: super::ServerWsStream,

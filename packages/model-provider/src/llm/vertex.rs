@@ -41,8 +41,8 @@ impl CredentialsProvider for StaticAccessTokenCredentials {
         }
     }
 
-    fn universe_domain(&self) -> impl Future<Output = Option<String>> + Send {
-        async { Some("googleapis.com".to_string()) }
+    async fn universe_domain(&self) -> Option<String> {
+        Some("googleapis.com".to_string())
     }
 }
 

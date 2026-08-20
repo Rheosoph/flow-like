@@ -1105,6 +1105,14 @@ impl NodeLogic for AutoOrdinalNode {
     }
 }
 
+/// Training dataset, validation features and the validation row indices of one CV fold.
+#[cfg(feature = "execute")]
+type FoldSplit = (
+    DatasetBase<Array2<f64>, Array1<usize>>,
+    Array2<f64>,
+    Vec<usize>,
+);
+
 /// Materialises one cross-validation split from the shuffled row order.
 #[cfg(feature = "execute")]
 fn split_fold(
@@ -1114,11 +1122,7 @@ fn split_fold(
     fold: usize,
     fold_size: usize,
     cv_folds: usize,
-) -> (
-    DatasetBase<Array2<f64>, Array1<usize>>,
-    Array2<f64>,
-    Vec<usize>,
-) {
+) -> FoldSplit {
     let validation_start = fold * fold_size;
     // The last fold absorbs the remainder, so no row is dropped when the row count is not divisible
     // by the fold count.

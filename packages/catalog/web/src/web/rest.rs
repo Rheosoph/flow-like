@@ -2108,6 +2108,7 @@ fn openapi_operation_id(method: &str, path: &str) -> String {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut stream: super::tls::BoxedIo,
     remote_addr: String,

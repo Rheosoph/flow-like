@@ -4181,6 +4181,7 @@ fn reachable_flow_ir_function_names(program: &FlowIrProgram) -> HashSet<String> 
     reachable
 }
 
+#[allow(clippy::too_many_arguments)]
 fn steps_implement_requirement(
     steps: &[FlowIrStep],
     requirement: &FlowCapabilityRequirement,
@@ -4309,6 +4310,7 @@ fn steps_implement_requirement(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn node_implements_requirement(
     requirement: &FlowCapabilityRequirement,
     metadata: &NodeMetadata,

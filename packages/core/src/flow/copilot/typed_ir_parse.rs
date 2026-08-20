@@ -111,11 +111,15 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct NestedArgs {
+        #[allow(dead_code)]
+        // deserialize-only fixture: the nested shape is what produces the asserted
         items: Vec<Flag>,
     }
 
     #[derive(Debug, Deserialize)]
     struct Flag {
+        #[allow(dead_code)]
+        // deserialize-only fixture: the bool type is what makes the string input fail with the asserted expectation
         enabled: bool,
     }
 

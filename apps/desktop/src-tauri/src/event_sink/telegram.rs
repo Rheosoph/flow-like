@@ -55,6 +55,8 @@ lazy_static::lazy_static! {
 }
 
 struct BotInstance {
+    #[allow(dead_code)]
+    // instance identity, mirrors discord::BotInstance::token; run_telegram_bot takes the token as a parameter
     token: String,
     handlers: HashMap<String, EventHandler>,
 }
@@ -1116,6 +1118,7 @@ impl TelegramSink {
         Ok(token)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn parse_telegram_config(
         token: String,
         bot_name: Option<String>,

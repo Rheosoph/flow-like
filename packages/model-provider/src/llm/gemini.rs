@@ -418,7 +418,7 @@ impl GeminiModel {
 
     /// Transform RigMessages to download HTTPS URLs and encode them as base64 for Gemini.
     /// Gemini only accepts gs:// URIs or inline base64 — arbitrary HTTPS URLs are rejected.
-    async fn transform_rig_messages(&self, prompt: &mut RigMessage, history: &mut Vec<RigMessage>) {
+    async fn transform_rig_messages(&self, prompt: &mut RigMessage, history: &mut [RigMessage]) {
         transform_rig_message(prompt).await;
         for msg in history.iter_mut() {
             transform_rig_message(msg).await;

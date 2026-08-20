@@ -84,6 +84,12 @@ pub async fn map_reduce_summarize(
     Ok((result, llm_calls))
 }
 
+/// Boxed future of one reduce pass: the merged summary plus the number of LLM calls it cost.
+/// Boxed because [`recursive_reduce`] recurses into itself.
+pub type ReduceFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = flow_like_types::Result<(String, usize)>> + Send + 'a>,
+>;
+
 /// Recursively reduces summaries until they fit in a single context window.
 pub fn recursive_reduce<'a>(
     summaries: &'a [String],
@@ -92,9 +98,7 @@ pub fn recursive_reduce<'a>(
     model: &'a dyn ModelLogic,
     model_name: &'a str,
     chunk_capacity: usize,
-) -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = flow_like_types::Result<(String, usize)>> + Send + 'a>,
-> {
+) -> ReduceFuture<'a> {
     Box::pin(async move {
         if summaries.len() <= 1 {
             return Ok((summaries.first().cloned().unwrap_or_default(), 0));

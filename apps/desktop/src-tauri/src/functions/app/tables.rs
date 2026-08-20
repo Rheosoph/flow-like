@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -322,6 +324,8 @@ pub async fn db_list(
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VectorQueryPayload {
+    #[allow(dead_code)]
+    // wire field: frontend IQueryTableVectorPayload always sends the vector column name; LanceDB currently resolves it itself
     pub column: String,
     pub vector: Vec<f64>,
 }

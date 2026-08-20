@@ -84,6 +84,8 @@ struct BranchToolCallArgs {
 
 #[derive(Debug, Deserialize)]
 struct BranchToolCall {
+    #[allow(dead_code)]
+    // required by the <tooluse> JSON contract: deserialization must fail when the model omits
     name: String,
     arguments: BranchToolCallArgs,
 }

@@ -991,20 +991,20 @@ fn parse_event_datetime(datetime_str: &str) -> Option<DateTime<Utc>> {
         let dt_part = &datetime_str[..bracket_pos];
         // Parse as naive datetime and assume UTC for filtering purposes
         if let Ok(naive_dt) = NaiveDateTime::parse_from_str(dt_part, "%Y-%m-%dT%H:%M:%S") {
-            return Some(DateTime::<Utc>::from_utc(naive_dt, Utc));
+            return Some(naive_dt.and_utc());
         }
     }
 
     // Try parsing floating datetime (no timezone)
     if let Ok(naive_dt) = NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%dT%H:%M:%S") {
-        return Some(DateTime::<Utc>::from_utc(naive_dt, Utc));
+        return Some(naive_dt.and_utc());
     }
 
     // Try parsing date-only format
     if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(datetime_str, "%Y-%m-%d")
         && let Some(naive_dt) = naive_date.and_hms_opt(0, 0, 0)
     {
-        return Some(DateTime::<Utc>::from_utc(naive_dt, Utc));
+        return Some(naive_dt.and_utc());
     }
 
     None

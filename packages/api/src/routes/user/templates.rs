@@ -16,6 +16,9 @@ use sea_orm::{
     RelationTrait, TransactionTrait,
 };
 
+/// One template per entry as (template id, board id, localized metadata).
+pub type UserTemplateListing = Vec<(String, String, Metadata)>;
+
 #[utoipa::path(
     get,
     path = "/user/templates",
@@ -38,7 +41,7 @@ pub async fn get_templates(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<LanguageParams>,
-) -> Result<Json<Vec<(String, String, Metadata)>>, ApiError> {
+) -> Result<Json<UserTemplateListing>, ApiError> {
     let language = query.language.as_deref().unwrap_or("en");
     let user_id = user.sub()?;
 
@@ -81,7 +84,7 @@ async fn get_templates_with_metadata(
     txn: &DatabaseTransaction,
     app_ids: &[String],
     language: &str,
-) -> Result<Vec<(String, String, Metadata)>, ApiError> {
+) -> Result<UserTemplateListing, ApiError> {
     let templates = template::Entity::find()
         .find_with_related(meta::Entity)
         .filter(template::Column::AppId.is_in(app_ids))

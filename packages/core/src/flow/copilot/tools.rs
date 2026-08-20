@@ -2185,6 +2185,7 @@ typed arguments. This covers every package in the project's catalog, including t
 /// updates/removals; new unanchored catalog calls become AddNode/ConnectPins/UpdateNodePin.
 /// The commands are surfaced in the same `<commands>…</commands>` envelope the `emit_commands`
 /// path consumes, so they flow through the existing validation/apply/undo pipeline.
+#[allow(dead_code)] // legacy rig adapter for the
 pub(crate) struct EditFlowScriptTool {
     pub board: Arc<Board>,
     pub provider: Arc<dyn CatalogProvider>,
@@ -4954,7 +4955,7 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let signature =
-            format!("declare function largeLiveDeclaration({{ payload: Struct }}): string;");
+            "declare function largeLiveDeclaration({ payload: Struct }): string;".to_string();
         let body = format!(
             "// declaration query: large live declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n// {}\n{DECLARATION_PRIORITY_END}",
             "usage".repeat(MAX_DECLARATION_RESPONSE_BYTES)

@@ -12,6 +12,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, Quer
 use std::collections::HashSet;
 
 /// Update daily aggregations for a specific app and date
+#[allow(dead_code)]
 pub async fn update_daily_aggregation(
     state: &AppState,
     app_id: &str,
@@ -108,6 +109,7 @@ pub async fn update_daily_aggregation(
 }
 
 /// Backfill aggregations for an app for the last N days
+#[allow(dead_code)]
 pub async fn backfill_aggregations(
     state: &AppState,
     app_id: &str,

@@ -192,6 +192,7 @@ impl CachedDataFusionSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_session_config(
     target_partitions: i64,
     batch_size: i64,

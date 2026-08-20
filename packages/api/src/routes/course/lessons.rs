@@ -62,6 +62,15 @@ pub struct LessonWithChildren {
     pub assets: Vec<LessonAssetView>,
 }
 
+/// Everything the lesson view joins in one round trip.
+type LessonBundle = (
+    Option<course_module::Model>,
+    Option<lesson::Model>,
+    Vec<challenge::Model>,
+    Vec<lesson_app_ref::Model>,
+    Vec<course_asset::Model>,
+);
+
 #[utoipa::path(
     get,
     path = "/courses/{course_id}/modules/{module_id}/lessons/{lesson_id}",
@@ -103,13 +112,7 @@ pub async fn get_lesson(
         .filter(course_asset::Column::CourseId.eq(&course_id))
         .all(&state.db);
 
-    let (module_opt, lesson_opt, challenges, app_refs, course_assets): (
-        Option<course_module::Model>,
-        Option<lesson::Model>,
-        Vec<challenge::Model>,
-        Vec<lesson_app_ref::Model>,
-        Vec<course_asset::Model>,
-    ) = try_join!(
+    let (module_opt, lesson_opt, challenges, app_refs, course_assets): LessonBundle = try_join!(
         module_fut,
         lesson_fut,
         challenges_fut,

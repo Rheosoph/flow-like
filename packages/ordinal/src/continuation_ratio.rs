@@ -419,7 +419,7 @@ impl<F: Float> ContinuationRatio<F> {
         let mut reached = F::one();
         for stop in conditional {
             probabilities.push(reached * stop);
-            reached *= (F::one() - stop);
+            reached *= F::one() - stop;
         }
         probabilities.push(reached);
         probabilities

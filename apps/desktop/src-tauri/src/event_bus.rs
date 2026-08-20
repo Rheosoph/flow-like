@@ -13,8 +13,8 @@ use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, sync::mpsc};
 use flow_like_types::{json, tokio};
+use std::sync::Arc;
 use std::time::Duration;
-use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Manager};
 
 // Maximum number of events to queue. 100,000 should be plenty for local handling.
@@ -265,6 +265,8 @@ impl EventBusEvent {
 
 pub struct EventBus {
     sender: mpsc::Sender<EventBusEvent>,
+    #[allow(dead_code)]
+    // handle kept for future bus-side emits; every consumer currently passes its own AppHandle
     app_handle: AppHandle,
 }
 
@@ -275,6 +277,7 @@ impl EventBus {
         (Arc::new(new_self), receiver)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn push_event_with_token(
         &self,
         payload: Option<Value>,
@@ -302,17 +305,5 @@ impl EventBus {
         self.sender
             .try_send(event)
             .map_err(|e| format!("Failed to send event: {}", e))
-    }
-}
-
-fn event_bus_dir() -> PathBuf {
-    if let Some(dir) = dirs_next::data_dir() {
-        dir.join("flow-like").join("event-bus")
-    } else if let Some(dir) = dirs_next::cache_dir() {
-        dir.join("flow-like").join("event-bus")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join("flow-like").join("event-bus")
-    } else {
-        PathBuf::from("flow-like").join("event-bus")
     }
 }

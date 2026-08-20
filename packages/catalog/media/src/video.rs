@@ -1441,11 +1441,12 @@ fn build_provider_bit(
     };
     let parameters = to_value(VideoGenerationModelProvider { provider }).unwrap_or_default();
 
-    let mut bit = Bit::default();
-    bit.id = hasher.finalize().to_hex().to_string();
-    bit.bit_type = BitTypes::VideoGeneration;
-    bit.parameters = parameters;
-    bit
+    Bit {
+        id: hasher.finalize().to_hex().to_string(),
+        bit_type: BitTypes::VideoGeneration,
+        parameters,
+        ..Default::default()
+    }
 }
 
 fn media_scores() -> NodeScores {

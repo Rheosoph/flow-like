@@ -3,6 +3,8 @@
 //! Supports running multiple Telegram bots concurrently, each with their own
 //! token and event handlers. Bots are synced from the API and managed dynamically.
 
+#![cfg_attr(not(feature = "telegram"), allow(dead_code))]
+
 use crate::api_client::{ApiClient, BotConfig, BotHandler};
 use crate::storage::{RedisStorage, TelegramConfigState};
 use std::collections::HashMap;
@@ -21,12 +23,15 @@ pub struct TelegramEventHandler {
     pub command: Option<String>,
 }
 
+/// Live Telegram bot connections keyed by bot id: `(token_hash, shutdown_sender)`.
+type ActiveTelegramBots = Arc<RwLock<HashMap<String, (String, tokio::sync::watch::Sender<bool>)>>>;
+
 /// Manages multiple Telegram bot instances
 pub struct TelegramBotManager {
     api_client: Arc<ApiClient>,
     storage: Option<Arc<RedisStorage>>,
     /// Active bot connections: bot_id -> (token_hash, shutdown_sender)
-    active_bots: Arc<RwLock<HashMap<String, (String, tokio::sync::watch::Sender<bool>)>>>,
+    active_bots: ActiveTelegramBots,
     /// Event handlers per bot: bot_id -> handlers
     bot_handlers: Arc<RwLock<HashMap<String, Vec<TelegramEventHandler>>>>,
 }

@@ -38,6 +38,8 @@ pub struct AnalyticsStatsQuery {
     pub event_id: Option<String>,
     /// Aggregation period: "day", "week", "month"
     #[serde(default = "default_period")]
+    #[allow(dead_code)]
+    // OpenAPI/serde query parameter — see openapi.rs component + utoipa params()
     pub period: String,
 }
 

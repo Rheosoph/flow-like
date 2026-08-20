@@ -67,12 +67,16 @@ const FORBIDDEN_GCP_SETTINGS: &[&str] = &[
     "SECRET_MANAGER_EMULATOR_HOST",
 ];
 
+/// One tuning knob: the environment variable name paired with the parse that
+/// decides whether the configured value is acceptable.
+type TuningKnob = (&'static str, fn(&str) -> bool);
+
 /// Every knob `ExecutorConfig::from_env` reads, paired with the parse it
 /// applies. That constructor falls back to the default on a value it cannot
 /// parse, so `EXECUTOR_TIMEOUT_SECS=48O` would silently become 3600 — the one
 /// value this platform can never honour. Refusing the unparsable value here is
 /// what makes the ceiling check below mean what it says.
-const EXECUTOR_TUNING: &[(&str, fn(&str) -> bool)] = &[
+const EXECUTOR_TUNING: &[TuningKnob] = &[
     ("EXECUTOR_BATCH_INTERVAL_MS", parses_u64),
     ("EXECUTOR_MAX_BATCH_SIZE", parses_usize),
     ("EXECUTOR_CALLBACK_TIMEOUT_MS", parses_u64),

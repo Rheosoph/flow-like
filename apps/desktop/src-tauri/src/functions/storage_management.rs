@@ -157,7 +157,7 @@ fn direct_items(
             })
         })
         .collect::<Vec<_>>();
-    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    items.sort_by_key(|item| std::cmp::Reverse(item.size_bytes));
     items
 }
 
@@ -208,7 +208,7 @@ fn log_items(logs_dir: &Path, active_runs: &HashSet<String>) -> Vec<StorageItem>
             }
         }
     }
-    items.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    items.sort_by_key(|item| std::cmp::Reverse(item.updated_at_ms));
     items
 }
 
@@ -262,7 +262,7 @@ fn offloaded_blob_items(blob_dir: &Path) -> Vec<StorageItem> {
             });
         }
     }
-    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    items.sort_by_key(|item| std::cmp::Reverse(item.size_bytes));
     items
 }
 

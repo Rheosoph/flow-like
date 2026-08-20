@@ -5,7 +5,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
-use serde::{Deserialize, Serialize};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -15,12 +14,6 @@ impl DateTimeFormatNode {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SystemTime {
-    secs_since_epoch: i64,
-    nanos_since_epoch: u32,
 }
 
 #[async_trait]
@@ -58,9 +51,7 @@ impl NodeLogic for DateTimeFormatNode {
         let formatted = match format_str.to_lowercase().as_str() {
             "rfc3339" => dt.to_rfc3339(),
             "rfc2822" => dt.to_rfc2822(),
-            _ => match dt.format(&format_str).to_string() {
-                s => s,
-            },
+            _ => dt.format(&format_str).to_string(),
         };
 
         context.set_pin_value("formatted", json!(formatted)).await?;

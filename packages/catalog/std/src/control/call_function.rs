@@ -759,13 +759,9 @@ impl NodeLogic for CallFunctionNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::{
-        board::{ExecutionMode, ExecutionStage},
-        execution::LogLevel,
-        pin::ValueType,
-    };
+    use flow_like::flow::pin::ValueType;
     use flow_like_types::json::json;
-    use std::{collections::BTreeSet, time::SystemTime};
+    use std::collections::BTreeSet;
 
     fn pin(name: &str, pin_type: PinType, data_type: VariableType, index: u16) -> Pin {
         Pin {

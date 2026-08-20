@@ -3,7 +3,8 @@
 //! Tests data conversion functions, serialization, and utility helpers.
 
 #[cfg(test)]
-mod tests {
+#[allow(clippy::approx_constant)]
+mod ml_tests {
     use crate::NodeLogic;
     use crate::ml::{
         AccuracyMetrics, ConfusionMatrixResult, GridSearchEntry, GridSearchResult, KMeansCentroids,

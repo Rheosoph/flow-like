@@ -619,9 +619,11 @@ mod tests {
 
     #[test]
     fn restart_policy_only_restarts_when_configured() {
-        let mut sink = DaemonSink::default();
+        let mut sink = DaemonSink {
+            restart_policy: DaemonRestartPolicy::Never,
+            ..Default::default()
+        };
 
-        sink.restart_policy = DaemonRestartPolicy::Never;
         assert!(!sink.should_restart(false));
         assert!(!sink.should_restart(true));
 

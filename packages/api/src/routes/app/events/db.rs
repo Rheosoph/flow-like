@@ -321,6 +321,7 @@ where
 /// This is the main entry point for event creation/updates.
 /// It syncs the event to the database and also creates/updates the associated sink,
 /// including any external scheduler for cron events.
+#[allow(dead_code)]
 pub async fn sync_event_with_sink(
     db: &DatabaseConnection,
     state: &crate::state::AppState,
@@ -662,6 +663,7 @@ pub async fn get_events_for_app(
 }
 
 /// Get all active events for an app from the database
+#[allow(dead_code)]
 pub async fn get_active_events_for_app(
     db: &DatabaseConnection,
     app_id: &str,
@@ -678,6 +680,7 @@ pub async fn get_active_events_for_app(
 }
 
 /// Get events by type for an app
+#[allow(dead_code)]
 pub async fn get_events_by_type(
     db: &DatabaseConnection,
     app_id: &str,
@@ -695,6 +698,7 @@ pub async fn get_events_by_type(
 }
 
 /// Get the event that links to a specific board
+#[allow(dead_code)]
 pub async fn get_event_by_board(
     db: &DatabaseConnection,
     app_id: &str,
@@ -713,6 +717,7 @@ pub async fn get_event_by_board(
 }
 
 /// Get the event that links to a specific page (A2UI events)
+#[allow(dead_code)]
 pub async fn get_event_by_page(
     db: &DatabaseConnection,
     app_id: &str,
@@ -731,6 +736,7 @@ pub async fn get_event_by_page(
 }
 
 /// Get the event for a specific route path
+#[allow(dead_code)]
 pub async fn get_event_by_route(
     db: &DatabaseConnection,
     app_id: &str,
@@ -749,6 +755,7 @@ pub async fn get_event_by_route(
 }
 
 /// Get the default event for an app (the one shown at "/" or when no route matches)
+#[allow(dead_code)]
 pub async fn get_default_event(
     db: &DatabaseConnection,
     app_id: &str,
@@ -771,6 +778,7 @@ pub async fn get_default_event(
 
 /// Get an event by ID with fallback to bucket if not in DB
 /// If found in bucket, syncs to DB for future fast lookups
+#[allow(dead_code)]
 pub async fn get_event_with_fallback(
     db: &DatabaseConnection,
     app: &App,
@@ -873,6 +881,7 @@ pub async fn get_events_with_fallback(
 }
 
 /// Get event by route with fallback - searches bucket events if not in DB
+#[allow(dead_code)]
 pub async fn get_event_by_route_with_fallback(
     db: &DatabaseConnection,
     app: &App,
@@ -906,6 +915,7 @@ pub async fn get_event_by_route_with_fallback(
 }
 
 /// Get default event with fallback - searches bucket events if not in DB
+#[allow(dead_code)]
 pub async fn get_default_event_with_fallback(
     db: &DatabaseConnection,
     app: &App,

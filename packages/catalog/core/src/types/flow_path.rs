@@ -185,11 +185,7 @@ impl FlowPath {
         context: &mut ExecutionContext,
         extension: &str,
     ) -> flow_like_types::Result<Self> {
-        let extension = if extension.starts_with('.') {
-            extension[1..].to_string()
-        } else {
-            extension.to_string()
-        };
+        let extension = extension.strip_prefix('.').unwrap_or(extension).to_string();
 
         let runtime = self.to_runtime(context).await?;
         let base_path = self.get_base_path_without_extension(&runtime);

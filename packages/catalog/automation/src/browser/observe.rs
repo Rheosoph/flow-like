@@ -649,10 +649,12 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
             let current_count = result.json().as_i64().unwrap_or(0);
 
             if current_count == last_request_count {
-                if idle_start.is_none() {
+                if let Some(started) = idle_start {
+                    if started.elapsed() >= idle_duration {
+                        break;
+                    }
+                } else {
                     idle_start = Some(Instant::now());
-                } else if idle_start.unwrap().elapsed() >= idle_duration {
-                    break;
                 }
             } else {
                 idle_start = None;

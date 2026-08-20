@@ -965,6 +965,10 @@ impl<F: Float> Backbone<F> {
     }
 }
 
+/// Objective value, gradients in the backbone weights and biases, and the gradient in the
+/// head parameters.
+type ObjectiveGradient<F> = (F, Vec<Array2<F>>, Vec<Array1<F>>, Array1<F>);
+
 /// Penalized objective and its gradient with respect to every parameter block.
 ///
 /// Both heads sum a binary cross-entropy over their tasks, written as `softplus(z) - t * z` rather
@@ -979,7 +983,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     head: OrdinalHead,
     n_classes: usize,
     alpha: F,
-) -> Result<(F, Vec<Array2<F>>, Vec<Array1<F>>, Array1<F>)> {
+) -> Result<ObjectiveGradient<F>> {
     let n_cuts = n_classes - 1;
     let (mut grad_weights, mut grad_biases) = backbone.zeros_like();
     let task_biases = coral_biases(head_params);
@@ -1414,6 +1418,9 @@ mod tests {
                             }
                         }
 
+                        // The index drives a fresh clone of the backbone and a second array
+                        // (`grad_biases`), so an iterator over one of them reads no better.
+                        #[allow(clippy::needless_range_loop)]
                         for index in 0..backbone.biases[layer].len() {
                             let mut shifted = backbone.clone();
                             shifted.biases[layer][index] += step;

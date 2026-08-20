@@ -408,6 +408,7 @@ async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, 
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_mqtt_client<R>(
     mut reader: R,
     tx: mpsc::UnboundedSender<Packet>,

@@ -11,6 +11,9 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 
+/// The app's default role id (when set) together with all of its roles.
+pub type AppRoles = (Option<String>, Vec<role::Model>);
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/roles",
@@ -35,7 +38,7 @@ pub async fn get_roles(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
-) -> Result<Json<(Option<String>, Vec<role::Model>)>, ApiError> {
+) -> Result<Json<AppRoles>, ApiError> {
     let permission = user.execution_app_permission(&app_id, &state).await?;
     if !permission.has_permission(RolePermissions::ReadRoles) {
         if let Ok(user_id) = permission.sub() {

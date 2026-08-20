@@ -222,6 +222,7 @@ impl NodeLogic for SmtpSendMailNode {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_rfc5322_message_send(
     from: &str,
     to: &str,

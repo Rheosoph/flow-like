@@ -64,6 +64,7 @@ impl A2UICopilot {
     }
 
     /// Main entry point - generate or modify A2UI surfaces via structured output
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat<F>(
         &self,
         current_surface: Option<&Vec<SurfaceComponent>>,

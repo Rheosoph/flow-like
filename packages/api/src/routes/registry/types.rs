@@ -331,6 +331,7 @@ pub struct DownloadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[allow(dead_code)] // canonical registry error wire type; mirrored by packages/wasm/src/registry.rs:406
 pub struct RegistryError {
     pub code: String,
     pub message: String,

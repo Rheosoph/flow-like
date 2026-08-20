@@ -1473,6 +1473,7 @@ fn insert_layer_pins(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_placeholder_pin(
     pins: &mut HashMap<String, Pin>,
     name: &str,

@@ -2742,6 +2742,7 @@ fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -
         .or_else(|| Some(expanded.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn schema_constraints_are_compatible(
     input_name: &str,
     input_data_type: &str,
@@ -3653,9 +3654,9 @@ fn reconcile_schema_contract_eq_with_refs(
 }
 
 /// Project `schema` through the FULL text surface: interface generation, rendering to FlowScript,
-/// and re-parsing. Parsing normalizes strictly more than [`interface_representable_schema`]'s
-/// in-memory projection (e.g. an optional `anyOf[enum, null]` folds into an enum containing
-/// `null`), and an authored roundtrip schema is by construction in THIS fixed point.
+/// and re-parsing. Parsing normalizes strictly more than a purely in-memory interface projection
+/// would (e.g. an optional `anyOf[enum, null]` folds into an enum containing `null`), and an
+/// authored roundtrip schema is by construction in THIS fixed point.
 fn text_projected_schema(schema: &str) -> Option<String> {
     let source = VarDecl {
         name: "boundary".to_string(),
@@ -3694,28 +3695,6 @@ fn text_projected_schema(schema: &str) -> Option<String> {
     parsed.variables.first()?.schema.clone()
 }
 
-fn interface_representable_schema(schema: &str) -> Option<String> {
-    let source = VarDecl {
-        name: "boundary".to_string(),
-        ty: TypeRef::new("Struct", Container::Normal),
-        default: None,
-        exposed: false,
-        secret: false,
-        editable: true,
-        runtime_configured: false,
-        category: None,
-        description: None,
-        schema: Some(schema.to_string()),
-        anchor: None,
-    };
-    let interfaces = flow_like_ast::interfaces_for_variables(&[source]);
-    let interface_name = flow_like_ast::interface_name_for_schema(&interfaces, schema)?;
-    let interface = interfaces
-        .iter()
-        .find(|interface| interface.name == interface_name)?;
-    flow_like_ast::schema_from_interface_with_defs(interface, &interfaces)
-}
-
 fn function_boundary_contract_matches(
     live: &PinMetadata,
     authored: &PinMetadata,
@@ -3735,7 +3714,7 @@ fn function_boundary_contract_matches(
     // schema to that representable projection while retaining the exact live schema for wiring.
     // The authored schema went through the render→parse text surface, so compare against the
     // live schema's projection through that same surface (`text_projected_schema` subsumes the
-    // in-memory `interface_representable_schema` projection and its extra parse normalizations).
+    // in-memory interface projection and adds the extra parse normalizations).
     match authored.schema.as_deref() {
         Some(schema) => {
             authored.enforce_schema
@@ -6996,6 +6975,7 @@ impl<'a> StructuralPlanner<'a> {
             .then(|| generic_input_pin_metadata(&input.name))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn queue_validated_data_connection(
         &mut self,
         source: &ValueSource,
@@ -7668,9 +7648,7 @@ impl<'a> StructuralPlanner<'a> {
             }
             return None;
         };
-        let Some(to_pin) = self.entity_exec_input_pin(current) else {
-            return None;
-        };
+        let to_pin = self.entity_exec_input_pin(current)?;
 
         if let Some((origin_node, origin_pin)) = insertion_origin
             && let NodeEntity::Existing(node_id) = current
@@ -19239,7 +19217,7 @@ eventsSimple() {
     return true
 }
 "#,
-            &vec![catalog_meta(
+            &[catalog_meta(
                 "a2ui_widget_update_inputs",
                 "Update Widget Inputs",
                 vec![pin_meta("element_ref", "Struct", PinType::Input)],

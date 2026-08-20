@@ -126,8 +126,7 @@ pub fn render_range(
 ) -> String {
     let mut out = String::new();
     let end = rect.r1.min(grid.height.saturating_sub(1));
-    let mut rendered = 0usize;
-    for r in rect.r0..=end {
+    for (rendered, r) in (rect.r0..=end).enumerate() {
         if rendered >= max_rows {
             out.push_str(&format!(
                 "[{} more rows in range omitted — inspect a smaller range for details]\n",
@@ -137,7 +136,6 @@ pub fn render_range(
         }
         out.push_str(&render_row(grid, styles, r, rect.c0, rect.c1, opts));
         out.push('\n');
-        rendered += 1;
     }
     out
 }

@@ -5497,6 +5497,7 @@ fn ast_access_path(expression: &AstExpr) -> Option<(String, Vec<String>)> {
     }
 }
 
+#[allow(clippy::if_same_then_else)] // the keyword match and the positional default legitimately share a side
 fn approval_ast_arm_side(label: &str, index: usize) -> ApprovalBranchSide {
     let label = normalize(label);
     if label.contains("false")
@@ -6949,8 +6950,8 @@ fn has_action(value: &str) -> bool {
 fn starts_with_action(value: &str) -> bool {
     semantic_tokens(value)
         .into_iter()
-        .skip_while(|token| {
-            matches!(
+        .find(|token| {
+            !matches!(
                 token.as_str(),
                 "and"
                     | "also"
@@ -6980,7 +6981,6 @@ fn starts_with_action(value: &str) -> bool {
                     | "muss"
             )
         })
-        .next()
         .is_some_and(|token| canonical_action(&token).is_some())
 }
 
@@ -13752,7 +13752,7 @@ eventsSimple() {
             ],
             ..Default::default()
         };
-        let catalog = vec![
+        let catalog = [
             metadata("events_simple", Vec::new(), Vec::new()),
             metadata("events_generic", Vec::new(), Vec::new()),
             metadata("smtp_email_send", Vec::new(), Vec::new()),

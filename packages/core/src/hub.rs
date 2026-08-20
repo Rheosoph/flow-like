@@ -732,11 +732,7 @@ impl Hub {
             url.push('/');
         }
 
-        if path.starts_with('/') {
-            url.push_str(&path[1..]);
-        } else {
-            url.push_str(path);
-        }
+        url.push_str(path.strip_prefix('/').unwrap_or(path));
         let url = Url::parse(&url)
             .map_err(|e| flow_like_types::Error::msg(format!("Invalid URL: {}", e)))?;
 

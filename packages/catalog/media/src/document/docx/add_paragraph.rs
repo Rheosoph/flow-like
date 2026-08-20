@@ -201,6 +201,7 @@ impl NodeLogic for DocxAddParagraphNode {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 fn build_paragraph(
     text: &str,
     style: &ParagraphStyle,

@@ -373,7 +373,7 @@ pub struct LogMeta {
 }
 
 impl LogMeta {
-    fn into_arrow(&self) -> flow_like_types::Result<RecordBatch> {
+    fn to_arrow(&self) -> flow_like_types::Result<RecordBatch> {
         let fields = &*STORED_META_FIELDS;
         let stored: StoredLogMeta = self.into();
         let batch = serde_arrow::to_record_batch(fields, &vec![stored])?;
@@ -403,7 +403,7 @@ impl LogMeta {
         db: Connection,
         write_options: Option<&flow_like_storage::lancedb::table::WriteOptions>,
     ) -> flow_like_types::Result<()> {
-        let arrow_batch = self.into_arrow()?;
+        let arrow_batch = self.to_arrow()?;
         let schema = arrow_batch.schema();
 
         let make_iter = || -> Box<dyn RecordBatchReader + Send> {
@@ -980,6 +980,7 @@ fn resolve_variable_override<'a>(
 }
 
 impl InternalRun {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         app_id: &str,
         board: Arc<Board>,
@@ -1010,6 +1011,7 @@ impl InternalRun {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_with_run_id(
         app_id: &str,
         board: Arc<Board>,
@@ -2098,6 +2100,7 @@ pub enum RunStatus {
     Stopped,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn step_core(
     nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
     target: ExecutionTarget,

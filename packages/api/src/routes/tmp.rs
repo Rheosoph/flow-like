@@ -95,6 +95,7 @@ pub struct ExtensionParams {
     /// Optional custom download TTL in seconds (capped at 31 days).
     pub download_ttl_secs: Option<u64>,
     /// Optional original filename. Appended as a query param on the download URL so consumers can recover it.
+    #[allow(dead_code)] // OpenAPI query parameter (IntoParams); part of the GET /tmp contract
     pub filename: Option<String>,
 }
 

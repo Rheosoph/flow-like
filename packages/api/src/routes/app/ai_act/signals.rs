@@ -61,6 +61,7 @@ pub struct Signals {
 
 impl Signals {
     /// Category names that are priors for Annex III high-risk domains.
+    #[allow(dead_code)]
     pub fn category_is_annex_iii_prior(&self) -> bool {
         const ANNEX_III: &[&str] = &["HEALTH", "FINANCE", "EDUCATION"];
         let in_set = |c: &Option<String>| {
@@ -72,6 +73,7 @@ impl Signals {
     }
 
     /// Distinct provider/model pairs as a stable set of "provider/model" keys.
+    #[allow(dead_code)]
     pub fn model_keys(&self) -> BTreeSet<String> {
         self.models
             .iter()

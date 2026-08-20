@@ -122,7 +122,7 @@ pub fn validate_json_data(schema: &str, data: &str) -> Result<Value, Error> {
 }
 
 /// Validates a Tool Call Function str against a list of Tools and returns the Tool Call Object
-pub fn tool_call_from_str(tools: &Vec<Tool>, tool_call_function: &str) -> Result<ToolCall, Error> {
+pub fn tool_call_from_str(tools: &[Tool], tool_call_function: &str) -> Result<ToolCall, Error> {
     // Deserialize tool call
     let tool_call_function: ToolCallFunction = match json::from_str(tool_call_function) {
         Ok(tool_call_function) => tool_call_function,

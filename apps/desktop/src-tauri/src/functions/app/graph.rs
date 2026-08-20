@@ -378,6 +378,7 @@ async fn validate_overlay_for_save(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn materialize_action_events(
     app_handle: &AppHandle,
     app_id: &str,
@@ -402,6 +403,7 @@ async fn materialize_action_events(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn materialize_action_events_with_mode(
     app_handle: &AppHandle,
     app_id: &str,
@@ -661,6 +663,7 @@ async fn remove_action_events(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rollback_action_event_changes(
     app_handle: &AppHandle,
     app_id: &str,

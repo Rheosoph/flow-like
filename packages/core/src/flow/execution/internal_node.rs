@@ -119,7 +119,7 @@ pub struct ExecutionTarget {
 }
 
 impl ExecutionTarget {
-    async fn into_sub_context(&self, ctx: &mut ExecutionContext) -> ExecutionContext {
+    async fn to_sub_context(&self, ctx: &mut ExecutionContext) -> ExecutionContext {
         let mut sub = ctx.create_sub_context(&self.node).await;
         sub.started_by = if self.through_pins.is_empty() {
             None
@@ -745,10 +745,9 @@ impl InternalNode {
         }
 
         // node_ptr -> (node_arc, pins_vec, seen_pin_ptrs)
-        let mut groups: AHashMap<
-            usize,
-            (Arc<InternalNode>, Vec<Arc<InternalPin>>, AHashSet<usize>),
-        > = AHashMap::with_capacity(
+        type ExecTargetGroups =
+            AHashMap<usize, (Arc<InternalNode>, Vec<Arc<InternalPin>>, AHashSet<usize>)>;
+        let mut groups: ExecTargetGroups = AHashMap::with_capacity(
             first_active_output
                 .connected_to()
                 .len()
@@ -1132,7 +1131,7 @@ impl InternalNode {
                     continue;
                 }
 
-                let mut sub2 = next.into_sub_context(context).await;
+                let mut sub2 = next.to_sub_context(context).await;
 
                 if !InternalNode::trigger_missing_dependencies(&mut sub2, recursion_guard, false)
                     .await
@@ -1255,7 +1254,7 @@ impl InternalNode {
                     continue;
                 }
 
-                let mut sub = next.into_sub_context(context).await;
+                let mut sub = next.to_sub_context(context).await;
                 let mut local_guard: Option<AHashSet<String>> = None;
 
                 if !InternalNode::trigger_missing_dependencies(&mut sub, &mut local_guard, false)
@@ -1395,7 +1394,7 @@ impl InternalNode {
                     continue;
                 }
 
-                let mut sub = next.into_sub_context(context).await;
+                let mut sub = next.to_sub_context(context).await;
 
                 // Fresh recursion guard per successor to mirror original semantics
                 let mut local_guard: Option<AHashSet<String>> = None;

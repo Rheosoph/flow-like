@@ -835,9 +835,7 @@ fn project_graph(
                 value,
                 ..
             } => {
-                let Some(index) = builder.resolve_node_key(node_id) else {
-                    return None;
-                };
+                let index = builder.resolve_node_key(node_id)?;
                 let node = &builder.graph.nodes[index];
                 let direction = if node.is_layer { None } else { Some(true) };
                 match resolve_graph_pin(node, pin_id, direction) {
@@ -865,9 +863,7 @@ fn project_graph(
                 friendly_name,
                 ..
             } => {
-                let Some(index) = builder.resolve_node_key(node_id) else {
-                    return None;
-                };
+                let index = builder.resolve_node_key(node_id)?;
                 builder.graph.nodes[index].display = friendly_name.clone();
                 builder.register_alias(friendly_name, index);
             }
@@ -875,9 +871,7 @@ fn project_graph(
             | BoardCommand::RemoveLayer {
                 layer_id: node_id, ..
             } => {
-                let Some(index) = builder.resolve_node_key(node_id) else {
-                    return None;
-                };
+                let index = builder.resolve_node_key(node_id)?;
                 builder.graph.nodes[index].removed = true;
                 builder
                     .graph
@@ -1314,7 +1308,6 @@ mod tests {
     use super::*;
     use crate::flow::board::{ExecutionMode, ExecutionStage};
     use crate::flow::execution::LogLevel;
-    use crate::flow::pin::ValueType;
 
     fn pin_meta(name: &str, data_type: &str) -> PinMetadata {
         PinMetadata {

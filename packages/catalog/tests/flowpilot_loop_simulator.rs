@@ -12,7 +12,6 @@
 //! oversized sources, partially satisfied acceptance contracts, and
 //! concurrent access to one draft.
 
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::SystemTime;
@@ -21,13 +20,12 @@ use flow_like::flow::ast::{
     FlowScriptDiagnosticCode, RenderOptions, apply_board_commands_to_board,
     apply_flowscript_to_board, board_to_flowscript, reconcile_text_with_catalog,
 };
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
+use flow_like::flow::board::Board;
 use flow_like::flow::copilot::{
     BoardCommand, CheckFlowScriptArgs, CommitFlowScriptArgs, FlowIrAcceptanceBinding,
     FlowIrDraftMode, FlowIrDraftStore, FlowScriptDraftResponse, NodeMetadata, PatchFlowScriptArgs,
     WriteFlowScriptArgs, node_to_metadata,
 };
-use flow_like::flow::execution::LogLevel;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::ValueType;
 use flow_like::flow::variable::{Variable, VariableType};
@@ -1358,6 +1356,7 @@ async fn staged_segments_grow_one_draft_into_a_single_commit() {
 ///      expensive and non-deterministic),
 ///   3. a transcript recorder so failures can be replayed through
 ///      [`ScriptedAgent`] as a deterministic regression scenario.
+///
 /// Until then this skeleton only documents the contract and refuses to run
 /// without the explicit `FLOWPILOT_E2E_REAL_AGENT` opt-in.
 #[test]

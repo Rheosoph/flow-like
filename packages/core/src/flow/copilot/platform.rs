@@ -74,6 +74,10 @@ pub struct PlatformToolImageUrl {
     pub media_type: String,
 }
 
+/// One finished tool call ready to be sent back to the model:
+/// `(tool_call_id, tool_name, output, images)`.
+type PlatformToolResult = (String, String, String, Vec<PlatformToolImageUrl>);
+
 /// Remove and validate temporary image references from a frontend tool result.
 pub fn take_platform_tool_image_urls(value: &mut Value) -> Vec<PlatformToolImageUrl> {
     let Some(object) = value.as_object_mut() else {
@@ -1094,15 +1098,14 @@ impl PlatformCopilot {
             // Reassemble in the model's declared call order: a tool result block must line up with
             // the tool_call ids of the assistant message that produced it, whatever order the lanes
             // happened to finish in.
-            let mut ordered: Vec<Option<(String, String, String, Vec<PlatformToolImageUrl>)>> =
+            let mut ordered: Vec<Option<PlatformToolResult>> =
                 (0..tool_calls.len()).map(|_| None).collect();
             for lane_results in futures::future::join_all(lane_futures).await {
                 for (index, result) in lane_results {
                     ordered[index] = Some(result);
                 }
             }
-            let tool_results: Vec<(String, String, String, Vec<PlatformToolImageUrl>)> =
-                ordered.into_iter().flatten().collect();
+            let tool_results: Vec<PlatformToolResult> = ordered.into_iter().flatten().collect();
 
             // All calls in one model-authored batch may complete. Once that batch has introduced
             // app, memory, or interactive data, later model rounds lose public-network access so

@@ -200,6 +200,7 @@ async fn upload_with_simple_put(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_with_session(
     context: &mut ExecutionContext,
     client: &reqwest::Client,
@@ -265,6 +266,7 @@ async fn upload_with_session(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_flow_path_to_drive(
     context: &mut ExecutionContext,
     client: &reqwest::Client,

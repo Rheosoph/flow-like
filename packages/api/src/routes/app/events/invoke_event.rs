@@ -167,6 +167,7 @@ pub(crate) async fn invoke_resolved_event(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn invoke_event_impl(
     state: AppState,
     user: AppUser,

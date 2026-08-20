@@ -163,6 +163,7 @@ async fn upload_with_multipart(
     Ok((resp.json().await?, size))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_with_resumable(
     context: &mut ExecutionContext,
     client: &reqwest::Client,

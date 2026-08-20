@@ -52,7 +52,7 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
             #[cfg(not(feature = "aws"))]
             {
                 let _ = config;
-                Err(SecretError::ProviderDisabled(
+                Err(crate::SecretError::ProviderDisabled(
                     SecretProviderKind::AwsParameterStore,
                 ))
             }
@@ -67,7 +67,7 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
             #[cfg(not(feature = "aws"))]
             {
                 let _ = config;
-                Err(SecretError::ProviderDisabled(
+                Err(crate::SecretError::ProviderDisabled(
                     SecretProviderKind::AwsSecretsManager,
                 ))
             }
@@ -82,7 +82,7 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
             #[cfg(not(feature = "gcp"))]
             {
                 let _ = config;
-                Err(SecretError::ProviderDisabled(
+                Err(crate::SecretError::ProviderDisabled(
                     SecretProviderKind::GcpSecretManager,
                 ))
             }
@@ -95,7 +95,7 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
             #[cfg(not(feature = "azure"))]
             {
                 let _ = config;
-                Err(SecretError::ProviderDisabled(
+                Err(crate::SecretError::ProviderDisabled(
                     SecretProviderKind::AzureKeyVault,
                 ))
             }

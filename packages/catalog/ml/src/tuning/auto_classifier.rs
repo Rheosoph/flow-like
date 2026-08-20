@@ -765,6 +765,14 @@ impl NodeLogic for AutoClassifierNode {
     }
 }
 
+/// Training dataset, validation features and the validation row indices of one CV fold.
+#[cfg(feature = "execute")]
+type FoldSplit = (
+    DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
+    ndarray::Array2<f64>,
+    Vec<usize>,
+);
+
 #[cfg(feature = "execute")]
 fn create_fold_split(
     records: &DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
@@ -772,11 +780,7 @@ fn create_fold_split(
     fold: usize,
     fold_size: usize,
     cv_folds: usize,
-) -> (
-    DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
-    ndarray::Array2<f64>,
-    Vec<usize>,
-) {
+) -> FoldSplit {
     let n_samples = records.nsamples();
     let val_start = fold * fold_size;
     let val_end = if fold == cv_folds - 1 {

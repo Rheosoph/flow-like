@@ -124,7 +124,7 @@ pub async fn create_interaction(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let sub = user.executor_scoped_sub()?;
 
-    let ttl = body.ttl_seconds.max(MIN_TTL_SECONDS).min(MAX_TTL_SECONDS);
+    let ttl = body.ttl_seconds.clamp(MIN_TTL_SECONDS, MAX_TTL_SECONDS);
     let id = create_id();
     let now = chrono::Utc::now();
     let expires_at = now.timestamp() + ttl;

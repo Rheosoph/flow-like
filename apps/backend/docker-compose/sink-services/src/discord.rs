@@ -3,6 +3,8 @@
 //! Supports running multiple Discord bots concurrently, each with their own
 //! token and event handlers. Bots are synced from the API and managed dynamically.
 
+#![cfg_attr(not(feature = "discord"), allow(dead_code))]
+
 use crate::api_client::{ApiClient, BotConfig, BotHandler};
 use crate::storage::{DiscordConfigState, RedisStorage};
 use std::collections::HashMap;
@@ -28,12 +30,15 @@ pub struct DiscordEventHandler {
     pub respond_to_dms: bool,
 }
 
+/// Live Discord bot connections keyed by bot id: `(token_hash, shutdown_sender)`.
+type ActiveDiscordBots = Arc<RwLock<HashMap<String, (String, tokio::sync::oneshot::Sender<()>)>>>;
+
 /// Manages multiple Discord bot instances
 pub struct DiscordBotManager {
     api_client: Arc<ApiClient>,
     storage: Option<Arc<RedisStorage>>,
     /// Active bot connections: bot_id -> (token_hash, shutdown_sender)
-    active_bots: Arc<RwLock<HashMap<String, (String, tokio::sync::oneshot::Sender<()>)>>>,
+    active_bots: ActiveDiscordBots,
     /// Event handlers per bot: bot_id -> handlers
     bot_handlers: Arc<RwLock<HashMap<String, Vec<DiscordEventHandler>>>>,
 }

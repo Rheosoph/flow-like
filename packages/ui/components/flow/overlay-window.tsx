@@ -16,19 +16,30 @@ interface IWindowPosition {
 	y: number;
 }
 
+/**
+ * The window the element actually lives in.
+ *
+ * Dialogs portal into `usePortalContainer()`, which the responsive preview points
+ * at an iframe's mount node — measuring the global `window` there would clamp
+ * against the host viewport instead of the one the window is rendered in.
+ */
+const viewportOf = (element: HTMLElement): Window =>
+	element.ownerDocument?.defaultView ?? window;
+
 const clampToViewport = (
 	x: number,
 	y: number,
 	width: number,
 	height: number,
+	view: Window,
 ): IWindowPosition => {
 	const maxX = Math.max(
 		VIEWPORT_MARGIN,
-		window.innerWidth - width - VIEWPORT_MARGIN,
+		view.innerWidth - width - VIEWPORT_MARGIN,
 	);
 	const maxY = Math.max(
 		VIEWPORT_MARGIN,
-		window.innerHeight - height - VIEWPORT_MARGIN,
+		view.innerHeight - height - VIEWPORT_MARGIN,
 	);
 	return {
 		x: Math.min(Math.max(x, VIEWPORT_MARGIN), maxX),
@@ -96,12 +107,14 @@ export function OverlayWindow({
 		const element = windowRef.current;
 		if (!element) return;
 		const { offsetWidth, offsetHeight } = element;
+		const view = viewportOf(element);
 		setPosition(
 			clampToViewport(
-				(window.innerWidth - offsetWidth) / 2,
-				(window.innerHeight - offsetHeight) / 2,
+				(view.innerWidth - offsetWidth) / 2,
+				(view.innerHeight - offsetHeight) / 2,
 				offsetWidth,
 				offsetHeight,
+				view,
 			),
 		);
 	}, [open]);
@@ -131,6 +144,7 @@ export function OverlayWindow({
 				event.clientY - offset.y,
 				element.offsetWidth,
 				element.offsetHeight,
+				viewportOf(element),
 			),
 		);
 	}, []);

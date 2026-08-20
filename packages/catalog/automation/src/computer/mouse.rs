@@ -302,6 +302,7 @@ fn try_template_match(template_bytes: &[u8], min_confidence: f32) -> Option<Temp
 ///
 /// Emits log messages for every step so the user can diagnose failures.
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn resolve_click_target(
     context: &mut ExecutionContext,
     _session: &AutomationSession,
@@ -493,7 +494,7 @@ fn perform_natural_move(
         return Ok(());
     }
 
-    let steps = ((distance / 10.0) as i32).max(10).min(100);
+    let steps = ((distance / 10.0) as i32).clamp(10, 100);
     let step_delay_ms = (duration_ms as f64 / steps as f64) as u64;
 
     // Generate random control points for bezier curve

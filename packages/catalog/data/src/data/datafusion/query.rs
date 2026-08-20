@@ -412,6 +412,7 @@ fn timestamp_to_json(
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use flow_like_storage::datafusion::arrow::array::*;

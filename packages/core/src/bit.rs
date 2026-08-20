@@ -1146,8 +1146,8 @@ impl BitPack {
             if !bits_considered.insert(artifact_key) {
                 continue;
             }
-            if bit.size.is_some() {
-                size += bit.size.unwrap();
+            if let Some(bit_size) = bit.size {
+                size += bit_size;
             }
         }
         size

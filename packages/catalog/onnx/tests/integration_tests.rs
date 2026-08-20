@@ -48,7 +48,8 @@ fn download_if_missing(url: &str, filename: &str) -> PathBuf {
 
     println!("Downloading {} from {}...", filename, url);
 
-    let response = reqwest::blocking::get(url).expect(&format!("Failed to download {}", url));
+    let response =
+        reqwest::blocking::get(url).unwrap_or_else(|_| panic!("Failed to download {}", url));
 
     if !response.status().is_success() {
         panic!("Failed to download {}: HTTP {}", url, response.status());
@@ -563,33 +564,33 @@ mod vad_tests {
         println!("VAD output keys: {:?}", outputs.keys().collect::<Vec<_>>());
 
         // Check output
-        if let Some(output) = outputs.get("output") {
-            if let Ok(arr) = output.try_extract_array::<f32>() {
-                println!("Speech probability shape: {:?}", arr.shape());
-                println!("Speech probability: {:?}", arr);
+        if let Some(output) = outputs.get("output")
+            && let Ok(arr) = output.try_extract_array::<f32>()
+        {
+            println!("Speech probability shape: {:?}", arr.shape());
+            println!("Speech probability: {:?}", arr);
 
-                // Should be a probability between 0 and 1
-                if let Some(&prob) = arr.first() {
-                    assert!(
-                        prob >= 0.0 && prob <= 1.0,
-                        "Probability should be in [0, 1], got {}",
-                        prob
-                    );
-                }
+            // Should be a probability between 0 and 1
+            if let Some(&prob) = arr.first() {
+                assert!(
+                    (0.0..=1.0).contains(&prob),
+                    "Probability should be in [0, 1], got {}",
+                    prob
+                );
             }
         }
 
         // Check state output
-        if let Some(state_out) = outputs.get("stateN") {
-            if let Ok(arr) = state_out.try_extract_array::<f32>() {
-                println!("New state shape: {:?}", arr.shape());
-                // State output is [2, batch, 128]
-                assert_eq!(
-                    arr.shape(),
-                    &[2, 1, 128],
-                    "State shape should be [2, 1, 128]"
-                );
-            }
+        if let Some(state_out) = outputs.get("stateN")
+            && let Ok(arr) = state_out.try_extract_array::<f32>()
+        {
+            println!("New state shape: {:?}", arr.shape());
+            // State output is [2, batch, 128]
+            assert_eq!(
+                arr.shape(),
+                &[2, 1, 128],
+                "State shape should be [2, 1, 128]"
+            );
         }
     }
 }

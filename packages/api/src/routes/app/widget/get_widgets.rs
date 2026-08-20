@@ -14,6 +14,9 @@ use axum::{
 use flow_like::bit::Metadata;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
+/// One widget per entry as (widget id, board id, localized metadata).
+pub type WidgetListing = Vec<(String, String, Metadata)>;
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/widgets",
@@ -42,7 +45,7 @@ pub async fn get_widgets(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Query(query): Query<LanguageParams>,
-) -> Result<Json<Vec<(String, String, Metadata)>>, ApiError> {
+) -> Result<Json<WidgetListing>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadWidgets);
 
     let language = query.language.as_deref().unwrap_or("en");

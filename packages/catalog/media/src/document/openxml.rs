@@ -67,6 +67,7 @@ pub fn replace_text_in_xml(
 ///
 /// Parses markdown into formatted runs and replaces the placeholder paragraph content
 /// with the rendered text, preserving the base formatting of the first run.
+#[allow(clippy::too_many_arguments)]
 pub fn replace_text_in_xml_markdown(
     xml_bytes: &[u8],
     placeholder: &str,
@@ -585,8 +586,13 @@ fn replace_across_text_elements(
             offset += diff1;
 
             // Clear content in middle and last segments that were part of the placeholder
-            for seg_i in (first_seg + 1)..=last_seg {
-                let (cs, ce, ref _text) = segments[seg_i];
+            for (seg_i, segment) in segments
+                .iter()
+                .enumerate()
+                .take(last_seg + 1)
+                .skip(first_seg + 1)
+            {
+                let (cs, ce, ref _text) = *segment;
                 let adj_cs = (cs as i64 + offset) as usize;
                 let adj_ce = (ce as i64 + offset) as usize;
                 let old = result[adj_cs..adj_ce].to_string();
@@ -631,12 +637,9 @@ fn replace_run_containing_placeholder(
     let mut result = xml.to_string();
     let mut search_from = 0;
 
-    loop {
+    while let Some(found) = result[search_from..].find(&open_tag) {
         // Find next text element
-        let text_start = match result[search_from..].find(&open_tag) {
-            Some(p) => search_from + p,
-            None => break,
-        };
+        let text_start = search_from + found;
 
         let tag_end = match result[text_start..].find('>') {
             Some(p) => text_start + p + 1,
@@ -877,8 +880,8 @@ pub fn replace_image_in_archive(
         if img_identifier == identifier {
             // Determine the full path of the image in the archive
             let base_dir = xml_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-            let full_img_path = if img_path.starts_with('/') {
-                img_path[1..].to_string()
+            let full_img_path = if let Some(stripped) = img_path.strip_prefix('/') {
+                stripped.to_string()
             } else if base_dir.is_empty() {
                 img_path.clone()
             } else {

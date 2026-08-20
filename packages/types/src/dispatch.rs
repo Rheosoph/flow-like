@@ -212,7 +212,7 @@ pub struct DispatchPayload {
 #[serde(untagged)]
 pub enum DispatchPayloadRef {
     /// Full payload embedded in the message body.
-    Inline(DispatchPayload),
+    Inline(Box<DispatchPayload>),
     /// Payload stored at a remote URL (presigned S3/GCS/Azure GET URL).
     Remote {
         /// Presigned GET URL from which the full `DispatchPayload` JSON can

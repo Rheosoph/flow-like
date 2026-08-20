@@ -140,6 +140,7 @@ pub trait RuntimeCredentialsTrait {
     async fn to_state(&self, state: AppState) -> Result<FlowLikeState>;
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder>;
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder>;
+    #[allow(clippy::wrong_self_convention)] // &self by design: callers keep the credentials and derive a shared view repeatedly
     fn into_shared_credentials(&self) -> SharedCredentials;
 }
 

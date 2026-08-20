@@ -7,11 +7,9 @@
 //! pin whose name had already been claimed. `add_input_pin` mints a fresh id rather than deduping
 //! by name, so each parse leaked another `page` pin and the board grew without bound.
 
-use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
-use flow_like::flow::execution::LogLevel;
+use flow_like::flow::board::Board;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::PinType;
 use flow_like_catalog::CatalogBuilder;

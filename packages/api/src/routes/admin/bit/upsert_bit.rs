@@ -42,7 +42,7 @@ struct Progress {
 
 enum StreamMsg {
     Progress(Progress),
-    Done(Bit),
+    Done(Box<Bit>),
     Error(String),
 }
 
@@ -291,7 +291,7 @@ pub async fn upsert_bit(
                             state_cloned
                                 .invalidate_cache(&format!("get_with_dependencies:{}", updated.id));
                         }
-                        let _ = tx.send(StreamMsg::Done(Bit::from(updated))).await;
+                        let _ = tx.send(StreamMsg::Done(Box::new(Bit::from(updated)))).await;
                     }
                     Err(e) => {
                         let _ = tx.send(StreamMsg::Error(e.to_string())).await;
@@ -329,7 +329,9 @@ pub async fn upsert_bit(
                 new_bit.updated_at = Set(chrono::Utc::now().naive_utc());
                 match new_bit.insert(&state_cloned.db).await {
                     Ok(inserted) => {
-                        let _ = tx.send(StreamMsg::Done(Bit::from(inserted))).await;
+                        let _ = tx
+                            .send(StreamMsg::Done(Box::new(Bit::from(inserted))))
+                            .await;
                     }
                     Err(_e) => {
                         match bit::Entity::find()
@@ -338,7 +340,9 @@ pub async fn upsert_bit(
                             .await
                         {
                             Ok(Some(existing_bit)) => {
-                                let _ = tx.send(StreamMsg::Done(Bit::from(existing_bit))).await;
+                                let _ = tx
+                                    .send(StreamMsg::Done(Box::new(Bit::from(existing_bit))))
+                                    .await;
                             }
                             Ok(None) => {
                                 let _ = tx.send(StreamMsg::Error("Bit with the same dependency tree hash not found after insert error".into())).await;
