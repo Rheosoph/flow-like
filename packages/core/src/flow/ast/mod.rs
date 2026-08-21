@@ -303,6 +303,7 @@ mod roundtrip_properties {
             board_dir: flow_like_storage::Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -801,6 +802,7 @@ mod lower_tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 

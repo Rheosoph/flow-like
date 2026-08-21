@@ -122,9 +122,9 @@ impl NodeLogic for ParBatchLoopNode {
         start_index_pin.set_value(Value::from(0)).await;
 
         let pins = BatchPins {
-            batch: batch_pin.id.clone(),
-            index: index_pin.id.clone(),
-            start_index: start_index_pin.id.clone(),
+            batch: batch_pin.id.to_string(),
+            index: index_pin.id.to_string(),
+            start_index: start_index_pin.id.to_string(),
         };
 
         let batch_size = context.evaluate_pin::<i64>("batch_size").await?.max(1) as usize;

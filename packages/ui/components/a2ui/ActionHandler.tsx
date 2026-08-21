@@ -68,8 +68,11 @@ type ExecuteActionFn = (
 const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
- * Page and global state keys arrive from surface messages, so a `__proto__`
- * key would otherwise walk straight into `Object.prototype`.
+ * Page ids, element ids and state keys arrive from surface messages and the
+ * route, so a `__proto__` segment would otherwise walk straight into
+ * `Object.prototype`. Every write into the state records goes through this,
+ * and an empty key is rejected everywhere so the same-page and cross-page
+ * `setPageState` paths accept exactly the same set of keys.
  */
 function isSafeStateKey(key: unknown): key is string {
 	return (
@@ -325,9 +328,43 @@ export function ActionProvider({
 	const [globalState, setGlobalStateMap] = useState<Record<string, unknown>>(
 		{},
 	);
-	const pageStateRef = useRef<Record<string, Record<string, unknown>>>({});
+	const pageStateRef = useRef<Record<string, Record<string, unknown>>>(
+		Object.create(null),
+	);
 	const [pageState, setPageStateLocal] = useState<Record<string, unknown>>({});
 	const [isStateLoaded, setIsStateLoaded] = useState(false);
+
+	// The only three doors into `pageStateRef`. Keeping the id check here rather
+	// than at each call site is what makes the invariant hold for every site.
+	const getPageBucket = useCallback(
+		(pageId: unknown): Record<string, unknown> | undefined =>
+			isSafeStateKey(pageId) ? pageStateRef.current[pageId] : undefined,
+		[],
+	);
+
+	const putPageBucket = useCallback(
+		(pageId: unknown, bucket: Record<string, unknown>): boolean => {
+			if (!isSafeStateKey(pageId)) return false;
+			pageStateRef.current[pageId] = bucket;
+			return true;
+		},
+		[],
+	);
+
+	const putPageBucketEntry = useCallback(
+		(
+			pageId: unknown,
+			key: unknown,
+			value: unknown,
+		): Record<string, unknown> | undefined => {
+			if (!isSafeStateKey(pageId) || !isSafeStateKey(key)) return undefined;
+			const bucket = pageStateRef.current[pageId] ?? {};
+			bucket[key] = value;
+			pageStateRef.current[pageId] = bucket;
+			return bucket;
+		},
+		[],
+	);
 
 	// Use props if provided (for portal'd dialogs), otherwise use context
 	const openDialog = openDialogProp ?? routeDialog?.openDialog;
@@ -336,8 +373,14 @@ export function ActionProvider({
 	// What the surface's inputs are currently holding, and what `_elements` carries into a
 	// workflow. Backed by storage so a surface that comes back from cache and the payload its
 	// workflows receive describe the same screen.
-	const elementValuesRef = useRef<Record<string, unknown>>({});
+	const elementValuesRef = useRef<Record<string, unknown>>(Object.create(null));
 	const { storeElementValue, restoreSurfaceValues } = useElementStorage(appId);
+
+	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
+		if (!isSafeStateKey(elementId)) return false;
+		elementValuesRef.current[elementId] = value;
+		return true;
+	}, []);
 
 	useEffect(() => {
 		if (!appId || !surfaceId) return;
@@ -348,10 +391,11 @@ export function ActionProvider({
 				if (cancelled) return;
 				// Anything the user has already touched on this mount is newer than what was
 				// stored, so restoration fills gaps rather than overwriting.
-				elementValuesRef.current = {
-					...restored,
-					...elementValuesRef.current,
-				};
+				elementValuesRef.current = Object.assign(
+					Object.create(null),
+					restored,
+					elementValuesRef.current,
+				);
 			})
 			.catch(() => undefined);
 
@@ -370,11 +414,10 @@ export function ActionProvider({
 	// under the "{instanceId}/values" elements-payload key.
 	const setElementValue = useCallback(
 		(elementId: string, value: unknown) => {
-			if (!elementId) return;
-			elementValuesRef.current[elementId] = value;
+			if (!putElementValue(elementId, value)) return;
 			storeElementValue(elementId, value);
 		},
-		[storeElementValue],
+		[putElementValue, storeElementValue],
 	);
 
 	// Ref-counted set of components that are currently triggering an async action.
@@ -476,14 +519,15 @@ export function ActionProvider({
 					? context.value
 					: context.checked;
 
-				elementValuesRef.current[elementId] = value;
-				storeElementValue(elementId, value);
+				if (putElementValue(elementId, value)) {
+					storeElementValue(elementId, value);
+				}
 			}
 
 			// Forward to original handler
 			onAction?.(message);
 		},
-		[onAction, storeElementValue],
+		[onAction, putElementValue, storeElementValue],
 	);
 
 	// Load persisted state from IndexedDB on mount
@@ -504,8 +548,10 @@ export function ActionProvider({
 				// Load page state for current page
 				const pageId = pageStateId;
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
-				if (Object.keys(persistedPage).length > 0) {
-					pageStateRef.current[pageId] = persistedPage;
+				if (
+					Object.keys(persistedPage).length > 0 &&
+					putPageBucket(pageId, persistedPage)
+				) {
 					setPageStateLocal(persistedPage);
 				}
 			} catch (error) {
@@ -516,17 +562,19 @@ export function ActionProvider({
 		};
 
 		loadPersistedState();
-	}, [appId, pageStateId]);
+	}, [appId, pageStateId, putPageBucket]);
 
 	// Load page state when the surface changes
 	useEffect(() => {
 		if (!appId || !isStateLoaded) return;
 
 		const pageId = pageStateId;
+		if (!isSafeStateKey(pageId)) return;
 
 		// Check if we already have this page's state in memory
-		if (pageStateRef.current[pageId]) {
-			setPageStateLocal(pageStateRef.current[pageId]);
+		const cached = getPageBucket(pageId);
+		if (cached) {
+			setPageStateLocal(cached);
 			return;
 		}
 
@@ -534,17 +582,17 @@ export function ActionProvider({
 		const loadPageState = async () => {
 			try {
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
-				pageStateRef.current[pageId] = persistedPage;
+				putPageBucket(pageId, persistedPage);
 				setPageStateLocal(persistedPage);
 			} catch (error) {
 				console.error("Failed to load page state:", error);
-				pageStateRef.current[pageId] = {};
+				putPageBucket(pageId, {});
 				setPageStateLocal({});
 			}
 		};
 
 		loadPageState();
-	}, [appId, pageStateId, isStateLoaded]);
+	}, [appId, pageStateId, isStateLoaded, getPageBucket, putPageBucket]);
 
 	const setGlobalState = useCallback(
 		(key: string, value: unknown) => {
@@ -567,13 +615,10 @@ export function ActionProvider({
 
 	const setPageState = useCallback(
 		(key: string, value: unknown) => {
-			if (!isSafeStateKey(key)) return;
 			const pageId = pageStateId;
-			if (!pageStateRef.current[pageId]) {
-				pageStateRef.current[pageId] = {};
-			}
-			pageStateRef.current[pageId][key] = value;
-			setPageStateLocal({ ...pageStateRef.current[pageId] });
+			const bucket = putPageBucketEntry(pageId, key, value);
+			if (!bucket) return;
+			setPageStateLocal({ ...bucket });
 
 			// Persist to IndexedDB
 			if (appId) {
@@ -582,12 +627,12 @@ export function ActionProvider({
 					.catch((err) => console.error("Failed to persist page state:", err));
 			}
 		},
-		[pageStateId, appId],
+		[pageStateId, appId, putPageBucketEntry],
 	);
 
 	const clearPageState = useCallback(() => {
 		const pageId = pageStateId;
-		pageStateRef.current[pageId] = {};
+		if (!putPageBucket(pageId, {})) return;
 		setPageStateLocal({});
 
 		// Clear from IndexedDB
@@ -596,7 +641,7 @@ export function ActionProvider({
 				.clearPage(appId, pageId)
 				.catch((err) => console.error("Failed to clear page state:", err));
 		}
-	}, [pageStateId, appId]);
+	}, [pageStateId, appId, putPageBucket]);
 
 	// Wrap onA2UIMessage to handle state updates
 	const handleA2UIMessage = useCallback(
@@ -614,16 +659,12 @@ export function ActionProvider({
 						value: unknown;
 					};
 					const currentPageId = pageStateId;
-					if (!isSafeStateKey(pageId)) break;
 					// Only apply if it's for the current page
 					if (pageId === currentPageId) {
 						setPageState(key, value);
 					} else {
 						// Store for other pages in memory
-						if (!pageStateRef.current[pageId]) {
-							pageStateRef.current[pageId] = {};
-						}
-						pageStateRef.current[pageId][key] = value;
+						if (!putPageBucketEntry(pageId, key, value)) break;
 						// Also persist to IndexedDB for cross-page state
 						if (appId) {
 							pageLocalState
@@ -640,8 +681,7 @@ export function ActionProvider({
 				}
 				case "clearPageState": {
 					const { pageId } = message as { pageId: string };
-					if (!isSafeStateKey(pageId)) break;
-					pageStateRef.current[pageId] = {};
+					if (!putPageBucket(pageId, {})) break;
 					if (pageId === pageStateId) {
 						setPageStateLocal({});
 					}
@@ -672,7 +712,15 @@ export function ActionProvider({
 					onA2UIMessage?.(message);
 			}
 		},
-		[onA2UIMessage, pageStateId, appId, setGlobalState, setPageState],
+		[
+			onA2UIMessage,
+			pageStateId,
+			appId,
+			setGlobalState,
+			setPageState,
+			putPageBucket,
+			putPageBucketEntry,
+		],
 	);
 
 	return (

@@ -25,7 +25,7 @@ serenity = { version = "0.12", default-features = false, features = [
     "rustls_backend",
 ], optional = true }
 # Telegram bot
-teloxide = { version = "0.13", default-features = false, features = [
+teloxide = { version = "0.17", default-features = false, features = [
     "rustls",
     "macros",
     "ctrlc_handler",

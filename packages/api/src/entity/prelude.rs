@@ -79,6 +79,7 @@ pub use super::telemetry_error_event::Entity as TelemetryErrorEvent;
 pub use super::telemetry_event::Entity as TelemetryEvent;
 pub use super::telemetry_event_daily::Entity as TelemetryEventDaily;
 pub use super::telemetry_flowpilot_daily::Entity as TelemetryFlowpilotDaily;
+pub use super::telemetry_flowpilot_failure_daily::Entity as TelemetryFlowpilotFailureDaily;
 pub use super::telemetry_install_daily::Entity as TelemetryInstallDaily;
 pub use super::telemetry_issue::Entity as TelemetryIssue;
 pub use super::telemetry_llm_call::Entity as TelemetryLlmCall;

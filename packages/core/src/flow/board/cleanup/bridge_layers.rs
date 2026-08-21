@@ -367,15 +367,15 @@ fn get_pin_mut<'a>(
     pin_id: &str,
 ) -> Option<&'a mut Pin> {
     match pin_lookup.get(pin_id) {
-        Some((pin_meta, parent)) => match parent {
+        Some((_, parent)) => match parent {
             NodeOrLayer::Node(_) => board
                 .nodes
                 .get_mut(parent.id())
-                .and_then(|n| n.pins.get_mut(&pin_meta.id)),
+                .and_then(|n| n.pins.get_mut(pin_id)),
             NodeOrLayer::Layer(_) => board
                 .layers
                 .get_mut(parent.id())
-                .and_then(|l| l.pins.get_mut(&pin_meta.id)),
+                .and_then(|l| l.pins.get_mut(pin_id)),
         },
         None => None,
     }
@@ -385,7 +385,6 @@ fn get_pin_mut<'a>(
 mod tests {
     use std::{
         collections::{BTreeSet, HashMap},
-        sync::Arc,
         time::SystemTime,
     };
 
@@ -427,6 +426,7 @@ mod tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -508,7 +508,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
                     ),
                 );
@@ -526,7 +526,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
                     ),
                 );
@@ -664,7 +664,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
                     ),
                 );
@@ -682,7 +682,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
                     ),
                 );

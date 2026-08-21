@@ -32,6 +32,7 @@ import {
 	ScrollArea,
 	Separator,
 } from "../../../ui";
+import { isImageFile, useImagePreviewUrls } from "./image-previews";
 
 interface FileManagerDialogProps {
 	open: boolean;
@@ -66,6 +67,7 @@ export function FileManagerDialog({
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
 		new Set(["root"]),
 	);
+	const previewUrls = useImagePreviewUrls(files);
 
 	const getFileIcon = (file: File) => {
 		if (file.type.startsWith("image/")) return Image;
@@ -416,15 +418,12 @@ export function FileManagerDialog({
 					/>
 
 					{/* File Preview/Icon */}
-					{node.file!.type.startsWith("image/") ? (
+					{isImageFile(node.file!) ? (
 						<div className="relative shrink-0">
 							<img
-								src={URL.createObjectURL(node.file!)}
+								src={previewUrls.get(node.file!)}
 								alt={node.name}
 								className="w-12 h-12 object-cover rounded-lg border border-border shadow-sm"
-								onLoad={(e) =>
-									URL.revokeObjectURL((e.target as HTMLImageElement).src)
-								}
 							/>
 							<div className="absolute -top-1 -right-1 w-5 h-5 bg-background rounded-full flex items-center justify-center border border-border shadow-sm">
 								<Image className="w-2.5 h-2.5 text-emerald-600" />

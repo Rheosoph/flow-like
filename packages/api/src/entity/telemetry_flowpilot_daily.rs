@@ -54,6 +54,22 @@ pub struct Model {
     pub boards_inspected: i64,
     #[sea_orm(column_name = "emptyBoardsAfterRun")]
     pub empty_boards_after_run: i64,
+    #[sea_orm(column_name = "failuresTotal")]
+    pub failures_total: i64,
+    #[sea_orm(column_name = "subagentDispatchFailures")]
+    pub subagent_dispatch_failures: i64,
+    #[sea_orm(column_name = "flowscriptApplyFailures")]
+    pub flowscript_apply_failures: i64,
+    #[sea_orm(column_name = "widgetApplyFailures")]
+    pub widget_apply_failures: i64,
+    #[sea_orm(column_name = "dataApplyFailures")]
+    pub data_apply_failures: i64,
+    #[sea_orm(column_name = "pageApplyFailures")]
+    pub page_apply_failures: i64,
+    #[sea_orm(column_name = "toolFailures")]
+    pub tool_failures: i64,
+    #[sea_orm(column_name = "runFailures")]
+    pub run_failures: i64,
     pub installs: i32,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,

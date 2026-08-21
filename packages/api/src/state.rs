@@ -388,6 +388,10 @@ pub struct State {
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
+    /// Positive cache for the pre-dispatch compiled-artifact check, keyed by
+    /// (app, board, version|etag, registry fingerprint). Entries are
+    /// content-addressed, so they never go stale — TTL only bounds memory.
+    pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
     pub response_cache: moka::sync::Cache<String, Value>,
     /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
@@ -860,6 +864,10 @@ impl State {
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
                 .time_to_idle(Duration::from_secs(30 * 60))
                 .build(),
+            compiled_artifact_cache: moka::sync::Cache::builder()
+                .max_capacity(16_384)
+                .time_to_idle(Duration::from_secs(12 * 60 * 60))
+                .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
                 .time_to_idle(Duration::from_secs(30 * 60))
@@ -879,9 +887,12 @@ impl State {
                 .max_capacity(BOARD_SEGMENT_BASE_MAX_NODES)
                 .time_to_idle(Duration::from_secs(30 * 60))
                 .build(),
+            // Installs, updates and removals are caught immediately by the package-pin digest in
+            // the key. The TTL only backstops the one change that digest cannot see — a package
+            // republished under the same version — and reclaims retired epochs.
             app_wasm_nodes_cache: moka::sync::Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(5 * 60))
+                .time_to_live(Duration::from_secs(10 * 60))
                 .build(),
             board_load_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
@@ -922,9 +933,12 @@ impl State {
 
     /// Invalidate the cached WASM package resolution for an app. Call this
     /// when the app's package list changes (add/update/delete).
+    ///
+    /// `app_wasm_nodes_cache` is deliberately absent: its key carries a digest of the app's package
+    /// pins, so a changed package list misses on its own — including on the replicas this call
+    /// never reaches.
     pub fn invalidate_wasm_resolve(&self, app_id: &str) {
         self.wasm_resolve_cache.invalidate(app_id);
-        self.app_wasm_nodes_cache.invalidate(app_id);
     }
 
     fn openid_validation_settings(&self) -> Result<OpenIdValidationSettings> {

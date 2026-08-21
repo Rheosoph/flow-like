@@ -858,11 +858,11 @@ pub async fn execute_tool_call(
     let argument_names = assign_sanitized_argument_names(
         referenced_node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
             })
-            .map(|pin| (pin.index, pin.name.clone()))
+            .map(|pin| (pin.index, pin.name.to_string()))
             .collect(),
     );
 
@@ -912,19 +912,19 @@ pub async fn execute_tool_call(
     // Also set values on the referenced function's OUTPUT pins (shared storage
     // + override map) so that both override-aware and non-override code paths
     // resolve correctly regardless of old/new layer format.
-    for pin in referenced_node.pins.values() {
+    for pin in referenced_node.pins.iter() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
 
         let sanitized_name = argument_names
-            .get(&pin.name)
+            .get(pin.name.as_ref())
             .cloned()
             .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
 
         if let Some(value) = args_obj
             .get(&sanitized_name)
-            .or_else(|| args_obj.get(&pin.name))
+            .or_else(|| args_obj.get(pin.name.as_ref()))
         {
             sub_context.override_pin_value(&pin.id, value.clone());
             pin.set_value(value.clone()).await;

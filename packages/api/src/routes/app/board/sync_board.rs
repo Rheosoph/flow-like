@@ -80,13 +80,20 @@ pub(crate) async fn snapshot_for_cached(
         return Ok(snapshot);
     }
 
-    let builtin_nodes = state.registry.as_ref().get_nodes();
+    let builtin_nodes = state.registry.as_ref().get_nodes_shared();
     let mut board = (*cached.board).clone();
     hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes);
     filter_board_secrets(&mut board);
 
-    let mut catalog = builtin_nodes;
-    catalog.extend(wasm.nodes.iter().cloned());
+    // Apps without packages are the common case; there the shared catalog is used as-is rather
+    // than copied to append nothing to it.
+    let catalog = if wasm.nodes.is_empty() {
+        builtin_nodes
+    } else {
+        let mut catalog = (*builtin_nodes).clone();
+        catalog.extend(wasm.nodes.iter().cloned());
+        Arc::new(catalog)
+    };
     let head_key = State::board_snapshot_head_key(app_id, board_id, version);
     let previous = state.board_snapshot_heads.get(&head_key);
     let snapshot = Arc::new(

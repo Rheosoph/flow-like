@@ -3,7 +3,7 @@ use flow_like_gcp_data::metadata::{AccessToken, MetadataError, TokenSource};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
-use opentelemetry_sdk::{runtime, trace::TracerProvider};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::sync::{Arc, OnceLock, RwLock, mpsc};
 use std::time::Duration;
 use tonic::{
@@ -98,8 +98,8 @@ fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
         .with_interceptor(authorizer)
         .build()
         .unwrap_or_else(|error| panic!("required OTLP exporter could not initialize: {error}"));
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
     let tracer = provider.tracer("flow-like-gcp-executor");
     opentelemetry::global::set_tracer_provider(provider);

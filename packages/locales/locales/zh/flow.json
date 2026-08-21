@@ -892,6 +892,7 @@
 	"thisHandlerIsConfiguredButIsNotDeclaredByTheCurrentComponentContract": "此处理程序已配置，但当前组件契约中未声明它。",
 	"thisLegacyWidgetWorkflowBindingIsPreservedAddingAnExactHandlerMayOverrideItAtRuntime": "此旧版组件工作流绑定已保留。添加精确处理程序可能会在运行时覆盖它。",
 	"thisNodeDoesNotDefineGovernanceScores": "此节点未定义治理分数。",
+	"thisNodePointsAtSomethingThatNoLongerExists": "",
 	"thisPreservesTheOriginalSingleactionBehaviorExactNamedAndWildcardHandlersTakePrecedence": "这保留了原始的单操作行为。精确命名的处理程序和通配符处理程序优先。",
 	"thisProjectHasNoOntologiesYetCreateOneInDataStudio": "此项目尚无本体 — 请在 Data Studio 中创建一个。",
 	"thisRemovesTheFlowAndCountPagesInsideIt_one": "这将移除该流程及其内部页面。",

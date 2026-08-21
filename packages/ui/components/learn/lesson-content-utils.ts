@@ -2,6 +2,7 @@ import type { LessonAssetView } from "../../lib/learn/types";
 
 const PLATE_JSON_PREFIX = "plate_json::";
 const MARKDOWN_REF_RE = /(^|[^\w\\])@([A-Za-z_][A-Za-z0-9_-]{0,63})/g;
+const MARKDOWN_H1_RE = /^\s{0,3}#\s+([^\s][^\r\n]*)\r*(?:\n|$)/;
 
 interface PlateNode {
 	readonly type?: string;
@@ -25,6 +26,12 @@ function normalizedTitle(value: string): string {
 		.replace(/\s+/g, " ")
 		.trim()
 		.toLocaleLowerCase();
+}
+
+function headingText(line: string): string {
+	let end = line.trimEnd().length;
+	while (end > 0 && line[end - 1] === "#") end--;
+	return line.slice(0, end).trimEnd() || line.slice(0, 1);
 }
 
 function plateText(node: PlateNode): string {
@@ -66,11 +73,12 @@ export function removeDuplicateLessonTitle(
 		}
 	}
 
-	const heading = content.match(/^\s{0,3}#\s+(.+?)\s*#*\s*(?:\r?\n|$)/);
-	if (!heading || normalizedTitle(heading[1] ?? "") !== expected) {
+	const heading = content.match(MARKDOWN_H1_RE);
+	if (!heading || normalizedTitle(headingText(heading[1] ?? "")) !== expected) {
 		return content;
 	}
-	return content.slice(heading[0].length).replace(/^\s*\r?\n/, "");
+	const rest = content.slice(heading[0].length);
+	return rest.trim() ? rest.replace(/^\s*\r?\n/, "") : "";
 }
 
 function nodeForAsset(asset: LessonAssetView): PlateNode {

@@ -17,9 +17,17 @@ const MAX_SUMMARY_CHARS = 500;
 const MAX_GENERATION_ATTEMPTS = 32;
 const MAX_GENERATION_DIAGNOSTIC_KEYS = 32;
 const MAX_GENERATION_DIAGNOSTIC_KEY_CHARS = 160;
+const MAX_FAILURE_SIGNATURES = 12;
+const MAX_FAILURE_MESSAGE_CHARS = 200;
+const MAX_FAILURE_CODE_CHARS = 80;
+/** Keeps the whole metrics payload inside the ingest endpoint's 8 KB props budget. */
+const MAX_FAILURE_PAYLOAD_BYTES = 4096;
+/** A quoted run of user prose is generalized; a short quoted identifier is diagnostic and kept. */
+const MAX_KEPT_QUOTED_CHARS = 32;
 const REPORT_SIZE_CACHE = new WeakMap<IAgentDebugReport, number>();
 const GENERATION_CANDIDATE_KEYS = new WeakMap<IAgentDebugReport, string[]>();
 const GENERATION_TOOL_EVIDENCE = Symbol("flowpilot-generation-tool-evidence");
+const GENERATION_FAILURE = Symbol("flowpilot-generation-failure");
 const EVENT_PREVIEWS_NORMALIZED = Symbol("flowpilot-event-previews-normalized");
 const FLOWSCRIPT_ARTIFACT_SOURCE_HASH = new WeakMap<IAgentDebugEvent, string>();
 const SENSITIVE_KEY =
@@ -106,9 +114,47 @@ export interface IAgentDebugGenerationAttempt {
 }
 
 /**
+ * Stable failure taxonomy for the admin FlowPilot trace. Every value is a fixed identifier chosen
+ * here, never a string read out of a payload.
+ */
+export type FlowPilotFailureKind =
+	/** A delegated specialist never produced a usable result (dispatch, transport, or timeout). */
+	| "subagent_dispatch"
+	/** Authoring, validating, committing or applying generated FlowScript failed. */
+	| "flowscript_apply"
+	/** A delegated UI build failed, or its components could not be applied to a page. */
+	| "widget_apply"
+	/** A Data Studio / storage / graph operation failed. */
+	| "data_apply"
+	/** A page or live-surface interaction failed. */
+	| "page_apply"
+	/** Any other tool call that ended in a non-recoverable status. */
+	| "tool_error"
+	/** The run itself terminated in a failure outcome. */
+	| "run_error";
+
+/**
+ * One deduplicated failure cause.
+ *
+ * `tool` is an allow-listed FlowPilot tool name — unknown and user-authored tool names collapse to
+ * `"other"`. `code` is a stable status/diagnostic identifier. `message` is the failure text after
+ * secret redaction AND generalization: emails, URLs, identifiers, paths, long digit runs and long
+ * quoted strings are replaced with placeholders before the payload leaves the client, so what is
+ * retained describes the failure mode and not the workflow it happened in.
+ */
+export interface IFlowPilotFailureSignature {
+	kind: FlowPilotFailureKind;
+	tool?: string;
+	code?: string;
+	message?: string;
+	count: number;
+}
+
+/**
  * Privacy-safe production telemetry for workflow generation. Every property after the schema is an
- * aggregate counter. In particular this payload contains no run/message ids, timestamps, model or
- * provider names, prompts, FlowScript, tool arguments/results, board ids, or diagnostic strings.
+ * aggregate counter, except `failures`, which carries bounded, redacted and generalized failure
+ * causes so admins can see WHY runs fail. This payload contains no run/message ids, timestamps,
+ * model or provider names, prompts, FlowScript source, tool arguments/results, or board ids.
  */
 export interface IFlowPilotProductionMetrics {
 	schema: typeof FLOWPILOT_PRODUCTION_METRICS_SCHEMA;
@@ -134,6 +180,16 @@ export interface IFlowPilotProductionMetrics {
 	validation_regressions: number;
 	boards_inspected: number;
 	empty_boards_after_run: number;
+	failures_total: number;
+	subagent_dispatch_failures: number;
+	flowscript_apply_failures: number;
+	widget_apply_failures: number;
+	data_apply_failures: number;
+	page_apply_failures: number;
+	tool_failures: number;
+	run_failures: number;
+	/** Deduplicated, redacted failure causes, bounded in both count and serialized bytes. */
+	failures: IFlowPilotFailureSignature[];
 }
 
 export type AgentGenerationReviewDisposition =
@@ -1278,6 +1334,373 @@ function generationEvidenceForToolEnd(
 	};
 }
 
+/**
+ * Tools whose failures are worth naming in the admin trace. Anything outside this list — including
+ * user-authored MCP tools, whose names can themselves identify a workspace — reports as "other".
+ */
+const FAILURE_TOOL_KINDS: Record<string, FlowPilotFailureKind | undefined> = {
+	plan_flow_ir: "flowscript_apply",
+	begin_flow_ir_draft: "flowscript_apply",
+	update_flow_ir_draft: "flowscript_apply",
+	upsert_flow_ir_module: "flowscript_apply",
+	validate_flow_ir_draft: "flowscript_apply",
+	commit_flow_ir_draft: "flowscript_apply",
+	write_flowscript: "flowscript_apply",
+	edit_flowscript: "flowscript_apply",
+	patch_flowscript: "flowscript_apply",
+	check_flowscript: "flowscript_apply",
+	commit_flowscript: "flowscript_apply",
+	read_flowscript_source: "flowscript_apply",
+	emit_commands: "flowscript_apply",
+	get_current_flowscript: "flowscript_apply",
+	flowpilot_board: "flowscript_apply",
+	flowpilot_widget: "widget_apply",
+	ui_inspect: "widget_apply",
+	interact_app_page: "page_apply",
+	open_app_page: "page_apply",
+	set_page_load_event: "page_apply",
+	navigate_view: "page_apply",
+	data_studio_agent: "data_apply",
+	database_tool: "data_apply",
+	storage_tool: "data_apply",
+	graph_element_tool: "data_apply",
+	graph_overlay_tool: "data_apply",
+	graph_query_tool: "data_apply",
+	ontology_action_tool: "data_apply",
+	research_agent: "subagent_dispatch",
+	project_scout: "subagent_dispatch",
+	catalog_search: "tool_error",
+	find_connectable_nodes: "tool_error",
+	get_node_details: "tool_error",
+	get_declarations: "tool_error",
+	list_board_nodes: "tool_error",
+	get_unconfigured_nodes: "tool_error",
+	search_by_pin: "tool_error",
+	execute_event: "tool_error",
+	execute_node: "tool_error",
+	call_app_event: "tool_error",
+	call_app_chat: "tool_error",
+	open_app_chat: "tool_error",
+	query_execution_logs: "tool_error",
+	upsert_event: "tool_error",
+	delete_event: "tool_error",
+	create_app: "tool_error",
+	acquire_app: "tool_error",
+	fork_app: "tool_error",
+	fork_preview: "tool_error",
+	inspect_app: "tool_error",
+	list_apps: "tool_error",
+	search_apps: "tool_error",
+	search_templates: "tool_error",
+	get_app_detail: "tool_error",
+	get_template_preview: "tool_error",
+	describe_app_interface: "tool_error",
+	ask_user: "tool_error",
+};
+
+const UNKNOWN_FAILURE_TOOL = "other";
+
+/**
+ * Generalizers applied in order, after secret redaction. Failure text is arbitrary — tool errors,
+ * transport messages, validator diagnostics — so this is a defence in depth rather than a proof:
+ * it strips the shapes an identity or a location actually takes, and the passes below then drop
+ * everything that reads like prose or a proper noun instead of a diagnostic.
+ */
+const FAILURE_MESSAGE_GENERALIZERS: readonly (readonly [RegExp, string])[] = [
+	[/\b[\w.+-]+@[\w-]+\.[\w.-]{2,}\b/g, "<email>"],
+	[/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>"],
+	[
+		/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+		"<id>",
+	],
+	[/\b(?=[a-z0-9_-]*\d)[a-z0-9_-]{16,}\b/gi, "<id>"],
+	// Prefixed record ids (`app_1029384756`, `ref-9182736455`). Four digits keeps
+	// short diagnostic suffixes like `error_404` or `line_42` readable.
+	[/\b[a-z][a-z0-9]*[_-]\d{4,}\b/gi, "<id>"],
+	[/(?:[A-Za-z]:)?(?:[\\/][\w.@~-]+){2,}[\\/]?/g, "<path>"],
+	[/\b\d[\d_]{5,}\b/g, "<n>"],
+];
+
+/** A pin, node, column or tool name — the kind of quoted token that makes a failure diagnosable. */
+const IDENTIFIER_LIKE = /^[A-Za-z_][A-Za-z0-9_.:+-]*$/;
+
+const QUOTED_RUN = /"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`/g;
+const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
+
+/**
+ * Generalize one quoted run. Only a short bare identifier survives: a quoted phrase is as likely
+ * to be a board title or a customer name as it is a diagnostic, and length alone does not tell
+ * them apart — `"Acme Payroll"` is shorter than most pin names.
+ *
+ * `'` doubles as an apostrophe, so a run opening or closing mid-word is two contractions in one
+ * sentence rather than a quote, and generalizing it would eat the words between them.
+ */
+function generalizeQuoted(match: string, offset: number, whole: string) {
+	const isApostrophe =
+		match.startsWith("'") &&
+		(WORD_CHARACTER.test(whole[offset - 1] ?? "") ||
+			WORD_CHARACTER.test(whole[offset + match.length] ?? ""));
+	if (isApostrophe) return match;
+
+	const inner = match.slice(1, -1);
+	return inner.length <= MAX_KEPT_QUOTED_CHARS && IDENTIFIER_LIKE.test(inner)
+		? match
+		: "<value>";
+}
+
+/**
+ * Capitalized phrases the platform emits itself. Anything else that reads like a proper noun —
+ * two or more capitalized words in a row — is taken to be a name the run happened to mention,
+ * because a customer, a board or a person is exactly what that shape carries in free-form text.
+ */
+const KNOWN_CAPITALIZED_PHRASES = [
+	"Data Studio",
+	"Flow Like",
+	"Bad Request",
+	"Not Found",
+	"Internal Server Error",
+	"Service Unavailable",
+	"Gateway Timeout",
+	"Too Many Requests",
+] as const;
+
+const KNOWN_PHRASES = new Set<string>(
+	KNOWN_CAPITALIZED_PHRASES.map((phrase) => phrase.toLowerCase()),
+);
+const LONGEST_KNOWN_PHRASE = Math.max(
+	...KNOWN_CAPITALIZED_PHRASES.map((phrase) => phrase.split(" ").length),
+);
+
+// Words have to be separated by whitespace alone, so a run cannot reach across a quote and swallow
+// an identifier the pass above deliberately kept.
+const CAPITALIZED_RUN =
+	/\b[A-Z][\p{L}\p{N}'\u2019-]*(?:\s+[A-Z][\p{L}\p{N}'\u2019-]*)+/gu;
+
+/** Replace the stretches of one capitalized run that are not a phrase the platform itself emits. */
+function generalizeCapitalizedRun(run: string): string {
+	const words = run.split(/\s+/);
+	const kept: string[] = [];
+	let pending: string[] = [];
+	const flush = () => {
+		if (pending.length >= 2) kept.push("<name>");
+		else kept.push(...pending);
+		pending = [];
+	};
+
+	for (let index = 0; index < words.length; ) {
+		let known = 0;
+		const reach = Math.min(LONGEST_KNOWN_PHRASE, words.length - index);
+		for (let size = reach; size >= 2; size--) {
+			const phrase = words.slice(index, index + size).join(" ");
+			if (KNOWN_PHRASES.has(phrase.toLowerCase())) {
+				known = size;
+				break;
+			}
+		}
+		if (known === 0) {
+			pending.push(words[index]);
+			index += 1;
+			continue;
+		}
+		flush();
+		kept.push(words.slice(index, index + known).join(" "));
+		index += known;
+	}
+	flush();
+
+	return kept.join(" ");
+}
+
+/**
+ * Turn arbitrary failure text into a retainable signature. Secrets are stripped with the same pass
+ * the debug previews use, then identities, locations and user prose are generalized away.
+ *
+ * What survives is meant to be the diagnosis and nothing around it. A blacklist over free-form text
+ * cannot prove that, so the rules err towards dropping: an unrecognized capitalized phrase or a
+ * quoted value that is not a bare identifier goes, even when it would have been readable.
+ */
+export function redactFailureMessage(value: unknown): string | undefined {
+	const raw =
+		typeof value === "string"
+			? value
+			: value instanceof Error
+				? value.message
+				: value === undefined || value === null
+					? undefined
+					: typeof value === "object"
+						? undefined
+						: String(value);
+	if (!raw?.trim()) return undefined;
+	let text = redactSecretsInText(raw, MAX_PREVIEW_CHARS, false);
+	for (const [pattern, replacement] of FAILURE_MESSAGE_GENERALIZERS) {
+		text = text.replace(pattern, replacement);
+	}
+	text = text
+		.replace(QUOTED_RUN, generalizeQuoted)
+		.replace(CAPITALIZED_RUN, generalizeCapitalizedRun)
+		.replace(/\s+/g, " ")
+		.trim();
+	return text.length > 0
+		? truncate(text, MAX_FAILURE_MESSAGE_CHARS)
+		: undefined;
+}
+
+/** Stable, low-cardinality codes only: anything free-form is left to the message field. */
+function failureCode(value: unknown): string | undefined {
+	const code = cleanSummary(value, MAX_FAILURE_CODE_CHARS);
+	if (!code) return undefined;
+	return /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(code) ? code : undefined;
+}
+
+function failureTool(name: string | undefined) {
+	const normalized = cleanSummary(name, MAX_FAILURE_CODE_CHARS)?.toLowerCase();
+	if (!normalized) return undefined;
+	const known = Object.keys(FAILURE_TOOL_KINDS).find(
+		(tool) => normalized === tool || normalized.endsWith(`_${tool}`),
+	);
+	return known ?? UNKNOWN_FAILURE_TOOL;
+}
+
+function failureKindForTool(
+	tool: string | undefined,
+	fallback: FlowPilotFailureKind,
+): FlowPilotFailureKind {
+	if (!tool) return fallback;
+	return FAILURE_TOOL_KINDS[tool] ?? fallback;
+}
+
+export interface FlowPilotFailureDetail {
+	kind: FlowPilotFailureKind;
+	tool?: string;
+	code?: string;
+	message?: string;
+}
+
+type FailureEvent = IAgentDebugEvent & {
+	[GENERATION_FAILURE]?: FlowPilotFailureDetail;
+};
+
+function attachFailureDetail<T extends IAgentDebugEvent>(
+	event: T,
+	detail: FlowPilotFailureDetail | undefined,
+) {
+	if (detail) (event as FailureEvent)[GENERATION_FAILURE] = detail;
+	return event;
+}
+
+/**
+ * Statuses that must never enter the failure trace. Beyond the success vocabulary this covers the
+ * two user-driven outcomes — cancelling a run and denying an approval — which are choices, not
+ * defects, and would otherwise drown the signal admins are looking for.
+ */
+const NON_FAILING_STATUSES = new Set([
+	"ok",
+	"success",
+	"done",
+	"completed",
+	"committed",
+	"queued",
+	"already_queued",
+	"no_changes",
+	"applied",
+	"awaiting_approval",
+	"progress",
+	"running",
+	"pending",
+	"submitted",
+	"in_progress",
+	"draft_started",
+	"draft_updated",
+	"draft_valid",
+	"module_validated",
+	"cancelled",
+	"canceled",
+	"dismissed",
+	"denied",
+]);
+
+function isFailingStatus(value: unknown) {
+	const status = String(value ?? "")
+		.trim()
+		.toLowerCase();
+	return status.length > 0 && !NON_FAILING_STATUSES.has(status);
+}
+
+/**
+ * Derive the failure cause of a settled tool/specialist call. Returns undefined for anything that
+ * did not fail, so a healthy run contributes no signatures at all.
+ */
+function failureDetailForToolEnd(options: {
+	name: string | undefined;
+	status?: unknown;
+	error?: unknown;
+	rawResult?: unknown;
+	summary?: unknown;
+	fallbackKind: FlowPilotFailureKind;
+	/** Wins over the tool's own domain: the caller knows the call never got there. */
+	overrideKind?: FlowPilotFailureKind;
+}): FlowPilotFailureDetail | undefined {
+	const payload = parseJsonRecord(options.rawResult);
+	const payloadStatus = payload?.status;
+	const failed =
+		options.error !== undefined ||
+		isFailingStatus(options.status) ||
+		isFailingStatus(payloadStatus);
+	if (!failed) return undefined;
+	const tool = failureTool(options.name);
+	const diagnostics = Array.isArray(payload?.diagnostics)
+		? payload.diagnostics
+		: undefined;
+	const [firstDiagnostic] = stableDiagnosticKeys(diagnostics, payload?.code);
+	return {
+		kind:
+			options.overrideKind ?? failureKindForTool(tool, options.fallbackKind),
+		tool,
+		code:
+			failureCode(payload?.code) ??
+			firstDiagnostic ??
+			failureCode(options.status) ??
+			failureCode(payloadStatus),
+		message:
+			redactFailureMessage(options.error) ??
+			redactFailureMessage(payload?.message) ??
+			redactFailureMessage(payload?.note) ??
+			redactFailureMessage(
+				diagnostics?.find((entry) => typeof entry === "string"),
+			) ??
+			redactFailureMessage(options.summary),
+	};
+}
+
+/** Recover the failure cause of an already-recorded event, whether or not it carries a hint. */
+function failureDetailForRecordedEvent(
+	event: IAgentDebugEvent,
+): FlowPilotFailureDetail | undefined {
+	const attached = (event as FailureEvent)[GENERATION_FAILURE];
+	if (attached) return attached;
+	if (event.stage === "nested_run_started" || event.stage === "tool_start") {
+		return undefined;
+	}
+	const settled =
+		event.stage === "tool_end" ||
+		event.stage === "nested_run_finished" ||
+		event.stage === AGENT_RUN_SUMMARY_STAGE;
+	if (!settled) return undefined;
+	return failureDetailForToolEnd({
+		name: event.name,
+		status: event.terminal_status ?? event.status,
+		error: event.error,
+		rawResult: event.result_preview,
+		summary: event.result_summary ?? event.summary,
+		fallbackKind:
+			event.stage === AGENT_RUN_SUMMARY_STAGE
+				? "run_error"
+				: event.stage === "nested_run_finished"
+					? "subagent_dispatch"
+					: "tool_error",
+	});
+}
+
 function updateGenerationEvaluation(
 	report: IAgentDebugReport,
 	event: IAgentDebugEvent,
@@ -1402,6 +1825,63 @@ interface ProductionMetricsAccumulator {
 	queuedReviewKeys: Set<string>;
 	dispositionEventIds: Set<string>;
 	dispositions: Record<AgentGenerationReviewDisposition, number>;
+	failureEventIds: Set<string>;
+	failuresByKind: Record<FlowPilotFailureKind, number>;
+	/** Deduplicated by (kind, tool, code, message); insertion order breaks count ties. */
+	failures: Map<string, IFlowPilotFailureSignature>;
+}
+
+const EMPTY_FAILURE_COUNTS: Record<FlowPilotFailureKind, number> = {
+	subagent_dispatch: 0,
+	flowscript_apply: 0,
+	widget_apply: 0,
+	data_apply: 0,
+	page_apply: 0,
+	tool_error: 0,
+	run_error: 0,
+};
+
+/** Fold one failure into the accumulator, bounded in distinct signatures but never in counts. */
+function collectFailure(
+	accumulator: ProductionMetricsAccumulator,
+	eventId: string,
+	detail: FlowPilotFailureDetail,
+) {
+	if (accumulator.failureEventIds.has(eventId)) return;
+	accumulator.failureEventIds.add(eventId);
+	accumulator.failuresByKind[detail.kind] += 1;
+	const key = `${detail.kind}|${detail.tool ?? ""}|${detail.code ?? ""}|${detail.message ?? ""}`;
+	const existing = accumulator.failures.get(key);
+	if (existing) {
+		existing.count += 1;
+		return;
+	}
+	if (accumulator.failures.size >= MAX_FAILURE_SIGNATURES) return;
+	accumulator.failures.set(key, {
+		kind: detail.kind,
+		tool: detail.tool,
+		code: detail.code,
+		message: detail.message,
+		count: 1,
+	});
+}
+
+/** Highest-count signatures first, trimmed to the ingest endpoint's props budget. */
+function boundedFailureSignatures(
+	accumulator: ProductionMetricsAccumulator,
+): IFlowPilotFailureSignature[] {
+	const ranked = [...accumulator.failures.values()].sort(
+		(left, right) => right.count - left.count,
+	);
+	const kept: IFlowPilotFailureSignature[] = [];
+	let bytes = 0;
+	for (const signature of ranked) {
+		const size = JSON.stringify(signature).length + 1;
+		if (bytes + size > MAX_FAILURE_PAYLOAD_BYTES) break;
+		bytes += size;
+		kept.push(signature);
+	}
+	return kept;
 }
 
 const PRODUCTION_METRICS_RUNS = new Map<string, ProductionMetricsAccumulator>();
@@ -1491,6 +1971,9 @@ export function beginAgentGenerationMetrics(
 		queuedReviewKeys: new Set(),
 		dispositionEventIds: new Set(),
 		dispositions: { applied: 0, dismissed: 0, stale: 0, error: 0 },
+		failureEventIds: new Set(),
+		failuresByKind: { ...EMPTY_FAILURE_COUNTS },
+		failures: new Map(),
 	});
 }
 
@@ -1501,6 +1984,8 @@ export function recordAgentGenerationMetricEvent(
 ) {
 	const accumulator = PRODUCTION_METRICS_RUNS.get(runKey);
 	if (!accumulator) return;
+	const failure = failureDetailForRecordedEvent(event);
+	if (failure) collectFailure(accumulator, event.id, failure);
 	const evidence = generationEvidenceForRecordedEvent(event);
 	if (!evidence) return;
 	if (evidence.reviewQueued) {
@@ -1605,6 +2090,15 @@ function productionMetricsFromAccumulator(
 		boards_inspected: boardInspected ? 1 : 0,
 		empty_boards_after_run:
 			boardInspected && evaluation.final_board_node_count === 0 ? 1 : 0,
+		failures_total: accumulator.failureEventIds.size,
+		subagent_dispatch_failures: accumulator.failuresByKind.subagent_dispatch,
+		flowscript_apply_failures: accumulator.failuresByKind.flowscript_apply,
+		widget_apply_failures: accumulator.failuresByKind.widget_apply,
+		data_apply_failures: accumulator.failuresByKind.data_apply,
+		page_apply_failures: accumulator.failuresByKind.page_apply,
+		tool_failures: accumulator.failuresByKind.tool_error,
+		run_failures: accumulator.failuresByKind.run_error,
+		failures: boundedFailureSignatures(accumulator),
 	};
 }
 
@@ -1612,11 +2106,30 @@ function productionMetricsFromAccumulator(
 export function finalizeAgentGenerationMetrics(
 	runKey: string,
 	outcome: AgentDebugOutcome,
-	options: { publish?: boolean; finalBoardNodeCount?: number } = {},
+	options: {
+		publish?: boolean;
+		finalBoardNodeCount?: number;
+		/** Terminal reason for a run that failed without any tool event carrying the cause. */
+		failure?: { code?: unknown; message?: unknown };
+	} = {},
 ) {
 	const accumulator = PRODUCTION_METRICS_RUNS.get(runKey);
 	if (!accumulator) return undefined;
 	PRODUCTION_METRICS_RUNS.delete(runKey);
+	if (
+		options.failure &&
+		["error", "timeout", "interrupted"].includes(outcome)
+	) {
+		const message = redactFailureMessage(options.failure.message);
+		const code = failureCode(options.failure.code) ?? failureCode(outcome);
+		if (message || code) {
+			collectFailure(accumulator, `${runKey}:terminal`, {
+				kind: "run_error",
+				code,
+				message,
+			});
+		}
+	}
 	if (
 		Number.isSafeInteger(options.finalBoardNodeCount) &&
 		(options.finalBoardNodeCount ?? -1) >= 0 &&
@@ -1652,31 +2165,51 @@ export function nestedAgentRunEvent(options: {
 	error?: unknown;
 	summary?: string;
 	nowMs?: number;
+	/**
+	 * Overrides where a failure is attributed. Defaults to the specialist's own domain (a failed
+	 * `flowpilot_widget` run is a widget-apply failure); pass `"subagent_dispatch"` when the
+	 * specialist never ran, so a transport/dispatch fault is not filed as a build fault.
+	 */
+	failureKind?: FlowPilotFailureKind;
 }): IAgentDebugEvent {
 	const now = options.nowMs ?? Date.now();
 	const terminal = normalizedTerminalStatus(options.status);
 	const started = options.stage === "started";
-	return markEventPreviewsNormalized({
-		id: `nested:${options.requestId}:run`,
-		kind: "nested",
-		stage: started ? "nested_run_started" : "nested_run_finished",
-		status: started ? "progress" : terminal.status,
-		terminal_status: started ? undefined : terminal.terminalStatus,
-		name: options.toolName,
-		request_id: options.requestId,
-		parent_request_id: options.parentRequestId,
-		timestamp_ms: now,
-		started_at_ms: started ? now : undefined,
-		ended_at_ms: started ? undefined : now,
-		summary: cleanSummary(options.summary),
-		arguments_preview: started
-			? agentDebugPreview(options.input, MAX_EVIDENCE_PREVIEW_CHARS)
-			: undefined,
-		result_preview: started
-			? undefined
-			: agentDebugPreview(options.output, MAX_EVIDENCE_PREVIEW_CHARS),
-		error: started ? undefined : agentDebugPreview(options.error),
-	});
+	const failure = started
+		? undefined
+		: failureDetailForToolEnd({
+				name: options.toolName,
+				status: terminal.terminalStatus ?? terminal.status,
+				error: options.error,
+				rawResult: options.output,
+				summary: options.summary,
+				fallbackKind: "subagent_dispatch",
+				overrideKind: options.failureKind,
+			});
+	return attachFailureDetail(
+		markEventPreviewsNormalized({
+			id: `nested:${options.requestId}:run`,
+			kind: "nested",
+			stage: started ? "nested_run_started" : "nested_run_finished",
+			status: started ? "progress" : terminal.status,
+			terminal_status: started ? undefined : terminal.terminalStatus,
+			name: options.toolName,
+			request_id: options.requestId,
+			parent_request_id: options.parentRequestId,
+			timestamp_ms: now,
+			started_at_ms: started ? now : undefined,
+			ended_at_ms: started ? undefined : now,
+			summary: cleanSummary(options.summary),
+			arguments_preview: started
+				? agentDebugPreview(options.input, MAX_EVIDENCE_PREVIEW_CHARS)
+				: undefined,
+			result_preview: started
+				? undefined
+				: agentDebugPreview(options.output, MAX_EVIDENCE_PREVIEW_CHARS),
+			error: started ? undefined : agentDebugPreview(options.error),
+		}),
+		failure,
+	);
 }
 
 /**
@@ -1692,6 +2225,11 @@ export function agentGenerationReviewDispositionEvent(options: {
 	revision?: number;
 	claimId?: string;
 	nowMs?: number;
+	/**
+	 * Why a non-applied disposition happened. Strings are redacted and generalized like every other
+	 * failure message; arrays keep only their first usable entry.
+	 */
+	reason?: { code?: unknown; message?: unknown } | readonly unknown[] | unknown;
 }): IAgentDebugEvent {
 	const now = options.nowMs ?? Date.now();
 	const candidateKey =
@@ -1720,7 +2258,41 @@ export function agentGenerationReviewDispositionEvent(options: {
 		disposition: options.disposition,
 		accepted: options.disposition === "applied",
 	};
+	if (options.disposition === "error") {
+		const reason = dispositionReason(options.reason);
+		attachFailureDetail(event, {
+			kind: "flowscript_apply",
+			code: reason.code ?? "REVIEW_APPLY_FAILED",
+			message: reason.message,
+		});
+	}
 	return markEventPreviewsNormalized(event);
+}
+
+/** Accepts the shapes apply paths already hold: a result object, a diagnostics array, or an error. */
+function dispositionReason(reason: unknown): {
+	code?: string;
+	message?: string;
+} {
+	if (Array.isArray(reason)) {
+		for (const entry of reason) {
+			const resolved = dispositionReason(entry);
+			if (resolved.code || resolved.message) return resolved;
+		}
+		return {};
+	}
+	if (reason && typeof reason === "object" && !(reason instanceof Error)) {
+		const record = reason as Record<string, unknown>;
+		return {
+			code: failureCode(record.code ?? record.status),
+			message: redactFailureMessage(record.message ?? record.error),
+		};
+	}
+	const message = redactFailureMessage(reason);
+	// Diagnostics are conventionally emitted as "CODE: human explanation"; splitting the prefix out
+	// makes the trace groupable instead of one bucket per phrasing.
+	const prefixed = message?.match(/^([A-Z][A-Z0-9_.:-]{2,}):\s*(.+)$/);
+	return prefixed ? { code: prefixed[1], message: prefixed[2] } : { message };
 }
 
 export function summarizeAgentDebugRootOutcomes(events: IAgentDebugEvent[]) {
@@ -2075,11 +2647,22 @@ function generationMetricEventFromCopilotStream(
 	const name = cleanSummary(
 		record.tool_name ?? record.toolName ?? record.tool ?? record.name,
 	);
-	const evidence = generationEvidenceForToolEnd(
+	const rawResult = record.result_preview ?? record.result ?? record.output;
+	const evidence = generationEvidenceForToolEnd(name, rawResult);
+	// A failing tool call is worth reporting even when it produced no generation evidence — that is
+	// exactly the case where the run stalled and the admin trace needs the reason.
+	const isRunSummary = record.kind === AGENT_RUN_SUMMARY_STAGE;
+	const failure = failureDetailForToolEnd({
 		name,
-		record.result_preview ?? record.result ?? record.output,
-	);
-	if (!evidence) return null;
+		status: isRunSummary
+			? record.outcome
+			: (record.status ?? record.terminal_status),
+		error: record.error,
+		rawResult,
+		summary: record.result_summary ?? record.summary ?? record.message,
+		fallbackKind: isRunSummary ? "run_error" : "tool_error",
+	});
+	if (!evidence && !failure) return null;
 	const rawId = String(
 		record.tool_call_id ?? record.toolCallId ?? record.id ?? "",
 	);
@@ -2093,7 +2676,8 @@ function generationMetricEventFromCopilotStream(
 		timestamp_ms: options.nowMs,
 		ended_at_ms: options.nowMs,
 	};
-	metricEvent[GENERATION_TOOL_EVIDENCE] = evidence;
+	if (evidence) metricEvent[GENERATION_TOOL_EVIDENCE] = evidence;
+	attachFailureDetail(metricEvent, failure);
 	return markEventPreviewsNormalized(metricEvent);
 }
 

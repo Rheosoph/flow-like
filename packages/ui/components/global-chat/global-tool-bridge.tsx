@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
+	IAppVisibility,
 	type IEvent,
 	IEventExecutionMode,
 	IExecutionStage,
@@ -58,6 +59,7 @@ import type {
 	IBoardState,
 } from "../../state/backend-state/board-state";
 import {
+	type FlowPilotFailureKind,
 	type IAgentDebugEvent,
 	agentDebugPreview,
 	agentGenerationReviewDispositionEvent,
@@ -1454,6 +1456,41 @@ export function GlobalToolBridge() {
 		},
 		[ownerMessageIdForRequest],
 	);
+	/**
+	 * Settle a delegated specialist run in the trace and hand its result back unchanged. Without
+	 * this the failure of a specialist that returns an error result (instead of throwing) leaves no
+	 * evidence at all, and the admin funnel shows a run that simply stopped making progress.
+	 */
+	const settleNestedSpecialist = useCallback(
+		<T extends Record<string, unknown>>(
+			request: FrontendToolRequest,
+			options: {
+				nestedRunRequestId: string;
+				toolName: string;
+				result: T;
+				error?: unknown;
+				summary: string;
+				failureKind?: FlowPilotFailureKind;
+			},
+		): T => {
+			recordNestedDebug(
+				request,
+				nestedAgentRunEvent({
+					requestId: options.nestedRunRequestId,
+					parentRequestId: request.requestId,
+					toolName: options.toolName,
+					stage: "finished",
+					status: String(options.result.status ?? "error"),
+					output: options.result,
+					error: options.error,
+					summary: options.summary,
+					failureKind: options.failureKind,
+				}),
+			);
+			return options.result;
+		},
+		[recordNestedDebug],
+	);
 	const isRequestExpired = useCallback((request: FrontendToolRequest) => {
 		const execution = requestExecutionLeasesRef.current.get(request);
 		const deadline = requestDeadline(request);
@@ -2246,6 +2283,22 @@ export function GlobalToolBridge() {
 								argString(args, "remote_event_token") || undefined,
 							language: argString(args, "language") || undefined,
 						});
+						// The fork exists on the hub, but this device has never opened it.
+						// Without a recorded visibility the desktop guesses "offline" and
+						// serves every later board/data read from an empty local store —
+						// the boards then look absent rather than undownloaded. Online
+						// forks land Private (utils/fork/mod.rs::fork_with_options).
+						await backend.appState
+							.recordLocalAppVisibility?.(
+								response.new_app_id,
+								IAppVisibility.Private,
+							)
+							.catch((error: unknown) => {
+								console.warn(
+									"[global-tool-bridge] fork_app: visibility cache failed",
+									error,
+								);
+							});
 						// Without this the forked app is invisible to list_apps /
 						// open_app_page, so the rest of the build cannot address it.
 						await addAppToProfile(backend, response.new_app_id);
@@ -2330,6 +2383,20 @@ export function GlobalToolBridge() {
 							};
 						}
 
+						// Same reason as fork_app: a joined app this device has never opened
+						// has no recorded visibility, and the desktop's fallback guess routes
+						// its boards at the local store instead of the hub. The app's own
+						// visibility is authoritative here — an acquired app is usually public.
+						if (app.visibility) {
+							await backend.appState
+								.recordLocalAppVisibility?.(appId, app.visibility)
+								.catch((error: unknown) => {
+									console.warn(
+										"[global-tool-bridge] acquire_app: visibility cache failed",
+										error,
+									);
+								});
+						}
 						await addAppToProfile(backend, appId);
 						queryClient.invalidateQueries({ queryKey: ["getApps"] });
 						queryClient.invalidateQueries({
@@ -3346,21 +3413,33 @@ export function GlobalToolBridge() {
 						publishDataLane("done");
 						publishSubSteps();
 						flushSubRun();
-						return {
-							status: "ok",
-							app_id: appId,
-							overlay_id: overlayId,
-							response: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "data_studio_agent",
+							result: {
+								status: "ok",
+								app_id: appId,
+								overlay_id: overlayId,
+								response: response.message,
+							},
+							summary: "Delegated Data Studio sub-agent finished.",
+						});
 					} catch (error) {
 						publishDataLane("failed");
 						publishSubSteps();
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "data_studio_agent",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated Data Studio sub-agent failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "research_agent": {
@@ -3505,18 +3584,30 @@ export function GlobalToolBridge() {
 							undefined /* appId: the researcher has no app scope */,
 						);
 						flushSubRun();
-						return {
-							status: "ok",
-							sealed_to_source_request: true,
-							findings: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "research_agent",
+							result: {
+								status: "ok",
+								sealed_to_source_request: true,
+								findings: response.message,
+							},
+							summary: "Delegated web research finished.",
+						});
 					} catch (error) {
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "research_agent",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated web research failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "project_scout": {
@@ -3661,18 +3752,30 @@ export function GlobalToolBridge() {
 							scoutAppId || undefined,
 						);
 						flushSubRun();
-						return {
-							status: "ok",
-							focus: focus || undefined,
-							plan: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "project_scout",
+							result: {
+								status: "ok",
+								focus: focus || undefined,
+								plan: response.message,
+							},
+							summary: "Delegated project scout finished.",
+						});
 					} catch (error) {
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "project_scout",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated project scout failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "flowpilot_board": {
@@ -4533,6 +4636,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											draftId: token.draft_id,
 											revision: token.revision,
 											claimId: token.claim_id,
+											reason: diagnostics,
 										}),
 									);
 								} else {
@@ -4605,6 +4709,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										draftId: token.draft_id,
 										revision: token.revision,
 										claimId: token.claim_id,
+										reason: compiledResult,
 									}),
 								);
 								diagnostics = [
@@ -4841,6 +4946,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												: staleSnapshotBlocked
 													? "stale"
 													: "error",
+										reason: diagnostics,
 									}),
 								);
 							}
@@ -4961,6 +5067,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										output: interruptedResult,
 										error,
 										summary: "Delegated board sub-agent failed.",
+										failureKind: "subagent_dispatch",
 									}),
 								);
 							}
@@ -5725,6 +5832,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									status: "error",
 									error,
 									summary: "Delegated UI sub-agent failed.",
+									failureKind: "subagent_dispatch",
 								}),
 							);
 						}
@@ -6526,6 +6634,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			openDialog,
 			presentBoardEditJob,
 			recordNestedDebug,
+			settleNestedSpecialist,
 			recordSettledGenerationReceipt,
 			assertRequestActive,
 			isRequestExpired,
@@ -6789,6 +6898,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									error: reason,
 									summary:
 										"Delegated board run reached the frontend deadline; the best candidate was retained.",
+									failureKind: "subagent_dispatch",
 								}),
 							);
 						}

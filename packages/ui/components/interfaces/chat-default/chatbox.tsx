@@ -22,7 +22,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { cn, humanFileSize, sanitizeImageUrl } from "../../../lib";
+import { cn, humanFileSize } from "../../../lib";
 import {
 	Button,
 	Popover,
@@ -37,6 +37,7 @@ import {
 	useVoiceRecorder,
 } from "../../voice";
 import { FileManagerDialog } from "./chatbox/file-dialog";
+import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
 
 export type ISendMessageFunction = (
 	content: string,
@@ -116,6 +117,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
 		const [showFileManager, setShowFileManager] = useState(false);
+		const previewUrls = useImagePreviewUrls(attachedFiles);
 
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordedDuration, setRecordedDuration] = useState(0);
@@ -448,10 +450,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			);
 		};
 
-		const isImageFile = (file: File) => {
-			return file.type.startsWith("image/");
-		};
-
 		return (
 			<div className="w-full max-w-screen-xl px-2">
 				{/* Attachments Preview */}
@@ -499,7 +497,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									>
 										{isImageFile(file) ? (
 											<img
-												src={sanitizeImageUrl(URL.createObjectURL(file), "")}
+												src={previewUrls.get(file)}
 												alt={file.name}
 												className="size-6 shrink-0 rounded-full object-cover"
 											/>

@@ -1014,6 +1014,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	finalizeDebugReport: (messageId, options) => {
 		finalizeAgentGenerationMetrics(messageId, options.outcome, {
 			publish: !FLOWPILOT_DEBUG_ENABLED,
+			failure: { code: options.terminalCode, message: options.summary },
 		});
 		if (!FLOWPILOT_DEBUG_ENABLED) return null;
 		const report = get().runs[messageId]?.debugReport;

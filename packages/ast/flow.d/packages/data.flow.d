@@ -959,7 +959,7 @@ declare function dfRegisterCsvTable({ session: Struct, table: Struct, tableName?
 declare function dfRegisterExcel({ session: Struct, file: Struct, sheet?: string, mode?: string, prefix?: string }): string[];
 
 /**
- * Register a LanceDB table into a DataFusion session for SQL queries. Uses the existing to_datafusion() implementation from the vector store.
+ * Register a LanceDB table into a DataFusion session for SQL. Supports SELECT, INSERT INTO, and UPDATE/DELETE with a column-referencing WHERE clause (SQL Query node). Uses the existing to_datafusion() implementation from the vector store.
  * @param session — DataFusion session to register the table into
  * @param database — LanceDB database connection
  * @param tableName (optional) — Name to register the table as in the DataFusion catalog. If empty, uses the database's original table name.
@@ -968,7 +968,7 @@ declare function dfRegisterExcel({ session: Struct, file: Struct, sheet?: string
 declare function dfRegisterLance({ session: Struct, database: Struct, tableName?: string }): void;
 
 /**
- * Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
+ * Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused, as are subqueries and multi-table forms; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
  * @param session — DataFusion session with registered tables
  * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
  * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
@@ -980,7 +980,7 @@ declare function dfRegisterLance({ session: Struct, database: Struct, tableName?
 declare function dfSqlQuery({ session: Struct, query?: string, params?: Struct }): { table: Struct, rows: Struct[], rowCount: int };
 
 /**
- * Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
+ * Execute a read-only SQL query against a DataFusion session, remembering the result in the app's cache. Writing statements (INSERT/UPDATE/DELETE) are rejected — a cache hit would skip them; use the SQL Query node for writes. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
  * @param session — DataFusion session with registered tables
  * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into, and each distinct value is cached separately. Placeholders stand for values only; table and column names cannot be parameterized.
  * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
@@ -1394,7 +1394,7 @@ declare function dfTimeRangeFilter({ timestampColumn: string, startTime?: string
 declare function dfDescribeTable({ session: Struct, tableName?: string }): string;
 
 /**
- * Execute a SQL query and return results as formatted text. Ideal for agent-driven data exploration.
+ * Execute a read-only SQL query and return results as formatted text. Ideal for agent-driven data exploration; writing statements are rejected.
  * @param session — DataFusion session to query
  * @param query (optional) — SQL query to execute. Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
  * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
@@ -1454,11 +1454,12 @@ declare function dropTableLocalDb({ database: Struct }): { dropped: bool, refere
 /**
  * Delete rows from a database table and return the removed rows
  * @param database — Database Connection Reference
- * @param filter (optional) — Optional SQL filter. Leave empty to delete all rows.
+ * @param filter (optional) — Optional SQL filter on the table's columns; leave empty to delete all rows. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @returns deletedValues — Rows that were deleted
  * @impure has side effects / drives control flow
  */
-declare function filterDeleteLocalDb({ database: Struct, filter?: string }): Struct[];
+declare function filterDeleteLocalDb({ database: Struct, filter?: string, params?: Struct }): Struct[];
 
 /**
  * Purge Database
@@ -1713,11 +1714,12 @@ declare function upsertLocalDb({ database: Struct, idRow: string, value: Struct 
 /**
  * Count Items
  * @param database — Database Connection Reference
- * @param filter (optional) — Optional SQL Filter
+ * @param filter (optional) — Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @returns count — Found Items Count
  * @impure has side effects / drives control flow
  */
-declare function countLocalDb({ database: Struct, filter?: string }): int;
+declare function countLocalDb({ database: Struct, filter?: string, params?: Struct }): int;
 
 /**
  * Lists all indices on a database table
@@ -1827,26 +1829,28 @@ declare function makeColumnOptionalLocalDb({ database: Struct, columnName?: stri
 /**
  * Filter Database
  * @param database — Database Connection Reference
- * @param filter (optional) — Optional SQL Filter
+ * @param filter (optional) — Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param limit (optional) — Limit
  * @param offset (optional) — Offset
  * @returns values — Found Items
  * @impure has side effects / drives control flow
  */
-declare function filterLocalDb({ database: Struct, filter?: string, limit?: int, offset?: int }): Struct[];
+declare function filterLocalDb({ database: Struct, filter?: string, params?: Struct, limit?: int, offset?: int }): Struct[];
 
 /**
  * Searches the Database using Full-Text Search
  * @param database — Database Connection Reference
  * @param search (optional) — Full Text Search Term
  * @param fields (optional) — Column names to search with FTS (searches all indexed columns if empty)
- * @param filter (optional) — Optional SQL Filter
+ * @param filter (optional) — Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param limit (optional) — Limit
  * @param offset (optional) — Offset
  * @returns values — Found Items
  * @impure has side effects / drives control flow
  */
-declare function ftsSearchLocalDb({ database: Struct, search?: string, fields?: string[], filter?: string, limit?: int, offset?: int }): Struct[];
+declare function ftsSearchLocalDb({ database: Struct, search?: string, fields?: string[], filter?: string, params?: Struct, limit?: int, offset?: int }): Struct[];
 
 /**
  * Searches the Database using both Vector and Full-Text Search
@@ -1854,26 +1858,28 @@ declare function ftsSearchLocalDb({ database: Struct, search?: string, fields?: 
  * @param search (optional) — Full Text Search Term
  * @param vector — Vector to Search
  * @param fields (optional) — Column names for both vector (first) and FTS search
- * @param filter (optional) — Optional SQL Filter
+ * @param filter (optional) — Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param rerank (optional) — Should the items be reranked using RRF?
  * @param limit (optional) — Limit
  * @param offset (optional) — Offset
  * @returns values — Found Items
  * @impure has side effects / drives control flow
  */
-declare function hybridSearchLocalDb({ database: Struct, search?: string, vector: float[], fields?: string[], filter?: string, rerank?: bool, limit?: int, offset?: int }): Struct[];
+declare function hybridSearchLocalDb({ database: Struct, search?: string, vector: float[], fields?: string[], filter?: string, params?: Struct, rerank?: bool, limit?: int, offset?: int }): Struct[];
 
 /**
  * Searches the Database based on a Vector
  * @param database — Database Connection Reference
  * @param vector — Vector to Search
- * @param filter (optional) — Optional SQL Filter
+ * @param filter (optional) — Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
+ * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param limit (optional) — Limit
  * @param offset (optional) — Offset
  * @returns values — Found Items
  * @impure has side effects / drives control flow
  */
-declare function vectorSearchLocalDb({ database: Struct, vector: float[], filter?: string, limit?: int, offset?: int }): Struct[];
+declare function vectorSearchLocalDb({ database: Struct, vector: float[], filter?: string, params?: Struct, limit?: int, offset?: int }): Struct[];
 
 
 // === Data/Databricks ===

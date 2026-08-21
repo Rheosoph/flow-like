@@ -31,7 +31,7 @@ cron = "0.15"
 tokio = { workspace = true, features = ["sync"] }
 
 # AWS SDK (optional)
-aws-sdk-scheduler = { version = "1.59", optional = true }
+aws-sdk-scheduler = { version = "1.59", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws-config = { version = "1.6", optional = true }
 
 # Kubernetes (optional)

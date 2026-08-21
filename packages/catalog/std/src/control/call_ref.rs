@@ -52,12 +52,12 @@ impl NodeLogic for CallReferenceNode {
         context.deactivate_exec_pin("exec_out").await?;
         let fn_ref: String = context.evaluate_pin("fn_ref").await?;
 
-        let pins_to_evaluate: Vec<_> = context.node.pins.values().cloned().collect();
+        let pins_to_evaluate: Vec<_> = context.node.pins.iter().cloned().collect();
         let mut content_pins = HashMap::with_capacity(pins_to_evaluate.len());
         let mut failed_pins = Vec::new();
 
         for pin in pins_to_evaluate {
-            let name = pin.name.clone();
+            let name = pin.name.to_string();
             let value = context.evaluate_pin_ref::<Value>(pin).await;
             if let Ok(value) = value {
                 content_pins.insert(name, value);
@@ -110,12 +110,12 @@ impl NodeLogic for CallReferenceNode {
         }
 
         // Also set on the referenced node's output pins (shared storage + overrides)
-        for pin in reference_function.pins.values() {
+        for pin in reference_function.pins.iter() {
             if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
                 continue;
             }
 
-            if let Some(value) = content_pins.get(&pin.name) {
+            if let Some(value) = content_pins.get(pin.name.as_ref()) {
                 sub_context.override_pin_value(&pin.id, value.clone());
                 pin.set_value(value.clone()).await;
             }

@@ -59,6 +59,7 @@ import {
 } from "../../lib";
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { toastError } from "../../lib/messages";
 import { isWebkitLite } from "../../lib/platform";
 import type {
 	IBoard,
@@ -84,6 +85,11 @@ import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
+import {
+	FlowNodeEditMenu,
+	type INodeEditTarget,
+	resolveNodeEditTarget,
+} from "./flow-node/flow-node-edit-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
@@ -115,6 +121,12 @@ export type FlowNode = Node<
 		transparent?: boolean;
 		boardRef: RefObject<IBoard | undefined>;
 		boardDataVersion?: string;
+		/**
+		 * The variables/refs/layers slice of the board, without node membership.
+		 * A node's own hash does not move when a variable it reads is renamed or
+		 * retyped, so both memo comparators below watch this instead.
+		 */
+		boardContentVersion?: string;
 		fnRefsHash?: string;
 		version?: [number, number, number];
 		onExecute: (node: INode, payload?: object) => Promise<void>;
@@ -129,6 +141,8 @@ export type FlowNode = Node<
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
 		functionLayerId?: string;
+		/** Navigates the canvas into a layer — absent on read-only previews. */
+		pushLayer?: (layer: ILayer) => Promise<void>;
 		/** Set only when the referenced function caches its results. */
 		functionCache?: ILayerCache;
 		currentLayerId?: string;
@@ -173,6 +187,21 @@ function scheduleNodeInternalsUpdate(store: FlowStoreApi, nodeId: string) {
 			updateNodeInternals(updates, { triggerFitView: false });
 		}
 	});
+}
+
+/**
+ * The cache badge is driven by the function a call node points at, not by the
+ * node itself: its own hash does not move when that function's caching changes.
+ * Both comparators have to look at it, or the outer one bails and the inner one
+ * never sees the new value.
+ */
+function sameFunctionCache(a?: ILayerCache, b?: ILayerCache) {
+	return (
+		a?.enabled === b?.enabled &&
+		a?.ttl_seconds === b?.ttl_seconds &&
+		a?.scope === b?.scope &&
+		a?.prefix === b?.prefix
+	);
 }
 
 const FlowNodeInner = memo(
@@ -1151,16 +1180,12 @@ const FlowNodeInner = memo(
 		prev.props.data.hash === next.props.data.hash &&
 		prev.props.selected === next.props.selected &&
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
-		// The node's own hash does not move when the function it calls changes its
-		// caching, so the indicator needs its own comparison.
-		prev.props.data.functionCache?.enabled ===
-			next.props.data.functionCache?.enabled &&
-		prev.props.data.functionCache?.ttl_seconds ===
-			next.props.data.functionCache?.ttl_seconds &&
-		prev.props.data.functionCache?.scope ===
-			next.props.data.functionCache?.scope &&
-		prev.props.data.functionCache?.prefix ===
-			next.props.data.functionCache?.prefix &&
+		sameFunctionCache(
+			prev.props.data.functionCache,
+			next.props.data.functionCache,
+		) &&
+		prev.props.data.boardContentVersion ===
+			next.props.data.boardContentVersion &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
 		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
@@ -1173,6 +1198,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 	const [commentMenu, setCommentMenu] = useState(false);
 	const [renameMenu, setRenameMenu] = useState(false);
 	const [editingMenu, setEditingMenu] = useState(false);
+	const [editTarget, setEditTarget] = useState<INodeEditTarget | undefined>();
 	const flow = useReactFlow();
 	const { pushCommand, pushCommands } = useUndoRedo(
 		props.data.appId,
@@ -1512,7 +1538,37 @@ function FlowNode(props: NodeProps<FlowNode>) {
 	// re-render every time this node re-renders (e.g. after a drag/drop).
 	const handleOpenComment = useCallback(() => setCommentMenu(true), []);
 	const handleOpenRename = useCallback(() => setRenameMenu(true), []);
-	const handleOpenEdit = useCallback(() => setEditingMenu(true), []);
+	// Resolved on open rather than on render: the comparator below does not react
+	// to board data, so anything memoized here would go stale after a rename.
+	const handleOpenEdit = useCallback(() => {
+		if (props.data.node.name === "events_generic") {
+			setEditTarget(undefined);
+			setEditingMenu(true);
+			return;
+		}
+		const target = resolveNodeEditTarget(
+			props.data.node,
+			props.data.boardRef?.current,
+			props.data.currentLayerId,
+		);
+		if (!target) {
+			toastError(
+				i18next.t(
+					"flow:thisNodePointsAtSomethingThatNoLongerExists",
+					"This node points at something that no longer exists.",
+				),
+				<CircleXIcon />,
+			);
+			return;
+		}
+		setEditTarget(target);
+		setEditingMenu(true);
+	}, [props.data.node, props.data.boardRef, props.data.currentLayerId]);
+
+	const handleEditOpenChange = useCallback((open: boolean) => {
+		setEditingMenu(open);
+		if (!open) setEditTarget(undefined);
+	}, []);
 
 	return (
 		<>
@@ -1532,6 +1588,17 @@ function FlowNode(props: NodeProps<FlowNode>) {
 					node={props.data.node}
 					open={renameMenu}
 					onOpenChange={(open) => setRenameMenu(open)}
+				/>
+			)}
+			{editingMenu && editTarget && (
+				<FlowNodeEditMenu
+					target={editTarget}
+					appId={props.data.appId}
+					boardId={props.data.boardId}
+					boardRef={props.data.boardRef}
+					open={editingMenu}
+					onOpenChange={handleEditOpenChange}
+					onOpenLayer={props.data.pushLayer}
 				/>
 			)}
 			{editingMenu && props.data.node.name === "events_generic" && (
@@ -1612,6 +1679,8 @@ function flowNodeAreEqual(
 		prev.data.hash === next.data.hash &&
 		prev.selected === next.selected &&
 		prev.data.fnRefsHash === next.data.fnRefsHash &&
+		prev.data.boardContentVersion === next.data.boardContentVersion &&
+		sameFunctionCache(prev.data.functionCache, next.data.functionCache) &&
 		prev.data.isUnavailable === next.data.isUnavailable &&
 		prev.data.remoteSelections === next.data.remoteSelections &&
 		prev.data.peerUsers === next.data.peerUsers &&

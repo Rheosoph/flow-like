@@ -33,6 +33,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { ToolbarButton } from "../layer-node/layer-node-toolbar";
+import { EDITABLE_REFERENCE_NODES } from "./flow-node-edit-menu";
 
 interface FlowNodeToolbarProps {
 	node: INode;
@@ -209,8 +210,11 @@ const FlowNodeToolbar = memo(
 			[node.pins],
 		);
 
-		const isGenericEvent = node.name === "events_generic";
 		const isStartNode = node.start ?? false;
+		// Generic events edit their own payload; the reference nodes open the
+		// variable or function they point at.
+		const hasEditButton =
+			node.name === "events_generic" || EDITABLE_REFERENCE_NODES.has(node.name);
 
 		// Stable onClick so the memoized ToolbarButton (and its Radix Tooltip/Popper,
 		// which measures the DOM on render) doesn't re-render on every toolbar render.
@@ -250,7 +254,7 @@ const FlowNodeToolbar = memo(
 									tooltip="Rename"
 								/>
 							)}
-							{isGenericEvent && (
+							{hasEditButton && (
 								<ToolbarButton
 									onClick={onEdit}
 									icon={SlidersHorizontalIcon}

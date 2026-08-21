@@ -438,7 +438,13 @@ async fn wiring_the_literal_keeps_wired_param_pins() {
 /// pasted together from user input, which is the string building parameters replace.
 #[flow_like_types::tokio::test]
 async fn a_lance_filter_derives_a_pin_for_an_in_list() {
-    let node = settle("filter_local_db", "filter", "id IN ($ids) AND rank > $min", 2).await;
+    let node = settle(
+        "filter_local_db",
+        "filter",
+        "id IN ($ids) AND rank > $min",
+        2,
+    )
+    .await;
     assert_eq!(
         param_pin_names(&node),
         vec!["param_ids".to_string(), "param_min".to_string()]

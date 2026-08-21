@@ -51,6 +51,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
@@ -382,6 +383,9 @@ export default function Id({
 		[id ?? ""],
 	) ?? { visibility: IAppVisibility.Offline };
 	const currentRoute = usePathname();
+	// Storage browsers and Data Studio own their vertical space; every other
+	// section scrolls the page.
+	const contentFillsHeight = configRouteFillsHeight(currentRoute);
 	const router = useRouter();
 	const metadata = useInvoke(
 		backend.appState.getAppMeta,
@@ -1415,44 +1419,35 @@ export default function Id({
 										/>
 									</div>
 								)}
-							{currentRoute?.includes("/storage") ||
-							currentRoute?.includes("/explore") ? (
-								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 overflow-hidden p-0 md:p-6 md:pt-4 md:pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
+							<div
+								className={
+									contentFillsHeight
+										? "h-full flex flex-col"
+										: "h-full overflow-y-auto"
+								}
+							>
+								<div
+									className={
+										contentFillsHeight
+											? "flex-1 min-h-0 overflow-hidden p-0 md:p-6 md:pt-4 md:pr-16"
+											: "p-0 md:p-6 md:pt-4 md:pr-16"
+									}
+								>
+									<Suspense
+										fallback={
+											<div className="space-y-4">
+												<Skeleton className="h-8 w-full" />
+												<Skeleton className="h-32 w-full" />
+												<Skeleton className="h-24 w-full" />
 											</div>
-										</Suspense>
-									</div>
+										}
+									>
+										<div key={id ?? "missing-app"} className="contents">
+											{children}
+										</div>
+									</Suspense>
 								</div>
-							) : (
-								<div className="h-full overflow-y-auto">
-									<div className="p-0 md:p-6 md:pt-4 md:pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
-											</div>
-										</Suspense>
-									</div>
-								</div>
-							)}
+							</div>
 						</CardContent>
 					</Card>
 				</div>

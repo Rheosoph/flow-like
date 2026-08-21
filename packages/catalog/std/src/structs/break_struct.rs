@@ -265,7 +265,7 @@ impl NodeLogic for BreakStructNode {
         let output_pins: Vec<_> = context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| pin.pin_type == PinType::Output)
             .cloned()
             .collect();

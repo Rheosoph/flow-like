@@ -28,12 +28,12 @@ fn collect_pins(context: &ExecutionContext) -> (Vec<Arc<InternalPin>>, Vec<Strin
     let mut exec_pins = Vec::new();
     let mut output_pins = Vec::new();
 
-    for pin in context.node.pins.values() {
+    for pin in context.node.pins.iter() {
         if pin.pin_type == PinType::Output {
             if pin.data_type == VariableType::Execution {
                 exec_pins.push(pin.clone());
-            } else if pin.name != "payload" {
-                output_pins.push(pin.name.clone());
+            } else if pin.name.as_ref() != "payload" {
+                output_pins.push(pin.name.to_string());
             }
         }
     }

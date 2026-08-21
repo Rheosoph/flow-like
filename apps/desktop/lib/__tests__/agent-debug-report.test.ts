@@ -12,6 +12,7 @@ import {
 	nestedAgentRunEvent,
 	recordAgentDebugEvent,
 	recordAgentGenerationMetricEvent,
+	redactFailureMessage,
 	setFlowPilotProductionMetricsSink,
 	summarizeAgentDebugRootOutcomes,
 } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
@@ -1577,7 +1578,11 @@ ${"// safe filler\n".repeat(900)}`;
 		expect(JSON.stringify(metrics)).not.toMatch(
 			/private-message-id|private-request-id|private-draft-id|private-claim-id|secret authored workflow/,
 		);
-		for (const value of Object.values(metrics ?? {})) {
+		// The privacy contract: every field is an aggregate counter or the schema
+		// string, except `failures`, which is empty on a run that did not fail.
+		expect(metrics?.failures).toEqual([]);
+		for (const [key, value] of Object.entries(metrics ?? {})) {
+			if (key === "failures") continue;
 			expect(["number", "string"]).toContain(typeof value);
 		}
 	});
@@ -1675,6 +1680,280 @@ ${"// safe filler\n".repeat(900)}`;
 		expect(sink.mock.calls[0]?.[0]).toMatchObject({
 			queued_reviews: 1,
 			attempts_applied: 0,
+		});
+	});
+
+	test("failure messages keep the diagnosis and drop the identity", () => {
+		const redacted = redactFailureMessage(
+			'Apply failed for board 3f0b4d5e-8a21-4c73-9b10-2f7c6d1e9a44 owned by ada@example.com: could not fetch https://storage.example.com/apps/acme/board.json (see /Users/ada/Projects/acme/board.json), expected "exec" pin on node ref_9182736455',
+		);
+		expect(redacted).toBeDefined();
+		expect(redacted).not.toMatch(
+			/3f0b4d5e|ada@example\.com|storage\.example\.com|Projects|ref_9182736455/,
+		);
+		// The parts an admin actually triages survive.
+		expect(redacted).toContain("Apply failed for board");
+		expect(redacted).toContain('expected "exec" pin');
+		expect(redacted).toContain("<id>");
+		expect(redacted).toContain("<email>");
+		expect(redacted).toContain("<url>");
+	});
+
+	test("failure messages generalize long user prose but keep short identifiers", () => {
+		const redacted = redactFailureMessage(
+			`Node "exec" rejected the value "${"a very long piece of user authored prose".padEnd(80, "!")}"`,
+		);
+		expect(redacted).toContain('"exec"');
+		expect(redacted).toContain("<value>");
+		expect(redacted).not.toMatch(/user authored prose/);
+	});
+
+	test("a short quoted value is dropped unless it is a bare identifier", () => {
+		// Length does not separate a diagnostic from a name: a board title is shorter
+		// than most pin names, so only an identifier-shaped token survives quoting.
+		const redacted = redactFailureMessage(
+			'Board "Acme Payroll" has no pin named "exec_in"',
+		);
+		expect(redacted).not.toMatch(/Acme|Payroll/);
+		expect(redacted).toContain("<value>");
+		expect(redacted).toContain('"exec_in"');
+	});
+
+	test("apostrophes are not read as a quoted run", () => {
+		// Two contractions in one sentence look exactly like one single-quoted run.
+		expect(
+			redactFailureMessage("Couldn't reach the sink, so it doesn't retry."),
+		).toBe("Couldn't reach the sink, so it doesn't retry.");
+	});
+
+	test("an unquoted proper noun is generalized, a platform phrase is not", () => {
+		expect(redactFailureMessage("Customer Acme payroll export failed")).toBe(
+			"<name> payroll export failed",
+		);
+		expect(
+			redactFailureMessage("The Data Studio sub-agent transport closed."),
+		).toBe("The Data Studio sub-agent transport closed.");
+	});
+
+	test("failure messages stay bounded and drop secrets", () => {
+		const redacted = redactFailureMessage(
+			`Authorization: Bearer sk-live-abcdef0123456789 rejected. ${"x".repeat(4_000)}`,
+		);
+		expect(redacted?.length).toBeLessThanOrEqual(201);
+		expect(redacted).not.toMatch(/sk-live-abcdef0123456789/);
+	});
+
+	test("a failed specialist dispatch is filed apart from a failed build", () => {
+		const sink = vi.fn();
+		const clearSink = setFlowPilotProductionMetricsSink(sink);
+		beginAgentGenerationMetrics("failure-trace-run", 1_000);
+
+		recordAgentGenerationMetricEvent(
+			"failure-trace-run",
+			nestedAgentRunEvent({
+				requestId: "req-dispatch",
+				parentRequestId: "parent",
+				toolName: "data_studio_agent",
+				stage: "finished",
+				status: "error",
+				error: new Error("The Data Studio sub-agent transport closed."),
+				summary: "Delegated Data Studio sub-agent failed.",
+				failureKind: "subagent_dispatch",
+				nowMs: 1_100,
+			}),
+		);
+		recordAgentGenerationMetricEvent(
+			"failure-trace-run",
+			nestedAgentRunEvent({
+				requestId: "req-widget",
+				parentRequestId: "parent",
+				toolName: "flowpilot_widget",
+				stage: "finished",
+				status: "error",
+				output: {
+					status: "error",
+					code: "NO_COMPONENTS",
+					message:
+						"The widget copilot ended without generating any UI components.",
+				},
+				summary: "Delegated UI build did not produce an applicable result.",
+				nowMs: 1_200,
+			}),
+		);
+		recordAgentGenerationMetricEvent(
+			"failure-trace-run",
+			agentGenerationReviewDispositionEvent({
+				requestId: "req-apply",
+				disposition: "error",
+				draftId: "draft-x",
+				revision: 1,
+				nowMs: 1_300,
+			}),
+		);
+
+		const metrics = finalizeAgentGenerationMetrics(
+			"failure-trace-run",
+			"error",
+		);
+		clearSink();
+
+		expect(metrics).toMatchObject({
+			failures_total: 3,
+			subagent_dispatch_failures: 1,
+			widget_apply_failures: 1,
+			flowscript_apply_failures: 1,
+		});
+		const failures = metrics?.failures ?? [];
+		expect(failures).toHaveLength(3);
+		expect(failures.find((f) => f.kind === "subagent_dispatch")).toMatchObject({
+			tool: "data_studio_agent",
+			message: "The Data Studio sub-agent transport closed.",
+		});
+		expect(failures.find((f) => f.kind === "widget_apply")).toMatchObject({
+			tool: "flowpilot_widget",
+			code: "NO_COMPONENTS",
+		});
+		expect(failures.find((f) => f.kind === "flowscript_apply")).toMatchObject({
+			code: "REVIEW_APPLY_FAILED",
+		});
+	});
+
+	test("a diagnostics array splits its code prefix out of the message", () => {
+		beginAgentGenerationMetrics("failure-diagnostics-run", 1_000);
+		recordAgentGenerationMetricEvent(
+			"failure-diagnostics-run",
+			agentGenerationReviewDispositionEvent({
+				requestId: "req",
+				disposition: "error",
+				nowMs: 1_100,
+				reason: [
+					"PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.",
+				],
+			}),
+		);
+		const metrics = finalizeAgentGenerationMetrics(
+			"failure-diagnostics-run",
+			"error",
+			{ publish: false },
+		);
+		expect(metrics?.failures[0]).toMatchObject({
+			kind: "flowscript_apply",
+			code: "PERSISTED_FLOWSCRIPT_MISMATCH",
+			message:
+				"Atomic apply reported success but the persisted board snapshot did not advance.",
+			count: 1,
+		});
+	});
+
+	test("repeated identical failures deduplicate into one counted signature", () => {
+		beginAgentGenerationMetrics("failure-dedupe-run", 1_000);
+		for (const index of [1, 2, 3]) {
+			recordAgentGenerationMetricEvent(
+				"failure-dedupe-run",
+				nestedAgentRunEvent({
+					requestId: `req-${index}`,
+					parentRequestId: "parent",
+					toolName: "flowpilot_board",
+					stage: "finished",
+					status: "timeout",
+					error: "Delegated board run reached the frontend deadline.",
+					nowMs: 1_000 + index,
+				}),
+			);
+		}
+		const metrics = finalizeAgentGenerationMetrics(
+			"failure-dedupe-run",
+			"timeout",
+			{ publish: false },
+		);
+		expect(metrics?.failures).toHaveLength(1);
+		expect(metrics?.failures[0]).toMatchObject({
+			kind: "flowscript_apply",
+			tool: "flowpilot_board",
+			count: 3,
+		});
+		expect(metrics?.failures_total).toBe(3);
+	});
+
+	test("a cancelled specialist is a choice, not a failure", () => {
+		beginAgentGenerationMetrics("failure-cancel-run", 1_000);
+		recordAgentGenerationMetricEvent(
+			"failure-cancel-run",
+			nestedAgentRunEvent({
+				requestId: "req-cancel",
+				parentRequestId: "parent",
+				toolName: "flowpilot_board",
+				stage: "finished",
+				status: "cancelled",
+				summary: "The user stopped the run.",
+				nowMs: 1_100,
+			}),
+		);
+		const metrics = finalizeAgentGenerationMetrics(
+			"failure-cancel-run",
+			"cancelled",
+			{ publish: false },
+		);
+		expect(metrics?.failures).toEqual([]);
+		expect(metrics?.failures_total).toBe(0);
+	});
+
+	test("a terminal run error is traced even when no tool reported a cause", () => {
+		beginAgentGenerationMetrics("failure-terminal-run", 1_000);
+		const metrics = finalizeAgentGenerationMetrics(
+			"failure-terminal-run",
+			"error",
+			{
+				publish: false,
+				failure: {
+					code: "STREAM_FAILED",
+					message:
+						"The agent stream ended with an error for app app_1029384756.",
+				},
+			},
+		);
+		expect(metrics?.failures[0]).toMatchObject({
+			kind: "run_error",
+			code: "STREAM_FAILED",
+		});
+		expect(metrics?.run_failures).toBe(1);
+		expect(metrics?.failures[0]?.message).not.toMatch(/app_1029384756/);
+	});
+
+	test("a failing tool with no generation evidence still reaches the metric stream", () => {
+		const metricEvents: unknown[] = [];
+		const recorder = createAgentDebugStreamRecorder({
+			scope: "main",
+			requestId: "failing-tool-run",
+			enabled: false,
+			record: (event) => metricEvents.push(event),
+		});
+		recorder.push(
+			`<tool_end>${JSON.stringify({
+				tool_call_id: "call-1",
+				tool_name: "database_tool",
+				status: "error",
+				error: "The table private_customer_table does not exist.",
+			})}</tool_end>`,
+		);
+		recorder.flush();
+
+		expect(metricEvents).toHaveLength(1);
+		beginAgentGenerationMetrics("failing-tool-run", 1_000);
+		recordAgentGenerationMetricEvent(
+			"failing-tool-run",
+			metricEvents[0] as Parameters<typeof recordAgentGenerationMetricEvent>[1],
+		);
+		const metrics = finalizeAgentGenerationMetrics(
+			"failing-tool-run",
+			"error",
+			{
+				publish: false,
+			},
+		);
+		expect(metrics?.failures[0]).toMatchObject({
+			kind: "data_apply",
+			tool: "database_tool",
 		});
 	});
 });

@@ -3,6 +3,7 @@
 //! This module provides JWT-based authentication for execution environments
 //! (Kubernetes, Docker Compose, Lambda, etc.) to securely communicate with the API.
 
+pub mod compiled_artifacts;
 mod dispatch;
 mod interaction_jwt;
 mod jwt;
@@ -15,8 +16,9 @@ pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
-    ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse, Dispatcher,
-    ExecutionBackend, StreamChunk, fetch_profile_for_dispatch, hydrate_profile_custom_bit_secrets,
+    ArtifactEnsurer, ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse,
+    Dispatcher, ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
+    hydrate_profile_custom_bit_secrets,
 };
 pub use interaction_jwt::{
     InteractionClaims, InteractionJwtError, InteractionJwtParams,

@@ -8,6 +8,9 @@ import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 export default defineConfig({
 	site: "https://docs.flow-like.com",
 	output: "static",
+	// Astro 7 defaults to 'jsx', which drops the space between adjacent inline
+	// elements. Keep HTML-aware whitespace so prose spacing stays unchanged.
+	compressHTML: true,
 	image: {
 		service: passthroughImageService(),
 	},
@@ -378,12 +381,16 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{
 							label: "Docker Compose",
 							collapsed: true,
-							autogenerate: { directory: "self-hosting/docker-compose" },
+							items: [
+								{ autogenerate: { directory: "self-hosting/docker-compose" } },
+							],
 						},
 						{
 							label: "Kubernetes",
 							collapsed: true,
-							autogenerate: { directory: "self-hosting/kubernetes" },
+							items: [
+								{ autogenerate: { directory: "self-hosting/kubernetes" } },
+							],
 						},
 					],
 				},
@@ -438,12 +445,12 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{
 							label: "A2UI Development",
 							collapsed: true,
-							autogenerate: { directory: "dev/a2ui" },
+							items: [{ autogenerate: { directory: "dev/a2ui" } }],
 						},
 						{
 							label: "Event Sinks",
 							collapsed: true,
-							autogenerate: { directory: "dev/sinks" },
+							items: [{ autogenerate: { directory: "dev/sinks" } }],
 						},
 					],
 				},
@@ -466,7 +473,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				{
 					label: "Enterprise",
 					collapsed: true,
-					autogenerate: { directory: "enterprise" },
+					items: [{ autogenerate: { directory: "enterprise" } }],
 				},
 				// ===== REFERENCE =====
 				{

@@ -1,6 +1,7 @@
 //! Reusable server-side telemetry capture helper.
 
 pub mod alerts;
+pub mod flowpilot;
 pub mod llm;
 pub mod notify;
 pub mod rollup;

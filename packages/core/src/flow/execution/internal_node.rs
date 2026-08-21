@@ -65,7 +65,7 @@ mod tests {
             Arc::new(NoopLogic),
             name_cache,
         ));
-        for pin in internal.pins.values() {
+        for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
         }
         internal
@@ -84,10 +84,8 @@ mod tests {
             .expect("duplicate-name pins should be cached");
         assert_eq!(pins.len(), 2);
 
-        let cache_len = internal.pin_name_cache.len();
         assert!(internal.get_pin_by_name("missing").await.is_err());
         assert!(internal.get_pin_by_name("missing").await.is_err());
-        assert_eq!(internal.pin_name_cache.len(), cache_len);
     }
 
     #[test]
@@ -96,7 +94,7 @@ mod tests {
         target_node.add_input_pin("exec_in", "First", "First", VariableType::Execution);
         target_node.add_input_pin("exec_in", "Second", "Second", VariableType::Execution);
         let target = internal_node(target_node);
-        let target_pins: Vec<_> = target.pins.values().cloned().collect();
+        let target_pins: Vec<_> = target.pins.iter().cloned().collect();
 
         let mut source_node = Node::new("source", "Source", "Source", "Tests");
         let source_pin = source_node
@@ -395,7 +393,7 @@ async fn pure_parents_for_memo(
     let mut result: Vec<Arc<InternalNode>> = Vec::new();
 
     // Iterate only input, non-exec pins. Relay through standalone pins.
-    for pin in node.pins.values() {
+    for pin in node.pins.iter() {
         // Direct access to immutable fields - no lock needed
         let is_input = pin.pin_type == PinType::Input;
         let is_exec = pin.data_type == VariableType::Execution;
@@ -451,7 +449,7 @@ async fn pure_parents_for_memo(
 #[derive(Clone)]
 pub struct NodeMeta {
     pub id: Arc<str>,
-    pub name: String,
+    pub name: Arc<str>,
     pub is_pure: bool,
 }
 
@@ -459,9 +457,35 @@ impl NodeMeta {
     pub fn from_node(node: &Node) -> Self {
         Self {
             id: Arc::from(node.id.as_str()),
-            name: node.name.clone(),
+            name: Arc::from(node.name.as_str()),
             is_pure: node.is_pure(),
         }
+    }
+}
+
+/// Per-node pin lookup tables. Offsets index the node's local pin slice, so a
+/// run template can build these once and share them across every run.
+#[derive(Default)]
+pub struct NodePinLookup {
+    pub by_id: AHashMap<String, u16>,
+    pub by_name: AHashMap<String, Vec<u16>>,
+}
+
+impl NodePinLookup {
+    pub fn from_pins(pins: &[Arc<InternalPin>]) -> Self {
+        let mut lookup = NodePinLookup {
+            by_id: AHashMap::with_capacity(pins.len()),
+            by_name: AHashMap::with_capacity(pins.len()),
+        };
+        for (offset, pin) in pins.iter().enumerate() {
+            lookup.by_id.insert(pin.id.to_string(), offset as u16);
+            lookup
+                .by_name
+                .entry(pin.name.to_string())
+                .or_default()
+                .push(offset as u16);
+        }
+        lookup
     }
 }
 
@@ -469,10 +493,11 @@ pub struct InternalNode {
     pub node: Arc<Mutex<Node>>,
     /// Cached immutable metadata - no lock needed for access
     pub meta: NodeMeta,
-    pub pins: AHashMap<String, Arc<InternalPin>>,
+    /// Local pin order matches the lookup offsets (sorted by pin index, then id).
+    pub pins: Box<[Arc<InternalPin>]>,
     pub logic: Arc<dyn NodeLogic>,
     pub exec_calls: AtomicU64,
-    pin_name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
+    lookup: Arc<NodePinLookup>,
 }
 
 impl InternalNode {
@@ -480,66 +505,38 @@ impl InternalNode {
         node: Node,
         pins: AHashMap<String, Arc<InternalPin>>,
         logic: Arc<dyn NodeLogic>,
-        mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
+        _name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
     ) -> Self {
         let meta = NodeMeta::from_node(&node);
-
-        // Preserve the caller's duplicate-name ordering, but make the eager index complete and
-        // self-consistent at the construction boundary.
-        let mut indexed_pins = AHashSet::with_capacity(pins.len());
-        name_cache.retain(|name, cached| {
-            cached.retain(|pin| {
-                pin.name() == name
-                    && pins
-                        .get(pin.id())
-                        .is_some_and(|entry| Arc::ptr_eq(entry, pin))
-                    && indexed_pins.insert(ptr_key(pin))
-            });
-            !cached.is_empty()
-        });
-        for pin in pins.values() {
-            let is_cached = name_cache
-                .get(pin.name())
-                .is_some_and(|cached| cached.iter().any(|entry| Arc::ptr_eq(entry, pin)));
-            if !is_cached {
-                name_cache
-                    .entry(pin.name().to_string())
-                    .or_default()
-                    .push(pin.clone());
-            }
-        }
-
-        debug_assert_eq!(
-            name_cache.values().map(Vec::len).sum::<usize>(),
-            pins.len(),
-            "pin name cache must contain every pin exactly once"
-        );
-        debug_assert!(
-            pins.values().all(|pin| {
-                name_cache
-                    .get(pin.name())
-                    .is_some_and(|cached| cached.iter().any(|entry| Arc::ptr_eq(entry, pin)))
-            }),
-            "pin name cache must cover every pin under its name"
-        );
-        debug_assert!(
-            name_cache.iter().all(|(name, cached)| {
-                cached.iter().all(|pin| {
-                    pin.name() == name
-                        && pins
-                            .get(pin.id())
-                            .is_some_and(|entry| Arc::ptr_eq(entry, pin))
-                })
-            }),
-            "pin name cache must not contain stale or misnamed pins"
-        );
+        let mut local: Vec<Arc<InternalPin>> = pins.into_values().collect();
+        local.sort_by(|a, b| a.index.cmp(&b.index).then_with(|| a.id.cmp(&b.id)));
+        let lookup = Arc::new(NodePinLookup::from_pins(&local));
 
         InternalNode {
             node: Arc::new(Mutex::new(node)),
             meta,
+            pins: local.into_boxed_slice(),
+            logic,
+            lookup,
+            exec_calls: AtomicU64::new(0),
+        }
+    }
+
+    /// Assemble a node from template parts: everything except the per-run pin
+    /// instances is shared across runs.
+    pub fn from_parts(
+        node: Arc<Mutex<Node>>,
+        meta: NodeMeta,
+        pins: Box<[Arc<InternalPin>]>,
+        lookup: Arc<NodePinLookup>,
+        logic: Arc<dyn NodeLogic>,
+    ) -> Self {
+        InternalNode {
+            node,
+            meta,
             pins,
             logic,
-            pin_name_cache: name_cache,
+            lookup,
             exec_calls: AtomicU64::new(0),
         }
     }
@@ -573,10 +570,11 @@ impl InternalNode {
     pub async fn ensure_cache(&self, _name: &str) {}
 
     pub async fn get_pin_by_name(&self, name: &str) -> flow_like_types::Result<Arc<InternalPin>> {
-        self.pin_name_cache
+        self.lookup
+            .by_name
             .get(name)
-            .and_then(|pins| pins.first())
-            .cloned()
+            .and_then(|offsets| offsets.first())
+            .map(|&offset| self.pins[offset as usize].clone())
             .ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", name))
     }
 
@@ -584,22 +582,28 @@ impl InternalNode {
         &self,
         name: &str,
     ) -> flow_like_types::Result<Vec<Arc<InternalPin>>> {
-        self.pin_name_cache
+        self.lookup
+            .by_name
             .get(name)
-            .cloned()
+            .map(|offsets| {
+                offsets
+                    .iter()
+                    .map(|&offset| self.pins[offset as usize].clone())
+                    .collect()
+            })
             .ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", name))
     }
 
     pub fn get_pin_by_id(&self, id: &str) -> flow_like_types::Result<Arc<InternalPin>> {
-        if let Some(pin) = self.pins.get(id) {
-            return Ok(pin.clone());
-        }
-
-        Err(flow_like_types::anyhow!("Pin {} not found", id))
+        self.lookup
+            .by_id
+            .get(id)
+            .map(|&offset| self.pins[offset as usize].clone())
+            .ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", id))
     }
 
     pub async fn orphaned(&self) -> bool {
-        for pin in self.pins.values() {
+        for pin in self.pins.iter() {
             // No lock needed - direct access to immutable fields
             if pin.pin_type != PinType::Input {
                 continue;
@@ -614,7 +618,7 @@ impl InternalNode {
     }
 
     pub async fn is_ready(&self) -> flow_like_types::Result<bool> {
-        for pin in self.pins.values() {
+        for pin in self.pins.iter() {
             // Direct access to immutable fields - no lock needed
             let pin_type = &pin.pin_type;
             let data_type = &pin.data_type;
@@ -666,7 +670,7 @@ impl InternalNode {
         let mut visited_pins: AHashSet<usize> = AHashSet::new();
         let mut stack: Vec<Weak<InternalPin>> = Vec::new();
 
-        for pin in self.pins.values() {
+        for pin in self.pins.iter() {
             // Direct access to immutable fields - no lock needed
             if pin.pin_type != PinType::Output {
                 continue;
@@ -716,7 +720,7 @@ impl InternalNode {
         let mut first_active_output = None;
         let mut additional_active_outputs = Vec::new();
 
-        for pin in self.pins.values() {
+        for pin in self.pins.iter() {
             // Direct access to immutable fields - no lock needed
             if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
                 continue;
@@ -868,7 +872,7 @@ impl InternalNode {
         let mut visited_pins: AHashSet<usize> = AHashSet::new();
         let mut stack: Vec<Weak<InternalPin>> = Vec::new();
 
-        for pin in self.pins.values() {
+        for pin in self.pins.iter() {
             // Direct access to immutable fields - no lock needed
             if pin.pin_type != PinType::Input {
                 continue;

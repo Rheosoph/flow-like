@@ -536,6 +536,21 @@ impl App {
             .delete_stream(locations)
             .try_collect::<Vec<Path>>()
             .await?;
+
+        // Compiled artifacts are derived from the versions removed above.
+        let compiled_path = Path::from("apps")
+            .child(self.id.clone())
+            .child("compiled")
+            .child(board_id);
+        let compiled_locations = store
+            .list(Some(&compiled_path))
+            .map_ok(|m| m.location)
+            .boxed();
+        store
+            .delete_stream(compiled_locations)
+            .try_collect::<Vec<Path>>()
+            .await?;
+
         self.updated_at = SystemTime::now();
         self.save().await?;
         Ok(())

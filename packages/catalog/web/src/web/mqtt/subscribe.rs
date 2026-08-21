@@ -184,15 +184,15 @@ impl NodeLogic for MqttSubscribeNode {
         let mut has_topic_pin = false;
         let mut typed_pin_count: usize = 0;
 
-        for pin in ref_node_pins.values() {
+        for pin in ref_node_pins.iter() {
             if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
                 continue;
             }
-            if pin.name == "payload" {
+            if pin.name.as_ref() == "payload" {
                 has_payload_pin = true;
                 continue;
             }
-            if pin.name == "topic" {
+            if pin.name.as_ref() == "topic" {
                 has_topic_pin = true;
                 continue;
             }
@@ -258,8 +258,8 @@ impl NodeLogic for MqttSubscribeNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| p.pin_type == PinType::Output && p.name == "topic")
-                            .map(|(_, p)| p.clone())
+                            .filter(|p| p.pin_type == PinType::Output && p.name.as_ref() == "topic")
+                            .map(|p| (*p).clone())
                             .collect();
                         for pin in topic_pins {
                             pin.set_value(json!(msg_topic.as_str())).await;
@@ -268,11 +268,11 @@ impl NodeLogic for MqttSubscribeNode {
 
                     if single_string {
                         let pins = &ctx.node.pins;
-                        for pin in pins.values() {
+                        for pin in pins.iter() {
                             if pin.pin_type == PinType::Output
                                 && pin.data_type == VariableType::String
-                                && pin.name != "payload"
-                                && pin.name != "topic"
+                                && pin.name.as_ref() != "payload"
+                                && pin.name.as_ref() != "topic"
                             {
                                 pin.set_value(json!(text.as_ref())).await;
                                 break;
@@ -283,13 +283,13 @@ impl NodeLogic for MqttSubscribeNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| {
+                            .filter(|p| {
                                 p.pin_type == PinType::Output
                                     && p.data_type == VariableType::Byte
-                                    && p.name != "payload"
-                                    && p.name != "topic"
+                                    && p.name.as_ref() != "payload"
+                                    && p.name.as_ref() != "topic"
                             })
-                            .map(|(_, p)| p.clone())
+                            .map(|p| (*p).clone())
                             .collect();
                         if let Some(pin) = pins.first() {
                             pin.set_value(json!(payload_bytes)).await;
@@ -302,8 +302,10 @@ impl NodeLogic for MqttSubscribeNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| p.pin_type == PinType::Output && p.name == "payload")
-                            .map(|(_, p)| p.clone())
+                            .filter(|p| {
+                                p.pin_type == PinType::Output && p.name.as_ref() == "payload"
+                            })
+                            .map(|p| (*p).clone())
                             .collect();
                         for pin in payload_pins {
                             pin.set_value(value.clone()).await;
@@ -317,13 +319,13 @@ impl NodeLogic for MqttSubscribeNode {
                                 .node
                                 .pins
                                 .iter()
-                                .filter(|(_, p)| {
+                                .filter(|p| {
                                     p.pin_type == PinType::Output
                                         && p.data_type != VariableType::Execution
-                                        && p.name != "payload"
-                                        && p.name != "topic"
+                                        && p.name.as_ref() != "payload"
+                                        && p.name.as_ref() != "topic"
                                 })
-                                .map(|(_, p)| (p.name.clone(), p.clone()))
+                                .map(|p| (p.name.to_string(), (*p).clone()))
                                 .collect();
 
                             for (name, pin) in &pins {
@@ -346,10 +348,10 @@ impl NodeLogic for MqttSubscribeNode {
                                 .node
                                 .pins
                                 .iter()
-                                .filter(|(_, p)| {
-                                    p.pin_type == PinType::Output && p.name == "payload"
+                                .filter(|p| {
+                                    p.pin_type == PinType::Output && p.name.as_ref() == "payload"
                                 })
-                                .map(|(_, p)| p.clone())
+                                .map(|p| (*p).clone())
                                 .collect();
                             for pin in payload_pins {
                                 pin.set_value(json!(remaining)).await;
@@ -359,10 +361,10 @@ impl NodeLogic for MqttSubscribeNode {
                                 .node
                                 .pins
                                 .iter()
-                                .filter(|(_, p)| {
-                                    p.pin_type == PinType::Output && p.name == "payload"
+                                .filter(|p| {
+                                    p.pin_type == PinType::Output && p.name.as_ref() == "payload"
                                 })
-                                .map(|(_, p)| p.clone())
+                                .map(|p| (*p).clone())
                                 .collect();
                             for pin in payload_pins {
                                 pin.set_value(parsed.clone()).await;
@@ -373,8 +375,10 @@ impl NodeLogic for MqttSubscribeNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| p.pin_type == PinType::Output && p.name == "payload")
-                            .map(|(_, p)| p.clone())
+                            .filter(|p| {
+                                p.pin_type == PinType::Output && p.name.as_ref() == "payload"
+                            })
+                            .map(|p| (*p).clone())
                             .collect();
                         for pin in payload_pins {
                             pin.set_value(json!(text.as_ref())).await;

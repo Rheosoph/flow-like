@@ -12,7 +12,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 reqwest.workspace = true
 aws-config.workspace = true
-aws-sdk-scheduler = "1.59"
+aws-sdk-scheduler = { version = "1.59", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 [profile.release]
 opt-level = "s"

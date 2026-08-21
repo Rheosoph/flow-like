@@ -644,8 +644,8 @@ async fn execute_callback_function(
             let coerced = coerce_value_for_pin(&pin, value)?;
             if let Some(internal_pin) = callback_function
                 .pins
-                .values()
-                .find(|internal_pin| internal_pin.name == pin.name)
+                .iter()
+                .find(|internal_pin| internal_pin.name.as_ref() == pin.name)
             {
                 internal_pin.set_value(coerced).await;
             }

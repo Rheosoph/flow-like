@@ -13,6 +13,11 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 #[cfg(feature = "discord")]
+use crate::storage::DiscordBotState;
+#[cfg(feature = "discord")]
+use tracing::{debug, error};
+
+#[cfg(feature = "discord")]
 use serenity::{
     all::{GatewayIntents, Message, Ready},
     async_trait,

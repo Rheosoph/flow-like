@@ -900,6 +900,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::telemetry::TelemetryFlowPilotResponse,
         crate::routes::admin::telemetry::FlowPilotTotals,
         crate::routes::admin::telemetry::FlowPilotTrendPoint,
+        crate::routes::admin::telemetry::FlowPilotFailureGroup,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackRecord,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackFacetCount,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackTrendPoint,

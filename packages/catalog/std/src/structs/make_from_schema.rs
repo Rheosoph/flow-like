@@ -277,7 +277,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
         let mut result: HashMap<String, Value> = HashMap::new();
 
         // Get all input pins and build the struct
-        for pin in context.node.pins.values() {
+        for pin in context.node.pins.iter() {
             // Skip output pins and execution pins
             if pin.pin_type != PinType::Input || pin.data_type == VariableType::Execution {
                 continue;

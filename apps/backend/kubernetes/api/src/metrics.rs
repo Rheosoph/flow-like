@@ -2,7 +2,7 @@ use axum::response::IntoResponse;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace::TracerProvider};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::sync::OnceLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -40,8 +40,8 @@ fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
         .build()
         .ok()?;
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
 
     let tracer = provider.tracer("flow-like-api");

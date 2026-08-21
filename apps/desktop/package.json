@@ -147,7 +147,7 @@
 		"tinycolor2": "^1.6.0",
 		"tw-animate-css": "^1.3.6",
 		"unified": "^11.0.5",
-		"vite": "^6.0.7",
+		"vite": "^7.3.6",
 		"zod": "^3.24.1",
 		"zod-validation-error": "^3.4.0",
 		"zustand": "^5.0.3"
@@ -177,7 +177,7 @@
 		"internal-ip": "^8.0.0",
 		"license-report": "^6.7.1",
 		"puppeteer": "24.43.1",
-		"sharp": "^0.33.5",
+		"sharp": "^0.35.3",
 		"tailwindcss": "^4.1.11",
 		"tw-animate-css": "^1.3.6",
 		"typescript": "^5.7.3",

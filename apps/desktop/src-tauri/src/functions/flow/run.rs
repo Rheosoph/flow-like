@@ -2,6 +2,7 @@
 
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
+use flow_like::flow::compiled::TemplateCache;
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
@@ -18,7 +19,7 @@ use flow_like_types::{json, tokio};
 use futures::TryStreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -27,6 +28,23 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
+
+/// Desktop-wide template cache. Runs skip proto decode + `node_updates`
+/// entirely when the local compiled artifact (or this cache) is warm; the
+/// registry fingerprint inside the cache key covers catalog / installed-node
+/// changes.
+static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
+
+pub(crate) async fn resolve_run_template(
+    state: &Arc<flow_like::state::FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Result<Arc<flow_like::flow::compiled::CompiledRunTemplate>> {
+    TEMPLATE_CACHE
+        .resolve(state, app_id, board_id, version, "")
+        .await
+}
 
 #[derive(Serialize)]
 struct ReportRunRequest {
@@ -231,11 +249,11 @@ async fn execute_internal(
         event = Some(intermediate_event);
     }
 
-    let Ok(board) = app.open_board(board_id.clone(), None, version).await else {
-        return Err(TauriFunctionError::new("Board not found"));
-    };
-
-    let board = Arc::new(board.lock().await.clone());
+    let template = resolve_run_template(&flow_like_state, &app_id, &board_id, version)
+        .await
+        .map_err(|e| {
+            TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
+        })?;
 
     let profile = TauriSettingsState::current_profile(&app_handle).await?;
 
@@ -286,9 +304,9 @@ async fn execute_internal(
 
     let identity_token = token.clone();
 
-    let mut internal_run = InternalRun::new(
+    let mut internal_run = InternalRun::from_template(
         &app_id,
-        board,
+        template,
         event,
         &flow_like_state,
         &profile.hub_profile,
@@ -298,6 +316,7 @@ async fn execute_internal(
         credentials,
         token,
         oauth_tokens.unwrap_or_default().into_iter().collect(),
+        None,
     )
     .await?;
 

@@ -34,6 +34,22 @@ describe("lesson content normalization", () => {
 		);
 	});
 
+	test("removes a duplicate title with closing hashes and CRLF endings", () => {
+		expect(
+			removeDuplicateLessonTitle(
+				"  # Product map ###\r\n\r\nBody",
+				"Product map",
+			),
+		).toBe("Body");
+	});
+
+	test("stays linear on heading lines padded with whitespace", () => {
+		const content = `#${"\t".repeat(50000)}Product map\r x`;
+		const started = performance.now();
+		expect(removeDuplicateLessonTitle(content, "Product map")).toBe(content);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+
 	test("removes a duplicate leading Plate title", () => {
 		const content = `plate_json::${JSON.stringify([
 			{

@@ -33,15 +33,15 @@ use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 
 use crate::entity::prelude::{
     TelemetryAlertEvent, TelemetryDimensionDaily, TelemetryErrorEvent, TelemetryEvent,
-    TelemetryEventDaily, TelemetryFlowpilotDaily, TelemetryInstallDaily, TelemetryLlmCall,
-    TelemetryLlmDaily, TelemetryPerfDaily, TelemetryPerfMetric, TelemetrySession,
-    TelemetrySessionDaily, TelemetrySpan,
+    TelemetryEventDaily, TelemetryFlowpilotDaily, TelemetryFlowpilotFailureDaily,
+    TelemetryInstallDaily, TelemetryLlmCall, TelemetryLlmDaily, TelemetryPerfDaily,
+    TelemetryPerfMetric, TelemetrySession, TelemetrySessionDaily, TelemetrySpan,
 };
 use crate::entity::{
     telemetry_alert_event, telemetry_dimension_daily, telemetry_error_event, telemetry_event,
-    telemetry_event_daily, telemetry_flowpilot_daily, telemetry_install_daily, telemetry_llm_call,
-    telemetry_llm_daily, telemetry_perf_daily, telemetry_perf_metric, telemetry_session,
-    telemetry_session_daily, telemetry_span,
+    telemetry_event_daily, telemetry_flowpilot_daily, telemetry_flowpilot_failure_daily,
+    telemetry_install_daily, telemetry_llm_call, telemetry_llm_daily, telemetry_perf_daily,
+    telemetry_perf_metric, telemetry_session, telemetry_session_daily, telemetry_span,
 };
 use crate::telemetry::rollup::{latest_rolled_up_day, rollup_disabled};
 
@@ -342,6 +342,7 @@ async fn sweep_rollups(db: &DatabaseConnection, cutoff: NaiveDateTime) -> Result
         TelemetryLlmDaily => telemetry_llm_daily::Column::Day,
         TelemetryPerfDaily => telemetry_perf_daily::Column::Day,
         TelemetryFlowpilotDaily => telemetry_flowpilot_daily::Column::Day,
+        TelemetryFlowpilotFailureDaily => telemetry_flowpilot_failure_daily::Column::Day,
     ))
 }
 

@@ -74,11 +74,13 @@ impl EventBusEvent {
         let board_version = loaded_event.board_version;
         let board_id = loaded_event.board_id.clone();
 
-        let Ok(board) = app.open_board(board_id.clone(), None, board_version).await else {
-            return Err(flow_like_types::anyhow!("Board not found"));
-        };
-
-        let board = Arc::new(board.lock().await.clone());
+        let template = crate::functions::flow::run::resolve_run_template(
+            &execution_state,
+            &self.app_id,
+            &board_id,
+            board_version,
+        )
+        .await?;
         let profile = TauriSettingsState::current_profile(app_handle).await?;
 
         let app_handle_clone = app_handle.clone();
@@ -135,9 +137,9 @@ impl EventBusEvent {
         let event_name = loaded_event.name.clone();
         let event_type = loaded_event.event_type.clone();
 
-        let mut internal_run = InternalRun::new(
+        let mut internal_run = InternalRun::from_template(
             &self.app_id,
-            board,
+            template,
             Some(loaded_event),
             &execution_state,
             &profile.hub_profile,
@@ -147,6 +149,7 @@ impl EventBusEvent {
             credentials,
             self.token.clone(),
             self.oauth_tokens.clone(),
+            None,
         )
         .await?;
 

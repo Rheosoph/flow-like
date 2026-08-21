@@ -217,7 +217,7 @@ impl NodeLogic for TcpListenNode {
                     let mut sub = context.create_sub_context(&reference_function).await;
                     sub.delegated = true;
 
-                    for pin in sub.node.pins.values() {
+                    for pin in sub.node.pins.iter() {
                         if pin.pin_type == PinType::Output
                             && pin.data_type != VariableType::Execution
                         {

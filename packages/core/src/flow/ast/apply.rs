@@ -1744,6 +1744,7 @@ mod tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 

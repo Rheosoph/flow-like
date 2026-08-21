@@ -814,6 +814,13 @@ export class AppState implements IAppState {
 		}
 	}
 
+	async recordLocalAppVisibility(
+		appId: string,
+		visibility: IAppVisibility,
+	): Promise<void> {
+		await appsDB.visibility.put({ visibility, appId });
+	}
+
 	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
 		if (await this.backend.isOffline(appId)) {
 			throw new Error("Forking settings are only available for online apps.");

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::flow::{
     board::{
@@ -23,7 +23,27 @@ pub mod order_pin_indices;
 pub mod sync_known_schemas;
 pub mod sync_node_schema;
 
-pub type PinLookup = HashMap<String, (Arc<Pin>, NodeOrLayer)>;
+pub type PinLookup = HashMap<String, (PinEdges, NodeOrLayer)>;
+
+/// A pin's reciprocal edges, snapshotted before the main pass begins.
+///
+/// The main pass holds `&mut` on the board while steps look up *other* pins, so this cannot borrow
+/// from the board and has to own what it exposes. It carries only the two edge sets the steps read:
+/// snapshotting whole pins meant copying every schema string and default value on the board — the
+/// bulk of a pin's size — on every apply, none of which was ever looked at.
+pub struct PinEdges {
+    pub connected_to: BTreeSet<String>,
+    pub depends_on: BTreeSet<String>,
+}
+
+impl PinEdges {
+    fn of(pin: &Pin) -> Self {
+        PinEdges {
+            connected_to: pin.connected_to.clone(),
+            depends_on: pin.depends_on.clone(),
+        }
+    }
+}
 
 pub enum NodeOrLayer {
     Node(String),
@@ -113,7 +133,7 @@ impl Board {
             for pin in node.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), NodeOrLayer::Node(node.id.clone())),
+                    (PinEdges::of(pin), NodeOrLayer::Node(node.id.clone())),
                 );
                 for step in steps.iter_mut() {
                     (*step).initial_pin_iteration(pin, NodeOrLayerRef::Node(node));
@@ -129,7 +149,7 @@ impl Board {
             for pin in layer.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), NodeOrLayer::Layer(layer.id.clone())),
+                    (PinEdges::of(pin), NodeOrLayer::Layer(layer.id.clone())),
                 );
                 for step in steps.iter_mut() {
                     (*step).initial_pin_iteration(pin, NodeOrLayerRef::Layer(layer));
@@ -144,7 +164,7 @@ impl Board {
                 for pin in node.pins.values() {
                     pins.insert(
                         pin.id.clone(),
-                        (Arc::new(pin.clone()), NodeOrLayer::Node(node.id.clone())),
+                        (PinEdges::of(pin), NodeOrLayer::Node(node.id.clone())),
                     );
                     for step in steps.iter_mut() {
                         (*step).initial_pin_iteration(pin, NodeOrLayerRef::Node(node));

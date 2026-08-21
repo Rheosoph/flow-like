@@ -255,7 +255,39 @@ export function InviteUserDialog({
 									</div>
 								)}
 
+							{!userSearch.isFetching && userSearch.isError && (
+								<div className="flex flex-col items-center gap-3 py-8 text-center">
+									<div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+										<UserX className="h-6 w-6 text-destructive" />
+									</div>
+									<div className="space-y-1">
+										<p className="text-sm font-medium">
+											{t("userSearchFailed", "Could not search for users")}
+										</p>
+										<p className="text-xs text-muted-foreground">
+											{apiErrorMessage(
+												userSearch.error,
+												t(
+													"userSearchFailedHint",
+													"The directory is unreachable right now. Try again in a moment.",
+												),
+											)}
+										</p>
+									</div>
+									<Button
+										size="sm"
+										variant="outline"
+										className="h-8 gap-1.5 text-xs"
+										onClick={() => userSearch.refetch()}
+									>
+										<RefreshCw className="h-3 w-3" />
+										{t("retry", "Retry")}
+									</Button>
+								</div>
+							)}
+
 							{!userSearch.isFetching &&
+								!userSearch.isError &&
 								(!userSearch.data || userSearch.data.length === 0) && (
 									<div className="flex flex-col items-center gap-2 py-8 text-center">
 										<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">

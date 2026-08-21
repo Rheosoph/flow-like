@@ -1854,9 +1854,9 @@ pub async fn developer_load_into_catalog(
             .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
-        let mut inner = flow_like::state::FlowNodeRegistryInner {
-            registry: registry.node_registry.registry.clone(),
-        };
+        let mut inner = flow_like::state::FlowNodeRegistryInner::from_registry(
+            registry.node_registry.registry.clone(),
+        );
         for (node, logic) in node_pairs {
             inner.insert(node, logic);
         }
@@ -2032,9 +2032,9 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
     {
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
-        let mut inner = flow_like::state::FlowNodeRegistryInner {
-            registry: registry.node_registry.registry.clone(),
-        };
+        let mut inner = flow_like::state::FlowNodeRegistryInner::from_registry(
+            registry.node_registry.registry.clone(),
+        );
         for (node, logic) in node_pairs {
             inner.insert(node, logic);
         }

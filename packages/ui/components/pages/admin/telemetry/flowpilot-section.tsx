@@ -8,6 +8,7 @@ import {
 	CircleX,
 	MonitorSmartphone,
 	Play,
+	TriangleAlert,
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
@@ -36,6 +37,8 @@ import {
 	trendBucketForHours,
 } from "./telemetry-shared";
 import type {
+	ITelemetryFlowpilotFailure,
+	ITelemetryFlowpilotFailureKind,
 	ITelemetryFlowpilotResponse,
 	ITelemetryFlowpilotTotals,
 	ITelemetryFlowpilotTrendPoint,
@@ -66,6 +69,89 @@ const FUNNEL_STAGES: {
 	{ key: "attemptsReconcileValid", label: "Reconcile valid" },
 	{ key: "attemptsApplied", label: "Applied" },
 ];
+
+const FAILURE_KIND_LABELS: Record<ITelemetryFlowpilotFailureKind, string> = {
+	subagent_dispatch: "Sub-agent dispatch",
+	flowscript_apply: "FlowScript apply",
+	widget_apply: "Widget apply",
+	data_apply: "Data apply",
+	page_apply: "Page apply",
+	tool_error: "Tool error",
+	run_error: "Run error",
+};
+
+const FAILURE_KIND_TOTALS: {
+	kind: ITelemetryFlowpilotFailureKind;
+	key: keyof ITelemetryFlowpilotTotals;
+}[] = [
+	{ kind: "subagent_dispatch", key: "subagentDispatchFailures" },
+	{ kind: "flowscript_apply", key: "flowscriptApplyFailures" },
+	{ kind: "widget_apply", key: "widgetApplyFailures" },
+	{ kind: "data_apply", key: "dataApplyFailures" },
+	{ kind: "page_apply", key: "pageApplyFailures" },
+	{ kind: "tool_error", key: "toolFailures" },
+	{ kind: "run_error", key: "runFailures" },
+];
+
+const UNKNOWN_DIMENSION = "unknown";
+
+function failureRowKey(failure: ITelemetryFlowpilotFailure, index: number) {
+	return `${failure.kind}|${failure.tool}|${failure.code}|${index}`;
+}
+
+/**
+ * The failure causes behind the funnel. Messages arrive already redacted and
+ * generalized by the client, so they are safe to render verbatim.
+ */
+function FailureCauses({
+	failures,
+}: { failures: ITelemetryFlowpilotFailure[] }) {
+	if (failures.length === 0) {
+		return <EmptyState message="No failures reported in this window." />;
+	}
+	const max = Math.max(...failures.map((failure) => failure.count));
+	return (
+		<ul className="space-y-2">
+			{failures.map((failure, index) => (
+				<li
+					key={failureRowKey(failure, index)}
+					className="rounded-lg border border-border bg-muted/30 px-3 py-2"
+				>
+					<div className="flex items-center gap-2">
+						<span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-destructive">
+							{FAILURE_KIND_LABELS[failure.kind] ?? failure.kind}
+						</span>
+						{failure.tool !== UNKNOWN_DIMENSION ? (
+							<span className="truncate font-mono text-[11px] text-muted-foreground">
+								{failure.tool}
+							</span>
+						) : null}
+						{failure.code !== UNKNOWN_DIMENSION ? (
+							<span className="truncate font-mono text-[11px] font-medium">
+								{failure.code}
+							</span>
+						) : null}
+						<span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+							{failure.count.toLocaleString()} ×{" "}
+							{failure.installs.toLocaleString()} installs
+						</span>
+					</div>
+					{failure.message !== UNKNOWN_DIMENSION ? (
+						<p className="mt-1 line-clamp-3 text-xs text-muted-foreground">
+							{failure.message}
+						</p>
+					) : null}
+					<div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+						<div
+							className="h-full rounded-full bg-destructive/60"
+							style={{ width: `${(failure.count / max) * 100}%` }}
+						/>
+					</div>
+				</li>
+			))}
+		</ul>
+	);
+}
 
 function GenerationFunnel({ totals }: { totals: ITelemetryFlowpilotTotals }) {
 	const base = totals.attemptsTotal;
@@ -258,6 +344,14 @@ export function FlowpilotSection({
 		totals && totals.runsStarted > 0
 			? (totals.runsSucceeded / totals.runsStarted) * 100
 			: null;
+	const failures = flowpilot.data?.failures ?? [];
+	const failureKindRows = totals
+		? FAILURE_KIND_TOTALS.map(({ kind, key }) => ({
+				key: kind,
+				label: FAILURE_KIND_LABELS[kind],
+				count: totals[key],
+			})).filter((row) => row.count > 0)
+		: [];
 
 	return (
 		<section className="space-y-4">
@@ -390,6 +484,46 @@ export function FlowpilotSection({
 									]}
 									emptyMessage="No review dispositions in this window."
 								/>
+							</CardContent>
+						</Card>
+					</div>
+
+					<div className="grid gap-4 lg:grid-cols-2">
+						<Card>
+							<CardHeader className="pb-3">
+								<CardTitle className="flex items-center gap-2 text-base">
+									<TriangleAlert className="h-4 w-4 text-destructive" />
+									{t("whereRunsFail", "Where runs fail")}
+								</CardTitle>
+								<CardDescription>
+									{t(
+										"valFailuresRecordedAcrossAllReportedRuns",
+										"{{val}} failures recorded across all reported runs.",
+										{ val: totals.failuresTotal.toLocaleString() },
+									)}
+								</CardDescription>
+							</CardHeader>
+							<CardContent>
+								<BarList
+									rows={failureKindRows}
+									emptyMessage="No failures in this window."
+								/>
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="pb-3">
+								<CardTitle className="text-base">
+									{t("topFailureCauses", "Top failure causes")}
+								</CardTitle>
+								<CardDescription>
+									{t(
+										"redactedFailureMessagesGroupedByCauseMostFrequentFirst",
+										"Redacted failure messages grouped by cause, most frequent first.",
+									)}
+								</CardDescription>
+							</CardHeader>
+							<CardContent>
+								<FailureCauses failures={failures} />
 							</CardContent>
 						</Card>
 					</div>
