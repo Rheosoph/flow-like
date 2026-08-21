@@ -892,6 +892,7 @@
 	"thisHandlerIsConfiguredButIsNotDeclaredByTheCurrentComponentContract": "このハンドラーは設定済みですが、現在のコンポーネントコントラクトには宣言されていません。",
 	"thisLegacyWidgetWorkflowBindingIsPreservedAddingAnExactHandlerMayOverrideItAtRuntime": "このレガシーウィジェットのワークフローバインディングは維持されています。厳密なハンドラーを追加すると、実行時に上書きされる可能性があります。",
 	"thisNodeDoesNotDefineGovernanceScores": "このノードにはガバナンススコアが定義されていません。",
+	"thisNodePointsAtSomethingThatNoLongerExists": "",
 	"thisPreservesTheOriginalSingleactionBehaviorExactNamedAndWildcardHandlersTakePrecedence": "これにより元の単一アクションの挙動が維持されます。厳密な名前付きハンドラーとワイルドカードハンドラーが優先されます。",
 	"thisProjectHasNoOntologiesYetCreateOneInDataStudio": "このプロジェクトにはまだオントロジーがありません — Data Studioで作成してください。",
 	"thisRemovesTheFlowAndCountPagesInsideIt_one": "このフローと、その中の1件のページが削除されます。",

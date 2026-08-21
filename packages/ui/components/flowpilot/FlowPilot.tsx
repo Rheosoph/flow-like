@@ -693,6 +693,7 @@ function FlowPilotImpl({
 			disposition: "applied" | "dismissed" | "stale" | "error",
 			token?: FlowIrCommitToken,
 			finalBoardNodeCount?: number,
+			reason?: unknown,
 		) => {
 			const run = generationMetricsRunRef.current;
 			if (!run) return;
@@ -700,6 +701,7 @@ function FlowPilotImpl({
 				disposition,
 				token,
 				finalBoardNodeCount ?? currentBoardNodeCountRef.current,
+				reason,
 			);
 			if (generationMetricsRunRef.current === run) {
 				generationMetricsRunRef.current = undefined;
@@ -2026,12 +2028,12 @@ function FlowPilotImpl({
 							...compiledResult.diagnostics,
 						]);
 						if (compiledResult.status === "stale") {
-							settleGenerationReview("stale", token);
+							settleGenerationReview("stale", token, undefined, compiledResult);
 							await dismissPendingFlowIrCommit();
 							setPendingCommands([]);
 							setFlowscriptWorkspaceStatus("stale");
 						} else {
-							settleGenerationReview("error", token);
+							settleGenerationReview("error", token, undefined, compiledResult);
 						}
 						return;
 					}
@@ -2086,7 +2088,12 @@ function FlowPilotImpl({
 					}
 					recordBoardApplyFailure(diagnostics);
 					setFlowscriptWorkspaceStatus("validation_errors");
-					settleGenerationReview("error", pendingFlowIrCommit);
+					settleGenerationReview(
+						"error",
+						pendingFlowIrCommit,
+						undefined,
+						diagnostics,
+					);
 					return;
 				}
 				if (shouldApplyFlowScript || hasRetainedCompiledBatch) {
@@ -2094,7 +2101,7 @@ function FlowPilotImpl({
 					setFlowscriptWorkspaceStatus("applied");
 				}
 			} catch (error) {
-				settleGenerationReview("error", pendingFlowIrCommit);
+				settleGenerationReview("error", pendingFlowIrCommit, undefined, error);
 				recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 				console.error("Failed to apply FlowPilot commands:", error);
 				return;
@@ -2238,7 +2245,7 @@ function FlowPilotImpl({
 				recordBoardApplyFailure(diagnostics);
 				setFlowscriptWorkspaceStatus("validation_errors");
 				setDestructiveApplyRequest(null);
-				settleGenerationReview("error");
+				settleGenerationReview("error", undefined, undefined, diagnostics);
 				return;
 			}
 
@@ -2250,7 +2257,7 @@ function FlowPilotImpl({
 			setPendingCommands([]);
 			setDestructiveApplyRequest(null);
 		} catch (error) {
-			settleGenerationReview("error");
+			settleGenerationReview("error", undefined, undefined, error);
 			recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 			console.error("Failed to apply destructive FlowScript edit:", error);
 		} finally {
@@ -3438,6 +3445,7 @@ function FlowPilotImpl({
 							: "error",
 					false,
 					currentBoardNodeCountRef.current,
+					{ message: error },
 				);
 				if (generationMetricsRunRef.current === generationMetricsRun) {
 					generationMetricsRunRef.current = undefined;

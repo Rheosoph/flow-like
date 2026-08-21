@@ -444,7 +444,7 @@ pub async fn collect_prefixed_pin_values(
     prefix: &str,
 ) -> Map<String, Value> {
     let mut values = Map::new();
-    let pins: Vec<_> = context.node.pins.values().cloned().collect();
+    let pins: Vec<_> = context.node.pins.iter().cloned().collect();
     for pin in pins {
         if pin.pin_type != PinType::Input || !pin.name.starts_with(prefix) {
             continue;

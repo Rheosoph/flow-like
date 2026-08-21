@@ -150,26 +150,56 @@ impl FlowLikeConfig {
 #[derive(Default, Clone)]
 pub struct FlowNodeRegistryInner {
     pub registry: HashMap<String, (Node, Arc<dyn NodeLogic>)>,
+    /// Cached [`Self::fingerprint`]; reset by `insert` so any mutation
+    /// invalidates it.
+    fingerprint_cell: std::sync::OnceLock<[u8; 32]>,
+    /// Cached [`Self::get_nodes_shared`]; reset by `insert` alongside the
+    /// fingerprint.
+    nodes_cell: std::sync::OnceLock<Arc<Vec<Node>>>,
 }
 
 impl FlowNodeRegistryInner {
     pub fn new(size: usize) -> Self {
         FlowNodeRegistryInner {
             registry: HashMap::with_capacity(size),
+            fingerprint_cell: std::sync::OnceLock::new(),
+            nodes_cell: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// A registry seeded with an existing node map. The derived caches start empty, so callers
+    /// outside this crate never have to know they exist.
+    pub fn from_registry(registry: HashMap<String, (Node, Arc<dyn NodeLogic>)>) -> Self {
+        FlowNodeRegistryInner {
+            registry,
+            fingerprint_cell: std::sync::OnceLock::new(),
+            nodes_cell: std::sync::OnceLock::new(),
         }
     }
 
     pub fn insert(&mut self, node: Node, logic: Arc<dyn NodeLogic>) {
         self.registry.insert(node.name.clone(), (node, logic));
+        self.fingerprint_cell = std::sync::OnceLock::new();
+        self.nodes_cell = std::sync::OnceLock::new();
     }
 
     pub fn get_nodes(&self) -> Vec<Node> {
         self.registry.values().map(|node| node.0.clone()).collect()
     }
 
+    /// The catalog as a shared snapshot. Callers that only read it — board hydration, command
+    /// sanitization, sync snapshots — would otherwise clone every node definition per request.
+    pub fn get_nodes_shared(&self) -> Arc<Vec<Node>> {
+        self.nodes_cell
+            .get_or_init(|| Arc::new(self.get_nodes()))
+            .clone()
+    }
+
     pub fn prepare(nodes: &Arc<Vec<Arc<dyn NodeLogic>>>) -> Self {
         let mut registry = FlowNodeRegistryInner {
             registry: HashMap::with_capacity(nodes.len()),
+            fingerprint_cell: std::sync::OnceLock::new(),
+            nodes_cell: std::sync::OnceLock::new(),
         };
 
         for logic in nodes.iter() {
@@ -205,6 +235,41 @@ impl FlowNodeRegistryInner {
             )),
         }
     }
+
+    /// Identity of this registry for compiled-board artifacts: hash of every
+    /// registered node type, its schema version, and the semantic hash of its
+    /// catalog default node (name, display strings, full pin set). A compiled
+    /// artifact built against a different fingerprint is recompiled instead of
+    /// trusted, since its baked `on_update` output may not match the running
+    /// catalog. The semantic hash also covers WASM nodes, whose `version` is
+    /// often unset — a package update that changes pin definitions changes the
+    /// fingerprint even without a version bump. `on_update` body changes with
+    /// an identical `get_node` still require a node version bump.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        *self.fingerprint_cell.get_or_init(|| {
+            let mut entries: Vec<(&str, u32, u64)> = self
+                .registry
+                .iter()
+                .map(|(name, (node, _))| {
+                    (
+                        name.as_str(),
+                        node.version.unwrap_or(u32::MAX),
+                        node.semantic_hash(),
+                    )
+                })
+                .collect();
+            entries.sort_unstable();
+
+            let mut hasher = blake3::Hasher::new();
+            for (name, version, semantic) in entries {
+                hasher.update(name.as_bytes());
+                hasher.update(&[0]);
+                hasher.update(&version.to_le_bytes());
+                hasher.update(&semantic.to_le_bytes());
+            }
+            *hasher.finalize().as_bytes()
+        })
+    }
 }
 
 #[cfg(feature = "flow-runtime")]
@@ -238,18 +303,16 @@ impl FlowNodeRegistry {
     }
 
     pub fn push_node(&mut self, logic: Arc<dyn NodeLogic>) {
-        let mut registry = FlowNodeRegistryInner {
-            registry: self.node_registry.registry.clone(),
-        };
+        let mut registry =
+            FlowNodeRegistryInner::from_registry(self.node_registry.registry.clone());
         let node = logic.get_node();
         registry.insert(node, logic);
         self.node_registry = Arc::new(registry);
     }
 
     pub fn push_nodes(&mut self, nodes: Vec<Arc<dyn NodeLogic>>) {
-        let mut registry = FlowNodeRegistryInner {
-            registry: self.node_registry.registry.clone(),
-        };
+        let mut registry =
+            FlowNodeRegistryInner::from_registry(self.node_registry.registry.clone());
 
         for logic in nodes {
             let node = logic.get_node();

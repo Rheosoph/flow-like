@@ -24,6 +24,7 @@ import {
 	ICommentType,
 	IExecutionMode,
 	type ILayer,
+	type ILayerCache,
 	ILayerType,
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
@@ -88,6 +89,55 @@ function boardDataVersion(board: IBoard): string {
 		identityToken(board.refs),
 		identityToken(board.layers),
 		membershipHash,
+	].join(":");
+}
+
+/**
+ * What a rendered node reads from a layer: where it sits in the tree, and the
+ * local variables its `var_ref` pins list.
+ *
+ * Coordinates are deliberately excluded. They are the field that moves most
+ * often, and nothing inside a node renders them — folding them in would repaint
+ * every node on the canvas on every layer drag. A layer's pins are excluded for
+ * the same reason: when a function's signature changes the backend rewrites each
+ * call node's own pins, so those nodes re-render on their own hash.
+ *
+ * Order-independent because serde HashMap serialization does not guarantee key
+ * order. Each digest is seeded with the layer id so that two layers swapping a
+ * value cannot cancel each other out in the sum.
+ */
+function layersSignature(board: IBoard): number {
+	let total = 0;
+	for (const layer of Object.values(board.layers ?? {})) {
+		let digest = stringHash(
+			`${layer.id}\u0000${layer.name}\u0000${layer.type}\u0000${layer.parent_id ?? ""}`,
+		);
+		for (const variable of Object.values(layer.variables ?? {})) {
+			digest =
+				(digest + stringHash(`${variable.id}\u0000${variable.name}`)) | 0;
+		}
+		total = (total + digest) | 0;
+	}
+	return total;
+}
+
+/**
+ * The slice of the board a *mounted* node dereferences through boardRef, which
+ * both FlowNode memo comparators watch. Narrower than boardDataVersion on
+ * purpose — it is compared per node, so anything folded in here that changes
+ * during ordinary editing repaints the whole canvas.
+ *
+ * `board.refs` is not included: no mounted node reads it. The pin editor, the
+ * event payload form and the layer/function editors resolve hashed descriptions
+ * and schemas through it, but each is a dialog that snapshots when it opens, and
+ * refs churn every time a node type appears on the board for the first time.
+ */
+function boardContentVersion(board: IBoard): string {
+	return [
+		board.id,
+		board.version?.join(".") ?? "",
+		identityToken(board.variables),
+		layersSignature(board),
 	].join(":");
 }
 
@@ -297,6 +347,34 @@ function stripCallFunctionRef(node: INode): {
 	return { node, functionLayerId };
 }
 
+/**
+ * The call-function bits of a node's render data.
+ *
+ * Surfaced on the call node so a cached function is recognizable without opening
+ * the function it points at. It has to be recomputed on every rebuild path: a
+ * call node's own hash does not move when the function it points at changes its
+ * caching, so a branch that carries the old value forward shows a stale badge.
+ */
+function callFunctionData(
+	node: INode,
+	board: IBoard,
+): {
+	nodeForData: INode;
+	functionLayerId?: string;
+	functionCache?: ILayerCache;
+} {
+	if (node.name !== "control_call_function") return { nodeForData: node };
+	const { node: nodeForData, functionLayerId } = stripCallFunctionRef(node);
+	const cache = functionLayerId
+		? (board.layers[functionLayerId]?.cache ?? undefined)
+		: undefined;
+	return {
+		nodeForData,
+		functionLayerId,
+		functionCache: cache?.enabled ? cache : undefined,
+	};
+}
+
 /** Prefix for break struct field pins */
 const BREAK_STRUCT_PIN_PREFIX = "__break_struct_field__";
 /** Prefix for make struct field pins */
@@ -469,6 +547,7 @@ export function parseBoard(
 	const oldEdgesMap = new Map<string, any>();
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
 	const boardVersionToken = boardDataVersion(board);
+	const boardContentToken = boardContentVersion(board);
 
 	// Hash only nodes that actually reference functions (sorted — serde HashMap
 	// order is unstable), so adding/removing unrelated nodes doesn't force every
@@ -546,10 +625,10 @@ export function parseBoard(
 			nodes.push(oldNode);
 		} else if (oldNode) {
 			// Hash matches but some derived state changed — shallow update
-			const nodeForData =
-				node.name === "control_call_function"
-					? stripCallFunctionRef(node).node
-					: node;
+			const { nodeForData, functionLayerId, functionCache } = callFunctionData(
+				node,
+				board,
+			);
 			nodes.push({
 				...oldNode,
 				data: {
@@ -559,26 +638,24 @@ export function parseBoard(
 					node: nodeForData,
 					boardRef,
 					boardDataVersion: boardVersionToken,
+					boardContentVersion: boardContentToken,
+					functionLayerId,
+					functionCache,
 					selectorDataRef,
 					selectorDataVersion,
 				},
 				selected: sel,
 			});
 		} else {
-			const isCallFunction = node.name === "control_call_function";
-			const { node: nodeForData, functionLayerId } = isCallFunction
-				? stripCallFunctionRef(node)
-				: { node, functionLayerId: undefined };
-
-			// Surfaced on the call node so a cached function is recognizable without
-			// opening the function it points at.
-			const functionCache = functionLayerId
-				? (board.layers[functionLayerId]?.cache ?? undefined)
-				: undefined;
+			const { nodeForData, functionLayerId, functionCache } = callFunctionData(
+				node,
+				board,
+			);
 
 			nodes.push({
 				id: node.id,
-				type: isCallFunction ? "callFunctionNode" : "node",
+				type:
+					node.name === "control_call_function" ? "callFunctionNode" : "node",
 				zIndex: 20,
 				position: {
 					x: node.coordinates?.[0] ?? 0,
@@ -588,6 +665,7 @@ export function parseBoard(
 					label: node.name,
 					boardRef: boardRef,
 					boardDataVersion: boardVersionToken,
+					boardContentVersion: boardContentToken,
 					selectorDataRef,
 					selectorDataVersion,
 					fnRefsHash: fnRefsHash,
@@ -598,8 +676,11 @@ export function parseBoard(
 					version: version,
 					isUnavailable,
 					functionLayerId,
-					functionCache: functionCache?.enabled ? functionCache : undefined,
+					functionCache,
 					currentLayerId: currentLayer,
+					pushLayer: async (layer: ILayer) => {
+						pushLayer(layer);
+					},
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
 					},

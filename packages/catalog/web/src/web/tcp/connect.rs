@@ -290,11 +290,11 @@ async fn spawn_message_reader(
     let mut has_byte_pin = false;
     let mut typed_pin_count: usize = 0;
 
-    for pin in ref_node_pins.values() {
+    for pin in ref_node_pins.iter() {
         if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
             continue;
         }
-        if pin.name == "payload" {
+        if pin.name.as_ref() == "payload" {
             continue;
         }
         typed_pin_count += 1;
@@ -368,12 +368,12 @@ async fn spawn_message_reader(
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| {
+                            .filter(|p| {
                                 p.pin_type == PinType::Output
                                     && p.data_type == VariableType::String
-                                    && p.name != "payload"
+                                    && p.name.as_ref() != "payload"
                             })
-                            .map(|(_, p)| p.clone())
+                            .map(|p| (*p).clone())
                             .collect();
                         if let Some(pin) = pins.first() {
                             pin.set_value(json!(text)).await;
@@ -384,12 +384,12 @@ async fn spawn_message_reader(
                         .node
                         .pins
                         .iter()
-                        .filter(|(_, p)| {
+                        .filter(|p| {
                             p.pin_type == PinType::Output
                                 && p.data_type == VariableType::Byte
-                                && p.name != "payload"
+                                && p.name.as_ref() != "payload"
                         })
-                        .map(|(_, p)| p.clone())
+                        .map(|p| (*p).clone())
                         .collect();
                     if let Some(pin) = pins.first() {
                         pin.set_value(json!(data)).await;
@@ -399,8 +399,8 @@ async fn spawn_message_reader(
                         .node
                         .pins
                         .iter()
-                        .filter(|(_, p)| p.pin_type == PinType::Output && p.name == "payload")
-                        .map(|(_, p)| p.clone())
+                        .filter(|p| p.pin_type == PinType::Output && p.name.as_ref() == "payload")
+                        .map(|p| (*p).clone())
                         .collect();
                     for pin in payload_pins {
                         pin.set_value(json!(data)).await;

@@ -83,7 +83,8 @@ export interface IUsageIndex {
 
 const EMPTY_USAGE: IUsageIndex = { variables: {}, functions: {} };
 
-const refFromPin = (
+/** Reads a node's reference pin (`var_ref`, `function_layer_id`) as a plain id. */
+export const refFromPin = (
 	node: { pins?: Record<string, unknown> },
 	pinName: string,
 ): string | undefined => {

@@ -81,7 +81,7 @@ pub async fn evaluate_pin_value_reference(pin: Arc<InternalPin>) -> flow_like_ty
 
         // Case 3: Use default value if available
         if let Some(default_value) = &current_pin.default_value {
-            return Ok(default_value.clone());
+            return Ok(default_value.as_ref().clone());
         }
 
         // Case 4: No value found
@@ -144,7 +144,7 @@ pub async fn evaluate_pin_value(
         }
 
         if let Some(default_value) = &current_pin.default_value {
-            return Ok(default_value.clone());
+            return Ok(default_value.as_ref().clone());
         }
 
         return Err(flow_like_types::anyhow!(
@@ -244,7 +244,7 @@ mod tests {
             .expect("shared cell resolves without a scope");
         assert_eq!(unscoped, json!("shared"));
 
-        let scope = Some(BTreeMap::from([(source.id.clone(), json!("scoped"))]));
+        let scope = Some(BTreeMap::from([(source.id.to_string(), json!("scoped"))]));
         let scoped = evaluate_pin_value(consumer, &scope)
             .await
             .expect("scope resolves through the dependency chain");

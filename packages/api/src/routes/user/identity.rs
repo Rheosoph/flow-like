@@ -14,6 +14,9 @@ const MAX_HANDLE_LEN: usize = 64;
 /// Minimum length before a substring search is allowed to run.
 pub const MIN_SEARCH_LEN: usize = 2;
 
+/// Bounds the condition tree a single search query builds.
+const MAX_SEARCH_TOKENS: usize = 5;
+
 const IDP_HANDLE_PREFIXES: &[&str] = &[
     "google_",
     "signinwithapple_",
@@ -219,12 +222,55 @@ pub fn escape_like_pattern(value: &str) -> String {
     escaped
 }
 
+/// Splits a term into the pieces an identity is actually stored in. An address is
+/// two meaningful halves — who, and where — so the domain stays whole; splitting it
+/// into labels would make the TLD a token, and `%de%` matches half the directory.
+/// Returns empty for a single-token term, which the phrase match already covers.
+fn tokenize(lower: &str) -> Vec<String> {
+    let (local, domain) = match lower.split_once('@') {
+        Some((local, domain)) if !local.is_empty() && !domain.is_empty() => (local, Some(domain)),
+        _ => (lower, None),
+    };
+
+    let mut tokens = local
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, '.' | '_' | '-' | '+' | ',' | ';' | '/' | '@')
+        })
+        .filter(|part| part.chars().count() >= MIN_SEARCH_LEN)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if let Some(domain) = domain {
+        tokens.push(domain.to_string());
+    }
+
+    let mut seen = Vec::with_capacity(tokens.len());
+    tokens.retain(|token| {
+        let unseen = !seen.contains(token);
+        if unseen {
+            seen.push(token.clone());
+        }
+        unseen
+    });
+
+    if tokens.len() < 2 {
+        return Vec::new();
+    }
+
+    tokens.truncate(MAX_SEARCH_TOKENS);
+    tokens
+}
+
 /// A normalized search term. `raw` is what the user typed (trimmed), `lower` is
 /// what ranking compares against.
 #[derive(Debug, Clone)]
 pub struct SearchTerm {
     pub raw: String,
     pub lower: String,
+    /// `felix.schultz@corp.com` → `["felix", "schultz", "corp.com"]`. People type a
+    /// full name while the directory keeps the halves in different columns, so each
+    /// token has to be matchable on its own. Empty for a single-token term.
+    pub tokens: Vec<String>,
 }
 
 impl SearchTerm {
@@ -242,11 +288,20 @@ impl SearchTerm {
         }
 
         let lower = raw.to_lowercase();
-        Some(SearchTerm { raw, lower })
+        let tokens = tokenize(&lower);
+        Some(SearchTerm { raw, lower, tokens })
     }
 
     pub fn like_pattern(&self) -> String {
         format!("%{}%", escape_like_pattern(&self.raw))
+    }
+
+    /// One `%token%` per entry of [`SearchTerm::tokens`], in the same order.
+    pub fn token_patterns(&self) -> Vec<String> {
+        self.tokens
+            .iter()
+            .map(|token| format!("%{}%", escape_like_pattern(token)))
+            .collect()
     }
 }
 
@@ -255,6 +310,10 @@ const WEIGHT_PREFERRED_USERNAME: i32 = 38;
 const WEIGHT_EMAIL: i32 = 30;
 const WEIGHT_ID: i32 = 20;
 const WEIGHT_USERNAME: i32 = 10;
+
+/// A row that holds the whole phrase beats one assembled from tokens scattered
+/// across columns, so token matches sit a tier below.
+const TOKEN_MATCH_PENALTY: i32 = 120;
 
 fn match_bonus(haystack: &str, needle: &str) -> Option<i32> {
     if haystack == needle {
@@ -286,25 +345,46 @@ pub struct RankableUser<'a> {
     pub has_avatar: bool,
 }
 
+/// Best score any single field gives this needle, 0 when none of them match.
+fn best_field_bonus(fields: &[(Option<String>, i32)], needle: &str) -> i32 {
+    let mut best = 0;
+    for (value, weight) in fields {
+        let Some(value) = value else { continue };
+        if let Some(bonus) = match_bonus(value, needle) {
+            best = best.max(bonus + weight);
+        }
+    }
+    best
+}
+
 /// Higher is a better match. Ranks by how the term matched (exact ≫ prefix ≫
 /// word-prefix ≫ substring) and on which field, then nudges complete profiles up
 /// so a real person outranks a bare shell row.
 pub fn score_candidate(candidate: &RankableUser<'_>, term: &SearchTerm) -> i32 {
-    let needle = &term.lower;
     let fields = [
         (candidate.name, WEIGHT_NAME),
         (candidate.preferred_username, WEIGHT_PREFERRED_USERNAME),
         (candidate.email, WEIGHT_EMAIL),
         (Some(candidate.id), WEIGHT_ID),
         (candidate.username, WEIGHT_USERNAME),
-    ];
+    ]
+    .map(|(value, weight)| (value.map(str::to_lowercase), weight));
 
-    let mut best = 0;
-    for (value, weight) in fields {
-        let Some(value) = value else { continue };
-        let lowered = value.to_lowercase();
-        if let Some(bonus) = match_bonus(&lowered, needle) {
-            best = best.max(bonus + weight);
+    let mut best = best_field_bonus(&fields, &term.lower);
+
+    // "Felix Schultz" has to find the row that stores the halves apart — a name
+    // reading "Schultz, Felix", or a first name plus an email carrying the last.
+    // A term is only as good as its weakest token.
+    if !term.tokens.is_empty() {
+        let weakest = term
+            .tokens
+            .iter()
+            .map(|token| best_field_bonus(&fields, token))
+            .min()
+            .unwrap_or(0);
+
+        if weakest > 0 {
+            best = best.max((weakest - TOKEN_MATCH_PENALTY).max(1));
         }
     }
 
@@ -473,6 +553,75 @@ mod tests {
         assert!(score_candidate(&prefix, &term) > score_candidate(&word, &term));
         assert!(score_candidate(&word, &term) > score_candidate(&substring, &term));
         assert!(score_candidate(&substring, &term) > 0);
+    }
+
+    #[test]
+    fn tokenizes_names_and_addresses() {
+        assert_eq!(
+            SearchTerm::parse("felix").unwrap().tokens,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            SearchTerm::parse("Felix Schultz").unwrap().tokens,
+            ["felix", "schultz"]
+        );
+        assert_eq!(
+            SearchTerm::parse("felix.schultz").unwrap().tokens,
+            ["felix", "schultz"]
+        );
+        // The domain stays whole — a `de` token would match half the directory.
+        assert_eq!(
+            SearchTerm::parse("felix.schultz@corp.de").unwrap().tokens,
+            ["felix", "schultz", "corp.de"]
+        );
+        // A single-letter middle initial is below the substring floor.
+        assert_eq!(
+            SearchTerm::parse("Felix M Schultz").unwrap().tokens,
+            ["felix", "schultz"]
+        );
+    }
+
+    #[test]
+    fn finds_a_person_whose_halves_live_in_different_columns() {
+        let term = SearchTerm::parse("Felix Schultz").unwrap();
+
+        let reversed_name = RankableUser {
+            id: "1",
+            name: Some("Schultz, Felix"),
+            ..Default::default()
+        };
+        let split_across_fields = RankableUser {
+            id: "2",
+            name: Some("Felix"),
+            email: Some("schultz@corp.de"),
+            ..Default::default()
+        };
+        assert!(score_candidate(&reversed_name, &term) > 0);
+        assert!(score_candidate(&split_across_fields, &term) > 0);
+
+        // Only one half present is still not a match.
+        let half = RankableUser {
+            id: "3",
+            name: Some("Felix Weber"),
+            ..Default::default()
+        };
+        assert_eq!(score_candidate(&half, &term), 0);
+    }
+
+    #[test]
+    fn ranks_the_contiguous_phrase_above_scattered_tokens() {
+        let term = SearchTerm::parse("Felix Schultz").unwrap();
+        let phrase = RankableUser {
+            id: "1",
+            name: Some("Felix Schultz"),
+            ..Default::default()
+        };
+        let scattered = RankableUser {
+            id: "2",
+            name: Some("Schultz, Felix"),
+            ..Default::default()
+        };
+        assert!(score_candidate(&phrase, &term) > score_candidate(&scattered, &term));
     }
 
     #[test]

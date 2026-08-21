@@ -62,7 +62,7 @@ fn internal_node(node: Node) -> Arc<InternalNode> {
         name_cache,
     ));
 
-    for pin in internal.pins.values() {
+    for pin in internal.pins.iter() {
         pin.init_node(Arc::downgrade(&internal));
         pin.init_connected_to(Vec::new());
         pin.init_depends_on(Vec::new());

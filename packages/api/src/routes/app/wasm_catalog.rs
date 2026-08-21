@@ -20,20 +20,24 @@ pub struct AppWasmNodes {
     pub fingerprint: String,
 }
 
-/// [`app_wasm_nodes`] behind a short-lived per-app cache.
+/// [`app_wasm_nodes`] behind a per-app cache keyed by the app's package pins.
 ///
-/// The board sync endpoint needs this on every poll; without the cache each poll would pay two
-/// database round trips for a catalog that changes only when packages are installed. Package
-/// mutations call `invalidate_wasm_resolve`, which drops this entry too; the TTL bounds staleness
-/// against writes on other replicas.
+/// The board sync endpoint needs this on every poll and the mutation path on every write; without
+/// a cache each call pays a second database round trip that pulls every pinned package's node
+/// definitions as JSON. The key embeds a digest of the installed `(package, version)` set, so an
+/// install, update or removal is observed immediately and on every replica — a TTL would instead
+/// keep serving the previous catalog to someone who just added a package and went straight into a
+/// board, and no invalidation can reach the instances a Lambda deployment is holding.
 pub async fn app_wasm_nodes_cached(
     state: &AppState,
     app_id: &str,
 ) -> Result<Arc<AppWasmNodes>, ApiError> {
-    if let Some(cached) = state.app_wasm_nodes_cache.get(app_id) {
+    let packages = app_packages(state, app_id).await?;
+    let key = format!("{app_id}\u{1f}{}", packages_epoch(&packages));
+    if let Some(cached) = state.app_wasm_nodes_cache.get(&key) {
         return Ok(cached);
     }
-    let nodes = app_wasm_nodes(state, app_id).await?;
+    let nodes = wasm_nodes_for_packages(state, &packages).await?;
     let fingerprint = if nodes.is_empty() {
         String::new()
     } else {
@@ -60,25 +64,53 @@ pub async fn app_wasm_nodes_cached(
         hasher.finalize().to_hex().to_string()
     };
     let entry = Arc::new(AppWasmNodes { nodes, fingerprint });
-    state
-        .app_wasm_nodes_cache
-        .insert(app_id.to_string(), entry.clone());
+    state.app_wasm_nodes_cache.insert(key, entry.clone());
     Ok(entry)
 }
 
-pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
-    let packages = app_package::Entity::find()
+/// The app's pinned, non-stale packages. This is the cheap half of a catalog resolve; the
+/// expensive half is [`wasm_nodes_for_packages`], which the cache is there to skip.
+async fn app_packages(state: &AppState, app_id: &str) -> Result<Vec<app_package::Model>, ApiError> {
+    Ok(app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
         .filter(app_package::Column::Stale.eq(false))
         .all(&state.db)
-        .await?;
+        .await?)
+}
 
+/// Identity of an app's package pins: any install, removal or version change moves it.
+fn packages_epoch(packages: &[app_package::Model]) -> String {
+    if packages.is_empty() {
+        return String::new();
+    }
+    let mut pins: Vec<String> = packages
+        .iter()
+        .map(|pkg| format!("{}\u{1f}{}", pkg.package_id, pkg.version))
+        .collect();
+    pins.sort();
+    let mut hasher = blake3::Hasher::new();
+    for pin in pins {
+        hasher.update(pin.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
+    let packages = app_packages(state, app_id).await?;
+    wasm_nodes_for_packages(state, &packages).await
+}
+
+async fn wasm_nodes_for_packages(
+    state: &AppState,
+    packages: &[app_package::Model],
+) -> Result<Vec<Node>, ApiError> {
     if packages.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut pinned = Condition::any();
-    for pkg in &packages {
+    for pkg in packages {
         pinned = pinned.add(
             Condition::all()
                 .add(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
@@ -97,7 +129,7 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
 
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
 
-    for pkg in &packages {
+    for pkg in packages {
         let key = (pkg.package_id.clone(), pkg.version.clone());
         let Some(nodes_value) = nodes_by_pin.remove(&key) else {
             tracing::warn!(

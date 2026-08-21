@@ -247,6 +247,7 @@ impl FromProto<flow_like_types::proto::Board> for Board {
             board_dir: Path::from("/default"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 }

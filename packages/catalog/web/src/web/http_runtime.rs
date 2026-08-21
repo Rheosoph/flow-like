@@ -322,15 +322,13 @@ pub(crate) async fn trigger_shared_function_context(
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {
         let sanitized = sanitize_identifier(&pin.name);
-        if let Some(value) = args.get(&pin.name).or_else(|| args.get(&sanitized)) {
+        if let Some(value) = args.get(pin.name.as_ref()).or_else(|| args.get(&sanitized)) {
             context.set_pin_ref_value(&pin, value.clone()).await?;
         }
     }
@@ -362,10 +360,8 @@ async fn reset_function_output_pins(context: &ExecutionContext) {
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {

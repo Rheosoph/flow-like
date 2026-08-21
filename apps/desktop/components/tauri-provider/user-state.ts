@@ -218,27 +218,27 @@ export class UserState implements IUserState {
 
 		return result;
 	}
+	/**
+	 * Throws on failure on purpose: swallowing the error here renders a broken
+	 * lookup as an empty directory, which is indistinguishable from "nobody
+	 * matched" and hides outages from whoever is trying to invite someone.
+	 */
 	async searchUsers(query: string): Promise<IUserLookup[]> {
 		const trimmed = query.trim();
 		if (!trimmed || !this.backend.profile || !this.backend.auth) {
 			return [];
 		}
 
-		try {
-			const result = await fetcher<IUserLookup[]>(
-				this.backend.profile,
-				`user/search/${encodeURIComponent(trimmed)}`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
-			);
+		const result = await fetcher<IUserLookup[]>(
+			this.backend.profile,
+			`user/search/${encodeURIComponent(trimmed)}`,
+			{
+				method: "GET",
+			},
+			this.backend.auth,
+		);
 
-			return result ?? [];
-		} catch (error) {
-			console.warn("[UserState.searchUsers] search failed:", error);
-			return [];
-		}
+		return result ?? [];
 	}
 	async getNotifications(): Promise<INotificationsOverview> {
 		// Get local notifications first (works offline)

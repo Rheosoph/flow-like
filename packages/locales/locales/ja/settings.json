@@ -1489,6 +1489,8 @@
 	"user": "ユーザー",
 	"userCount": "ユーザー数",
 	"userScoped": "ユーザー単位",
+	"userSearchFailed": "",
+	"userSearchFailedHint": "",
 	"userTables": "ユーザーテーブル",
 	"userType": "ユーザーの種類",
 	"uses": "利用回数",

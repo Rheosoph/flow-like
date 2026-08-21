@@ -132,11 +132,11 @@ async fn evaluate_committed_paths(
     let has_override = context
         .context_pin_overrides
         .as_ref()
-        .is_some_and(|overrides| overrides.contains_key(&pin.id));
+        .is_some_and(|overrides| overrides.contains_key(pin.id.as_ref()));
     let provided = has_override
         || !pin.depends_on().is_empty()
         || pin.has_value().await
-        || has_selected_default(pin.default_value.as_ref());
+        || has_selected_default(pin.default_value.as_deref());
 
     if !provided {
         return Ok(None);

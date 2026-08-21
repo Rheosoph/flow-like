@@ -929,6 +929,7 @@
 	"thisHandlerIsConfiguredButIsNotDeclaredByTheCurrentComponentContract": "Este controlador está configurado, pero no está declarado por el contrato del componente actual.",
 	"thisLegacyWidgetWorkflowBindingIsPreservedAddingAnExactHandlerMayOverrideItAtRuntime": "Este enlace de flujo de trabajo heredado del componente se conserva. Añadir un controlador exacto puede reemplazarlo en tiempo de ejecución.",
 	"thisNodeDoesNotDefineGovernanceScores": "Este nodo no define puntuaciones de gobernanza.",
+	"thisNodePointsAtSomethingThatNoLongerExists": "",
 	"thisPreservesTheOriginalSingleactionBehaviorExactNamedAndWildcardHandlersTakePrecedence": "Esto conserva el comportamiento original de acción única. Los controladores exactos con nombre y los comodín tienen prioridad.",
 	"thisProjectHasNoOntologiesYetCreateOneInDataStudio": "Este proyecto aún no tiene ontologías — crea una en Data Studio.",
 	"thisRemovesTheFlowAndCountPagesInsideIt_one": "Esto elimina el flujo y la página que contiene.",

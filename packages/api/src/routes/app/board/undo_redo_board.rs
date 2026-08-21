@@ -67,7 +67,7 @@ pub async fn undo_board(
         )))?
         .clone();
     let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
-    let builtin_nodes = state.registry.as_ref().get_nodes();
+    let builtin_nodes = state.registry.as_ref().get_nodes_shared();
     if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
         board.mark_changed();
     }
@@ -122,7 +122,7 @@ pub async fn redo_board(
         )))?
         .clone();
     let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
-    let builtin_nodes = state.registry.as_ref().get_nodes();
+    let builtin_nodes = state.registry.as_ref().get_nodes_shared();
     if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
         board.mark_changed();
     }

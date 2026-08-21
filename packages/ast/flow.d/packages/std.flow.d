@@ -1994,7 +1994,7 @@ declare function utilsDatetimeFormat({ date: Date, format?: string }): string;
 declare function utilsDatetimeNow(): Date;
 
 /**
- * Parses a string into a DateTime. Auto-detects common formats or uses custom format string.
+ * Parses a string into a DateTime. Auto-detects common formats and epoch timestamps (seconds, milliseconds, microseconds, nanoseconds) or uses a custom format string.
  * @param input — String to parse
  * @param format (optional) — Optional format string (e.g., '%Y-%m-%d %H:%M:%S'). Leave empty for auto-detection.
  * @returns date — Parsed date

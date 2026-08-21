@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod board;
 pub mod catalog;
+pub mod compiled;
 pub mod copilot;
 pub mod event;
 pub mod execution;

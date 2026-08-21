@@ -4,7 +4,10 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::user::{
-        identity::{RankableUser, SearchTerm, escape_like_pattern, is_idp_handle, score_candidate},
+        identity::{
+            RankableUser, SearchTerm, escape_like_pattern, humanize_email_local_part,
+            is_idp_handle, sanitize_display_name, score_candidate,
+        },
         sign_avatar,
     },
     state::AppState,
@@ -54,6 +57,22 @@ impl UserLookupResponse {
             _ => None,
         };
 
+        // Rows provisioned before display names were derived — and every row
+        // `ensure_user_exists` creates — carry no name, and with `lookup.email` off
+        // there is then nothing left to render but the raw id. `derive_display_name`
+        // already treats the email local part as the last rung of that ladder, so
+        // reuse it here instead of showing a uuid where a person belongs. The domain
+        // never leaves the server, so this stays inside the `email` opt-out.
+        let name = lookup_config
+            .name
+            .then(|| {
+                user.name
+                    .as_deref()
+                    .and_then(sanitize_display_name)
+                    .or_else(|| user.email.as_deref().and_then(humanize_email_local_part))
+            })
+            .flatten();
+
         UserLookupResponse {
             id: user.id,
             email: lookup_config.email.then_some(user.email).flatten(),
@@ -62,7 +81,7 @@ impl UserLookupResponse {
                 .preferred_username
                 .then_some(user.preferred_username)
                 .flatten(),
-            name: lookup_config.name.then_some(user.name).flatten(),
+            name,
             avatar_url,
             additional_information: lookup_config
                 .additional_information
@@ -282,6 +301,33 @@ fn ilike_contains(column: user::Column, pattern: &str) -> sea_orm::sea_query::Si
     Expr::col(column).ilike(LikeExpr::new(pattern).escape('\\'))
 }
 
+/// The columns a human search term can legitimately land in. `username` is the
+/// pool-internal handle, but a pasted one still has to resolve.
+fn any_column_contains(pattern: &str) -> Condition {
+    Condition::any()
+        .add(ilike_contains(user::Column::Name, pattern))
+        .add(ilike_contains(user::Column::PreferredUsername, pattern))
+        .add(ilike_contains(user::Column::Email, pattern))
+        .add(ilike_contains(user::Column::Username, pattern))
+}
+
+/// Every token has to land somewhere, but not all of them in the same column.
+/// Matching the phrase as one contiguous string is what made "Felix Schultz" miss
+/// `name = 'Schultz, Felix'` and `email = 'felix.schultz@…'` — the two places a
+/// directory most often keeps a person.
+fn search_condition(term: &SearchTerm) -> Condition {
+    let patterns = term.token_patterns();
+    if patterns.is_empty() {
+        return any_column_contains(&term.like_pattern());
+    }
+
+    patterns
+        .iter()
+        .fold(Condition::all(), |condition, pattern| {
+            condition.add(any_column_contains(pattern))
+        })
+}
+
 #[utoipa::path(
     get,
     path = "/user/search/{query}",
@@ -342,16 +388,9 @@ pub async fn user_search(
     let fuzzy_matches = match &term {
         Some(_) if resolved_identifier => Vec::new(),
         Some(term) => {
-            let pattern = term.like_pattern();
             let pool = (limit * CANDIDATE_POOL_FACTOR).min(MAX_CANDIDATE_POOL);
             user::Entity::find()
-                .filter(
-                    Condition::any()
-                        .add(ilike_contains(user::Column::Name, &pattern))
-                        .add(ilike_contains(user::Column::PreferredUsername, &pattern))
-                        .add(ilike_contains(user::Column::Email, &pattern))
-                        .add(ilike_contains(user::Column::Username, &pattern)),
-                )
+                .filter(search_condition(term))
                 .filter(user::Column::Status.ne(UserStatus::Banned))
                 .limit(pool)
                 .all(&state.db)
@@ -418,4 +457,49 @@ pub async fn user_search(
     .await;
 
     Ok(Json(responses))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DbBackend, QueryTrait};
+
+    fn fuzzy_sql(query: &str) -> String {
+        let term = SearchTerm::parse(query).unwrap();
+        user::Entity::find()
+            .filter(search_condition(&term))
+            .build(DbBackend::Postgres)
+            .to_string()
+    }
+
+    #[test]
+    fn a_single_token_matches_the_phrase_across_every_column() {
+        let sql = fuzzy_sql("felix");
+        assert_eq!(sql.matches("ILIKE").count(), 4);
+        assert_eq!(sql.matches("'%felix%'").count(), 4);
+    }
+
+    #[test]
+    fn every_token_gets_its_own_column_group() {
+        let sql = fuzzy_sql("Felix Schultz");
+        // Each token is ORed across the columns, and the groups are ANDed — a row
+        // has to carry both halves, but not in the same column.
+        assert_eq!(sql.matches("'%felix%'").count(), 4);
+        assert_eq!(sql.matches("'%schultz%'").count(), 4);
+        assert!(!sql.contains("'%Felix Schultz%'"));
+    }
+
+    #[test]
+    fn a_typed_address_keeps_its_domain_whole() {
+        let sql = fuzzy_sql("felix.schultz@corp.de");
+        assert_eq!(sql.matches("'%corp.de%'").count(), 4);
+        // A bare `de` token would match most of the directory.
+        assert!(!sql.contains("'%de%'"));
+    }
+
+    #[test]
+    fn tokenizing_does_not_lose_like_escaping() {
+        let term = SearchTerm::parse("100% off").unwrap();
+        assert_eq!(term.token_patterns(), [r"%100\%%", "%off%"]);
+    }
 }

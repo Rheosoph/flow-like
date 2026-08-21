@@ -82,6 +82,7 @@ pub mod telemetry_error_event;
 pub mod telemetry_event;
 pub mod telemetry_event_daily;
 pub mod telemetry_flowpilot_daily;
+pub mod telemetry_flowpilot_failure_daily;
 pub mod telemetry_install_daily;
 pub mod telemetry_issue;
 pub mod telemetry_llm_call;

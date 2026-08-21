@@ -167,21 +167,21 @@ export class WebUserState implements IUserState {
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
 
+	/**
+	 * Throws on failure on purpose: swallowing the error here renders a broken
+	 * lookup as an empty directory, which is indistinguishable from "nobody
+	 * matched" and hides outages from whoever is trying to invite someone.
+	 */
 	async searchUsers(query: string): Promise<IUserLookup[]> {
 		const trimmed = query.trim();
 		if (!trimmed) return [];
 
-		try {
-			return (
-				(await apiGet<IUserLookup[]>(
-					`user/search/${encodeURIComponent(trimmed)}`,
-					this.backend.auth,
-				)) ?? []
-			);
-		} catch (error) {
-			console.warn("[UserState.searchUsers] search failed:", error);
-			return [];
-		}
+		return (
+			(await apiGet<IUserLookup[]>(
+				`user/search/${encodeURIComponent(trimmed)}`,
+				this.backend.auth,
+			)) ?? []
+		);
 	}
 
 	async getNotifications(): Promise<INotificationsOverview> {

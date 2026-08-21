@@ -1,10 +1,11 @@
-use super::board::{ExecutionStage, LayerType};
+use super::board::ExecutionStage;
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
 use crate::app::AppVisibility;
 use crate::credentials::SharedCredentials;
-use crate::flow::execution::internal_node::ExecutionTarget;
+use crate::flow::compiled::CompiledRunTemplate;
+use crate::flow::execution::internal_node::{ExecutionTarget, NodeMeta};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
@@ -38,10 +39,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::Hasher;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use std::{
-    sync::{Arc, Weak},
-    time::SystemTime,
-};
+use std::{sync::Arc, time::SystemTime};
 use trace::Trace;
 
 pub mod context;
@@ -901,7 +899,8 @@ pub struct InternalRun {
     pub run: Arc<Mutex<Run>>,
     pub nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
     pub dependencies: AHashMap<String, Vec<Arc<InternalNode>>>,
-    pub pins: AHashMap<String, Arc<InternalPin>>,
+    /// All pin instances of this run, in template arena order.
+    pub pins: Vec<Arc<InternalPin>>,
     pub variables: Arc<Mutex<AHashMap<String, Variable>>>,
     pub cache: Arc<RwLock<AHashMap<String, Arc<dyn Cacheable>>>>,
     pub profile: Arc<Profile>,
@@ -1026,7 +1025,44 @@ impl InternalRun {
         oauth_tokens: std::collections::HashMap<String, OAuthToken>,
         run_id: Option<String>,
     ) -> flow_like_types::Result<Self> {
-        // Convert to AHashMap for internal use
+        let registry = handler.node_registry.read().await.node_registry.clone();
+        let template = Arc::new(CompiledRunTemplate::from_board(board, registry.as_ref())?);
+        Self::from_template(
+            app_id,
+            template,
+            event,
+            handler,
+            profile,
+            payload,
+            stream_state,
+            callback,
+            credentials,
+            token,
+            oauth_tokens,
+            run_id,
+        )
+        .await
+    }
+
+    /// Construct a run from a shared compiled template. Topology, node logic,
+    /// pin lookups and parsed defaults are reused from the template; only
+    /// per-run state (pin values, variables, stack) is allocated here.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn from_template(
+        app_id: &str,
+        template: Arc<CompiledRunTemplate>,
+        event: Option<Event>,
+        handler: &Arc<FlowLikeState>,
+        profile: &Profile,
+        payload: &RunPayload,
+        stream_state: bool,
+        callback: InterComCallback,
+        credentials: Option<SharedCredentials>,
+        token: Option<String>,
+        oauth_tokens: std::collections::HashMap<String, OAuthToken>,
+        run_id: Option<String>,
+    ) -> flow_like_types::Result<Self> {
+        let board = template.board.clone();
         let oauth_tokens: AHashMap<String, OAuthToken> = oauth_tokens.into_iter().collect();
 
         let before = Instant::now();
@@ -1086,7 +1122,7 @@ impl InternalRun {
 
         let run = Arc::new(Mutex::new(run));
 
-        let mut dependencies = AHashMap::with_capacity(board.nodes.len());
+        let dependencies = AHashMap::with_capacity(board.nodes.len());
 
         let event_variables = event
             .as_ref()
@@ -1098,237 +1134,92 @@ impl InternalRun {
         let filter_secrets = payload.filter_secrets.unwrap_or(true);
 
         let variables = Arc::new(Mutex::new({
-            let mut map = AHashMap::with_capacity(board.variables.len());
-            for (variable_id, board_variable) in &board.variables {
+            let mut map = AHashMap::with_capacity(template.variables.len());
+            for tv in template.variables.iter() {
                 let variable = resolve_variable_override(
-                    variable_id,
-                    board_variable,
+                    &tv.variable.id,
+                    &tv.variable,
                     &runtime_variables,
                     &event_variables,
                     filter_secrets,
                 );
 
-                let value = match &variable.default_value {
-                    Some(bytes) => {
-                        flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                // The board default was parsed once at template build; only
+                // caller/event overrides still need a JSON parse.
+                let value = if std::ptr::eq(variable, &tv.variable) {
+                    tv.parsed_default.as_deref().cloned().unwrap_or(Value::Null)
+                } else {
+                    match &variable.default_value {
+                        Some(bytes) => {
+                            flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                        }
+                        None => Value::Null,
                     }
-                    None => Value::Null,
                 };
 
                 let mut var = variable.clone();
                 var.value = Arc::new(Mutex::new(value));
-                map.insert(variable_id.clone(), var);
+                map.insert(tv.variable.id.clone(), var);
             }
             map
         }));
 
-        let mut pin_to_node = AHashMap::with_capacity(board.nodes.len() * 3);
-        let mut pins: AHashMap<String, Arc<InternalPin>> =
-            AHashMap::with_capacity(board.nodes.len() * 3);
-
-        // Phase 1: Create all pins without connections
-        for (node_id, node) in &board.nodes {
-            for (pin_id, pin) in &node.pins {
-                let internal_pin = InternalPin::new(pin, false);
-                pin_to_node.insert(pin_id, (node_id, node.is_pure()));
-                pins.insert(pin.id.clone(), Arc::new(internal_pin));
-            }
+        // Per-run pin instances: cheap Arc clones of template metadata, then
+        // wiring resolved from pre-computed arena indices — no string probing.
+        let pins: Vec<Arc<InternalPin>> = template
+            .pins
+            .iter()
+            .map(|tp| Arc::new(InternalPin::from_template(tp)))
+            .collect();
+        for (tp, pin) in template.pins.iter().zip(pins.iter()) {
+            pin.init_connected_to(
+                tp.connected_to
+                    .iter()
+                    .map(|&target| Arc::downgrade(&pins[target as usize]))
+                    .collect(),
+            );
+            pin.init_depends_on(
+                tp.depends_on
+                    .iter()
+                    .map(|&target| Arc::downgrade(&pins[target as usize]))
+                    .collect(),
+            );
         }
 
-        // Also create pins for nodes inside function layers
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for (node_id, node) in &layer.nodes {
-                for (pin_id, pin) in &node.pins {
-                    let internal_pin = InternalPin::new(pin, false);
-                    pin_to_node.insert(pin_id, (node_id, node.is_pure()));
-                    pins.insert(pin.id.clone(), Arc::new(internal_pin));
-                }
-            }
-        }
-
-        for layer in board.layers.values() {
-            for (pin_id, pin) in &layer.pins {
-                if pins.contains_key(pin_id) {
-                    // this is the old layer format, where we just relayed the connected pin to the layers pin.
-                    continue;
-                }
-
-                let internal_pin = InternalPin::new(pin, true);
-                pins.insert(pin.id.clone(), Arc::new(internal_pin));
-            }
-        }
-
-        // Phase 2: Wire up connections using OnceLock init methods
-        for node in board.nodes.values() {
-            for pin in node.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    // Build connected_to list
-                    let connected: Vec<Weak<InternalPin>> = pin
-                        .connected_to
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_connected_to(connected);
-
-                    // Build depends_on list
-                    let depends: Vec<Weak<InternalPin>> = pin
-                        .depends_on
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_depends_on(depends);
-                }
-            }
-        }
-
-        // Wire connections for function layer nodes
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for node in layer.nodes.values() {
-                for pin in node.pins.values() {
-                    if let Some(internal_pin) = pins.get(&pin.id) {
-                        let connected: Vec<Weak<InternalPin>> = pin
-                            .connected_to
-                            .iter()
-                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                            .collect();
-                        internal_pin.init_connected_to(connected);
-
-                        let depends: Vec<Weak<InternalPin>> = pin
-                            .depends_on
-                            .iter()
-                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                            .collect();
-                        internal_pin.init_depends_on(depends);
-                    }
-                }
-            }
-        }
-
-        // Also wire connections for layer pins
-        for layer in board.layers.values() {
-            for pin in layer.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    let connected: Vec<Weak<InternalPin>> = pin
-                        .connected_to
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_connected_to(connected);
-
-                    let depends: Vec<Weak<InternalPin>> = pin
-                        .depends_on
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_depends_on(depends);
-                }
-            }
-        }
-
-        let mut dependency_map = AHashMap::with_capacity(board.nodes.len());
-        let mut nodes = AHashMap::with_capacity(board.nodes.len());
+        let mut nodes = AHashMap::with_capacity(template.nodes.len());
         let mut stack = RunStack::with_capacity(1);
 
-        let registry = handler.node_registry.read().await.node_registry.clone();
-        for (node_id, node) in &board.nodes {
-            let logic = registry.instantiate(node)?;
-            let mut node_pins = AHashMap::new();
-            let mut pin_cache = AHashMap::new();
-
-            for pin in node.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    node_pins.insert(pin.id.clone(), internal_pin.clone());
-                    let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
-                    cached_array.push(internal_pin.clone());
-                }
-
-                if USE_DEPENDENCY_GRAPH {
-                    for dependency_pin_id in &pin.depends_on {
-                        if let Some((dependency_node_id, is_pure)) =
-                            pin_to_node.get(dependency_pin_id)
-                        {
-                            dependency_map
-                                .entry(node_id)
-                                .or_insert(vec![])
-                                .push((*dependency_node_id, is_pure));
-                        }
-                    }
-                }
-            }
-
-            let internal_node = Arc::new(InternalNode::new(
-                node.clone(),
-                node_pins.clone(),
-                logic,
-                pin_cache.clone(),
+        for tn in template.nodes.iter() {
+            let node_pins: Box<[Arc<InternalPin>]> = tn
+                .pins
+                .iter()
+                .map(|&arena_idx| pins[arena_idx as usize].clone())
+                .collect();
+            let meta = NodeMeta {
+                id: tn.id.clone(),
+                name: tn.name.clone(),
+                is_pure: tn.is_pure,
+            };
+            let internal_node = Arc::new(InternalNode::from_parts(
+                tn.node.clone(),
+                meta,
+                node_pins,
+                tn.lookup.clone(),
+                tn.logic.clone(),
             ));
 
-            // Set node reference on all pins using OnceLock init method
-            for internal_pin in node_pins.values() {
+            for internal_pin in internal_node.pins.iter() {
                 internal_pin.init_node(Arc::downgrade(&internal_node));
             }
 
-            if payload.id == node.id {
-                let target = ExecutionTarget {
+            if !tn.in_layer_body && payload.id.as_str() == tn.id.as_ref() {
+                stack.push(ExecutionTarget {
                     node: internal_node.clone(),
                     through_pins: vec![],
-                };
-                stack.push(target);
+                });
             }
 
-            nodes.insert(node_id.clone(), internal_node);
-        }
-
-        // Instantiate nodes inside function layers so they are available during execution
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for (node_id, node) in &layer.nodes {
-                let logic = registry.instantiate(node)?;
-                let mut node_pins = AHashMap::new();
-                let mut pin_cache = AHashMap::new();
-
-                for pin in node.pins.values() {
-                    if let Some(internal_pin) = pins.get(&pin.id) {
-                        node_pins.insert(pin.id.clone(), internal_pin.clone());
-                        let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
-                        cached_array.push(internal_pin.clone());
-                    }
-                }
-
-                let internal_node = Arc::new(InternalNode::new(
-                    node.clone(),
-                    node_pins.clone(),
-                    logic,
-                    pin_cache.clone(),
-                ));
-
-                for internal_pin in node_pins.values() {
-                    internal_pin.init_node(Arc::downgrade(&internal_node));
-                }
-
-                nodes.insert(node_id.clone(), internal_node);
-            }
-        }
-
-        if USE_DEPENDENCY_GRAPH {
-            let mut recursion_filter: AHashSet<String> = AHashSet::new();
-            for node_id in board.nodes.keys() {
-                let deps = recursive_get_deps(
-                    node_id.to_string(),
-                    &dependency_map,
-                    &nodes,
-                    &mut recursion_filter,
-                );
-                dependencies.insert(node_id.clone(), deps);
-            }
+            nodes.insert(tn.id.to_string(), internal_node);
         }
 
         tracing::debug!(
@@ -1533,7 +1424,7 @@ impl InternalRun {
             run.end = SystemTime::now();
         }
         for node in self.nodes.values() {
-            for pin in node.pins.values() {
+            for pin in node.pins.iter() {
                 // Reset is async but pin access is lock-free
                 pin.reset().await;
             }

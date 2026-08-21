@@ -143,6 +143,8 @@ image = "0.25.6"
 imageproc = "0.25.0"
 webp = "0.3.1"
 ahash = "0.8.12"
+rkyv = { version = "0.8.18", features = ["bytecheck"] }
+zstd = "0.13.3"
 base64 = "0.22.1"
 aes-gcm = "0.10.3"
 argon2 = "0.5.3"

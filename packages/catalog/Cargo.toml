@@ -138,6 +138,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["html_reports", "async_tokio"] }
+rkyv.workspace = true
 flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true

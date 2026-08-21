@@ -675,6 +675,39 @@ pub fn run() {
                 }
             });
 
+            // Draft board artifacts under tmp/compiled/ are recreatable; the
+            // per-board purge only cleans boards that still run, so sweep the
+            // rest by age once per launch.
+            let artifact_sweep_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                flow_like_types::tokio::time::sleep(Duration::from_secs(10)).await;
+                let Ok(state) = state::TauriFlowLikeState::construct(&artifact_sweep_handle).await
+                else {
+                    return;
+                };
+                let meta_store = {
+                    let guard = state.config.read().await;
+                    guard.stores.app_meta_store.clone()
+                };
+                let Some(meta_store) = meta_store else {
+                    return;
+                };
+                match flow_like::flow::compiled::resolver::sweep_draft_artifacts(
+                    &meta_store.as_generic(),
+                    Duration::from_secs(7 * 24 * 60 * 60),
+                )
+                .await
+                {
+                    Ok(0) => {}
+                    Ok(deleted) => {
+                        tracing::info!(deleted, "Swept stale compiled draft artifacts")
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, "Compiled draft artifact sweep failed")
+                    }
+                }
+            });
+
             let telemetry_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
                 functions::telemetry::track(&telemetry_handle, "app_started", None).await;

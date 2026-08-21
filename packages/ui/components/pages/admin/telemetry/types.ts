@@ -120,6 +120,32 @@ export interface ITelemetryFlowpilotTotals {
 	validationRegressions: number;
 	boardsInspected: number;
 	emptyBoardsAfterRun: number;
+	failuresTotal: number;
+	subagentDispatchFailures: number;
+	flowscriptApplyFailures: number;
+	widgetApplyFailures: number;
+	dataApplyFailures: number;
+	pageApplyFailures: number;
+	toolFailures: number;
+	runFailures: number;
+}
+
+export type ITelemetryFlowpilotFailureKind =
+	| "subagent_dispatch"
+	| "flowscript_apply"
+	| "widget_apply"
+	| "data_apply"
+	| "page_apply"
+	| "tool_error"
+	| "run_error";
+
+export interface ITelemetryFlowpilotFailure {
+	kind: ITelemetryFlowpilotFailureKind;
+	tool: string;
+	code: string;
+	message: string;
+	count: number;
+	installs: number;
 }
 
 export interface ITelemetryFlowpilotTrendPoint {
@@ -134,6 +160,7 @@ export interface ITelemetryFlowpilotResponse {
 	installs: number;
 	totals: ITelemetryFlowpilotTotals;
 	trend: ITelemetryFlowpilotTrendPoint[];
+	failures: ITelemetryFlowpilotFailure[];
 }
 
 export type ITelemetryIssueStatus = "unresolved" | "resolved" | "ignored";

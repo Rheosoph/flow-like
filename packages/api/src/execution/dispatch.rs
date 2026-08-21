@@ -373,11 +373,25 @@ pub enum DispatchError {
     Serialization(String),
 }
 
+/// Callback that guarantees the compiled artifact for (app, board, version)
+/// exists before a run is handed to a read-only executor. Installed once at
+/// router construction; see `execution::compiled_artifacts`.
+pub type ArtifactEnsurer = Arc<
+    dyn Fn(
+            String,
+            String,
+            Option<(u32, u32, u32)>,
+        ) -> futures::future::BoxFuture<'static, flow_like_types::Result<()>>
+        + Send
+        + Sync,
+>;
+
 /// Unified job dispatcher
 #[derive(Clone)]
 pub struct Dispatcher {
     config: Arc<DispatchConfig>,
     staging_bucket: Option<Arc<FlowLikeStore>>,
+    artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
     #[cfg(feature = "lambda")]
     lambda_client: Option<aws_sdk_lambda::Client>,
     #[cfg(feature = "sqs")]
@@ -450,6 +464,7 @@ impl Dispatcher {
         Self {
             config: Arc::new(config),
             staging_bucket,
+            artifact_ensurer: std::sync::OnceLock::new(),
             #[cfg(feature = "lambda")]
             lambda_client,
             #[cfg(feature = "sqs")]
@@ -463,6 +478,7 @@ impl Dispatcher {
         Self {
             config: Arc::new(config),
             staging_bucket: None,
+            artifact_ensurer: std::sync::OnceLock::new(),
             #[cfg(feature = "lambda")]
             lambda_client: None,
             #[cfg(feature = "sqs")]
@@ -475,6 +491,33 @@ impl Dispatcher {
     /// Get the configured sync/streaming backend type
     pub fn backend(&self) -> ExecutionBackend {
         self.config.backend.clone()
+    }
+
+    /// Install the pre-dispatch artifact ensurer. Set once at router
+    /// construction; later calls are ignored.
+    pub fn set_artifact_ensurer(&self, ensurer: ArtifactEnsurer) {
+        let _ = self.artifact_ensurer.set(ensurer);
+    }
+
+    /// Best-effort: guarantee the compiled artifact exists before handing the
+    /// run to the executor. Failures never block dispatch — the executor
+    /// falls back to compiling in memory.
+    async fn ensure_artifact(&self, request: &DispatchRequest) {
+        if let Some(ensurer) = self.artifact_ensurer.get()
+            && let Err(e) = ensurer(
+                request.app_id.clone(),
+                request.board_id.clone(),
+                request.board_version,
+            )
+            .await
+        {
+            tracing::warn!(
+                app_id = %request.app_id,
+                board_id = %request.board_id,
+                error = %e,
+                "Pre-dispatch compiled-artifact check failed; executor will compile in memory"
+            );
+        }
     }
 
     /// Dispatch an execution request to the configured sync/streaming backend (EXECUTION_BACKEND)
@@ -509,6 +552,7 @@ impl Dispatcher {
         backend: ExecutionBackend,
         request: DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
+        self.ensure_artifact(&request).await;
         let job_id = create_id();
 
         match backend {
@@ -536,6 +580,7 @@ impl Dispatcher {
         &self,
         request: DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
+        self.ensure_artifact(&request).await;
         let job_id = create_id();
 
         match self.config.backend {
@@ -596,6 +641,7 @@ impl Dispatcher {
         &self,
         request: DispatchRequest,
     ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
+        self.ensure_artifact(&request).await;
         let url =
             self.config.executor_url.as_ref().ok_or_else(|| {
                 DispatchError::Configuration("EXECUTOR_URL not configured".into())

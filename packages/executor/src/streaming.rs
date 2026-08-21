@@ -198,7 +198,7 @@ async fn execute_inner(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = execution_environment;
 
-    let mut registry = crate::execute::PREPARED_REGISTRY.clone();
+    let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
 
     // Load WASM packages from presigned URLs if any are specified
@@ -218,10 +218,7 @@ async fn execute_inner(
                         "Loaded WASM nodes for streaming execution"
                     );
                     failed_wasm_package_ids = report.failed_package_ids;
-                    for logic in report.nodes {
-                        let node = logic.get_node();
-                        registry.insert(node, logic);
-                    }
+                    wasm_nodes = report.nodes;
                 }
                 Err(e) => {
                     return Err(e);
@@ -230,15 +227,28 @@ async fn execute_inner(
         }
     }
 
-    state.node_registry.write().await.node_registry = Arc::new(registry);
+    state.node_registry.write().await.node_registry = crate::execute::request_registry(wasm_nodes);
 
     let state = Arc::new(state);
 
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Arc::new(crate::execute::resolve_board(&state, request, &storage_root).await?);
+    let template = crate::execute::resolve_run_template(&state, request)
+        .await
+        .map_err(|e| match e {
+            ExecutorError::BoardLoad(msg) if !failed_wasm_package_ids.is_empty() => {
+                let failed: Vec<&str> =
+                    failed_wasm_package_ids.iter().map(String::as_str).collect();
+                ExecutorError::BoardLoad(format!(
+                    "{} (WASM packages failed to load: {})",
+                    msg,
+                    failed.join(", ")
+                ))
+            }
+            other => other,
+        })?;
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
-        &board,
+        template.board.as_ref(),
         request.wasm_packages.as_ref(),
         &failed_wasm_package_ids,
     );
@@ -336,9 +346,9 @@ async fn execute_inner(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
-    let mut run = InternalRun::new_with_run_id(
+    let mut run = InternalRun::from_template(
         &request.app_id,
-        board.clone(),
+        template.clone(),
         event,
         &state,
         &profile,

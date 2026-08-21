@@ -1506,6 +1506,8 @@
 	"user": "",
 	"userCount": "",
 	"userScoped": "",
+	"userSearchFailed": "",
+	"userSearchFailedHint": "",
 	"userTables": "",
 	"userType": "",
 	"uses": "",

@@ -81,7 +81,7 @@ pub async fn get_flowscript(
         .master_board(&sub, &app_id, &board_id, &state, version_opt)
         .await?;
 
-    let builtin_nodes = state.registry.as_ref().get_nodes();
+    let builtin_nodes = state.registry.as_ref().get_nodes_shared();
     let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
     hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes);
 

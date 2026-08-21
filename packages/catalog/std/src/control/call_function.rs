@@ -148,7 +148,7 @@ impl CallFunctionNode {
         context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
             })
@@ -160,11 +160,11 @@ impl CallFunctionNode {
         context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type == VariableType::Execution
             })
-            .map(|pin| pin.name.clone())
+            .map(|pin| pin.name.to_string())
             .collect()
     }
 
@@ -177,7 +177,7 @@ impl CallFunctionNode {
                 .evaluate_pin_ref::<Value>(pin.clone())
                 .await
                 .unwrap_or(Value::Null);
-            outputs.insert(pin.name.clone(), value);
+            outputs.insert(pin.name.to_string(), value);
         }
         Value::Object(outputs)
     }
@@ -194,7 +194,10 @@ impl CallFunctionNode {
         })?;
 
         for pin in Self::output_data_pins(context) {
-            let value = outputs.get(&pin.name).cloned().unwrap_or(Value::Null);
+            let value = outputs
+                .get(pin.name.as_ref())
+                .cloned()
+                .unwrap_or(Value::Null);
             context.set_pin_ref_value(&pin, value).await?;
         }
 
@@ -423,12 +426,12 @@ impl NodeLogic for CallFunctionNode {
 
         // Collect input values (non-exec, non-function_layer_id)
         let input_pins: Vec<_> = {
-            let pins: Vec<_> = context.node.pins.values().cloned().collect();
+            let pins: Vec<_> = context.node.pins.iter().cloned().collect();
             pins.into_iter()
                 .filter(|p| {
                     p.pin_type == PinType::Input
                         && p.data_type != VariableType::Execution
-                        && p.name != "function_layer_id"
+                        && p.name.as_ref() != "function_layer_id"
                 })
                 .collect()
         };
@@ -436,7 +439,7 @@ impl NodeLogic for CallFunctionNode {
         let mut input_values = std::collections::HashMap::new();
         for pin in &input_pins {
             if let Ok(value) = context.evaluate_pin_ref::<Value>(pin.clone()).await {
-                input_values.insert(pin.name.clone(), value);
+                input_values.insert(pin.name.to_string(), value);
             }
         }
 

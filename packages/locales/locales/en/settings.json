@@ -1489,6 +1489,8 @@
 	"user": "User",
 	"userCount": "User Count",
 	"userScoped": "User scoped",
+	"userSearchFailed": "Could not search for users",
+	"userSearchFailedHint": "The directory is unreachable right now. Try again in a moment.",
 	"userTables": "user tables",
 	"userType": "User Type",
 	"uses": "Uses",

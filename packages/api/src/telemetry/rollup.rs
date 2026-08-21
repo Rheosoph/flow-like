@@ -35,8 +35,12 @@ use sea_orm::{
 
 use crate::entity::{
     telemetry_dimension_daily, telemetry_error_event, telemetry_event, telemetry_event_daily,
-    telemetry_flowpilot_daily, telemetry_install_daily, telemetry_llm_call, telemetry_llm_daily,
-    telemetry_perf_daily, telemetry_perf_metric, telemetry_session, telemetry_session_daily,
+    telemetry_flowpilot_daily, telemetry_flowpilot_failure_daily, telemetry_install_daily,
+    telemetry_llm_call, telemetry_llm_daily, telemetry_perf_daily, telemetry_perf_metric,
+    telemetry_session, telemetry_session_daily,
+};
+use crate::telemetry::flowpilot::{
+    FLOWPILOT_METRICS_EVENT, FailureSignature, parse_failure_signatures,
 };
 
 const DEFAULT_INTERVAL_SECS: u64 = 3600;
@@ -56,7 +60,6 @@ const BACKEND_ANON_ID: &str = "backend";
 /// Dimensions broken out into `TelemetryDimensionDaily`.
 pub const ROLLUP_DIMENSIONS: [&str; 4] = ["platform", "country", "app_version", "source"];
 
-const FLOWPILOT_METRICS_EVENT: &str = "flowpilot_generation_metrics";
 const CRASHED_STATUS: &str = "crashed";
 /// Non-crash unhealthy session statuses. Together with `ok` and `crashed` this
 /// partitions the session status vocabulary exactly once.
@@ -443,6 +446,14 @@ flowpilot_counters!(
     validation_regressions,
     boards_inspected,
     empty_boards_after_run,
+    failures_total,
+    subagent_dispatch_failures,
+    flowscript_apply_failures,
+    widget_apply_failures,
+    data_apply_failures,
+    page_apply_failures,
+    tool_failures,
+    run_failures,
 );
 
 #[derive(Debug, FromQueryResult)]
@@ -1376,12 +1387,90 @@ async fn rollup_flowpilot(
         validation_regressions: Set(counters.validation_regressions),
         boards_inspected: Set(counters.boards_inspected),
         empty_boards_after_run: Set(counters.empty_boards_after_run),
+        failures_total: Set(counters.failures_total),
+        subagent_dispatch_failures: Set(counters.subagent_dispatch_failures),
+        flowscript_apply_failures: Set(counters.flowscript_apply_failures),
+        widget_apply_failures: Set(counters.widget_apply_failures),
+        data_apply_failures: Set(counters.data_apply_failures),
+        page_apply_failures: Set(counters.page_apply_failures),
+        tool_failures: Set(counters.tool_failures),
+        run_failures: Set(counters.run_failures),
         installs: Set(to_i32(installs)),
         created_at: Set(now),
         updated_at: Set(now),
     };
 
-    upsert_chunked(db, vec![model], flowpilot_daily_on_conflict()).await
+    let upserted = upsert_chunked(db, vec![model], flowpilot_daily_on_conflict()).await?;
+    Ok(upserted + rollup_flowpilot_failures(db, day, &rows).await?)
+}
+
+/// Group one day's redacted failure signatures so the admin trace can answer
+/// "why did runs fail" from a handful of rows instead of a scan over every
+/// counter event. `installs` counts the distinct anonymous installs that hit a
+/// group, which is what separates one loud install from a real regression.
+async fn rollup_flowpilot_failures(
+    db: &DatabaseConnection,
+    day: NaiveDateTime,
+    rows: &[FlowPilotRow],
+) -> Result<u64, DbErr> {
+    let mut grouped: HashMap<(String, String, String, String), (FailureSignature, HashSet<&str>)> =
+        HashMap::new();
+    for row in rows {
+        let install = (row.anon_id != BACKEND_ANON_ID).then_some(row.anon_id.as_str());
+        for signature in parse_failure_signatures(row.props.as_ref()) {
+            let key = signature.key();
+            match grouped.get_mut(&key) {
+                Some((existing, installs)) => {
+                    existing.count = existing.count.saturating_add(signature.count);
+                    installs.extend(install);
+                }
+                None => {
+                    grouped.insert(key, (signature, install.into_iter().collect()));
+                }
+            }
+        }
+    }
+
+    if grouped.is_empty() {
+        return Ok(0);
+    }
+
+    let now = Utc::now().naive_utc();
+    let models: Vec<telemetry_flowpilot_failure_daily::ActiveModel> = grouped
+        .into_values()
+        .map(
+            |(signature, installs)| telemetry_flowpilot_failure_daily::ActiveModel {
+                id: Set(create_id()),
+                day: Set(day),
+                kind: Set(signature.kind),
+                tool: Set(signature.tool),
+                code: Set(signature.code),
+                message: Set(signature.message),
+                count: Set(signature.count),
+                installs: Set(to_i32(installs.len() as i64)),
+                created_at: Set(now),
+                updated_at: Set(now),
+            },
+        )
+        .collect();
+
+    upsert_chunked(db, models, flowpilot_failure_daily_on_conflict()).await
+}
+
+fn flowpilot_failure_daily_on_conflict() -> OnConflict {
+    OnConflict::columns([
+        telemetry_flowpilot_failure_daily::Column::Day,
+        telemetry_flowpilot_failure_daily::Column::Kind,
+        telemetry_flowpilot_failure_daily::Column::Tool,
+        telemetry_flowpilot_failure_daily::Column::Code,
+        telemetry_flowpilot_failure_daily::Column::Message,
+    ])
+    .update_columns([
+        telemetry_flowpilot_failure_daily::Column::Count,
+        telemetry_flowpilot_failure_daily::Column::Installs,
+        telemetry_flowpilot_failure_daily::Column::UpdatedAt,
+    ])
+    .to_owned()
 }
 
 fn flowpilot_daily_on_conflict() -> OnConflict {
@@ -1409,6 +1498,14 @@ fn flowpilot_daily_on_conflict() -> OnConflict {
             telemetry_flowpilot_daily::Column::ValidationRegressions,
             telemetry_flowpilot_daily::Column::BoardsInspected,
             telemetry_flowpilot_daily::Column::EmptyBoardsAfterRun,
+            telemetry_flowpilot_daily::Column::FailuresTotal,
+            telemetry_flowpilot_daily::Column::SubagentDispatchFailures,
+            telemetry_flowpilot_daily::Column::FlowscriptApplyFailures,
+            telemetry_flowpilot_daily::Column::WidgetApplyFailures,
+            telemetry_flowpilot_daily::Column::DataApplyFailures,
+            telemetry_flowpilot_daily::Column::PageApplyFailures,
+            telemetry_flowpilot_daily::Column::ToolFailures,
+            telemetry_flowpilot_daily::Column::RunFailures,
             telemetry_flowpilot_daily::Column::Installs,
             telemetry_flowpilot_daily::Column::UpdatedAt,
         ])
@@ -1879,6 +1976,14 @@ mod tests {
                 validation_regressions: Set(0),
                 boards_inspected: Set(0),
                 empty_boards_after_run: Set(0),
+                failures_total: Set(0),
+                subagent_dispatch_failures: Set(0),
+                flowscript_apply_failures: Set(0),
+                widget_apply_failures: Set(0),
+                data_apply_failures: Set(0),
+                page_apply_failures: Set(0),
+                tool_failures: Set(0),
+                run_failures: Set(0),
                 installs: Set(1),
                 created_at: Set(now),
                 updated_at: Set(now),

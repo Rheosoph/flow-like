@@ -7,7 +7,7 @@ use super::{
 use crate::{
     a2ui::widget::Page,
     app::App,
-    state::FlowLikeState,
+    state::{FlowLikeState, FlowNodeRegistry},
     utils::compression::{
         ConditionalRead, compress_to_file, compress_to_file_create, compress_to_file_update,
         from_compressed, from_compressed_if_changed, from_compressed_json,
@@ -16,6 +16,7 @@ use crate::{
 };
 use commands::GenericCommand;
 use commands::nodes::update_node::UpdateNodeCommand;
+use dirty::{DirtyIndex, Touched};
 use flow_like_storage::object_store::{self, ObjectStore, PutResult, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
@@ -24,7 +25,7 @@ use highway::{HighwayHash, HighwayHasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Weak},
     time::SystemTime,
 };
@@ -32,6 +33,7 @@ use tracing::instrument;
 
 pub mod cleanup;
 pub mod commands;
+pub mod dirty;
 pub mod summary;
 pub mod sync;
 
@@ -39,6 +41,13 @@ pub mod sync;
 /// board mutation but must never participate in FlowScript, semantic fingerprints, or user-facing
 /// context. Values under this prefix are opaque to the workflow engine.
 pub const INTERNAL_BOARD_REF_PREFIX: &str = "__flow_like_internal_v1/";
+
+/// How many times a node may be re-derived before the sweep gives up.
+///
+/// A pass exists because one node's `on_update` can retype a pin its neighbour reads, so
+/// derivations settle by iteration. The scoped sweep spends the same total budget, just spread over
+/// a queue instead of whole-board passes.
+const MAX_UPDATE_PASSES: usize = 10;
 
 pub fn is_internal_board_ref(key: &str) -> bool {
     key.starts_with(INTERNAL_BOARD_REF_PREFIX)
@@ -326,6 +335,23 @@ pub struct Board {
 
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
+
+    /// Pin id to owning container, populated only while [`Board::node_updates`] runs.
+    ///
+    /// `on_update` receives an immutable board, so within a pass only the node currently being
+    /// updated can change its pins; the index is refreshed as each node is written back. Outside
+    /// `node_updates` this stays `None` and [`Board::get_pin_by_id`] scans, so no mutation path
+    /// has to maintain it.
+    #[serde(skip)]
+    pub(crate) pin_index: Option<HashMap<String, PinOwner>>,
+}
+
+/// Which container owns a pin, as recorded by [`Board::pin_index`].
+#[derive(Clone)]
+pub(crate) enum PinOwner {
+    Node(String),
+    LayerPin(String),
+    LayerNode { layer: String, node: String },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
@@ -432,6 +458,7 @@ impl Board {
             board_dir,
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         };
         board.hash();
         board
@@ -688,6 +715,16 @@ impl Board {
     }
 
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
+        self.node_updates_scoped(state, None).await;
+    }
+
+    /// Re-derive nodes through their `on_update` until the board settles.
+    ///
+    /// `dirty` narrows the sweep to what a command batch could have reached. `None` re-derives
+    /// every node, which is what board load, undo/redo and a registry swap need — and what the
+    /// narrowed sweep is checked against. See [`dirty`] for the propagation channels and why
+    /// restricting the sweep is sound.
+    async fn node_updates_scoped(&mut self, state: Arc<FlowLikeState>, dirty: Option<&Touched>) {
         let registry = state.node_registry().clone();
         let registry = registry.read().await;
 
@@ -709,91 +746,18 @@ impl Board {
             }
         }
 
-        const MAX_PASSES: usize = 10;
-        for _ in 0..MAX_PASSES {
-            let mut changed = false;
+        // `get_pin_by_id` scans the whole board, and the `on_update` of variable, struct and widget
+        // nodes calls it once per connection — the dominant cost of this sweep on large boards.
+        // Index the pins for its duration: `on_update` takes an immutable board, so only the node
+        // being updated can change, and refreshing its entries on write-back keeps the index exact.
+        self.pin_index = Some(self.build_pin_index());
 
-            let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
-            for node_id in node_ids {
-                let Some(mut node) = self.nodes.remove(&node_id) else {
-                    continue;
-                };
-                let old_hash = node.hash;
-
-                let node_logic = match self.logic_nodes.get(&node.name) {
-                    Some(logic) => Arc::clone(logic),
-                    None => match registry.instantiate(&node) {
-                        Ok(new_logic) => {
-                            self.logic_nodes
-                                .insert(node.name.clone(), Arc::clone(&new_logic));
-                            Arc::clone(&new_logic)
-                        }
-                        Err(_) => {
-                            self.nodes.insert(node_id, node);
-                            continue;
-                        }
-                    },
-                };
-                node_logic.on_update(&mut node, self).await;
-
-                node.hash();
-                if node.hash != old_hash {
-                    changed = true;
-                }
-
-                self.nodes.insert(node_id, node);
-            }
-
-            let layer_ids: Vec<String> = self.layers.keys().cloned().collect();
-            for layer_id in layer_ids {
-                let layer_node_ids: Vec<String> = match self.layers.get(&layer_id) {
-                    Some(layer) => layer.nodes.keys().cloned().collect(),
-                    None => continue,
-                };
-
-                for node_id in layer_node_ids {
-                    let Some(mut node) = self
-                        .layers
-                        .get_mut(&layer_id)
-                        .and_then(|layer| layer.nodes.remove(&node_id))
-                    else {
-                        continue;
-                    };
-                    let old_hash = node.hash;
-
-                    let node_logic = match self.logic_nodes.get(&node.name) {
-                        Some(logic) => Arc::clone(logic),
-                        None => match registry.instantiate(&node) {
-                            Ok(new_logic) => {
-                                self.logic_nodes
-                                    .insert(node.name.clone(), Arc::clone(&new_logic));
-                                Arc::clone(&new_logic)
-                            }
-                            Err(_) => {
-                                if let Some(layer) = self.layers.get_mut(&layer_id) {
-                                    layer.nodes.insert(node_id, node);
-                                }
-                                continue;
-                            }
-                        },
-                    };
-                    node_logic.on_update(&mut node, self).await;
-
-                    node.hash();
-                    if node.hash != old_hash {
-                        changed = true;
-                    }
-
-                    if let Some(layer) = self.layers.get_mut(&layer_id) {
-                        layer.nodes.insert(node_id, node);
-                    }
-                }
-            }
-
-            if !changed {
-                break;
-            }
+        match dirty.and_then(|touched| self.dirty_queue(touched)) {
+            Some((index, queue)) => self.settle_dirty_nodes(&registry, &index, queue).await,
+            None => self.settle_every_node(&registry).await,
         }
+
+        self.pin_index = None;
 
         for layer in self.layers.values_mut() {
             layer.hash();
@@ -806,6 +770,167 @@ impl Board {
         for comment in self.comments.values_mut() {
             comment.hash();
         }
+    }
+
+    /// Re-run every node until a pass changes nothing.
+    ///
+    /// This is the reference behaviour a dirty sweep is measured against, so it stays exhaustive:
+    /// any node whose `on_update` moved forces another pass over the whole board.
+    async fn settle_every_node(&mut self, registry: &FlowNodeRegistry) {
+        for _ in 0..MAX_UPDATE_PASSES {
+            let mut changed = false;
+
+            let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
+            for node_id in node_ids {
+                let Some(node) = self.nodes.remove(&node_id) else {
+                    continue;
+                };
+                let owner = PinOwner::Node(node_id.clone());
+                let (node, node_changed) = self.update_node(registry, node, owner).await;
+                changed |= node_changed;
+                self.nodes.insert(node_id, node);
+            }
+
+            let layer_ids: Vec<String> = self.layers.keys().cloned().collect();
+            for layer_id in layer_ids {
+                let layer_node_ids: Vec<String> = match self.layers.get(&layer_id) {
+                    Some(layer) => layer.nodes.keys().cloned().collect(),
+                    None => continue,
+                };
+
+                for node_id in layer_node_ids {
+                    let Some(node) = self
+                        .layers
+                        .get_mut(&layer_id)
+                        .and_then(|layer| layer.nodes.remove(&node_id))
+                    else {
+                        continue;
+                    };
+                    let owner = PinOwner::LayerNode {
+                        layer: layer_id.clone(),
+                        node: node_id.clone(),
+                    };
+                    let (node, node_changed) = self.update_node(registry, node, owner).await;
+                    changed |= node_changed;
+                    if let Some(layer) = self.layers.get_mut(&layer_id) {
+                        layer.nodes.insert(node_id, node);
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Re-run only the queued nodes, following each change to whatever reads it.
+    ///
+    /// A node re-enters the queue only when its own `on_update` moved it, so the work is bounded by
+    /// the edit instead of by the board. Anything a command changed *without* running `on_update`
+    /// is already accounted for: [`DirtyIndex::seed`] queues the wired neighbours of every node the
+    /// batch wrote.
+    async fn settle_dirty_nodes(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        index: &DirtyIndex,
+        mut queue: VecDeque<String>,
+    ) {
+        let mut queued: HashSet<String> = queue.iter().cloned().collect();
+        // The same budget the full sweep has, so a pathological chain degrades to the old cost
+        // rather than spinning.
+        let budget = self.nodes.len().saturating_mul(MAX_UPDATE_PASSES);
+        let mut visits = 0usize;
+
+        while let Some(node_id) = queue.pop_front() {
+            queued.remove(&node_id);
+            visits += 1;
+            if visits > budget {
+                tracing::warn!(
+                    board = %self.id,
+                    "scoped node update did not settle within its budget; falling back to a full sweep"
+                );
+                self.settle_every_node(registry).await;
+                return;
+            }
+
+            let Some(node) = self.nodes.remove(&node_id) else {
+                continue;
+            };
+            let owner = PinOwner::Node(node_id.clone());
+            let (node, changed) = self.update_node(registry, node, owner).await;
+            self.nodes.insert(node_id.clone(), node);
+
+            if !changed {
+                continue;
+            }
+            let mut dependents = HashSet::new();
+            index.wired_neighbours(self, &node_id, &mut dependents);
+            for dependent in dependents {
+                if queued.insert(dependent.clone()) {
+                    queue.push_back(dependent);
+                }
+            }
+        }
+    }
+
+    /// Run one node's `on_update`, returning it with whether it changed itself.
+    ///
+    /// The node is detached from the board across the call because `on_update` receives the board
+    /// immutably, so a lookup of its own pins answers `None` while it runs — the same answer the
+    /// pre-index scan gave for a detached node.
+    async fn update_node(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        mut node: Node,
+        owner: PinOwner,
+    ) -> (Node, bool) {
+        let old_hash = node.hash;
+        let Some(node_logic) = self.node_logic(registry, &node) else {
+            return (node, false);
+        };
+        let previous_pins: Vec<String> = node.pins.keys().cloned().collect();
+        node_logic.on_update(&mut node, self).await;
+
+        node.hash();
+        let changed = node.hash != old_hash;
+        if changed {
+            self.reindex_node_pins(owner, &previous_pins, &node);
+        }
+        (node, changed)
+    }
+
+    /// The logic for a node's type, instantiated once and memoized on the board.
+    fn node_logic(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        node: &Node,
+    ) -> Option<Arc<dyn NodeLogic>> {
+        if let Some(logic) = self.logic_nodes.get(&node.name) {
+            return Some(Arc::clone(logic));
+        }
+        let logic = registry.instantiate(node).ok()?;
+        self.logic_nodes
+            .insert(node.name.clone(), Arc::clone(&logic));
+        Some(logic)
+    }
+
+    /// The index and starting queue for a scoped sweep, or `None` when it cannot be bounded.
+    fn dirty_queue(&self, touched: &Touched) -> Option<(DirtyIndex, VecDeque<String>)> {
+        // Nodes parked inside a layer are a legacy shape none of the propagation channels describe.
+        // Every board written since keeps its nodes in `self.nodes` with a `layer` tag, so bounding
+        // this case would buy nothing and risk a great deal.
+        if self.layers.values().any(|layer| !layer.nodes.is_empty()) {
+            return None;
+        }
+        let index = DirtyIndex::build(self);
+        let queue = index.seed(self, touched).into_iter().collect();
+        Some((index, queue))
+    }
+
+    /// The container that owns `pin_id`, while [`Self::pin_index`] is live.
+    pub(crate) fn pin_owner(&self, pin_id: &str) -> Option<&PinOwner> {
+        self.pin_index.as_ref()?.get(pin_id)
     }
 
     async fn rollback_commands(
@@ -867,7 +992,9 @@ impl Board {
             return Err(error);
         }
         tracing::debug!("Board command executed successfully");
-        self.node_updates(state).await;
+        let mut touched = Touched::default();
+        command.touched(&mut touched);
+        self.node_updates_scoped(state, Some(&touched)).await;
         self.cleanup();
         self.mark_changed();
         Ok(command)
@@ -982,7 +1109,11 @@ impl Board {
                 });
             }
         }
-        self.node_updates(state).await;
+        let mut touched = Touched::default();
+        for command in &commands {
+            command.touched(&mut touched);
+        }
+        self.node_updates_scoped(state, Some(&touched)).await;
         self.cleanup();
         self.mark_changed();
         let derived = self.derived_node_state_commands(&nodes_before, &commands);
@@ -1073,6 +1204,10 @@ impl Board {
     }
 
     pub fn get_pin_by_id(&self, pin_id: &str) -> Option<&Pin> {
+        if self.pin_index.is_some() {
+            return self.indexed_pin(pin_id);
+        }
+
         for node in self.nodes.values() {
             if let Some(pin) = node.pins.get(pin_id) {
                 return Some(pin);
@@ -1091,6 +1226,61 @@ impl Board {
         }
 
         None
+    }
+
+    /// A node is removed from its map while its own `on_update` runs, so an index entry that no
+    /// longer resolves yields `None` — the same answer the scan gives for a detached node.
+    fn indexed_pin(&self, pin_id: &str) -> Option<&Pin> {
+        match self.pin_index.as_ref()?.get(pin_id)? {
+            PinOwner::Node(node) => self.nodes.get(node)?.pins.get(pin_id),
+            PinOwner::LayerPin(layer) => self.layers.get(layer)?.pins.get(pin_id),
+            PinOwner::LayerNode { layer, node } => {
+                self.layers.get(layer)?.nodes.get(node)?.pins.get(pin_id)
+            }
+        }
+    }
+
+    /// Layer entries are written first so a pin id present in both a node and a layer resolves to
+    /// the node, matching the scan order of the fallback in [`Self::get_pin_by_id`].
+    fn build_pin_index(&self) -> HashMap<String, PinOwner> {
+        let mut index = HashMap::new();
+        for (layer_id, layer) in &self.layers {
+            for pin_id in layer.pins.keys() {
+                index.insert(pin_id.clone(), PinOwner::LayerPin(layer_id.clone()));
+            }
+            for (node_id, node) in &layer.nodes {
+                for pin_id in node.pins.keys() {
+                    index.insert(
+                        pin_id.clone(),
+                        PinOwner::LayerNode {
+                            layer: layer_id.clone(),
+                            node: node_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        for (node_id, node) in &self.nodes {
+            for pin_id in node.pins.keys() {
+                index.insert(pin_id.clone(), PinOwner::Node(node_id.clone()));
+            }
+        }
+        index
+    }
+
+    /// Re-point the index at `node`'s pins after its `on_update`, dropping the ids it gave up.
+    fn reindex_node_pins(&mut self, owner: PinOwner, previous: &[String], node: &Node) {
+        let Some(index) = self.pin_index.as_mut() else {
+            return;
+        };
+        for pin_id in previous {
+            if !node.pins.contains_key(pin_id) {
+                index.remove(pin_id);
+            }
+        }
+        for pin_id in node.pins.keys() {
+            index.insert(pin_id.clone(), owner.clone());
+        }
     }
 
     pub fn get_dependent_nodes(&self, node_id: &str) -> Vec<&Node> {
@@ -1558,6 +1748,20 @@ impl Board {
         version_type: VersionType,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<(u32, u32, u32)> {
+        self.create_version_returning_published(version_type, store)
+            .await
+            .map(|(new_version, _published)| new_version)
+    }
+
+    /// Like [`Self::create_version`], but also returns the version the
+    /// immutable snapshot was published under (the pre-bump version). Callers
+    /// that derive per-version artifacts (e.g. compiled-board warm-up) need
+    /// the snapshot's version, not the bumped draft version.
+    pub async fn create_version_returning_published(
+        &mut self,
+        version_type: VersionType,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<((u32, u32, u32), (u32, u32, u32))> {
         let store = self.get_store(store).await?;
         let existing = self.get_versions(Some(store.clone())).await?;
         let mut published = self.version;
@@ -1610,7 +1814,7 @@ impl Board {
         self.version = new_version;
         self.mark_changed();
         self.save(Some(store)).await?;
-        Ok(new_version)
+        Ok((new_version, published))
     }
 
     pub async fn get_versions(
@@ -2526,6 +2730,328 @@ mod tests {
         assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
         assert_eq!(board.updated_at, updated_at);
         assert_eq!(board.hash, Some(0xdead_beef));
+    }
+
+    #[tokio::test]
+    async fn pin_index_answers_exactly_like_the_scan() {
+        use crate::flow::node::Node;
+        use crate::flow::variable::VariableType;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+
+        let mut node = Node::new("indexed_node", "Indexed Node", "", "test");
+        node.add_input_pin("in", "In", "", VariableType::String);
+        node.add_output_pin("out", "Out", "", VariableType::String);
+        let mut pin_ids: Vec<String> = node.pins.keys().cloned().collect();
+        board.nodes.insert(node.id.clone(), node);
+
+        let mut interface = Node::new("layer_interface", "Layer Interface", "", "test");
+        interface.add_input_pin("layer_in", "Layer In", "", VariableType::String);
+        pin_ids.extend(interface.pins.keys().cloned());
+
+        let mut nested = Node::new("nested_node", "Nested Node", "", "test");
+        nested.add_output_pin("nested_out", "Nested Out", "", VariableType::String);
+        pin_ids.extend(nested.pins.keys().cloned());
+
+        let mut layer = super::Layer::new(
+            "layer-1".to_string(),
+            "Layer".to_string(),
+            super::LayerType::Function,
+        );
+        layer.pins = interface.pins.clone();
+        layer.nodes.insert(nested.id.clone(), nested);
+        board.layers.insert(layer.id.clone(), layer);
+
+        pin_ids.push("pin-that-does-not-exist".to_string());
+
+        let scanned: Vec<Option<String>> = pin_ids
+            .iter()
+            .map(|id| board.get_pin_by_id(id).map(|pin| pin.id.clone()))
+            .collect();
+        assert_eq!(
+            scanned.iter().filter(|found| found.is_some()).count(),
+            pin_ids.len() - 1
+        );
+
+        board.pin_index = Some(board.build_pin_index());
+        let indexed: Vec<Option<String>> = pin_ids
+            .iter()
+            .map(|id| board.get_pin_by_id(id).map(|pin| pin.id.clone()))
+            .collect();
+
+        assert_eq!(scanned, indexed);
+    }
+
+    /// Mimics the `match_type` family: adopts the data type of whatever feeds its input, which is
+    /// how a retyped pin travels along a chain of wires.
+    struct TypeMirrorLogic;
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for TypeMirrorLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            use crate::flow::variable::VariableType;
+            let mut node =
+                crate::flow::node::Node::new("type_mirror_test", "Type Mirror", "", "test");
+            node.add_input_pin("in", "In", "", VariableType::Generic);
+            node.add_output_pin("out", "Out", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, board: &super::Board) {
+            let upstream = node
+                .get_pin_by_name("in")
+                .and_then(|pin| pin.depends_on.iter().next().cloned())
+                .and_then(|pin_id| board.get_pin_by_id(&pin_id))
+                .map(|pin| pin.data_type.clone());
+            let Some(data_type) = upstream else {
+                return;
+            };
+            for pin in node.pins.values_mut() {
+                pin.data_type = data_type.clone();
+            }
+        }
+    }
+
+    /// A scoped sweep must leave exactly the board a full sweep would.
+    ///
+    /// This is the check that makes narrowing the sweep defensible: if a propagation channel is
+    /// ever missed, a node keeps a stale derivation and the two boards diverge here. `node.error`
+    /// is compared separately because `Node::hash` does not cover it, so a divergence in validation
+    /// messages alone would otherwise pass unnoticed.
+    async fn assert_sweeps_agree(
+        board: &super::Board,
+        state: Arc<crate::state::FlowLikeState>,
+        commands: Vec<super::GenericCommand>,
+    ) {
+        use crate::flow::board::dirty::Touched;
+
+        let mut full = board.clone();
+        let mut scoped = board.clone();
+        for target in [&mut full, &mut scoped] {
+            for command in commands.clone().iter_mut() {
+                command.execute(target, state.clone()).await.expect("apply");
+            }
+        }
+
+        let mut touched = Touched::default();
+        for command in &commands {
+            command.touched(&mut touched);
+        }
+
+        full.node_updates_scoped(state.clone(), None).await;
+        full.cleanup();
+        full.mark_changed();
+
+        scoped
+            .node_updates_scoped(state.clone(), Some(&touched))
+            .await;
+        scoped.cleanup();
+        scoped.mark_changed();
+
+        for (node_id, expected) in &full.nodes {
+            let actual = scoped.nodes.get(node_id).expect("node present after sweep");
+            assert_eq!(
+                expected.hash, actual.hash,
+                "node {node_id} ({}) settled differently",
+                expected.name
+            );
+            assert_eq!(
+                expected.error, actual.error,
+                "node {node_id} ({}) reports a different error",
+                expected.name
+            );
+        }
+        assert_eq!(full.nodes.len(), scoped.nodes.len());
+        assert_eq!(full.hash, scoped.hash, "board hashes diverged");
+    }
+
+    /// A retyped pin has to travel the whole chain, not just to the first neighbour.
+    #[tokio::test]
+    async fn dirty_sweep_matches_full_sweep_along_a_wire_chain() {
+        use crate::flow::node::{Node, NodeLogic};
+        use crate::flow::variable::VariableType;
+
+        let state = flow_state().await;
+        let logic: Arc<dyn NodeLogic> = Arc::new(TypeMirrorLogic);
+        state.node_registry().write().await.push_node(logic.clone());
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+
+        // source -> a -> b -> c, so a change at the head has three hops to travel.
+        let mut source = Node::new("type_mirror_test", "Source", "", "test");
+        source.add_output_pin("out", "Out", "", VariableType::String);
+        let mut chain: Vec<Node> = vec![source];
+        for index in 0..3 {
+            let mut link = logic.get_node();
+            link.friendly_name = format!("Link {index}");
+            chain.push(link);
+        }
+
+        for window in 0..chain.len() - 1 {
+            let out_pin = chain[window]
+                .get_pin_by_name("out")
+                .expect("output pin")
+                .id
+                .clone();
+            let in_pin = chain[window + 1]
+                .get_pin_by_name("in")
+                .expect("input pin")
+                .id
+                .clone();
+            chain[window]
+                .get_pin_mut_by_name("out")
+                .expect("output pin")
+                .connected_to
+                .insert(in_pin.clone());
+            chain[window + 1]
+                .get_pin_mut_by_name("in")
+                .expect("input pin")
+                .depends_on
+                .insert(out_pin);
+        }
+
+        let head_id = chain[0].id.clone();
+        for node in chain {
+            board.nodes.insert(node.id.clone(), node);
+        }
+        board.node_updates(state.clone()).await;
+        board.cleanup();
+        board.mark_changed();
+
+        // Retype the head. Every link downstream has to adopt it.
+        let mut head = board.nodes.get(&head_id).expect("head node").clone();
+        head.get_pin_mut_by_name("out")
+            .expect("output pin")
+            .data_type = VariableType::Integer;
+        let command = super::GenericCommand::UpdateNode(
+            crate::flow::board::commands::nodes::update_node::UpdateNodeCommand {
+                node: head,
+                old_node: board.nodes.get(&head_id).cloned(),
+            },
+        );
+
+        assert_sweeps_agree(&board, state, vec![command]).await;
+    }
+
+    /// Where an apply actually spends its time on a large board, with a trivial `on_update` so the
+    /// numbers are the fixed per-node overhead rather than any one node type's work. Ignored: it
+    /// reports a measurement rather than asserting a threshold. Run with:
+    ///   cargo test -p flow-like --lib apply_phase_breakdown -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn apply_phase_breakdown() {
+        use crate::flow::node::NodeLogic;
+        use crate::flow::variable::VariableType;
+        use std::time::Instant;
+
+        const NODES: usize = 1097;
+
+        let state = flow_state().await;
+        let logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Scaling" });
+        state.node_registry().write().await.push_node(logic.clone());
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        for _ in 0..NODES {
+            let mut node = logic.get_node();
+            node.add_input_pin("in", "In", "", VariableType::String);
+            node.add_output_pin("out", "Out", "", VariableType::String);
+            board.nodes.insert(node.id.clone(), node);
+        }
+
+        let started = Instant::now();
+        board.node_updates(state.clone()).await;
+        let node_updates = started.elapsed();
+
+        let started = Instant::now();
+        board.cleanup();
+        let cleanup = started.elapsed();
+
+        let started = Instant::now();
+        board.mark_changed();
+        let mark_changed = started.elapsed();
+
+        let started = Instant::now();
+        let _nodes_before = board.nodes.clone();
+        let clone_nodes = started.elapsed();
+
+        println!(
+            "{NODES} nodes / {} pins: node_updates {node_updates:?}, cleanup {cleanup:?}, mark_changed {mark_changed:?}, nodes.clone() {clone_nodes:?}",
+            board
+                .nodes
+                .values()
+                .map(|node| node.pins.len())
+                .sum::<usize>(),
+        );
+    }
+
+    /// How the `node_updates` pin lookup scales with board size. Ignored: it reports a measurement
+    /// rather than asserting a threshold. Run with:
+    ///   cargo test -p flow-like --lib pin_lookup_scaling -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn pin_lookup_scaling() {
+        use crate::flow::node::Node;
+        use crate::flow::variable::VariableType;
+        use std::time::Instant;
+
+        const NODES: usize = 1097;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+
+        let mut pin_ids: Vec<String> = Vec::new();
+        for index in 0..NODES {
+            let mut node = Node::new("scaling_node", &format!("Node {index}"), "", "test");
+            node.add_input_pin("in", "In", "", VariableType::String);
+            node.add_output_pin("out", "Out", "", VariableType::String);
+            pin_ids.extend(node.pins.keys().cloned());
+            board.nodes.insert(node.id.clone(), node);
+        }
+
+        // Spread the sample over the map so neither mode wins on locality.
+        let lookups: Vec<&String> = pin_ids.iter().step_by(3).collect();
+
+        let started = Instant::now();
+        let scanned = lookups
+            .iter()
+            .filter(|pin_id| board.get_pin_by_id(pin_id).is_some())
+            .count();
+        let scan = started.elapsed();
+
+        board.pin_index = Some(board.build_pin_index());
+        let started = Instant::now();
+        let indexed_hits = lookups
+            .iter()
+            .filter(|pin_id| board.get_pin_by_id(pin_id).is_some())
+            .count();
+        let indexed = started.elapsed();
+
+        assert_eq!(scanned, indexed_hits);
+        println!(
+            "{NODES} nodes / {} pins, {} lookups: scan {scan:?} ({:?} each), indexed {indexed:?} ({:?} each)",
+            pin_ids.len(),
+            lookups.len(),
+            scan / lookups.len() as u32,
+            indexed / lookups.len() as u32,
+        );
+    }
+
+    /// The index is only exact while `node_updates` owns it; leaking it would let a later mutation
+    /// answer `get_pin_by_id` from stale entries.
+    #[tokio::test]
+    async fn node_updates_clears_the_pin_index() {
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        board.node_updates(state).await;
+        assert!(board.pin_index.is_none());
     }
 
     #[tokio::test]

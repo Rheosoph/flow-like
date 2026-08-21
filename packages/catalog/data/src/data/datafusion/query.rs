@@ -217,77 +217,77 @@ fn array_value_to_json(
     let dt = array.data_type();
     let value = match dt {
         DataType::Boolean => {
-            let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            let arr = typed_column::<BooleanArray>(array)?;
             JsonValue::Bool(arr.value(idx))
         }
         DataType::Int8 => {
-            let arr = array.as_any().downcast_ref::<Int8Array>().unwrap();
+            let arr = typed_column::<Int8Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::Int16 => {
-            let arr = array.as_any().downcast_ref::<Int16Array>().unwrap();
+            let arr = typed_column::<Int16Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::Int32 => {
-            let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
+            let arr = typed_column::<Int32Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::Int64 => {
-            let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
+            let arr = typed_column::<Int64Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::UInt8 => {
-            let arr = array.as_any().downcast_ref::<UInt8Array>().unwrap();
+            let arr = typed_column::<UInt8Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::UInt16 => {
-            let arr = array.as_any().downcast_ref::<UInt16Array>().unwrap();
+            let arr = typed_column::<UInt16Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::UInt32 => {
-            let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+            let arr = typed_column::<UInt32Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::UInt64 => {
-            let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+            let arr = typed_column::<UInt64Array>(array)?;
             JsonValue::Number(arr.value(idx).into())
         }
         DataType::Float32 => {
-            let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
+            let arr = typed_column::<Float32Array>(array)?;
             let v = arr.value(idx) as f64;
             flow_like_types::json::Number::from_f64(v)
                 .map(JsonValue::Number)
                 .unwrap_or(JsonValue::Null)
         }
         DataType::Float64 => {
-            let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
+            let arr = typed_column::<Float64Array>(array)?;
             let v = arr.value(idx);
             flow_like_types::json::Number::from_f64(v)
                 .map(JsonValue::Number)
                 .unwrap_or(JsonValue::Null)
         }
         DataType::Utf8 => {
-            let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
+            let arr = typed_column::<StringArray>(array)?;
             JsonValue::String(arr.value(idx).to_string())
         }
         DataType::LargeUtf8 => {
-            let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let arr = typed_column::<LargeStringArray>(array)?;
             JsonValue::String(arr.value(idx).to_string())
         }
         DataType::Utf8View => {
-            let arr = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+            let arr = typed_column::<StringViewArray>(array)?;
             JsonValue::String(arr.value(idx).to_string())
         }
         DataType::Decimal128(_, _) => {
-            let arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let arr = typed_column::<Decimal128Array>(array)?;
             decimal_string_to_json(arr.value_as_string(idx))
         }
         DataType::Decimal256(_, _) => {
-            let arr = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let arr = typed_column::<Decimal256Array>(array)?;
             decimal_string_to_json(arr.value_as_string(idx))
         }
         DataType::Date32 => {
-            let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            let arr = typed_column::<Date32Array>(array)?;
             let days = arr.value(idx);
             let epoch = chrono::DateTime::UNIX_EPOCH.date_naive();
             match chrono::TimeDelta::try_days(days as i64)
@@ -298,7 +298,7 @@ fn array_value_to_json(
             }
         }
         DataType::Date64 => {
-            let arr = array.as_any().downcast_ref::<Date64Array>().unwrap();
+            let arr = typed_column::<Date64Array>(array)?;
             let ms = arr.value(idx);
             let secs = ms / 1000;
             let nsecs = ((ms % 1000) * 1_000_000) as u32;
@@ -310,34 +310,45 @@ fn array_value_to_json(
         }
         DataType::Timestamp(unit, timezone) => match unit {
             TimeUnit::Second => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<TimestampSecondArray>()
-                    .unwrap();
+                let arr = typed_column::<TimestampSecondArray>(array)?;
                 timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Millisecond => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .unwrap();
+                let arr = typed_column::<TimestampMillisecondArray>(array)?;
                 timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Microsecond => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .unwrap();
+                let arr = typed_column::<TimestampMicrosecondArray>(array)?;
                 timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Nanosecond => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
+                let arr = typed_column::<TimestampNanosecondArray>(array)?;
                 timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
         },
+        DataType::List(_) => {
+            let arr = typed_column::<ListArray>(array)?;
+            list_values_to_json(arr.value(idx).as_ref())?
+        }
+        DataType::LargeList(_) => {
+            let arr = typed_column::<LargeListArray>(array)?;
+            list_values_to_json(arr.value(idx).as_ref())?
+        }
+        DataType::FixedSizeList(_, _) => {
+            let arr = typed_column::<FixedSizeListArray>(array)?;
+            list_values_to_json(arr.value(idx).as_ref())?
+        }
+        DataType::Struct(fields) => {
+            let arr = typed_column::<StructArray>(array)?;
+            let mut object = flow_like_types::json::Map::with_capacity(fields.len());
+            for (field, column) in fields.iter().zip(arr.columns().iter()) {
+                object.insert(
+                    field.name().clone(),
+                    array_value_to_json(column.as_ref(), idx)?,
+                );
+            }
+            JsonValue::Object(object)
+        }
         _ => {
             use flow_like_storage::arrow::util::display::{ArrayFormatter, FormatOptions};
             let options = FormatOptions::default();
@@ -352,6 +363,33 @@ fn array_value_to_json(
     };
 
     Ok(value)
+}
+
+/// Read an Arrow column as its concrete array type. The `DataType` match above already selected
+/// the layout, so a mismatch means the schema and the buffers disagree — surface that instead of
+/// panicking inside a running flow.
+fn typed_column<T: flow_like_storage::datafusion::arrow::array::Array + 'static>(
+    array: &dyn flow_like_storage::datafusion::arrow::array::Array,
+) -> flow_like_types::Result<&T> {
+    array.as_any().downcast_ref::<T>().ok_or_else(|| {
+        flow_like_types::anyhow!(
+            "reading SQL result column as {} failed: Arrow reported data type {}",
+            std::any::type_name::<T>(),
+            array.data_type()
+        )
+    })
+}
+
+/// Materialize the child values of one Arrow list cell as a JSON array. The slice handed in is
+/// already narrowed to a single row's values, so every index belongs to that row.
+fn list_values_to_json(
+    values: &dyn flow_like_storage::datafusion::arrow::array::Array,
+) -> flow_like_types::Result<Value> {
+    let mut items = Vec::with_capacity(values.len());
+    for idx in 0..values.len() {
+        items.push(array_value_to_json(values, idx)?);
+    }
+    Ok(Value::Array(items))
 }
 
 fn decimal_string_to_json(raw: String) -> Value {
@@ -423,7 +461,10 @@ fn timestamp_to_json(
 mod tests {
     use super::*;
     use flow_like_storage::datafusion::arrow::array::*;
-    use flow_like_storage::datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use flow_like_storage::datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use flow_like_storage::datafusion::arrow::datatypes::{
+        DataType, Field, Int32Type, Int64Type, Schema,
+    };
     use flow_like_storage::datafusion::arrow::record_batch::RecordBatch;
     use flow_like_types::tokio;
     use std::sync::Arc;
@@ -622,6 +663,203 @@ mod tests {
 
         assert_eq!(array_value_to_json(&integer_array, 0).unwrap(), json!(12));
         assert_eq!(array_value_to_json(&scaled_array, 0).unwrap(), json!(57.5));
+    }
+
+    fn subscription_fields() -> (Arc<Field>, Arc<Field>) {
+        (
+            Arc::new(Field::new("sub", DataType::Utf8, true)),
+            Arc::new(Field::new("threshold", DataType::Int64, true)),
+        )
+    }
+
+    fn subscriptions_list_array() -> ListArray {
+        let (sub_field, threshold_field) = subscription_fields();
+        let entries = StructArray::from(vec![
+            (
+                sub_field.clone(),
+                Arc::new(StringArray::from(vec!["user-a", "user-b"])) as ArrayRef,
+            ),
+            (
+                threshold_field.clone(),
+                Arc::new(Int64Array::from(vec![30i64, 50i64])) as ArrayRef,
+            ),
+        ]);
+        let item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(vec![sub_field, threshold_field].into()),
+            true,
+        ));
+
+        ListArray::new(
+            item_field,
+            OffsetBuffer::new(vec![0i32, 2i32].into()),
+            Arc::new(entries),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn primitive_list_becomes_json_array() {
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            None,
+        ])]);
+
+        assert_eq!(
+            array_value_to_json(&array, 0).unwrap(),
+            json!([1, 2, Value::Null])
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_list_becomes_empty_json_array() {
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![] as Vec<Option<i32>>),
+            None,
+        ]);
+
+        assert_eq!(array_value_to_json(&array, 0).unwrap(), json!([]));
+        assert_eq!(array_value_to_json(&array, 1).unwrap(), Value::Null);
+    }
+
+    #[tokio::test]
+    async fn large_and_fixed_size_lists_become_json_arrays() {
+        let large = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+            Some(7i64),
+            Some(8i64),
+        ])]);
+        let fixed = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(4), Some(5)])],
+            2,
+        );
+
+        assert_eq!(array_value_to_json(&large, 0).unwrap(), json!([7, 8]));
+        assert_eq!(array_value_to_json(&fixed, 0).unwrap(), json!([4, 5]));
+    }
+
+    #[tokio::test]
+    async fn struct_becomes_json_object_and_keeps_null_fields() {
+        let (sub_field, threshold_field) = subscription_fields();
+        let array = StructArray::from(vec![
+            (
+                sub_field,
+                Arc::new(StringArray::from(vec![Some("user-a"), None])) as ArrayRef,
+            ),
+            (
+                threshold_field,
+                Arc::new(Int64Array::from(vec![Some(30i64), None])) as ArrayRef,
+            ),
+        ]);
+
+        assert_eq!(
+            array_value_to_json(&array, 0).unwrap(),
+            json!({"sub": "user-a", "threshold": 30})
+        );
+        assert_eq!(
+            array_value_to_json(&array, 1).unwrap(),
+            json!({"sub": Value::Null, "threshold": Value::Null})
+        );
+    }
+
+    #[tokio::test]
+    async fn null_struct_row_becomes_json_null() {
+        let (sub_field, threshold_field) = subscription_fields();
+        let array = StructArray::try_new(
+            vec![sub_field, threshold_field].into(),
+            vec![
+                Arc::new(StringArray::from(vec!["user-a", "user-b"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![30i64, 50i64])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, false])),
+        )
+        .unwrap();
+
+        assert_eq!(
+            array_value_to_json(&array, 0).unwrap(),
+            json!({"sub": "user-a", "threshold": 30})
+        );
+        assert_eq!(array_value_to_json(&array, 1).unwrap(), Value::Null);
+    }
+
+    #[tokio::test]
+    async fn list_of_structs_becomes_array_of_json_objects() {
+        let array = subscriptions_list_array();
+
+        assert_eq!(
+            array_value_to_json(&array, 0).unwrap(),
+            json!([
+                {"sub": "user-a", "threshold": 30},
+                {"sub": "user-b", "threshold": 50},
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn batches_to_rows_keeps_nested_lists_as_arrays() {
+        let array = subscriptions_list_array();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "subscriptions",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+        let rows = batches_to_rows(&[batch]).unwrap();
+        let subscriptions = rows[0].get("subscriptions").unwrap();
+
+        assert!(
+            matches!(subscriptions, Value::Array(_)),
+            "expected a JSON array, got {subscriptions:?}"
+        );
+        assert_eq!(
+            subscriptions,
+            &json!([
+                {"sub": "user-a", "threshold": 30},
+                {"sub": "user-b", "threshold": 50},
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn array_agg_named_struct_survives_as_nested_json() {
+        use flow_like_storage::datafusion::prelude::SessionContext;
+
+        let ctx = SessionContext::new();
+        let df = ctx
+            .sql(
+                "SELECT ARRAY_AGG(
+                    NAMED_STRUCT(
+                        'sub', user_sub,
+                        'threshold', relevance_threshold
+                    )
+                    ORDER BY user_sub
+                ) AS subscriptions
+                FROM (
+                    VALUES
+                        ('user-a', 30),
+                        ('user-b', 50)
+                ) AS subscriptions(user_sub, relevance_threshold)",
+            )
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+
+        let rows = batches_to_rows(&batches).unwrap();
+        assert_eq!(rows.len(), 1);
+
+        let subscriptions = rows[0].get("subscriptions").unwrap();
+        assert!(
+            matches!(subscriptions, Value::Array(_)),
+            "expected a JSON array, got {subscriptions:?}"
+        );
+        assert_eq!(
+            subscriptions,
+            &json!([
+                {"sub": "user-a", "threshold": 30},
+                {"sub": "user-b", "threshold": 50},
+            ])
+        );
     }
 
     #[tokio::test]

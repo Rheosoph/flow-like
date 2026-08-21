@@ -370,9 +370,37 @@ model TelemetryFlowpilotDaily {
   validationRegressions         BigInt   @default(0)
   boardsInspected               BigInt   @default(0)
   emptyBoardsAfterRun           BigInt   @default(0)
+  failuresTotal                 BigInt   @default(0)
+  subagentDispatchFailures      BigInt   @default(0)
+  flowscriptApplyFailures       BigInt   @default(0)
+  widgetApplyFailures           BigInt   @default(0)
+  dataApplyFailures             BigInt   @default(0)
+  pageApplyFailures             BigInt   @default(0)
+  toolFailures                  BigInt   @default(0)
+  runFailures                   BigInt   @default(0)
   installs                      Int      @default(0)
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
   @@unique([day])
+}
+
+/// Daily grouped FlowPilot failure causes. One row per (day, kind, tool, code,
+/// message) signature reported by the client, so the admin trace can show WHY
+/// runs fail without scanning raw counter events. Every string is redacted and
+/// generalized on the client before it is ever sent.
+model TelemetryFlowpilotFailureDaily {
+  id        String   @id
+  day       DateTime
+  kind      String
+  tool      String
+  code      String
+  message   String
+  count     BigInt   @default(0)
+  installs  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, kind, tool, code, message])
+  @@index([day])
 }
