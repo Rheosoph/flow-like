@@ -17,6 +17,7 @@ import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { configRouteFillsHeight } from "../../lib/config-route";
 import {
 	type IApp,
 	IAppVisibility,
@@ -683,7 +684,7 @@ export function AppConfigLayout({
 							</div>
 						</CardHeader>
 						<CardContent className="flex-1 p-0 overflow-hidden min-h-0">
-							{currentRoute?.includes("/storage") ? (
+							{configRouteFillsHeight(currentRoute) ? (
 								<div className="h-full flex flex-col">
 									<div className="flex-1 min-h-0 p-6 pb-0 pt-0">
 										<Suspense

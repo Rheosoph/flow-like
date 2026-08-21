@@ -154,6 +154,20 @@ function escapeInline(value) {
 	return value.replace(/([\\`*[\]])/g, "\\$1");
 }
 
+/**
+ * GFM splits a table row on every `|` whose preceding backslash run is even.
+ * Cells mix escaped markdown (backslashes always come in pairs) with raw
+ * code-span and heading text (lone backslashes), so the run has to be counted:
+ * padding it to an odd length escapes the pipe without double-escaping either.
+ */
+function escapeTablePipes(value) {
+	return value.replace(/\\+\|?|\|/g, (match) => {
+		if (!match.endsWith("|")) return match;
+		const slashes = match.slice(0, -1);
+		return slashes.length % 2 ? `${slashes}\\\\|` : `${slashes}\\|`;
+	});
+}
+
 function indentLines(value, indent, firstLinePrefix = indent) {
 	const lines = value.split("\n");
 	return lines
@@ -224,9 +238,11 @@ function renderTable($, node, ctx) {
 				.children("th,td")
 				.get()
 				.map((cell) =>
-					collapseWhitespace(renderChildren($, cell, { ...ctx, inTable: true }))
-						.replace(/\|/g, "\\|")
-						.trim(),
+					escapeTablePipes(
+						collapseWhitespace(
+							renderChildren($, cell, { ...ctx, inTable: true }),
+						),
+					).trim(),
 				),
 		)
 		.filter((row) => row.length);

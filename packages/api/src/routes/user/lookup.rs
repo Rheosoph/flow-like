@@ -19,7 +19,7 @@ use axum::{
 use flow_like::hub::Lookup;
 use flow_like_types::Value;
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect,
+    ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
     sea_query::{Expr, LikeExpr, extension::postgres::PgExpr},
 };
 use serde::{Deserialize, Serialize};
@@ -244,39 +244,35 @@ async fn ensure_executor_lookup_permission(
     Ok(())
 }
 
+/// The app-membership constraint as SQL, so it can join the candidate queries
+/// instead of filtering what they already returned.
+fn membership_scope(app_id: &str) -> sea_orm::sea_query::SimpleExpr {
+    user::Column::Id.in_subquery(
+        membership::Entity::find()
+            .select_only()
+            .column(membership::Column::UserId)
+            .filter(membership::Column::AppId.eq(app_id))
+            .into_query(),
+    )
+}
+
 /// Executor tokens belong to a running flow, so they see the app's members and
 /// nobody else — the same boundary `scoped_lookup_ids` enforces for lookups.
-async fn scope_search_candidates(
+///
+/// The constraint has to be part of the candidate queries rather than a pass over
+/// their results: both of them are capped, and in a large directory the cap can
+/// fill up with non-members long before the app's own members are reached, which
+/// would answer "no such user" for a colleague sitting in the same app.
+async fn executor_search_scope(
     state: &AppState,
     user: &AppUser,
-    candidates: Vec<user::Model>,
-) -> Result<Vec<user::Model>, ApiError> {
+) -> Result<Option<sea_orm::sea_query::SimpleExpr>, ApiError> {
     let AppUser::Executor(executor) = user else {
-        return Ok(candidates);
+        return Ok(None);
     };
 
     ensure_executor_lookup_permission(state, user, &executor.app_id).await?;
-    if candidates.is_empty() {
-        return Ok(candidates);
-    }
-
-    let members = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(&executor.app_id))
-        .filter(
-            membership::Column::UserId
-                .is_in(candidates.iter().map(|candidate| candidate.id.clone())),
-        )
-        .limit(MAX_CANDIDATE_POOL)
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|membership| membership.user_id)
-        .collect::<HashSet<_>>();
-
-    Ok(candidates
-        .into_iter()
-        .filter(|candidate| members.contains(&candidate.id))
-        .collect())
+    Ok(Some(membership_scope(&executor.app_id)))
 }
 
 const DEFAULT_SEARCH_LIMIT: u64 = 10;
@@ -363,20 +359,28 @@ pub async fn user_search(
         return Ok(Json(Vec::new()));
     }
 
+    let scope = executor_search_scope(&state, &user).await?;
+    let scoped = |query: sea_orm::Select<user::Entity>| match &scope {
+        Some(constraint) => query.filter(constraint.clone()),
+        None => query,
+    };
+
     // Pasting an id or a full email address should resolve even when it is shorter
     // than the substring-search floor.
-    let exact_matches = user::Entity::find()
-        .filter(
-            Condition::any()
-                .add(user::Column::Id.eq(trimmed))
-                .add(ilike_eq(user::Column::Email, trimmed))
-                .add(ilike_eq(user::Column::Username, trimmed))
-                .add(ilike_eq(user::Column::PreferredUsername, trimmed)),
-        )
-        .filter(user::Column::Status.ne(UserStatus::Banned))
-        .limit(MAX_SEARCH_LIMIT)
-        .all(&state.db)
-        .await?;
+    let exact_matches = scoped(
+        user::Entity::find()
+            .filter(
+                Condition::any()
+                    .add(user::Column::Id.eq(trimmed))
+                    .add(ilike_eq(user::Column::Email, trimmed))
+                    .add(ilike_eq(user::Column::Username, trimmed))
+                    .add(ilike_eq(user::Column::PreferredUsername, trimmed)),
+            )
+            .filter(user::Column::Status.ne(UserStatus::Banned)),
+    )
+    .limit(MAX_SEARCH_LIMIT)
+    .all(&state.db)
+    .await?;
 
     // Pasting an id or address that already resolved needs no substring scan; typing
     // a name still gets one, so near-matches keep showing up alongside an exact hit.
@@ -389,12 +393,14 @@ pub async fn user_search(
         Some(_) if resolved_identifier => Vec::new(),
         Some(term) => {
             let pool = (limit * CANDIDATE_POOL_FACTOR).min(MAX_CANDIDATE_POOL);
-            user::Entity::find()
-                .filter(search_condition(term))
-                .filter(user::Column::Status.ne(UserStatus::Banned))
-                .limit(pool)
-                .all(&state.db)
-                .await?
+            scoped(
+                user::Entity::find()
+                    .filter(search_condition(term))
+                    .filter(user::Column::Status.ne(UserStatus::Banned)),
+            )
+            .limit(pool)
+            .all(&state.db)
+            .await?
         }
         None => Vec::new(),
     };
@@ -407,7 +413,6 @@ pub async fn user_search(
         }
     }
 
-    let mut candidates = scope_search_candidates(&state, &user, candidates).await?;
     if candidates.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -462,7 +467,7 @@ pub async fn user_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{DbBackend, QueryTrait};
+    use sea_orm::DbBackend;
 
     fn fuzzy_sql(query: &str) -> String {
         let term = SearchTerm::parse(query).unwrap();
@@ -495,6 +500,22 @@ mod tests {
         assert_eq!(sql.matches("'%corp.de%'").count(), 4);
         // A bare `de` token would match most of the directory.
         assert!(!sql.contains("'%de%'"));
+    }
+
+    #[test]
+    fn an_executor_search_is_scoped_before_the_candidate_cap() {
+        let sql = user::Entity::find()
+            .filter(search_condition(&SearchTerm::parse("felix").unwrap()))
+            .filter(membership_scope("app-1"))
+            .limit(200)
+            .build(DbBackend::Postgres)
+            .to_string();
+
+        assert!(sql.contains(r#""Membership""#));
+        assert!(sql.contains("'app-1'"));
+        // The membership subquery has to sit inside the query the cap applies to,
+        // or the cap decides the pool before scoping ever sees it.
+        assert!(sql.find("Membership") < sql.find("LIMIT"));
     }
 
     #[test]

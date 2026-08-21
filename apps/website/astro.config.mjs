@@ -13,6 +13,9 @@ import sitemap from "@astrojs/sitemap";
 export default defineConfig({
 	site: "https://flow-like.com",
 	adapter: cloudflare(),
+	// Astro 7 defaults to 'jsx', which drops the space between adjacent inline
+	// elements. Keep HTML-aware whitespace so prose spacing stays unchanged.
+	compressHTML: true,
 	i18n: {
 		defaultLocale: "en",
 		locales: ["en", "de", "es", "fr", "zh", "ja", "ko", "pt", "it", "nl", "sv"],

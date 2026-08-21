@@ -9,14 +9,14 @@ ignore = [
     # Blocked by: no patched rsa release as of 2026-05-16.
     "RUSTSEC-2023-0071",
 
-    # rustls-webpki 0.101.7 + 0.102.8 — name-constraint and CRL parsing advisories
+    # rustls-webpki 0.102.8 — name-constraint and CRL parsing advisories
     # (RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0049)
-    # Fix requires rustls-webpki >= 0.103.10, but:
-    #   0.101.7: pulled in by aws-smithy-http-client 1.1.12 (depends on both rustls ^0.21 and ^0.23)
-    #            and by serenity 0.12.5 → reqwest 0.11 → hyper-rustls 0.24 → rustls 0.21.
-    #   0.102.8: pulled in by rumqttc 0.25.1 (direct dep rustls-webpki ^0.102.8)
-    #            and by serenity 0.12.5 → tokio-tungstenite 0.21 → rustls 0.22.
-    # Both require upstream crates to update; no action possible in this workspace.
+    # Fix requires rustls-webpki >= 0.103.10, but 0.102.8 is pulled in by
+    # rumqttc 0.25.1 (direct dep rustls-webpki ^0.102.8, no newer release) and by
+    # serenity 0.12.5 → tokio-tungstenite 0.21 → rustls 0.22. Both require upstream
+    # crates to update; no action possible in this workspace.
+    # The 0.101.7 copy is gone: the aws-sdk-* crates now opt out of their deprecated
+    # `rustls` default feature and sink-services uses teloxide 0.17 (reqwest 0.12).
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",

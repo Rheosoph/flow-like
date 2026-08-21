@@ -8,7 +8,7 @@ use axum::{
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace::TracerProvider};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::sync::OnceLock;
 use std::time::Instant;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -59,8 +59,8 @@ fn init_tracing() -> Result<Option<opentelemetry_sdk::trace::Tracer>, TelemetryE
                 "OTEL_EXPORTER_OTLP_ENDPOINT is set but the OTLP exporter could not initialize: {error}"
             ))
         })?;
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
     let tracer = provider.tracer("flow-like-azure-executor");
     opentelemetry::global::set_tracer_provider(provider);

@@ -1401,8 +1401,10 @@ const FAILURE_TOOL_KINDS: Record<string, FlowPilotFailureKind | undefined> = {
 const UNKNOWN_FAILURE_TOOL = "other";
 
 /**
- * Generalizers applied in order, after secret redaction. They trade a little specificity for the
- * guarantee that a retained failure message cannot carry an identity, a location, or user prose.
+ * Generalizers applied in order, after secret redaction. Failure text is arbitrary — tool errors,
+ * transport messages, validator diagnostics — so this is a defence in depth rather than a proof:
+ * it strips the shapes an identity or a location actually takes, and the passes below then drop
+ * everything that reads like prose or a proper noun instead of a diagnostic.
  */
 const FAILURE_MESSAGE_GENERALIZERS: readonly (readonly [RegExp, string])[] = [
 	[/\b[\w.+-]+@[\w-]+\.[\w.-]{2,}\b/g, "<email>"],
@@ -1419,14 +1421,103 @@ const FAILURE_MESSAGE_GENERALIZERS: readonly (readonly [RegExp, string])[] = [
 	[/\b\d[\d_]{5,}\b/g, "<n>"],
 ];
 
-/** Generalize one quoted run: short identifiers stay readable, long user prose does not. */
-function generalizeQuoted(match: string) {
-	return match.length - 2 > MAX_KEPT_QUOTED_CHARS ? "<value>" : match;
+/** A pin, node, column or tool name — the kind of quoted token that makes a failure diagnosable. */
+const IDENTIFIER_LIKE = /^[A-Za-z_][A-Za-z0-9_.:+-]*$/;
+
+const QUOTED_RUN = /"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`/g;
+const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
+
+/**
+ * Generalize one quoted run. Only a short bare identifier survives: a quoted phrase is as likely
+ * to be a board title or a customer name as it is a diagnostic, and length alone does not tell
+ * them apart — `"Acme Payroll"` is shorter than most pin names.
+ *
+ * `'` doubles as an apostrophe, so a run opening or closing mid-word is two contractions in one
+ * sentence rather than a quote, and generalizing it would eat the words between them.
+ */
+function generalizeQuoted(match: string, offset: number, whole: string) {
+	const isApostrophe =
+		match.startsWith("'") &&
+		(WORD_CHARACTER.test(whole[offset - 1] ?? "") ||
+			WORD_CHARACTER.test(whole[offset + match.length] ?? ""));
+	if (isApostrophe) return match;
+
+	const inner = match.slice(1, -1);
+	return inner.length <= MAX_KEPT_QUOTED_CHARS && IDENTIFIER_LIKE.test(inner)
+		? match
+		: "<value>";
+}
+
+/**
+ * Capitalized phrases the platform emits itself. Anything else that reads like a proper noun —
+ * two or more capitalized words in a row — is taken to be a name the run happened to mention,
+ * because a customer, a board or a person is exactly what that shape carries in free-form text.
+ */
+const KNOWN_CAPITALIZED_PHRASES = [
+	"Data Studio",
+	"Flow Like",
+	"Bad Request",
+	"Not Found",
+	"Internal Server Error",
+	"Service Unavailable",
+	"Gateway Timeout",
+	"Too Many Requests",
+] as const;
+
+const KNOWN_PHRASES = new Set<string>(
+	KNOWN_CAPITALIZED_PHRASES.map((phrase) => phrase.toLowerCase()),
+);
+const LONGEST_KNOWN_PHRASE = Math.max(
+	...KNOWN_CAPITALIZED_PHRASES.map((phrase) => phrase.split(" ").length),
+);
+
+// Words have to be separated by whitespace alone, so a run cannot reach across a quote and swallow
+// an identifier the pass above deliberately kept.
+const CAPITALIZED_RUN =
+	/\b[A-Z][\p{L}\p{N}'\u2019-]*(?:\s+[A-Z][\p{L}\p{N}'\u2019-]*)+/gu;
+
+/** Replace the stretches of one capitalized run that are not a phrase the platform itself emits. */
+function generalizeCapitalizedRun(run: string): string {
+	const words = run.split(/\s+/);
+	const kept: string[] = [];
+	let pending: string[] = [];
+	const flush = () => {
+		if (pending.length >= 2) kept.push("<name>");
+		else kept.push(...pending);
+		pending = [];
+	};
+
+	for (let index = 0; index < words.length; ) {
+		let known = 0;
+		const reach = Math.min(LONGEST_KNOWN_PHRASE, words.length - index);
+		for (let size = reach; size >= 2; size--) {
+			const phrase = words.slice(index, index + size).join(" ");
+			if (KNOWN_PHRASES.has(phrase.toLowerCase())) {
+				known = size;
+				break;
+			}
+		}
+		if (known === 0) {
+			pending.push(words[index]);
+			index += 1;
+			continue;
+		}
+		flush();
+		kept.push(words.slice(index, index + known).join(" "));
+		index += known;
+	}
+	flush();
+
+	return kept.join(" ");
 }
 
 /**
  * Turn arbitrary failure text into a retainable signature. Secrets are stripped with the same pass
  * the debug previews use, then identities, locations and user prose are generalized away.
+ *
+ * What survives is meant to be the diagnosis and nothing around it. A blacklist over free-form text
+ * cannot prove that, so the rules err towards dropping: an unrecognized capitalized phrase or a
+ * quoted value that is not a bare identifier goes, even when it would have been readable.
  */
 export function redactFailureMessage(value: unknown): string | undefined {
 	const raw =
@@ -1445,7 +1536,8 @@ export function redactFailureMessage(value: unknown): string | undefined {
 		text = text.replace(pattern, replacement);
 	}
 	text = text
-		.replace(/"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`/g, generalizeQuoted)
+		.replace(QUOTED_RUN, generalizeQuoted)
+		.replace(CAPITALIZED_RUN, generalizeCapitalizedRun)
 		.replace(/\s+/g, " ")
 		.trim();
 	return text.length > 0

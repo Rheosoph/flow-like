@@ -103,8 +103,14 @@ function boardDataVersion(board: IBoard): string {
  * call node's own pins, so those nodes re-render on their own hash.
  *
  * Order-independent because serde HashMap serialization does not guarantee key
- * order. Each digest is seeded with the layer id so that two layers swapping a
- * value cannot cancel each other out in the sum.
+ * order. Everything folded in is keyed by the layer it belongs to — a bare sum
+ * of per-variable hashes would be blind to a variable moving between layers,
+ * because the same addend just lands in a different term of the same total.
+ *
+ * Local variables carry their type alongside their name: `board.variables` is
+ * covered by an identity token, which moves on any edit, so a retype there
+ * already reaches the node. Hashing these by name alone would make the local
+ * scope the one place where a retype leaves a mounted node stale.
  */
 function layersSignature(board: IBoard): number {
 	let total = 0;
@@ -114,7 +120,11 @@ function layersSignature(board: IBoard): number {
 		);
 		for (const variable of Object.values(layer.variables ?? {})) {
 			digest =
-				(digest + stringHash(`${variable.id}\u0000${variable.name}`)) | 0;
+				(digest +
+					stringHash(
+						`${layer.id}\u0000${variable.id}\u0000${variable.name}\u0000${variable.data_type}\u0000${variable.value_type}\u0000${variable.schema ?? ""}`,
+					)) |
+				0;
 		}
 		total = (total + digest) | 0;
 	}

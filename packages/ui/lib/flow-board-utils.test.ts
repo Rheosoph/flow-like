@@ -10,7 +10,7 @@ import { ILayerCacheScope, ILayerType } from "./schema/flow/board";
 import type { INode } from "./schema/flow/node";
 import { IVariableType } from "./schema/flow/node";
 import { IValueType } from "./schema/flow/pin";
-import { convertJsonToUint8Array } from "./uint8";
+import { convertJsonToUint8Array, parseUint8ArrayToJson } from "./uint8";
 
 /** Only the slice of a rendered React Flow node these tests read. */
 interface IRenderedNode {
@@ -217,6 +217,58 @@ describe("boardContentVersion on rendered nodes", () => {
 		expect(contentVersion(second, "n1")).not.toBe(contentVersion(first, "n1"));
 	});
 
+	test("changes when a local variable MOVES to another layer", () => {
+		// The dropdown a var_ref pin renders lists the current layer's locals, so a
+		// variable changing owner changes what a mounted node offers.
+		const before = board({
+			layers: {
+				l1: functionLayer("l1", { variables: { lv: variable("lv", "Local") } }),
+				l2: functionLayer("l2", { name: "other" }),
+			},
+		});
+		const first = parse(before);
+		const second = parse(
+			edit(before, {
+				layers: {
+					l1: functionLayer("l1"),
+					l2: functionLayer("l2", {
+						name: "other",
+						variables: { lv: variable("lv", "Local") },
+					}),
+				},
+			}),
+			first.nodes,
+			first.edges,
+		);
+		expect(contentVersion(second, "n1")).not.toBe(contentVersion(first, "n1"));
+	});
+
+	test("changes when a local variable is RETYPED", () => {
+		const before = board({
+			layers: {
+				l1: functionLayer("l1", { variables: { lv: variable("lv", "Local") } }),
+			},
+		});
+		const first = parse(before);
+		const second = parse(
+			edit(before, {
+				layers: {
+					l1: functionLayer("l1", {
+						variables: {
+							lv: {
+								...variable("lv", "Local"),
+								data_type: IVariableType.Integer,
+							},
+						},
+					}),
+				},
+			}),
+			first.nodes,
+			first.edges,
+		);
+		expect(contentVersion(second, "n1")).not.toBe(contentVersion(first, "n1"));
+	});
+
 	test("does not change when a layer is DRAGGED", () => {
 		// The whole point of the signature: coordinates move constantly and no node
 		// renders them, so a layer drag must not repaint the canvas.
@@ -271,6 +323,20 @@ describe("boardContentVersion on rendered nodes", () => {
 		);
 		expect(node(second, "c1").data.functionCache?.enabled).toBe(true);
 		expect(node(second, "c1").data.functionCache?.ttl_seconds).toBe(60);
+	});
+
+	test("keeps the function_layer_id pin on the rendered call node", () => {
+		// The hover toolbar's Edit action resolves the function through this pin. It is
+		// hidden from the pin rows, never removed from the node the renderer carries.
+		const before = board({
+			nodes: { c1: callNode("c1", "l1") },
+			layers: { l1: functionLayer("l1") },
+		});
+		const parsed = parse(before);
+		const pin = Object.values(node(parsed, "c1").data.node.pins).find(
+			(candidate) => candidate.name === "function_layer_id",
+		);
+		expect(parseUint8ArrayToJson(pin?.default_value)).toBe("l1");
 	});
 
 	test("does not change when board.refs churns", () => {

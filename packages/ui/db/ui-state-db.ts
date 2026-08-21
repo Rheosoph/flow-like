@@ -60,6 +60,18 @@ export function globalStateKey(appId: string, key: string): string {
 	return `${appId}:${key}`;
 }
 
+const UNSAFE_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * The `getAll` helpers rebuild a plain record keyed by stored ids, so a row
+ * whose id is `__proto__` would replace that record's prototype instead of
+ * becoming an entry. Writers reject those ids; rows predating that are dropped
+ * on read, matching the writers.
+ */
+function isSafeRecordKey(key: string): boolean {
+	return key.length > 0 && !UNSAFE_RECORD_KEYS.has(key);
+}
+
 export const uiElementValues = {
 	async get(
 		appId: string,
@@ -95,6 +107,7 @@ export const uiElementValues = {
 
 		const result: Record<string, IUIElementValue> = {};
 		for (const record of records) {
+			if (!isSafeRecordKey(record.elementId)) continue;
 			result[record.elementId] = record;
 		}
 		return result;
@@ -177,6 +190,7 @@ export const uiPageState = {
 
 		const result: Record<string, unknown> = {};
 		for (const record of records) {
+			if (!isSafeRecordKey(record.key)) continue;
 			result[record.key] = record.value;
 		}
 		return result;
@@ -219,6 +233,7 @@ export const uiGlobalState = {
 
 		const result: Record<string, unknown> = {};
 		for (const record of records) {
+			if (!isSafeRecordKey(record.key)) continue;
 			result[record.key] = record.value;
 		}
 		return result;

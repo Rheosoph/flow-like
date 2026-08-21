@@ -13,6 +13,11 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 #[cfg(feature = "telegram")]
+use crate::storage::TelegramBotState;
+#[cfg(feature = "telegram")]
+use tracing::{debug, error};
+
+#[cfg(feature = "telegram")]
 use teloxide::{prelude::*, types::Message};
 
 /// Event handler configuration for a Telegram bot

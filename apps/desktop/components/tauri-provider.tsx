@@ -262,9 +262,17 @@ export class TauriBackend implements IBackendState {
 			const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
 				appId,
 			});
-			const visibility = app.visibility ?? IAppVisibility.Offline;
-			await appsDB.visibility.put({ visibility, appId });
-			return visibility;
+			// Only a visibility the manifest actually states is worth caching.
+			// Guessing "offline" here and persisting the guess is not a neutral
+			// default: it is sticky, and it makes `isLocalOnly` claim a hosted app
+			// is local-only, which closes the one door that downloads its boards
+			// (`materializeBoardFromRemote`). An absent value stays unknown so the
+			// callers that distinguish the two can still ask the hub.
+			if (typeof app.visibility === "undefined") {
+				return undefined;
+			}
+			await appsDB.visibility.put({ visibility: app.visibility, appId });
+			return app.visibility;
 		} catch {
 			return undefined;
 		}

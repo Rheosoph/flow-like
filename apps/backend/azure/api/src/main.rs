@@ -189,7 +189,7 @@ mod metrics_endpoint {
     use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::{runtime, trace::TracerProvider};
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use std::sync::OnceLock;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -230,8 +230,8 @@ mod metrics_endpoint {
             .with_endpoint(endpoint)
             .build()
             .unwrap_or_else(|error| panic!("required OTLP exporter could not initialize: {error}"));
-        let provider = TracerProvider::builder()
-            .with_batch_exporter(exporter, runtime::Tokio)
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
             .build();
         let tracer = provider.tracer("flow-like-azure-api");
         opentelemetry::global::set_tracer_provider(provider);

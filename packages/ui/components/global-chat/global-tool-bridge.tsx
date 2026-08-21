@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
+	IAppVisibility,
 	type IEvent,
 	IEventExecutionMode,
 	IExecutionStage,
@@ -2282,6 +2283,22 @@ export function GlobalToolBridge() {
 								argString(args, "remote_event_token") || undefined,
 							language: argString(args, "language") || undefined,
 						});
+						// The fork exists on the hub, but this device has never opened it.
+						// Without a recorded visibility the desktop guesses "offline" and
+						// serves every later board/data read from an empty local store —
+						// the boards then look absent rather than undownloaded. Online
+						// forks land Private (utils/fork/mod.rs::fork_with_options).
+						await backend.appState
+							.recordLocalAppVisibility?.(
+								response.new_app_id,
+								IAppVisibility.Private,
+							)
+							.catch((error: unknown) => {
+								console.warn(
+									"[global-tool-bridge] fork_app: visibility cache failed",
+									error,
+								);
+							});
 						// Without this the forked app is invisible to list_apps /
 						// open_app_page, so the rest of the build cannot address it.
 						await addAppToProfile(backend, response.new_app_id);
@@ -2366,6 +2383,20 @@ export function GlobalToolBridge() {
 							};
 						}
 
+						// Same reason as fork_app: a joined app this device has never opened
+						// has no recorded visibility, and the desktop's fallback guess routes
+						// its boards at the local store instead of the hub. The app's own
+						// visibility is authoritative here — an acquired app is usually public.
+						if (app.visibility) {
+							await backend.appState
+								.recordLocalAppVisibility?.(appId, app.visibility)
+								.catch((error: unknown) => {
+									console.warn(
+										"[global-tool-bridge] acquire_app: visibility cache failed",
+										error,
+									);
+								});
+						}
 						await addAppToProfile(backend, appId);
 						queryClient.invalidateQueries({ queryKey: ["getApps"] });
 						queryClient.invalidateQueries({

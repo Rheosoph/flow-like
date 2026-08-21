@@ -1708,6 +1708,33 @@ ${"// safe filler\n".repeat(900)}`;
 		expect(redacted).not.toMatch(/user authored prose/);
 	});
 
+	test("a short quoted value is dropped unless it is a bare identifier", () => {
+		// Length does not separate a diagnostic from a name: a board title is shorter
+		// than most pin names, so only an identifier-shaped token survives quoting.
+		const redacted = redactFailureMessage(
+			'Board "Acme Payroll" has no pin named "exec_in"',
+		);
+		expect(redacted).not.toMatch(/Acme|Payroll/);
+		expect(redacted).toContain("<value>");
+		expect(redacted).toContain('"exec_in"');
+	});
+
+	test("apostrophes are not read as a quoted run", () => {
+		// Two contractions in one sentence look exactly like one single-quoted run.
+		expect(
+			redactFailureMessage("Couldn't reach the sink, so it doesn't retry."),
+		).toBe("Couldn't reach the sink, so it doesn't retry.");
+	});
+
+	test("an unquoted proper noun is generalized, a platform phrase is not", () => {
+		expect(redactFailureMessage("Customer Acme payroll export failed")).toBe(
+			"<name> payroll export failed",
+		);
+		expect(
+			redactFailureMessage("The Data Studio sub-agent transport closed."),
+		).toBe("The Data Studio sub-agent transport closed.");
+	});
+
 	test("failure messages stay bounded and drop secrets", () => {
 		const redacted = redactFailureMessage(
 			`Authorization: Bearer sk-live-abcdef0123456789 rejected. ${"x".repeat(4_000)}`,

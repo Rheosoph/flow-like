@@ -9,7 +9,6 @@ import { createRoot } from "react-dom/client";
 mock.module("../../../lib", () => ({
 	cn: (...classes: unknown[]) => classes.filter(Boolean).join(" "),
 	humanFileSize: (bytes: number) => `${bytes} B`,
-	sanitizeImageUrl: (url: string) => url,
 }));
 
 mock.module("../../ui", () => ({

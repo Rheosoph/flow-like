@@ -46,6 +46,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -666,8 +667,7 @@ export default function Id({
 	}
 
 	// Storage and Data Studio own their vertical space; every other section scrolls.
-	const contentFillsHeight =
-		currentRoute?.includes("/storage") || currentRoute?.includes("/explore");
+	const contentFillsHeight = configRouteFillsHeight(currentRoute);
 
 	// Rendered exactly once — a second copy for mobile would mount the whole page
 	// twice, duplicating its effects, URL writes and IndexedDB persistence.
