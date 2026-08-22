@@ -67,7 +67,7 @@ export function FileManagerDialog({
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
 		new Set(["root"]),
 	);
-	const previewUrls = useImagePreviewUrls(files);
+	const previewUrls = useImagePreviewUrls(files, open);
 
 	const getFileIcon = (file: File) => {
 		if (file.type.startsWith("image/")) return Image;

@@ -117,7 +117,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
 		const [showFileManager, setShowFileManager] = useState(false);
-		const previewUrls = useImagePreviewUrls(attachedFiles);
+		const visibleFiles = attachedFiles.slice(0, 6);
+		const previewUrls = useImagePreviewUrls(visibleFiles);
 
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordedDuration, setRecordedDuration] = useState(0);
@@ -487,7 +488,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Attached files — one quiet chip per file, wrapping inline. */}
 						{attachedFiles.length > 0 && (
 							<div className="flex flex-wrap items-center gap-1.5">
-								{attachedFiles.slice(0, 6).map((file, index) => (
+								{visibleFiles.map((file, index) => (
 									<div
 										key={`${file.name}-${index}`}
 										className="group flex h-8 min-w-0 max-w-56 items-center gap-2 rounded-full border py-0 pr-1 pl-1.5 transition-colors hover:border-ring"
