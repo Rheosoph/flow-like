@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { Client } from "pg";
 
 /**
@@ -19,6 +19,12 @@ const LOCKED_TABLES_QUERY = `
 		AND create_statement ILIKE '%schema_locked = true%'
 	ORDER BY descriptor_name;
 `;
+
+/// Prisma drops a stale `@@unique` with `DROP INDEX`, which CockroachDB refuses
+/// while the index backs a unique constraint. Drop the constraint instead and
+/// let the push run again.
+const CONSTRAINT_IN_USE = /index "([^"]+)" is in use as unique constraint/;
+const MAX_PUSH_ATTEMPTS = 5;
 
 function quoteIdentifier(name: string): string {
 	return `"${name.replace(/"/g, '""')}"`;
@@ -83,6 +89,74 @@ async function setSchemaLocked(
 	}
 }
 
+async function dropUniqueConstraint(
+	client: Client,
+	constraint: string,
+): Promise<boolean> {
+	try {
+		const owner = await client.query(
+			`SELECT namespace.nspname AS schema_name, class.relname AS table_name
+			FROM pg_constraint constraints
+			JOIN pg_class class ON class.oid = constraints.conrelid
+			JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+			WHERE constraints.conname = $1 AND constraints.contype = 'u'`,
+			[constraint],
+		);
+		const owned = owner.rows[0];
+		if (!owned) {
+			console.warn(`No unique constraint named ${constraint} found`);
+			return false;
+		}
+
+		const table = `${quoteIdentifier(owned.schema_name)}.${quoteIdentifier(owned.table_name)}`;
+		console.log(`Dropping stale unique constraint ${constraint} on ${table}`);
+		await client.query(
+			`ALTER TABLE ${table} DROP CONSTRAINT ${quoteIdentifier(constraint)}`,
+		);
+		return true;
+	} catch (error) {
+		console.warn(`Failed to drop constraint ${constraint}: ${error}`);
+		return false;
+	}
+}
+
+function runPush(): Promise<{ status: number; output: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(
+			"bunx",
+			[
+				"prisma",
+				"db",
+				"push",
+				"--schema",
+				"prisma/schema",
+				...process.argv.slice(2),
+			],
+			{
+				stdio: ["inherit", "pipe", "pipe"],
+				env: {
+					...process.env,
+					// CockroachDB 26.1+ locks newly created tables by default. Prisma may
+					// create a table and add its indexes as separate schema changes, so a
+					// new lock would make the same push fail midway through.
+					DATABASE_URL: databaseUrlForPush(process.env.DATABASE_URL!),
+				},
+			},
+		);
+
+		let output = "";
+		child.stdout?.on("data", (chunk) => {
+			output += chunk;
+			process.stdout.write(chunk);
+		});
+		child.stderr?.on("data", (chunk) => {
+			output += chunk;
+			process.stderr.write(chunk);
+		});
+		child.on("close", (status) => resolve({ status: status ?? 1, output }));
+	});
+}
+
 const client = await connect();
 const locked = client ? await findLockedTables(client) : [];
 
@@ -91,27 +165,16 @@ if (client && locked.length > 0) {
 	await setSchemaLocked(client, locked, false);
 }
 
-const push = spawnSync(
-	"bunx",
-	[
-		"prisma",
-		"db",
-		"push",
-		"--schema",
-		"prisma/schema",
-		...process.argv.slice(2),
-	],
-	{
-		stdio: "inherit",
-		env: {
-			...process.env,
-			// CockroachDB 26.1+ locks newly created tables by default. Prisma may
-			// create a table and add its indexes as separate schema changes, so a
-			// new lock would make the same push fail midway through.
-			DATABASE_URL: databaseUrlForPush(process.env.DATABASE_URL!),
-		},
-	},
-);
+let push = await runPush();
+for (
+	let attempt = 1;
+	client && push.status !== 0 && attempt < MAX_PUSH_ATTEMPTS;
+	attempt++
+) {
+	const constraint = CONSTRAINT_IN_USE.exec(push.output)?.[1];
+	if (!constraint || !(await dropUniqueConstraint(client, constraint))) break;
+	push = await runPush();
+}
 
 if (client) {
 	if (locked.length > 0) {
@@ -121,4 +184,4 @@ if (client) {
 	await client.end();
 }
 
-process.exit(push.status ?? 1);
+process.exit(push.status);

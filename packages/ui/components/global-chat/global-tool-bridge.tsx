@@ -111,6 +111,7 @@ import {
 	hasActiveFrontendRequestOwnership,
 	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	normalizeBoardRepairScope,
 	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
@@ -1351,6 +1352,9 @@ export function GlobalToolBridge() {
 			{
 				key: string;
 				baselineFingerprint?: FlowScriptBaselineFingerprint;
+				// The declared repair scope, so the deadline path charges the same retry bucket the
+				// dispatch was admitted against.
+				repairScope?: string;
 			}
 		>
 	>(new Map());
@@ -3788,6 +3792,13 @@ export function GlobalToolBridge() {
 					// Read-only mode: the board copilot answers a question about the board and
 					// makes no edits (no FlowScript, no apply, no approval).
 					const readOnly = argString(args, "mode") === "explain";
+					// Which part of the build this run repairs. Each scope carries its own
+					// zero-progress budget, so a failed graph build does not also block an unrelated
+					// repair on the same board. An unrecognised or absent value collapses to the
+					// shared whole-board bucket.
+					const repairScope = normalizeBoardRepairScope(
+						argString(args, "repair_scope") || argString(args, "repairScope"),
+					);
 					const appIdArg =
 						argString(args, "app_id") || argString(args, "appId");
 					const boardIdArg =
@@ -3830,6 +3841,7 @@ export function GlobalToolBridge() {
 					if (boardId) {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardEditRecoveryKey(appId, boardId),
+							repairScope,
 						});
 					}
 					// Explain/readback waits too, otherwise it can observe the pre-commit board while
@@ -3952,6 +3964,7 @@ export function GlobalToolBridge() {
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
+							repairScope,
 						});
 						const zeroProgressOwnerId =
 							ownerMessageId ?? parentRequestId(request) ?? request.requestId;
@@ -3960,14 +3973,15 @@ export function GlobalToolBridge() {
 							!boardZeroProgressRetryRef.current.canStart(
 								zeroProgressOwnerId,
 								boardRecoveryKey,
+								repairScope,
 							)
 						) {
 							return {
 								status: "zero_progress_retry_exhausted",
 								code: "FLOWPILOT_BOARD_ZERO_PROGRESS_RETRY_EXHAUSTED",
 								flowscript_status: "no_flowscript",
-								message:
-									"The board specialist already made the initial attempt and one materially different retry in this assistant turn without retaining any FlowScript source. A third equivalent run was not dispatched. Report the failure honestly instead of rewording the same request again.",
+								repair_scope: repairScope,
+								message: `The board specialist exhausted its zero-progress budget for repair scope "${repairScope}" on this board in this assistant turn: every dispatched run returned without retaining any FlowScript source. A further run against the same scope was not dispatched. A genuinely different part of the build may still be attempted by passing that repair_scope; rewording the same failing request is not a different scope. Otherwise report the failure honestly.`,
 							};
 						}
 						flowPilotDebugLog(
@@ -4010,6 +4024,7 @@ export function GlobalToolBridge() {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
 							baselineFingerprint,
+							repairScope,
 						});
 						const retainedCandidateAtStart = boardRecoveryRef.current.get(
 							boardRecoveryKey,
@@ -5053,6 +5068,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									boardRecoveryKey,
 									request.requestId,
 									Boolean(retainedCandidate),
+									repairScope,
 								);
 							}
 							if (!nestedRunSettled) {
@@ -5084,6 +5100,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								boardRecoveryKey,
 								request.requestId,
 								!noFlowScript,
+								repairScope,
 							);
 						}
 						const unvalidatedWorkspace =
@@ -5318,7 +5335,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
+										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most twice for this repair_scope, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. Moving to a genuinely different part of the build means passing that repair_scope, which carries its own budget; merely rewording or shortening the same instruction is not a different scope or a different strategy. Once the scope's budget is spent, stop and tell the user honestly that the edit failed.",
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -6860,6 +6877,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								recoveryScope.key,
 								request.requestId,
 								Boolean(retainedCandidate),
+								recoveryScope.repairScope,
 							);
 						}
 						cancelRequestDialogs(request.requestId, reason);
