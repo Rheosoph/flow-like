@@ -68,7 +68,7 @@ impl WasmComponent {
         }
 
         let mut instance =
-            WasmComponentInstance::new(engine, self.clone(), security.clone()).await?;
+            WasmComponentInstance::new(engine, self.clone(), security.for_metadata()).await?;
         let definition = instance.call_get_node().await?;
 
         {

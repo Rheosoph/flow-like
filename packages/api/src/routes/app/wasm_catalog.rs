@@ -181,7 +181,13 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         },
         required_oauth_scopes: entry.required_oauth_scopes.clone(),
         only_offline: entry.only_offline,
-        version: entry.version,
+        // `build_node_from_definition` builds the same node for the executor
+        // and leaves this unset; the two must agree or the registry
+        // fingerprints they produce — and with them any compiled board
+        // artifact bound to one — diverge. Entries written before
+        // `definition_to_package_entry` stopped storing the module's ABI
+        // version here still carry one, so the stored value is not read.
+        version: None,
         wasm: Some(NodeWasm {
             package_id: package_id.to_string(),
             permissions: entry.permissions.clone(),
@@ -354,5 +360,93 @@ impl<'a> WasmCatalogLookup<'a> {
         }
 
         Ok(self.wasm_by_name.get(node.name.as_str()).copied())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_wasm::abi::{WasmNodeDefinition, WasmPinDefinition};
+    use flow_like_wasm::{build_node_from_definition, definition_to_package_entry};
+
+    fn definition() -> WasmNodeDefinition {
+        WasmNodeDefinition {
+            name: "youtube_transcript".to_string(),
+            friendly_name: "YouTube Transcript".to_string(),
+            description: "Fetch a transcript".to_string(),
+            category: "Web".to_string(),
+            icon: Some("video".to_string()),
+            pins: vec![
+                WasmPinDefinition {
+                    name: "video_url".to_string(),
+                    friendly_name: "Video URL".to_string(),
+                    description: "The video to transcribe".to_string(),
+                    pin_type: "Input".to_string(),
+                    data_type: "String".to_string(),
+                    default_value: None,
+                    value_type: Some("Normal".to_string()),
+                    schema: None,
+                    valid_values: None,
+                    range: None,
+                    step: None,
+                    sensitive: None,
+                    enforce_schema: None,
+                    enforce_generic_value_type: None,
+                },
+                WasmPinDefinition {
+                    name: "transcript".to_string(),
+                    friendly_name: "Transcript".to_string(),
+                    description: "The transcript text".to_string(),
+                    pin_type: "Output".to_string(),
+                    data_type: "String".to_string(),
+                    default_value: None,
+                    value_type: Some("Normal".to_string()),
+                    schema: None,
+                    valid_values: None,
+                    range: None,
+                    step: None,
+                    sensitive: None,
+                    enforce_schema: None,
+                    enforce_generic_value_type: None,
+                },
+            ],
+            scores: None,
+            long_running: None,
+            docs: None,
+            // A module built against a non-default host ABI: the case that used
+            // to push the two builders apart.
+            abi_version: Some(3),
+            permissions: vec![],
+        }
+    }
+
+    /// The executor overlays WASM nodes onto its registry via
+    /// `build_node_from_definition`; the API reconstructs the same nodes from
+    /// the stored `PackageNodeEntry`. `FlowNodeRegistryInner::fingerprint`
+    /// hashes name, version and `semantic_hash` per node, so any disagreement
+    /// on those three yields two different fingerprints for one package — and
+    /// a compiled artifact one side writes that the other always rejects.
+    #[test]
+    fn both_node_builders_agree_on_every_fingerprint_input() {
+        let definition = definition();
+
+        let executor_node = build_node_from_definition(&definition);
+        let api_node = package_node_to_node(
+            &definition_to_package_entry(&definition),
+            "com.flow-like.youtube",
+        );
+
+        assert_eq!(executor_node.name, api_node.name);
+        assert_eq!(executor_node.version, api_node.version);
+        assert_eq!(executor_node.semantic_hash(), api_node.semantic_hash());
+    }
+
+    #[test]
+    fn abi_version_never_becomes_a_node_schema_version() {
+        let definition = definition();
+        assert_eq!(definition.abi_version, Some(3));
+
+        assert_eq!(definition_to_package_entry(&definition).version, None);
+        assert_eq!(build_node_from_definition(&definition).version, None);
     }
 }

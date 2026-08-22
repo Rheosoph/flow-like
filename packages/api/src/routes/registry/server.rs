@@ -639,71 +639,11 @@ impl ServerRegistry {
         Ok(url.to_string())
     }
 
-    /// Extract node definitions from a WASM binary by instantiating it and
-    /// calling `get_nodes()`. Returns the entries serialized as JSON suitable
-    /// for storage in `wasm_package_version.nodes`.
-    pub async fn extract_node_entries(
-        wasm_bytes: &[u8],
-    ) -> flow_like_types::Result<serde_json::Value> {
-        let config = flow_like_wasm::engine::WasmConfig::default().without_cache();
-        let engine = Arc::new(flow_like_wasm::engine::WasmEngine::new(config)?);
-        let security = flow_like_wasm::limits::WasmSecurityConfig::restrictive();
-        let loaded = engine.load_auto(wasm_bytes).await?;
-        let mut instance = loaded.instantiate(&engine, security).await?;
-        let definitions = instance.call_get_nodes().await?;
-        let entries: Vec<PackageNodeEntry> = definitions
-            .iter()
-            .map(flow_like_wasm::node::definition_to_package_entry)
-            .collect();
-        Ok(serde_json::to_value(entries)?)
-    }
-
-    /// Compile WASM bytes to AOT .cwasm for every configured target platform
-    /// and store artifacts + checksums in the bucket.
-    ///
-    /// Set `WASM_COMPILATION_TARGETS=linux-x86_64,linux-aarch64` to cross-compile.
-    /// Defaults to host + iOS Pulley when the variable is unset.
-    pub async fn compile_and_store_artifact(
-        &self,
-        package_id: &str,
-        version: &str,
-        wasm_bytes: &[u8],
-    ) -> flow_like_types::Result<Vec<String>> {
-        let targets = compilation_targets();
-        let mut compiled_platforms = Vec::new();
-
-        for target in &targets {
-            let mut config = flow_like_wasm::engine::WasmConfig::default().without_cache();
-            if let Some(triple) = &target.cross_triple {
-                config = config.with_target(triple);
-            }
-            if target.platform_key.starts_with("ios-") {
-                config = config.with_ios_memory_layout();
-            }
-            let engine = flow_like_wasm::engine::WasmEngine::new(config)?;
-            let serialized = engine.precompile(wasm_bytes)?;
-
-            let base = Path::from(WASM_COMPILED_PATH)
-                .child(package_id)
-                .child(version);
-            let cwasm_path = base.child(format!("{}.cwasm", target.platform_key));
-            let hash_path = base.child(format!("{}.cwasm.b3", target.platform_key));
-            let hash = blake3::hash(&serialized).to_hex().to_string();
-
-            self.meta_bucket
-                .as_generic()
-                .put(&cwasm_path, PutPayload::from(serialized))
-                .await?;
-            self.meta_bucket
-                .as_generic()
-                .put(&hash_path, PutPayload::from(hash.into_bytes()))
-                .await?;
-
-            compiled_platforms.push(target.platform_key.clone());
-        }
-
-        Ok(compiled_platforms)
-    }
+    // Node extraction and AOT compilation deliberately do not live here. Both
+    // load an uploaded module into a wasmtime engine, and the API process holds
+    // the platform's database, mail, scheduler and bucket credentials. Every
+    // deployment routes that work to a compiler worker, which reports results
+    // back through `crate::compilation::callback`.
 
     pub async fn recompile_version(
         &self,
@@ -711,136 +651,43 @@ impl ServerRegistry {
         package_id: &str,
         version: &str,
     ) -> flow_like_types::Result<()> {
-        let use_external = self
-            .compilation_dispatcher
-            .as_ref()
-            .is_some_and(|d| d.backend().is_external());
-
         tracing::info!(
-            use_external = use_external,
-            backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
+            backend = ?self.compilation_dispatcher.as_ref().and_then(|d| d.backend()),
             pkg = %package_id,
             ver = %version,
-            "Recompilation dispatch decision"
+            "Recompilation dispatch"
         );
 
-        if use_external {
-            let wasm_path = Self::wasm_path(package_id, version).to_string();
+        let wasm_path = Self::wasm_path(package_id, version).to_string();
 
-            let version_record = wasm_package_version::Entity::find()
-                .filter(wasm_package_version::Column::PackageId.eq(package_id))
-                .filter(wasm_package_version::Column::Version.eq(version))
-                .one(&self.db)
-                .await?
-                .ok_or_else(|| flow_like_types::anyhow!("Version not found"))?;
+        let version_record = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(package_id))
+            .filter(wasm_package_version::Column::Version.eq(version))
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| flow_like_types::anyhow!("Version not found"))?;
 
-            let dispatcher = self
-                .compilation_dispatcher
-                .clone()
-                .ok_or_else(|| flow_like_types::anyhow!("Compilation dispatcher not configured"))?;
-            let params = crate::compilation::DispatchParams {
-                package_id: package_id.to_string(),
-                version: version.to_string(),
-                wasm_path,
-                wasm_hash: version_record.wasm_hash,
-            };
-            let resp = dispatcher
-                .dispatch(sub, params)
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Dispatch failed: {e}"))?;
-            tracing::info!(
-                pkg = %package_id,
-                ver = %version,
-                job_id = %resp.job_id,
-                backend = %resp.backend,
-                "Recompilation job dispatched to external backend"
-            );
-        } else {
-            let db = self.db.clone();
-            let content_bucket = self.content_bucket.clone();
-            let meta_bucket = self.meta_bucket.clone();
-            let pkg_id = package_id.to_string();
-            let ver = version.to_string();
-
-            flow_like_types::tokio::spawn(async move {
-                let inline_registry = ServerRegistry::new(db.clone(), content_bucket, meta_bucket);
-                let wasm_path = ServerRegistry::wasm_path(&pkg_id, &ver);
-                let data = match inline_registry
-                    .content_bucket
-                    .as_generic()
-                    .get(&wasm_path)
-                    .await
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::error!(pkg = %pkg_id, ver = %ver, err = %e, "Failed to fetch WASM for recompilation");
-                        return;
-                    }
-                };
-                let wasm_bytes = match data.bytes().await {
-                    Ok(b) => b.to_vec(),
-                    Err(e) => {
-                        tracing::error!(pkg = %pkg_id, ver = %ver, err = %e, "Failed to read WASM bytes");
-                        return;
-                    }
-                };
-
-                // Extract node definitions (backfills nodes for older packages)
-                let extracted_nodes = match ServerRegistry::extract_node_entries(&wasm_bytes).await
-                {
-                    Ok(nodes) => Some(nodes),
-                    Err(e) => {
-                        tracing::warn!(pkg = %pkg_id, ver = %ver, err = %e, "Failed to extract nodes during recompilation");
-                        None
-                    }
-                };
-
-                match inline_registry
-                    .compile_and_store_artifact(&pkg_id, &ver, &wasm_bytes)
-                    .await
-                {
-                    Ok(platforms) => {
-                        let version_record = wasm_package_version::Entity::find()
-                            .filter(wasm_package_version::Column::PackageId.eq(&pkg_id))
-                            .filter(wasm_package_version::Column::Version.eq(&ver))
-                            .one(&db)
-                            .await;
-                        if let Ok(Some(record)) = version_record {
-                            let supported_wasmtime_versions =
-                                record.supported_wasmtime_versions.clone();
-                            let mut active: wasm_package_version::ActiveModel = record.into();
-                            active.compilation_status = Set(WasmCompilationStatus::Compiled);
-                            active.compiled_platforms = Set(Some(platforms));
-                            active.supported_wasmtime_versions = Set(Some(
-                                with_current_wasmtime_version(supported_wasmtime_versions),
-                            ));
-                            active.compilation_error = Set(None);
-                            if let Some(ref nodes) = extracted_nodes {
-                                active.nodes = Set(nodes.clone());
-                            }
-                            let _ = active.update(&db).await;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(pkg = %pkg_id, ver = %ver, err = %e, "Inline recompilation failed");
-                        let version_record = wasm_package_version::Entity::find()
-                            .filter(wasm_package_version::Column::PackageId.eq(&pkg_id))
-                            .filter(wasm_package_version::Column::Version.eq(&ver))
-                            .one(&db)
-                            .await;
-                        if let Ok(Some(record)) = version_record {
-                            let mut active: wasm_package_version::ActiveModel = record.into();
-                            active.compilation_status = Set(WasmCompilationStatus::LocalOnly);
-                            active.compilation_error = Set(Some(e.to_string()));
-                            if let Some(ref nodes) = extracted_nodes {
-                                active.nodes = Set(nodes.clone());
-                            }
-                            let _ = active.update(&db).await;
-                        }
-                    }
-                }
-            });
-        }
+        let dispatcher = self
+            .compilation_dispatcher
+            .clone()
+            .ok_or_else(|| flow_like_types::anyhow!("Compilation dispatcher not configured"))?;
+        let params = crate::compilation::DispatchParams {
+            package_id: package_id.to_string(),
+            version: version.to_string(),
+            wasm_path,
+            wasm_hash: version_record.wasm_hash,
+        };
+        let resp = dispatcher
+            .dispatch(sub, params)
+            .await
+            .map_err(|e| flow_like_types::anyhow!("Dispatch failed: {e}"))?;
+        tracing::info!(
+            pkg = %package_id,
+            ver = %version,
+            job_id = %resp.job_id,
+            backend = %resp.backend,
+            "Recompilation job dispatched"
+        );
 
         Ok(())
     }
@@ -2238,19 +2085,16 @@ impl ServerRegistry {
             let compile_version = manifest.version.clone();
             let compile_wasm_path = final_wasm_path.to_string();
 
-            let use_external = self
-                .compilation_dispatcher
-                .as_ref()
-                .is_some_and(|d| d.backend().is_external());
-
             tracing::info!(
-                use_external = use_external,
-                backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
-                "Compilation dispatch decision"
+                backend = ?self.compilation_dispatcher.as_ref().and_then(|d| d.backend()),
+                "Compilation dispatch"
             );
 
-            // Dispatch compilation inline (not tokio::spawn — Lambda shuts down after response)
-            if use_external {
+            // Dispatched synchronously (not tokio::spawn — Lambda shuts down after response).
+            // Everything the worker reports back is applied by the compilation
+            // callback: node entries, wasmtime versions, private auto-approval
+            // and promotion to the parent package.
+            {
                 let dispatcher = self.compilation_dispatcher.clone().ok_or_else(|| {
                     flow_like_types::anyhow!("Compilation dispatcher not configured")
                 })?;
@@ -2286,94 +2130,6 @@ impl ServerRegistry {
                         }
                         .update(&compile_db)
                         .await;
-                    }
-                }
-            } else {
-                // Extract node definitions from the WASM binary
-                let extracted_nodes = match Self::extract_node_entries(&compile_wasm_data).await {
-                    Ok(nodes) => Some(nodes),
-                    Err(e) => {
-                        tracing::warn!(
-                            pkg = %compile_pkg_id,
-                            ver = %compile_version,
-                            err = %e,
-                            "Failed to extract node definitions from WASM"
-                        );
-                        None
-                    }
-                };
-
-                let tmp_registry =
-                    ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
-                match tmp_registry
-                    .compile_and_store_artifact(
-                        &compile_pkg_id,
-                        &compile_version,
-                        &compile_wasm_data,
-                    )
-                    .await
-                {
-                    Ok(platforms) => {
-                        let mut update = wasm_package_version::ActiveModel {
-                            id: Set(version_id.clone()),
-                            compilation_status: Set(WasmCompilationStatus::Compiled),
-                            compiled_platforms: Set(Some(platforms)),
-                            supported_wasmtime_versions: Set(Some(with_current_wasmtime_version(
-                                None,
-                            ))),
-                            compilation_error: Set(None),
-                            ..Default::default()
-                        };
-
-                        if let Some(ref nodes) = extracted_nodes {
-                            update.nodes = Set(nodes.clone());
-                        }
-
-                        // Auto-approve private packages on successful inline compilation
-                        if is_private_package {
-                            let now_approve = chrono::Utc::now().naive_utc();
-                            update.status = Set(WasmPackageStatus::Active);
-                            update.approved_at = Set(Some(now_approve));
-                        }
-
-                        let _ = update.update(&compile_db).await;
-
-                        // Promote version data to parent package for auto-approved private packages
-                        if is_private_package {
-                            let now_promote = chrono::Utc::now().naive_utc();
-                            let mut pkg_update = wasm_package::ActiveModel {
-                                id: Set(compile_pkg_id.clone()),
-                                version: Set(compile_version.clone()),
-                                widgets: Set(widgets_json.clone()),
-                                widget_bundle_hash: Set(widget_bundle_hash.clone()),
-                                widget_bundle_size: Set(widget_bundle_size),
-                                updated_at: Set(now_promote),
-                                ..Default::default()
-                            };
-                            if let Some(ref nodes) = extracted_nodes {
-                                pkg_update.nodes = Set(nodes.clone());
-                            }
-                            let _ = pkg_update.update(&compile_db).await;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            pkg = %compile_pkg_id,
-                            ver = %compile_version,
-                            err = %e,
-                            "AOT compilation failed"
-                        );
-                        // Still save extracted nodes even if AOT fails
-                        let mut update = wasm_package_version::ActiveModel {
-                            id: Set(version_id.clone()),
-                            compilation_status: Set(WasmCompilationStatus::LocalOnly),
-                            compilation_error: Set(Some(e.to_string())),
-                            ..Default::default()
-                        };
-                        if let Some(ref nodes) = extracted_nodes {
-                            update.nodes = Set(nodes.clone());
-                        }
-                        let _ = update.update(&compile_db).await;
                     }
                 }
             }

@@ -129,6 +129,9 @@ impl ComponentStoreData {
         builder.inherit_output();
         configure_guest_network(&mut builder, security);
         builder.args(&["flow-like-wasm-node"]);
+        if security.deterministic {
+            builder.make_deterministic();
+        }
 
         Self::with_host_state(
             HostState::new(security.capabilities),

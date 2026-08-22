@@ -1128,7 +1128,7 @@ impl RegistryClient {
             cached
         } else {
             let mut instance = loaded
-                .instantiate(&engine, manifest_security.clone())
+                .instantiate(&engine, manifest_security.for_metadata())
                 .await?;
             let defs = instance.call_get_nodes().await?;
             engine.cache_definitions(wasm_hash, defs.clone());
@@ -1186,7 +1186,7 @@ impl RegistryClient {
             cached
         } else {
             let mut instance = loaded
-                .instantiate(&engine, manifest_security.clone())
+                .instantiate(&engine, manifest_security.for_metadata())
                 .await?;
             let defs = instance.call_get_nodes().await?;
             engine.cache_definitions(wasm_hash, defs.clone());
