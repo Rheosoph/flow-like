@@ -120,7 +120,6 @@ even when they match the generic names.
 | --- | --- | --- |
 | `COMPILATION_BACKEND` | `http` | `http` or `redis` — the API never compiles WASM in-process, so a compiler service is required |
 | `COMPILER_URL` | `http://compiler:8081` | Internal compiler endpoint |
-| `WASM_COMPILATION_TARGETS` | empty | Optional comma-separated target list |
 | `COMPILER_TIMEOUT_SECS` | `600` | Compiler timeout |
 | `COMPILER_CALLBACK_TIMEOUT_MS` | `10000` | Callback request timeout |
 | `COMPILER_CALLBACK_RETRIES` | `3` | Callback retry count |

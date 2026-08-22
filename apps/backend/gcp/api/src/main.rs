@@ -300,8 +300,7 @@ mod metrics_endpoint {
         let enabled = otlp
             .as_ref()
             .map(|otlp| (otlp.endpoint.clone(), otlp.endpoint_var, otlp.timeout));
-        let otel_layer =
-            otlp.map(|otlp| tracing_opentelemetry::layer().with_tracer(otlp.tracer));
+        let otel_layer = otlp.map(|otlp| tracing_opentelemetry::layer().with_tracer(otlp.tracer));
         let sentry_layer = sentry_guard.is_some().then(sentry_tracing::layer);
 
         tracing_subscriber::registry()

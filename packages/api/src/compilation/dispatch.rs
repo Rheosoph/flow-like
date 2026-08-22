@@ -126,7 +126,6 @@ impl CompilationBackend {
             Self::Sqs | Self::AzureQueue | Self::PubSub | Self::Kafka | Self::Redis
         )
     }
-
 }
 
 /// Compilation dispatch configuration loaded from environment

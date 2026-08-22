@@ -110,7 +110,9 @@ fn init_tracing() -> (Option<EnabledTracing>, Option<String>) {
             )
         }
         _ => {
-            eprintln!("{endpoint_var} is set but GCP_PROJECT_ID is not; OTLP export stays disabled");
+            eprintln!(
+                "{endpoint_var} is set but GCP_PROJECT_ID is not; OTLP export stays disabled"
+            );
             return (None, timeout_warning);
         }
     };

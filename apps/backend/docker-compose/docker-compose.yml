@@ -171,7 +171,6 @@ services:
       COMPILATION_BACKEND: ${COMPILATION_BACKEND:-http}
       COMPILER_URL: ${COMPILER_URL:-http://compiler:8081}
       API_BASE_URL: ${API_BASE_URL:-http://api:8080}
-      WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
 
       # Unified backend JWT keys (used for execution, realtime, etc.)
       BACKEND_KEY: ${BACKEND_KEY:-}

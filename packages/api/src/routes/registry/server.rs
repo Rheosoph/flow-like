@@ -283,57 +283,6 @@ pub struct TargetSpec {
     pub cross_triple: Option<String>,
 }
 
-fn ios_pulley_target() -> TargetSpec {
-    TargetSpec {
-        platform_key: platform_key_for("ios", "pulley64"),
-        cross_triple: Some("pulley64".to_string()),
-    }
-}
-
-fn ensure_ios_pulley_target(mut targets: Vec<TargetSpec>) -> Vec<TargetSpec> {
-    let ios_key = platform_key_for("ios", "pulley64");
-    if !targets.iter().any(|target| target.platform_key == ios_key) {
-        targets.push(ios_pulley_target());
-    }
-    targets
-}
-
-/// Read the list of platforms to compile for from `WASM_COMPILATION_TARGETS`.
-///
-/// Format: comma-separated `os-arch` pairs, e.g. `linux-x86_64,linux-aarch64`.
-/// Falls back to host + iOS Pulley when the variable is unset.
-///
-/// Used for **inline** compilation only. For external dispatch, use
-/// [`all_known_targets`] so the worker can compile whichever subset it supports.
-pub fn compilation_targets() -> Vec<TargetSpec> {
-    let mut targets = if let Ok(val) = std::env::var("WASM_COMPILATION_TARGETS") {
-        val.split(',')
-            .filter_map(|entry| {
-                let entry = entry.trim();
-                let (os, arch) = entry.split_once('-')?;
-                Some(TargetSpec {
-                    platform_key: platform_key_for(os, arch),
-                    cross_triple: target_triple_for(os, arch).map(String::from),
-                })
-            })
-            .collect()
-    } else {
-        vec![TargetSpec {
-            platform_key: host_platform_key(),
-            cross_triple: None,
-        }]
-    };
-
-    if targets.is_empty() {
-        targets.push(TargetSpec {
-            platform_key: host_platform_key(),
-            cross_triple: None,
-        });
-    }
-
-    ensure_ios_pulley_target(targets)
-}
-
 /// The platform key the executor expects.
 ///
 /// Read from `EXECUTOR_PLATFORM` (e.g. `linux-x86_64-wt43`).
@@ -1794,7 +1743,6 @@ impl ServerRegistry {
             .as_ref()
             .map(|wasm| wasm.len() as i64)
             .unwrap_or(0);
-        let compile_wasm_data = wasm_data.clone().unwrap_or_default();
 
         // Check for hash duplicates (non-blocking flag)
         let duplicate_info = if has_wasm {
@@ -2079,8 +2027,6 @@ impl ServerRegistry {
         } else {
             // Dispatch compilation based on configured backend
             let compile_db = self.db.clone();
-            let compile_content = self.content_bucket.clone();
-            let compile_meta = self.meta_bucket.clone();
             let compile_pkg_id = manifest.id.clone();
             let compile_version = manifest.version.clone();
             let compile_wasm_path = final_wasm_path.to_string();
