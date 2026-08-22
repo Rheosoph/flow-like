@@ -118,7 +118,7 @@ even when they match the generic names.
 
 | Variable | Template default | Purpose |
 | --- | --- | --- |
-| `COMPILATION_BACKEND` | `http` in `.env.example` | `inline`, `http`, or `redis` |
+| `COMPILATION_BACKEND` | `http` | `http` or `redis` — the API never compiles WASM in-process, so a compiler service is required |
 | `COMPILER_URL` | `http://compiler:8081` | Internal compiler endpoint |
 | `WASM_COMPILATION_TARGETS` | empty | Optional comma-separated target list |
 | `COMPILER_TIMEOUT_SECS` | `600` | Compiler timeout |
