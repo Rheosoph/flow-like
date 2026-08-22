@@ -324,7 +324,8 @@ fn encrypt_node(name: &str, friendly_name: &str, description: &str) -> Node {
         "Optional authenticated metadata stored alongside the ciphertext",
         VariableType::Struct,
     )
-    .set_default_value(Some(json!({})));
+    .set_default_value(Some(json!({})))
+    .set_open_schema();
 
     node.add_output_pin(
         "exec_out",
@@ -359,6 +360,7 @@ fn encrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         .set_value_type(ValueType::Array)
         .set_options(PinOptions::new().set_sensitive(true).build());
     node.add_input_pin("value", "Value", "Struct to encrypt", VariableType::Struct)
+        .set_open_schema()
         .set_options(PinOptions::new().set_sensitive(true).build());
     node.add_input_pin(
         "associated_data",
@@ -366,7 +368,8 @@ fn encrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         "Optional authenticated metadata stored alongside the ciphertext",
         VariableType::Struct,
     )
-    .set_default_value(Some(json!({})));
+    .set_default_value(Some(json!({})))
+    .set_open_schema();
 
     node.add_output_pin(
         "exec_out",
@@ -457,6 +460,7 @@ fn decrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         VariableType::Execution,
     );
     node.add_output_pin("value", "Value", "Decrypted struct", VariableType::Struct)
+        .set_open_schema()
         .set_options(PinOptions::new().set_sensitive(true).build());
 
     node

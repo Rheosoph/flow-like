@@ -58,7 +58,7 @@ impl NodeLogic for GetRowByIndexNode {
 
         // Outputs
         node.add_output_pin("row", "Row", "Row as struct", VariableType::Struct)
-        .set_open_schema();
+            .set_open_schema();
         node.add_output_pin(
             "actual_row_index",
             "Row Index",

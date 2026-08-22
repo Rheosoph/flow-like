@@ -53,7 +53,7 @@ impl NodeLogic for RowLoopNode {
             VariableType::Execution,
         );
         node.add_output_pin("value", "Row", "Current row object", VariableType::Struct)
-        .set_open_schema();
+            .set_open_schema();
         node.add_output_pin(
             "index",
             "Index",

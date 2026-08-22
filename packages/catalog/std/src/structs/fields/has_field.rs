@@ -35,7 +35,7 @@ impl NodeLogic for HasStructFieldNode {
         );
 
         node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct)
-        .set_open_schema();
+            .set_open_schema();
 
         node.add_input_pin(
             "field",

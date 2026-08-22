@@ -28,7 +28,7 @@ impl NodeLogic for MakeStructNode {
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_output_pin("struct", "Struct", "Struct Output", VariableType::Struct)
-        .set_open_schema();
+            .set_open_schema();
 
         node
     }

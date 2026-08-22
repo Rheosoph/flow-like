@@ -92,7 +92,7 @@ impl NodeLogic for HybridSearchLocalDatabaseNode {
 
         node.add_output_pin("values", "Values", "Found Items", VariableType::Struct)
             .set_value_type(ValueType::Array)
-        .set_open_schema();
+            .set_open_schema();
 
         node
     }

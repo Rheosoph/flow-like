@@ -620,7 +620,7 @@ impl NodeLogic for WindowAggregationNode {
 
         node.add_output_pin("results", "Results", "Query results", VariableType::Struct)
             .set_value_type(ValueType::Array)
-        .set_open_schema();
+            .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 

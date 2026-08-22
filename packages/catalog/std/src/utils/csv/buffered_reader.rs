@@ -73,7 +73,7 @@ impl NodeLogic for BufferedCsvReaderNode {
 
         node.add_output_pin("chunk", "Chunk", "Chunk", VariableType::Struct)
             .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_open_schema();
+            .set_open_schema();
 
         node.add_output_pin("exec_done", "Done", "Done", VariableType::Execution);
 

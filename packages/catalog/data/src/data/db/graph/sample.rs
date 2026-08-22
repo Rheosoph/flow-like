@@ -69,7 +69,7 @@ impl NodeLogic for GraphSampleNode {
         );
         node.add_output_pin("rows", "Objects", "Sampled objects", VariableType::Struct)
             .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_open_schema();
+            .set_open_schema();
 
         node
     }

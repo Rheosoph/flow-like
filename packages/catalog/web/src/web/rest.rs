@@ -3100,8 +3100,9 @@ mod tests {
         );
         handler_node.add_output_pin("Name", "Name", "Person name", VariableType::String);
         handler_node.add_output_pin("Age", "Age", "Person age", VariableType::Integer);
-        handler_node.add_output_pin("payload", "Payload", "The payload", VariableType::Struct)
-        .set_open_schema();
+        handler_node
+            .add_output_pin("payload", "Payload", "The payload", VariableType::Struct)
+            .set_open_schema();
 
         let handler = internal_node(handler_node);
         let parent = internal_node(RestServerNode::new().get_node());

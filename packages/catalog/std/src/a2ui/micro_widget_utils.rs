@@ -999,7 +999,7 @@ mod tests {
             )
             .id
             .clone()
-        .set_schema::<flow_like::a2ui::ElementRef>();
+            .set_schema::<flow_like::a2ui::ElementRef>();
 
         let mut bridge = Node::new("bridge", "Bridge", "Bridge", "Test");
         let bridge_pin = bridge.add_output_pin(
