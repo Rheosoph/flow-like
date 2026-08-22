@@ -287,6 +287,11 @@ pub struct WasmSecurityConfig {
     /// `flow_like::flow::execution::egress`.
     #[serde(default)]
     pub execution_environment: flow_like::flow::execution::ExecutionEnvironment,
+    /// Metadata-extraction mode: the guest is instantiated only to read its
+    /// node definitions, so everything it could observe the outside world
+    /// through is closed off. Set via [`WasmSecurityConfig::for_metadata`].
+    #[serde(default)]
+    pub deterministic: bool,
 }
 
 impl Default for WasmSecurityConfig {
@@ -298,6 +303,7 @@ impl Default for WasmSecurityConfig {
             allow_wasi_network: false,
             allowed_hosts: None,
             execution_environment: Default::default(),
+            deterministic: false,
         }
     }
 }
@@ -316,6 +322,7 @@ impl WasmSecurityConfig {
             allow_wasi_network: false,
             allowed_hosts: Some(vec![]),
             execution_environment: Default::default(),
+            deterministic: false,
         }
     }
 
@@ -328,6 +335,7 @@ impl WasmSecurityConfig {
             allow_wasi_network: true,
             allowed_hosts: None,
             execution_environment: Default::default(),
+            deterministic: false,
         }
     }
 
@@ -344,6 +352,28 @@ impl WasmSecurityConfig {
     pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
         self.allowed_hosts = Some(hosts);
         self
+    }
+
+    /// Derive the config used to read a module's node definitions.
+    ///
+    /// `get_node`/`get_nodes` take no arguments and return a JSON blob built
+    /// inside the guest, so extraction needs no host access whatsoever.
+    /// Closing every channel makes a definition — and with it the registry
+    /// fingerprint a compiled board artifact is bound to — a function of the
+    /// module bytes alone, instead of where and when extraction happened.
+    ///
+    /// Resource limits carry over: they decide whether extraction succeeds,
+    /// never what it returns.
+    pub fn for_metadata(&self) -> Self {
+        Self {
+            limits: self.limits.clone(),
+            capabilities: WasmCapabilities::NONE,
+            allow_wasi: false,
+            allow_wasi_network: false,
+            allowed_hosts: Some(vec![]),
+            execution_environment: Default::default(),
+            deterministic: true,
+        }
     }
 
     /// Build a security config from a set of node-level permissions.
@@ -383,6 +413,7 @@ impl WasmSecurityConfig {
             allow_wasi_network: false,
             allowed_hosts: None,
             execution_environment: Default::default(),
+            deterministic: false,
         }
     }
 }
@@ -421,5 +452,34 @@ mod tests {
         assert!(caps.has(WasmCapabilities::CACHE_READ));
         assert!(!caps.has(WasmCapabilities::STORAGE_WRITE));
         assert!(!caps.has(WasmCapabilities::HTTP_WRITE));
+    }
+
+    #[test]
+    fn for_metadata_closes_every_observation_channel() {
+        // Start from the most generous config there is: whatever it grants,
+        // metadata extraction must grant none of it.
+        let metadata = WasmSecurityConfig::permissive().for_metadata();
+
+        assert_eq!(metadata.capabilities, WasmCapabilities::NONE);
+        assert!(!metadata.allow_wasi);
+        assert!(!metadata.allow_wasi_network);
+        assert_eq!(metadata.allowed_hosts.as_deref(), Some(&[][..]));
+        assert!(metadata.deterministic);
+        assert_eq!(
+            metadata.execution_environment,
+            flow_like::flow::execution::ExecutionEnvironment::default()
+        );
+    }
+
+    #[test]
+    fn for_metadata_preserves_resource_limits() {
+        // Limits decide whether extraction succeeds, never what it returns —
+        // narrowing them here would fail modules that publish fine today.
+        let permissive = WasmSecurityConfig::permissive();
+        let metadata = permissive.for_metadata();
+
+        assert_eq!(metadata.limits.memory_limit, permissive.limits.memory_limit);
+        assert_eq!(metadata.limits.fuel_limit, permissive.limits.fuel_limit);
+        assert_eq!(metadata.limits.timeout, permissive.limits.timeout);
     }
 }

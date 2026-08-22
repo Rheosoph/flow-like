@@ -1735,6 +1735,43 @@ ${"// safe filler\n".repeat(900)}`;
 		).toBe("The Data Studio sub-agent transport closed.");
 	});
 
+	test("platform, provider and node vocabulary survives intact", () => {
+		// Without these the trace shows an admin "<name>" where the diagnosis should be.
+		expect(redactFailureMessage("OAuth Token Expired")).toBe(
+			"OAuth Token Expired",
+		);
+		expect(
+			redactFailureMessage("Anthropic API returned Overloaded Error"),
+		).toBe("Anthropic API returned Overloaded Error");
+		expect(redactFailureMessage("Execute SQL node: Table Not Found")).toBe(
+			"Execute SQL node: Table Not Found",
+		);
+		expect(redactFailureMessage("Rate Limit Exceeded after 3 retries")).toBe(
+			"Rate Limit Exceeded after 3 retries",
+		);
+		expect(redactFailureMessage("Set Page State rejected the payload")).toBe(
+			"Set Page State rejected the payload",
+		);
+	});
+
+	test("tenant names are still dropped once the allowlist grows", () => {
+		// The trace crosses tenants, so a widened allowlist must not start letting names through.
+		expect(redactFailureMessage("Acme Payroll export failed")).toBe(
+			"<name> export failed",
+		);
+		expect(redactFailureMessage("Contoso Manufacturing rejected the run")).toBe(
+			"<name> rejected the run",
+		);
+		expect(redactFailureMessage("Maria Gonzalez is not a member")).toBe(
+			"<name> is not a member",
+		);
+		expect(
+			redactFailureMessage(
+				"board Quarterly Vendor Onboarding is missing an event",
+			),
+		).toBe("board <name> is missing an event");
+	});
+
 	test("failure messages stay bounded and drop secrets", () => {
 		const redacted = redactFailureMessage(
 			`Authorization: Bearer sk-live-abcdef0123456789 rejected. ${"x".repeat(4_000)}`,

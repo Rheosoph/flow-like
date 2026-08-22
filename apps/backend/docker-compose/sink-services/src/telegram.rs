@@ -18,7 +18,10 @@ use crate::storage::TelegramBotState;
 use tracing::{debug, error};
 
 #[cfg(feature = "telegram")]
-use teloxide::{prelude::*, types::Message};
+use teloxide::{
+    prelude::*,
+    types::{Chat, Message},
+};
 
 /// Event handler configuration for a Telegram bot
 #[derive(Debug, Clone)]
@@ -286,13 +289,33 @@ pub struct TelegramMessage {
     pub date: i64,
 }
 
+/// Stable `chat_type` discriminant for sink payloads.
+///
+/// Mirrors the Telegram Bot API `Chat.type` values instead of teloxide's
+/// `Debug` rendering, which changes whenever the library adds or removes
+/// chat fields.
+#[cfg(feature = "telegram")]
+fn chat_type(chat: &Chat) -> &'static str {
+    if chat.is_private() {
+        "private"
+    } else if chat.is_group() {
+        "group"
+    } else if chat.is_supergroup() {
+        "supergroup"
+    } else if chat.is_channel() {
+        "channel"
+    } else {
+        "unknown"
+    }
+}
+
 #[cfg(feature = "telegram")]
 impl From<&Message> for TelegramMessage {
     fn from(msg: &Message) -> Self {
         Self {
             message_id: msg.id.0,
             chat_id: msg.chat.id.0,
-            chat_type: format!("{:?}", msg.chat.kind),
+            chat_type: chat_type(&msg.chat).to_string(),
             chat_title: msg.chat.title().map(String::from),
             from_id: msg.from.as_ref().map(|u| u.id.0 as i64),
             from_username: msg.from.as_ref().and_then(|u| u.username.clone()),

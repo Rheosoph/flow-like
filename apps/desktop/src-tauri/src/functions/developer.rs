@@ -955,7 +955,7 @@ pub async fn developer_inspect_node(
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-        let security = WasmSecurityConfig::permissive();
+        let security = WasmSecurityConfig::permissive().for_metadata();
         let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
             TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
         })?;
@@ -1085,7 +1085,7 @@ pub async fn developer_inspect_package(
                 TauriFunctionError::new(&format!("Failed to load WASM module: {}", e))
             })?;
 
-            let security = WasmSecurityConfig::permissive();
+            let security = WasmSecurityConfig::permissive().for_metadata();
             let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
             })?;
@@ -1629,7 +1629,7 @@ pub async fn developer_run_node(
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
         let mut inspect_instance = loaded
-            .instantiate(&engine, WasmSecurityConfig::permissive())
+            .instantiate(&engine, WasmSecurityConfig::permissive().for_metadata())
             .await
             .map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
@@ -1705,7 +1705,7 @@ async fn load_wasm_nodes_from_path(
 
     let security = WasmSecurityConfig::permissive();
     let mut instance = loaded
-        .instantiate(&engine, security.clone())
+        .instantiate(&engine, security.for_metadata())
         .await
         .map_err(|e| TauriFunctionError::new(&format!("Failed to instantiate module: {}", e)))?;
 

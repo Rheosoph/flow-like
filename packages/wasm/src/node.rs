@@ -114,7 +114,7 @@ impl WasmNodeLogic {
 
         let mut instance = self
             .loaded
-            .instantiate(&self.engine, self.security.clone())
+            .instantiate(&self.engine, self.security.for_metadata())
             .await?;
         let definitions = instance.call_get_nodes().await?;
 
@@ -394,7 +394,14 @@ pub fn definition_to_package_entry(
         oauth_providers: vec![],
         required_oauth_scopes: None,
         only_offline: false,
-        version: definition.abi_version,
+        // Deliberately not `definition.abi_version`. That is the host ABI the
+        // module was built against, while this field lands in `Node::version`,
+        // which `sync_node_schema` reads as the pin-schema generation. A guest
+        // definition carries no schema generation at all, and conflating the
+        // two would let an ABI bump present as a schema bump — which drops
+        // every pin the new catalog entry does not declare from boards already
+        // using the node.
+        version: None,
         permissions: definition.permissions.clone(),
         metadata: HashMap::new(),
     }

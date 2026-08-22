@@ -30,7 +30,7 @@
 		"vitest": "3.2.6"
 	},
 	"overrides": {
-		"vite": "7.3.6",
+		"vite": "7.3.5",
 		"rollup": "4.60.3",
 		"postcss": "8.5.26",
 		"esbuild": "0.28.1",

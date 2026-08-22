@@ -168,10 +168,9 @@ services:
       EXECUTOR_URL: ${EXECUTOR_URL:-http://runtime:9000}
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
-      COMPILATION_BACKEND: ${COMPILATION_BACKEND:-inline}
+      COMPILATION_BACKEND: ${COMPILATION_BACKEND:-http}
       COMPILER_URL: ${COMPILER_URL:-http://compiler:8081}
       API_BASE_URL: ${API_BASE_URL:-http://api:8080}
-      WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
 
       # Unified backend JWT keys (used for execution, realtime, etc.)
       BACKEND_KEY: ${BACKEND_KEY:-}

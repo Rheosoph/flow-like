@@ -8,7 +8,9 @@ use std::pin::Pin;
 use wasmtime_wasi::cli::{StdinStream, StdoutStream};
 use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::sockets::SocketAddrUse;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::{
+    Deterministic, DirPerms, FilePerms, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder,
+};
 
 /// A WASI context builder that cannot inherit the host process environment.
 ///
@@ -110,6 +112,23 @@ impl IsolatedWasiCtxBuilder {
         self
     }
 
+    /// Strip the two ambient sources a guest can read without any capability:
+    /// `wasi:clocks` and `wasi:random`.
+    ///
+    /// Components always get a real WASI context, so a guest asked only to
+    /// report its node definitions could otherwise consult the clock or draw
+    /// entropy and answer differently on every call. Running extraction
+    /// against this makes the same module bytes yield the same definitions.
+    pub fn make_deterministic(&mut self) -> &mut Self {
+        self.inner
+            .wall_clock(FrozenClock)
+            .monotonic_clock(FrozenClock)
+            .secure_random(fixed_entropy())
+            .insecure_random(fixed_entropy())
+            .insecure_random_seed(0);
+        self
+    }
+
     pub fn build(&mut self) -> WasiCtx {
         self.inner.build()
     }
@@ -123,4 +142,33 @@ impl IsolatedWasiCtxBuilder {
 #[must_use]
 pub fn isolated_wasi_ctx_builder() -> IsolatedWasiCtxBuilder {
     IsolatedWasiCtxBuilder::new()
+}
+
+/// A fixed byte cycle standing in for the host entropy source.
+fn fixed_entropy() -> Deterministic {
+    Deterministic::new(vec![0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15])
+}
+
+/// A clock stopped at the epoch, reporting one-second resolution so guests
+/// that divide by it stay well-defined.
+struct FrozenClock;
+
+impl HostWallClock for FrozenClock {
+    fn resolution(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(1)
+    }
+
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
+impl HostMonotonicClock for FrozenClock {
+    fn resolution(&self) -> u64 {
+        1_000_000_000
+    }
+
+    fn now(&self) -> u64 {
+        0
+    }
 }

@@ -228,7 +228,7 @@ async fn load_single_package(
         }
     };
 
-    let init_security = flow_like_wasm::WasmSecurityConfig::default();
+    let init_security = flow_like_wasm::WasmSecurityConfig::default().for_metadata();
 
     let mut instance = loaded
         .instantiate(engine, init_security.clone())

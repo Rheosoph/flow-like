@@ -6,7 +6,12 @@
 //!
 //! ## Supported Backends
 //!
-//! - **Inline** (default): Compile in-process (API process does AOT compilation)
+//! There is deliberately no in-process backend. Compiling or instantiating an
+//! uploaded module inside the API would run third-party code in the process
+//! that holds the platform's database, mail, scheduler and bucket credentials,
+//! so every deployment routes compilation to a worker. An unconfigured
+//! deployment rejects publishes rather than doing the work itself.
+//!
 //! - **Http**: POST to a compiler worker URL (K8s pool, Docker Compose, Lambda URL)
 //! - **LambdaInvoke**: AWS Lambda SDK async invocation (fire-and-forget)
 //! - **Sqs**: AWS SQS queue with Lambda or ECS consumer
@@ -33,12 +38,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Compilation backend type
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompilationBackend {
-    /// In-process AOT compilation (no external worker)
-    #[default]
-    Inline,
     /// HTTP POST to compiler worker URL
     Http,
     /// AWS Lambda SDK async invocation (fire-and-forget)
@@ -58,7 +60,10 @@ pub enum CompilationBackend {
 }
 
 impl CompilationBackend {
-    pub fn from_env() -> Self {
+    /// The configured backend, or `None` when this deployment has not named
+    /// one. `None` is not a fallback to in-process compilation — that no
+    /// longer exists — it means publish and recompile are refused.
+    pub fn from_env() -> Option<Self> {
         // Explicit configuration always wins
         if let Ok(val) = std::env::var("COMPILATION_BACKEND")
             && !val.is_empty()
@@ -66,48 +71,51 @@ impl CompilationBackend {
             return Self::from_env_var("COMPILATION_BACKEND");
         }
 
-        // Auto-detect on Lambda: prefer SQS (queue) over LambdaInvoke (direct)
-        // over Inline — inline AOT compilation inside the API Lambda is almost
-        // never desired (limited memory/time).
+        // Auto-detect on Lambda: prefer SQS (queue) over LambdaInvoke (direct).
         if std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok() {
             if std::env::var("SQS_COMPILATION_QUEUE_URL").is_ok() {
                 tracing::info!(
                     "Lambda detected with SQS_COMPILATION_QUEUE_URL — using Sqs compilation backend"
                 );
-                return Self::Sqs;
+                return Some(Self::Sqs);
             }
             if std::env::var("LAMBDA_COMPILER_FUNCTION").is_ok() {
                 tracing::info!(
                     "Lambda detected with LAMBDA_COMPILER_FUNCTION — using LambdaInvoke compilation backend"
                 );
-                return Self::LambdaInvoke;
+                return Some(Self::LambdaInvoke);
             }
-            tracing::warn!(
-                "Running on Lambda without COMPILATION_BACKEND, SQS_COMPILATION_QUEUE_URL, or LAMBDA_COMPILER_FUNCTION — falling back to Inline (not recommended)"
-            );
         }
 
-        Self::Inline
+        tracing::warn!(
+            "No compilation backend configured — WASM package publish and recompile will be refused. Set COMPILATION_BACKEND and run a compiler worker."
+        );
+        None
     }
 
-    fn from_env_var(var_name: &str) -> Self {
+    fn from_env_var(var_name: &str) -> Option<Self> {
         match std::env::var(var_name)
             .unwrap_or_default()
             .to_lowercase()
             .as_str()
         {
-            "http" | "url" => Self::Http,
-            "lambda_invoke" | "lambda" | "lambda_sdk" => Self::LambdaInvoke,
-            "sqs" | "aws_sqs" => Self::Sqs,
-            "azure_queue" | "azure_storage_queue" | "queue_storage" => Self::AzureQueue,
-            "pubsub" | "pub_sub" | "gcp_pubsub" => Self::PubSub,
-            "kafka" => Self::Kafka,
-            "redis" | "redis_queue" => Self::Redis,
-            "kubernetes_job" | "k8s_job" | "k8s" => Self::KubernetesJob,
-            "inline" | "" => Self::Inline,
+            "http" | "url" => Some(Self::Http),
+            "lambda_invoke" | "lambda" | "lambda_sdk" => Some(Self::LambdaInvoke),
+            "sqs" | "aws_sqs" => Some(Self::Sqs),
+            "azure_queue" | "azure_storage_queue" | "queue_storage" => Some(Self::AzureQueue),
+            "pubsub" | "pub_sub" | "gcp_pubsub" => Some(Self::PubSub),
+            "kafka" => Some(Self::Kafka),
+            "redis" | "redis_queue" => Some(Self::Redis),
+            "kubernetes_job" | "k8s_job" | "k8s" => Some(Self::KubernetesJob),
+            "inline" | "none" | "" => {
+                tracing::warn!(
+                    "COMPILATION_BACKEND=inline is no longer supported — the API never compiles or instantiates WASM itself. Run a compiler worker and set COMPILATION_BACKEND=http (or a queue backend)."
+                );
+                None
+            }
             other => {
-                tracing::warn!(value = %other, "Unknown COMPILATION_BACKEND, falling back to inline");
-                Self::Inline
+                tracing::warn!(value = %other, "Unknown COMPILATION_BACKEND — no compilation backend configured");
+                None
             }
         }
     }
@@ -118,16 +126,12 @@ impl CompilationBackend {
             Self::Sqs | Self::AzureQueue | Self::PubSub | Self::Kafka | Self::Redis
         )
     }
-
-    pub fn is_external(&self) -> bool {
-        !matches!(self, Self::Inline)
-    }
 }
 
 /// Compilation dispatch configuration loaded from environment
 #[derive(Clone, Debug)]
 pub struct CompilationDispatchConfig {
-    pub backend: CompilationBackend,
+    pub backend: Option<CompilationBackend>,
     /// HTTP compiler URL (for Http backend)
     pub compiler_url: Option<String>,
     /// AWS Lambda function name/ARN (for LambdaInvoke backend)
@@ -255,7 +259,7 @@ impl CompilationDispatcher {
         meta_bucket: Arc<FlowLikeStore>,
     ) -> Self {
         #[cfg(feature = "lambda")]
-        let lambda_client = if config.backend == CompilationBackend::LambdaInvoke {
+        let lambda_client = if config.backend == Some(CompilationBackend::LambdaInvoke) {
             let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
             Some(aws_sdk_lambda::Client::new(&aws_config))
         } else {
@@ -263,7 +267,7 @@ impl CompilationDispatcher {
         };
 
         #[cfg(feature = "sqs")]
-        let sqs_client = if config.backend == CompilationBackend::Sqs {
+        let sqs_client = if config.backend == Some(CompilationBackend::Sqs) {
             let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
             Some(aws_sdk_sqs::Client::new(&aws_config))
         } else {
@@ -271,7 +275,7 @@ impl CompilationDispatcher {
         };
 
         #[cfg(feature = "redis")]
-        let redis_client = if config.backend == CompilationBackend::Redis {
+        let redis_client = if config.backend == Some(CompilationBackend::Redis) {
             config
                 .redis_url
                 .as_ref()
@@ -293,8 +297,8 @@ impl CompilationDispatcher {
         }
     }
 
-    pub fn backend(&self) -> &CompilationBackend {
-        &self.config.backend
+    pub fn backend(&self) -> Option<&CompilationBackend> {
+        self.config.backend.as_ref()
     }
 
     pub fn config(&self) -> &CompilationDispatchConfig {
@@ -324,17 +328,17 @@ impl CompilationDispatcher {
         job: &CompilationJob,
     ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
         match &self.config.backend {
-            CompilationBackend::Inline => Err(CompilationDispatchError::Configuration(
-                "Inline backend does not dispatch — caller should compile in-process".into(),
+            None => Err(CompilationDispatchError::Configuration(
+                "No compilation backend configured — set COMPILATION_BACKEND and run a compiler worker. The API does not compile or instantiate WASM in-process.".into(),
             )),
-            CompilationBackend::Http => self.dispatch_http(job).await,
-            CompilationBackend::LambdaInvoke => self.dispatch_lambda_invoke(job).await,
-            CompilationBackend::Sqs => self.dispatch_sqs(job).await,
-            CompilationBackend::AzureQueue => self.dispatch_azure_queue(job).await,
-            CompilationBackend::PubSub => self.dispatch_pubsub(job).await,
-            CompilationBackend::Kafka => self.dispatch_kafka(job).await,
-            CompilationBackend::Redis => self.dispatch_redis(job).await,
-            CompilationBackend::KubernetesJob => self.dispatch_k8s_job(job).await,
+            Some(CompilationBackend::Http) => self.dispatch_http(job).await,
+            Some(CompilationBackend::LambdaInvoke) => self.dispatch_lambda_invoke(job).await,
+            Some(CompilationBackend::Sqs) => self.dispatch_sqs(job).await,
+            Some(CompilationBackend::AzureQueue) => self.dispatch_azure_queue(job).await,
+            Some(CompilationBackend::PubSub) => self.dispatch_pubsub(job).await,
+            Some(CompilationBackend::Kafka) => self.dispatch_kafka(job).await,
+            Some(CompilationBackend::Redis) => self.dispatch_redis(job).await,
+            Some(CompilationBackend::KubernetesJob) => self.dispatch_k8s_job(job).await,
         }
     }
 

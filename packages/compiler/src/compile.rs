@@ -810,7 +810,7 @@ async fn extract_nodes(
     let loaded = engine.load_auto(wasm_bytes).await.map_err(|e| {
         CompilerError::Compilation(format!("Failed to load WASM for node extraction: {e}"))
     })?;
-    let security = WasmSecurityConfig::restrictive();
+    let security = WasmSecurityConfig::restrictive().for_metadata();
     let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
         CompilerError::Compilation(format!(
             "Failed to instantiate WASM for node extraction: {e}"

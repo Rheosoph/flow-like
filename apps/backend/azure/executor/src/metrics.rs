@@ -10,10 +10,27 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+
+const OTLP_ENDPOINT_VARS: [&str; 2] = [
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+];
+const OTLP_TIMEOUT_VARS: [&str; 2] = [
+    "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    "OTEL_EXPORTER_OTLP_TIMEOUT",
+];
+const DEFAULT_OTLP_EXPORT_TIMEOUT: Duration = Duration::from_millis(10_000);
+
+struct EnabledTracing {
+    tracer: opentelemetry_sdk::trace::Tracer,
+    endpoint: String,
+    endpoint_var: &'static str,
+    timeout: Duration,
+}
 
 pub fn init_telemetry() -> Result<(), TelemetryError> {
     let format_layer = tracing_subscriber::fmt::layer();
@@ -24,11 +41,16 @@ pub fn init_telemetry() -> Result<(), TelemetryError> {
             .add_directive("tokio=warn".parse().expect("valid filter"))
     });
 
-    if let Some(tracer) = init_tracing()? {
+    let (otlp, timeout_warning) = init_tracing()?;
+    let enabled = otlp
+        .as_ref()
+        .map(|otlp| (otlp.endpoint.clone(), otlp.endpoint_var, otlp.timeout));
+
+    if let Some(otlp) = otlp {
         tracing_subscriber::registry()
             .with(format_layer)
             .with(env_filter)
-            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .with(tracing_opentelemetry::layer().with_tracer(otlp.tracer))
             .init();
     } else {
         tracing_subscriber::registry()
@@ -37,26 +59,43 @@ pub fn init_telemetry() -> Result<(), TelemetryError> {
             .init();
     }
 
+    if let Some(warning) = timeout_warning {
+        tracing::warn!("{warning}");
+    }
+    match enabled {
+        Some((endpoint, endpoint_var, timeout)) => tracing::info!(
+            "OpenTelemetry tracing enabled (endpoint={endpoint} from {endpoint_var}, export timeout={}ms)",
+            timeout.as_millis()
+        ),
+        None => tracing::info!(
+            "OpenTelemetry tracing disabled (neither {} nor {} is set)",
+            OTLP_ENDPOINT_VARS[0],
+            OTLP_ENDPOINT_VARS[1]
+        ),
+    }
+
     init_metrics();
     Ok(())
 }
 
-/// Traces are exported only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the
-/// Azure root wires the collector to the API alone today. Unlike the
-/// Kubernetes executor, an endpoint that is set but cannot be dialled is a
-/// startup error rather than a silently disabled exporter.
-fn init_tracing() -> Result<Option<opentelemetry_sdk::trace::Tracer>, TelemetryError> {
-    let endpoint = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-        Ok(endpoint) if !endpoint.trim().is_empty() => endpoint,
-        _ => return Ok(None),
+/// Traces are exported only when `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the Azure root wires the collector to
+/// the API alone today. Unlike the Kubernetes executor, an endpoint that is set
+/// but cannot be dialled is a startup error rather than a silently disabled
+/// exporter.
+fn init_tracing() -> Result<(Option<EnabledTracing>, Option<String>), TelemetryError> {
+    let (timeout, timeout_warning) = resolve_otlp_export_timeout();
+    let Some((endpoint_var, endpoint)) = resolve_otlp_endpoint() else {
+        return Ok((None, timeout_warning));
     };
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint(endpoint)
+        .with_endpoint(&endpoint)
+        .with_timeout(timeout)
         .build()
         .map_err(|error| {
             TelemetryError(format!(
-                "OTEL_EXPORTER_OTLP_ENDPOINT is set but the OTLP exporter could not initialize: {error}"
+                "{endpoint_var} is set but the OTLP exporter could not initialize: {error}"
             ))
         })?;
     let provider = SdkTracerProvider::builder()
@@ -64,7 +103,49 @@ fn init_tracing() -> Result<Option<opentelemetry_sdk::trace::Tracer>, TelemetryE
         .build();
     let tracer = provider.tracer("flow-like-azure-executor");
     opentelemetry::global::set_tracer_provider(provider);
-    Ok(Some(tracer))
+    Ok((
+        Some(EnabledTracing {
+            tracer,
+            endpoint,
+            endpoint_var,
+            timeout,
+        }),
+        timeout_warning,
+    ))
+}
+
+fn resolve_otlp_endpoint() -> Option<(&'static str, String)> {
+    OTLP_ENDPOINT_VARS.into_iter().find_map(|name| {
+        let value = std::env::var(name).ok()?;
+        let value = value.trim();
+        (!value.is_empty()).then(|| (name, value.to_string()))
+    })
+}
+
+/// The OTel specification, and opentelemetry-otlp since 0.28, read these as
+/// milliseconds; 0.27 read them as seconds. Resolved here and passed to the
+/// builder explicitly so the value cannot change meaning under the process.
+fn resolve_otlp_export_timeout() -> (Duration, Option<String>) {
+    for name in OTLP_TIMEOUT_VARS {
+        let Ok(raw) = std::env::var(name) else {
+            continue;
+        };
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        return match raw.parse::<u64>() {
+            Ok(millis) => (Duration::from_millis(millis), None),
+            Err(_) => (
+                DEFAULT_OTLP_EXPORT_TIMEOUT,
+                Some(format!(
+                    "{name}={raw:?} is not a whole number of milliseconds; using {}ms",
+                    DEFAULT_OTLP_EXPORT_TIMEOUT.as_millis()
+                )),
+            ),
+        };
+    }
+    (DEFAULT_OTLP_EXPORT_TIMEOUT, None)
 }
 
 fn init_metrics() {
