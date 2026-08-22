@@ -485,7 +485,7 @@ describe("board edit guard", () => {
 		expect([...storage.values.values()].join("\n")).toContain(currentBaseline);
 	});
 
-	test("allows one zero-progress retry and refuses a third equivalent board run", () => {
+	test("allows two zero-progress retries and refuses a fourth equivalent board run", () => {
 		const guard = new BoardZeroProgressRetryGuard();
 		const boardKey = boardEditRecoveryKey("app-1", "board-1");
 
@@ -501,6 +501,10 @@ describe("board edit guard", () => {
 		expect(
 			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-2", false),
 		).toBe(2);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
+		expect(
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-3", false),
+		).toBe(3);
 		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(false);
 
 		// The guard is scoped to one assistant owner and board, not future user turns or boards.
@@ -515,7 +519,7 @@ describe("board edit guard", () => {
 		guard.clear("assistant-turn-1", boardKey);
 		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
 		expect(
-			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-3", true),
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-4", true),
 		).toBe(0);
 
 		const deadlineRace = new BoardZeroProgressRetryGuard();
@@ -537,6 +541,63 @@ describe("board edit guard", () => {
 			),
 		).toBe(0);
 		expect(deadlineRace.canStart("assistant-turn-1", boardKey)).toBe(true);
+	});
+
+	test("budgets zero progress per repair scope under a board-wide ceiling", () => {
+		const guard = new BoardZeroProgressRetryGuard();
+		const boardKey = boardEditRecoveryKey("app-1", "board-1");
+		const burn = (scope: string, requestId: string) =>
+			guard.recordRunOutcome(
+				"assistant-turn-1",
+				boardKey,
+				requestId,
+				false,
+				scope,
+			);
+
+		// A spent graph budget must not block a genuinely different repair on the same board.
+		expect(burn("domain_logic", "request-1")).toBe(1);
+		expect(burn("domain_logic", "request-2")).toBe(2);
+		expect(burn("domain_logic", "request-3")).toBe(3);
+		expect(guard.canStart("assistant-turn-1", boardKey, "domain_logic")).toBe(
+			false,
+		);
+		expect(guard.canStart("assistant-turn-1", boardKey, "foundation")).toBe(
+			true,
+		);
+		// An unknown label is not a fresh budget: it collapses into the shared default bucket.
+		expect(
+			guard.canStart("assistant-turn-1", boardKey, "attachment-repair"),
+		).toBe(true);
+		expect(burn("attachment-repair", "request-4")).toBe(1);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
+		expect(burn("", "request-5")).toBe(2);
+
+		// The board ceiling still bounds the total across scopes: six zero-progress runs are spent.
+		expect(burn("foundation", "request-6")).toBe(1);
+		expect(guard.canStart("assistant-turn-1", boardKey, "foundation")).toBe(
+			false,
+		);
+		expect(
+			guard.canStart("assistant-turn-1", boardKey, "outputs_and_review"),
+		).toBe(false);
+
+		// Retained progress anywhere releases every scope bucket and the ceiling.
+		expect(
+			guard.recordRunOutcome(
+				"assistant-turn-1",
+				boardKey,
+				"request-7",
+				true,
+				"foundation",
+			),
+		).toBe(0);
+		expect(guard.canStart("assistant-turn-1", boardKey, "domain_logic")).toBe(
+			true,
+		);
+		expect(
+			guard.canStart("assistant-turn-1", boardKey, "outputs_and_review"),
+		).toBe(true);
 	});
 
 	test("redacts canonical @secret values before durable recovery or plan persistence", () => {

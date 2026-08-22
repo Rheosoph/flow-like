@@ -11,6 +11,11 @@ export default defineConfig({
 	// Astro 7 defaults to 'jsx', which drops the space between adjacent inline
 	// elements. Keep HTML-aware whitespace so prose spacing stays unchanged.
 	compressHTML: true,
+	build: {
+		// Docs navigation is page-to-page: a shared, cached stylesheet beats
+		// re-sending the same Starlight CSS inlined into every one of ~1900 pages.
+		inlineStylesheets: "never",
+	},
 	image: {
 		service: passthroughImageService(),
 	},
@@ -382,14 +387,24 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 							label: "Docker Compose",
 							collapsed: true,
 							items: [
-								{ autogenerate: { directory: "self-hosting/docker-compose" } },
+								{
+									autogenerate: {
+										directory: "self-hosting/docker-compose",
+										collapsed: true,
+									},
+								},
 							],
 						},
 						{
 							label: "Kubernetes",
 							collapsed: true,
 							items: [
-								{ autogenerate: { directory: "self-hosting/kubernetes" } },
+								{
+									autogenerate: {
+										directory: "self-hosting/kubernetes",
+										collapsed: true,
+									},
+								},
 							],
 						},
 					],
@@ -445,12 +460,16 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{
 							label: "A2UI Development",
 							collapsed: true,
-							items: [{ autogenerate: { directory: "dev/a2ui" } }],
+							items: [
+								{ autogenerate: { directory: "dev/a2ui", collapsed: true } },
+							],
 						},
 						{
 							label: "Event Sinks",
 							collapsed: true,
-							items: [{ autogenerate: { directory: "dev/sinks" } }],
+							items: [
+								{ autogenerate: { directory: "dev/sinks", collapsed: true } },
+							],
 						},
 					],
 				},
@@ -473,7 +492,9 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				{
 					label: "Enterprise",
 					collapsed: true,
-					items: [{ autogenerate: { directory: "enterprise" } }],
+					items: [
+						{ autogenerate: { directory: "enterprise", collapsed: true } },
+					],
 				},
 				// ===== REFERENCE =====
 				{
