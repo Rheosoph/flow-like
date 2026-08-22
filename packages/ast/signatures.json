@@ -21208,7 +21208,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Decrypted struct"
+          "doc": "Decrypted struct",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "impure": true,
@@ -21245,7 +21246,8 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional authenticated metadata stored alongside the ciphertext"
+          "doc": "Optional authenticated metadata stored alongside the ciphertext",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "outputs": [
@@ -21285,7 +21287,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Struct to encrypt"
+          "doc": "Struct to encrypt",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         },
         {
           "name": "associated_data",
@@ -21294,7 +21297,8 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional authenticated metadata stored alongside the ciphertext"
+          "doc": "Optional authenticated metadata stored alongside the ciphertext",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "outputs": [
@@ -21406,7 +21410,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Decrypted struct"
+          "doc": "Decrypted struct",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "impure": true,
@@ -21443,7 +21448,8 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional authenticated metadata stored alongside the ciphertext"
+          "doc": "Optional authenticated metadata stored alongside the ciphertext",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "outputs": [
@@ -21483,7 +21489,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Struct to encrypt"
+          "doc": "Struct to encrypt",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         },
         {
           "name": "associated_data",
@@ -21492,7 +21499,8 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional authenticated metadata stored alongside the ciphertext"
+          "doc": "Optional authenticated metadata stored alongside the ciphertext",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
         }
       ],
       "outputs": [

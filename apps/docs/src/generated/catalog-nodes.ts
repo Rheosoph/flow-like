@@ -127830,6 +127830,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "index": 2,
         "options": {
           "sensitive": true
@@ -127905,6 +127906,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "defaultValue": {},
         "index": 4
       },
@@ -127988,6 +127990,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "index": 3,
         "options": {
           "sensitive": true
@@ -128000,6 +128003,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "defaultValue": {},
         "index": 4
       },
@@ -128250,6 +128254,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "index": 2,
         "options": {
           "sensitive": true
@@ -128325,6 +128330,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "defaultValue": {},
         "index": 4
       },
@@ -128408,6 +128414,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "index": 3,
         "options": {
           "sensitive": true
@@ -128420,6 +128427,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
         "defaultValue": {},
         "index": 4
       },

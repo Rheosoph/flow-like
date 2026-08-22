@@ -2211,14 +2211,24 @@
   "cryptoAesDecryptValue": {
     "inputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
+    },
+    "outputs": {
+      "value": "{\"type\":\"object\",\"additionalProperties\":true}"
     }
   },
   "cryptoAesEncryptBytes": {
+    "inputs": {
+      "associatedData": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
     "outputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
     }
   },
   "cryptoAesEncryptValue": {
+    "inputs": {
+      "associatedData": "{\"type\":\"object\",\"additionalProperties\":true}",
+      "value": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
     "outputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
     }
@@ -2231,14 +2241,24 @@
   "cryptoXchacha20DecryptValue": {
     "inputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
+    },
+    "outputs": {
+      "value": "{\"type\":\"object\",\"additionalProperties\":true}"
     }
   },
   "cryptoXchacha20EncryptBytes": {
+    "inputs": {
+      "associatedData": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
     "outputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
     }
   },
   "cryptoXchacha20EncryptValue": {
+    "inputs": {
+      "associatedData": "{\"type\":\"object\",\"additionalProperties\":true}",
+      "value": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
     "outputs": {
       "encrypted": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EncryptedBytes\",\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"algorithm\":{\"$ref\":\"#/$defs/EncryptionAlgorithm\"},\"nonce\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},\"associated_data\":true,\"ciphertext\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"version\",\"algorithm\",\"nonce\",\"associated_data\",\"ciphertext\"],\"$defs\":{\"EncryptionAlgorithm\":{\"type\":\"string\",\"enum\":[\"aes-256-gcm\",\"xchacha20-poly1305\"]}}}"
     }
