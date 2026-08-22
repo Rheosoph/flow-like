@@ -61,7 +61,8 @@ impl NodeLogic for SetWidgetText {
             "Widget",
             "Widget instance reference (from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "element_id",
@@ -80,7 +81,8 @@ impl NodeLogic for SetWidgetText {
             "Widget",
             "The updated widget instance reference (connect to Push Widget / Push To Container)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.set_long_running(true);
 

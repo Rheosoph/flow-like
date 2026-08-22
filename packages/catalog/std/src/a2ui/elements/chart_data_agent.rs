@@ -202,7 +202,8 @@ impl NodeLogic for ChartDataAgent {
             "Query results as an array of row structs (chart-ready)",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL query", VariableType::String);
 

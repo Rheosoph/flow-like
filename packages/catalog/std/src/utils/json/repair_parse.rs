@@ -56,7 +56,8 @@ impl NodeLogic for RepairParseNode {
             "Result",
             "The parsed JSON structure",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

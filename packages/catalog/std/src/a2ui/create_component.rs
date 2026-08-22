@@ -49,7 +49,8 @@ impl NodeLogic for CreateComponent {
             "Props",
             "Component properties as JSON",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_input_pin(
             "style",

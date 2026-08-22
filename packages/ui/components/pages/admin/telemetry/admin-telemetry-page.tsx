@@ -9,6 +9,7 @@ import {
 	ArrowUpRight,
 	Bug,
 	Copy,
+	FileCode2,
 	GitBranch,
 	Layers,
 	Lock,
@@ -778,6 +779,12 @@ export function AdminTelemetryPage({
 								<Link href={`${basePath}/traces`}>
 									<GitBranch className="mr-1 h-3.5 w-3.5" />
 									{t("traces", "Traces")}
+								</Link>
+							</Button>
+							<Button asChild variant="outline" size="sm">
+								<Link href={`${basePath}/flowscript-failures`}>
+									<FileCode2 className="mr-1 h-3.5 w-3.5" />
+									{t("flowScriptApplies", "FlowScript applies")}
 								</Link>
 							</Button>
 							<Button asChild variant="outline" size="sm">

@@ -67,8 +67,16 @@ import {
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
+import {
+	FLOWSCRIPT_APPLY_FAILURE_PATH,
+	type FlowScriptApplyOrigin,
+	type FlowScriptApplyOutcome,
+	type IFlowScriptApplyFailureReport,
+	flowScriptApplyOutcome,
+} from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import { createId } from "@paralleldrive/cuid2";
+import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
@@ -81,6 +89,7 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import { desktopPlatform } from "../../lib/platform";
 import {
 	ensureRpaSystemPermissions,
 	requestRpaAutomationConsent,
@@ -1504,12 +1513,35 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		const board = await this.getBoard(
-			appId,
-			boardId,
-			normalizeBoardVersion(payload.version),
-			true,
-		);
+		let board: IBoard;
+		try {
+			board = await this.getBoard(
+				appId,
+				boardId,
+				normalizeBoardVersion(payload.version),
+				true,
+			);
+		} catch (error) {
+			// Everything below reads the flow to prepare a local run. A user who
+			// may run a board but not read it — the normal shape of a published
+			// app — gets nothing back from any of it, and the server can run it
+			// instead: it holds the board, and resolves permissions, secrets and
+			// OAuth on its own.
+			if (!(await this.canReachServer(appId))) throw error;
+			console.warn(
+				"[BoardState] Board unavailable for local execution, running on the server:",
+				error,
+			);
+			return this.executeBoardRemote(
+				appId,
+				boardId,
+				payload,
+				streamState,
+				eventId,
+				cb,
+			);
+		}
+
 		await this.ensureAppPackagesInstalledForExecution(appId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
@@ -3066,23 +3098,63 @@ export class BoardState implements IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions = false,
+		origin: FlowScriptApplyOrigin = "editor",
 	): Promise<IApplyFlowScriptResponse> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
 				appId,
 				boardId,
 			);
-			const result = await invoke<IApplyFlowScriptResponse>(
-				"apply_flowscript",
-				{
+			let result: IApplyFlowScriptResponse;
+			try {
+				result = await invoke<IApplyFlowScriptResponse>("apply_flowscript", {
 					appId,
 					boardId,
 					flowscript,
 					currentLayer,
 					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
 					allowDeletions,
-				},
+				});
+			} catch (error) {
+				void this.reportFlowScriptApplyFailure({
+					appId,
+					boardId,
+					currentLayer,
+					allowDeletions,
+					flowscript,
+					origin,
+					outcome: "error",
+					errorMessage: getErrorMessage(
+						error,
+						"Unknown FlowScript apply error",
+					),
+					diagnostics: [],
+					corrections: [],
+					commandCount: 0,
+				});
+				throw error;
+			}
+
+			// Classified on the native result: a blocked remote delivery below appends its own
+			// diagnostic, and that is a sync failure, not the user's edit going wrong.
+			const outcome = flowScriptApplyOutcome(
+				result.commands.length,
+				result.diagnostics.length,
 			);
+			if (outcome) {
+				void this.reportFlowScriptApplyFailure({
+					appId,
+					boardId,
+					currentLayer,
+					allowDeletions,
+					flowscript,
+					origin,
+					outcome,
+					diagnostics: result.diagnostics,
+					corrections: result.corrections ?? [],
+					commandCount: result.commands.length,
+				});
+			}
 
 			if (result.commands.length > 0) {
 				const sync = await this.syncExecutedCommandsToServer(
@@ -3105,6 +3177,63 @@ export class BoardState implements IBoardState {
 			}
 			return result;
 		});
+	}
+
+	/**
+	 * Report an apply that did not do what the user asked, so the source that produced it can be
+	 * reviewed. Best-effort in every direction: the source is redacted natively first so nothing
+	 * raw leaves the machine, a signed-out user reports nothing, and a failed report is swallowed —
+	 * losing a capture must never cost someone their edit.
+	 */
+	private async reportFlowScriptApplyFailure(failure: {
+		appId: string;
+		boardId: string;
+		currentLayer?: string;
+		allowDeletions: boolean;
+		flowscript: string;
+		outcome: FlowScriptApplyOutcome;
+		origin: FlowScriptApplyOrigin;
+		errorMessage?: string;
+		diagnostics: string[];
+		corrections: string[];
+		commandCount: number;
+	}): Promise<void> {
+		const { profile, auth } = this.backend;
+		if (!profile || !auth) return;
+		if (!failure.flowscript.trim()) return;
+
+		try {
+			const redacted = await invoke<{ flowscript: string }>(
+				"redact_flowscript",
+				{ flowscript: failure.flowscript },
+			);
+			if (!redacted.flowscript.trim()) return;
+
+			const report: IFlowScriptApplyFailureReport = {
+				app_id: failure.appId,
+				board_id: failure.boardId,
+				layer_id: failure.currentLayer,
+				outcome: failure.outcome,
+				origin: failure.origin,
+				flowscript: redacted.flowscript,
+				error_message: failure.errorMessage,
+				diagnostics: failure.diagnostics,
+				corrections: failure.corrections,
+				command_count: failure.commandCount,
+				allow_deletions: failure.allowDeletions,
+				app_version: await getVersion().catch(() => undefined),
+				platform: desktopPlatform(),
+			};
+
+			await fetcher(
+				profile,
+				FLOWSCRIPT_APPLY_FAILURE_PATH,
+				{ method: "POST", body: JSON.stringify(report) },
+				auth,
+			);
+		} catch (error) {
+			console.debug("[applyFlowScript] failure report skipped", error);
+		}
 	}
 
 	async getFlowScript(
@@ -3511,13 +3640,22 @@ export class BoardState implements IBoardState {
 		});
 	}
 
+	/**
+	 * Whether a run can be handed to the server for this app. `isOffline` also
+	 * reports true when the app's visibility has never been cached, which is not
+	 * a reason to give up on the server — only an app this device positively
+	 * knows is local-only is.
+	 */
+	private async canReachServer(appId: string): Promise<boolean> {
+		if (!this.backend.profile || !this.backend.auth) return false;
+		return !(await this.backend.isLocalOnly(appId).catch(() => false));
+	}
+
 	async prerunBoard(
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IPrerunBoardResponse> {
-		const isOffline = await this.backend.isOffline(appId);
-
 		// Helper to build prerun response from local board
 		const buildLocalPrerun = async (): Promise<IPrerunBoardResponse> => {
 			const board = await this.fetchLocalBoard(appId, boardId, version);
@@ -3573,8 +3711,10 @@ export class BoardState implements IBoardState {
 			};
 		};
 
-		// Offline apps: always use local board data
-		if (isOffline) {
+		// Local-only apps have no server answer to ask for. An app whose
+		// visibility is merely uncached is not one of them — treating it as one
+		// leaves this preflight with only a board the device may not have.
+		if (await this.backend.isLocalOnly(appId).catch(() => false)) {
 			return buildLocalPrerun();
 		}
 

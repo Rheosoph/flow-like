@@ -41,7 +41,8 @@ impl NodeLogic for PushGlobalSessionNode {
             "Generic Struct Type",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

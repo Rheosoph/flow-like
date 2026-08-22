@@ -54,7 +54,8 @@ impl NodeLogic for WriteCsvToTable {
             "Table data from DataFusion query",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_open_schema();
 
         node.add_input_pin(
             "delimiter",

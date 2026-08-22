@@ -17,6 +17,7 @@ export * from "./telemetry/alerts-types";
 export * from "./telemetry/dashboard-telemetry-widget";
 export * from "./telemetry/dashboards-page";
 export * from "./telemetry/flamegraph";
+export * from "./telemetry/flowscript-failures-page";
 export * from "./telemetry/issues-dashboard-widget";
 export * from "./telemetry/issues-page";
 export * from "./telemetry/llm-section";

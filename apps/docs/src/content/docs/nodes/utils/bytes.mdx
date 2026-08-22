@@ -1,0 +1,30 @@
+---
+title: "Bytes Node Catalog"
+description: "Utils/Bytes Flow-Like node category with 10 generated node references."
+sidebar:
+  order: 0
+  label: "Bytes"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Bytes nodes, Utils/Bytes, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Utils/Bytes"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Bytes Node Catalog\",\"description\":\"Utils/Bytes Flow-Like node category with 10 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/utils/bytes/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/Bytes\",\"keywords\":\"Bytes nodes, Utils/Bytes, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Utils/Bytes"}
+	label="Bytes"
+	nodes={nodesByCategory["Utils/Bytes"] ?? []}
+	client:load
+/>

@@ -191,6 +191,7 @@ import { BoardMeta } from "./board-meta";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
 import { FlowCopilot } from "./flow-copilot";
+import type { FlowScriptApplyOptions } from "./flow-copilot/types";
 import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
@@ -3330,10 +3331,8 @@ export function FlowBoard({
 		currentLayer,
 	});
 	const handleApplyFlowScript = useCallback(
-		(
-			flowscript: string,
-			options?: { allowDeletions?: boolean; suppressBlockedToast?: boolean },
-		) => applyFlowScript(flowscript, currentLayer, catalog.data, options),
+		(flowscript: string, options?: FlowScriptApplyOptions) =>
+			applyFlowScript(flowscript, currentLayer, catalog.data, options),
 		[applyFlowScript, currentLayer, catalog.data],
 	);
 	const handleApplyFlowIrCommit = useCallback(

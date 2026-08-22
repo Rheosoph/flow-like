@@ -15,6 +15,8 @@ import type { IIntercomEvent, ILogMetadata, IRunPayload } from "../lib";
 import type { IBoard, IVariable } from "../lib/schema/flow/board";
 import { IExecutionMode } from "../lib/schema/flow/board";
 import { normalizeBoardVersion } from "../lib/schema/flow/board-version";
+import type { IEvent } from "../lib/schema/flow/event";
+import { IEventExecutionMode } from "../lib/schema/flow/event";
 import { useBackend } from "./backend-state";
 import {
 	prerunBoardKey,
@@ -351,6 +353,23 @@ export function ExecutionServiceProvider({
 		setWasmConsentResolve(null);
 	}, [wasmConsentResolve]);
 
+	/**
+	 * A board this device cannot read cannot host a local run either — a user who
+	 * may run an event but not read its flow is the normal shape of a published
+	 * app. Escalating to the server beats a guaranteed local failure, unless the
+	 * app is local-only, where the missing board is the real answer.
+	 */
+	const canEscalateUnreadableBoard = useCallback(
+		async (appId: string, hasRemoteExecutor: boolean): Promise<boolean> => {
+			if (!hasRemoteExecutor) return false;
+			if (backend.isLocalOnly) {
+				return !(await backend.isLocalOnly(appId).catch(() => false));
+			}
+			return !(await backend.isOffline(appId).catch(() => true));
+		},
+		[backend],
+	);
+
 	const checkAndExecute = useCallback(
 		async (
 			appId: string,
@@ -363,6 +382,32 @@ export function ExecutionServiceProvider({
 			isRemote: boolean,
 		): Promise<ILogMetadata | undefined> => {
 			const boardVersion = normalizeBoardVersion(payload.version);
+			const executeBoardRemote = backend.boardState.executeBoardRemote;
+
+			const dispatch = (
+				remote: boolean,
+				runPayload: IRunPayload,
+			): Promise<ILogMetadata | undefined> =>
+				remote && executeBoardRemote
+					? executeBoardRemote.call(
+							backend.boardState,
+							appId,
+							boardId,
+							runPayload,
+							streamState,
+							eventId,
+							cb,
+						)
+					: backend.boardState.executeBoard(
+							appId,
+							boardId,
+							runPayload,
+							streamState,
+							eventId,
+							cb,
+							skipConsentCheck,
+						);
+
 			// Run WASM consent check first (independent of runtime vars).
 			// Fetch prerun once and reuse the result for runtime vars later.
 			let prerunResult: Awaited<
@@ -397,25 +442,7 @@ export function ExecutionServiceProvider({
 
 			// If no runtime vars context, execute directly
 			if (!runtimeVarsContext) {
-				if (isRemote && backend.boardState.executeBoardRemote) {
-					return backend.boardState.executeBoardRemote(
-						appId,
-						boardId,
-						payload,
-						streamState,
-						eventId,
-						cb,
-					);
-				}
-				return backend.boardState.executeBoard(
-					appId,
-					boardId,
-					payload,
-					streamState,
-					eventId,
-					cb,
-					skipConsentCheck,
-				);
+				return dispatch(isRemote, payload);
 			}
 
 			// Determine execution mode from the board/prerun and override isRemote if needed
@@ -423,13 +450,12 @@ export function ExecutionServiceProvider({
 			let effectiveIsRemote = isRemote;
 
 			if (prerunResult) {
-				// Force remote when board's execution_mode is Remote
-				if (
-					prerunResult.execution_mode === IExecutionMode.Remote &&
-					backend.boardState.executeBoardRemote
-				) {
-					effectiveIsRemote = true;
-				}
+				// Force remote when the board is pinned to Remote or this device
+				// is not allowed to read it
+				effectiveIsRemote =
+					effectiveIsRemote ||
+					!prerunResult.can_execute_locally ||
+					prerunResult.execution_mode === IExecutionMode.Remote;
 
 				if (effectiveIsRemote) {
 					varsNeedingValues = convertPrerunToVariables(
@@ -455,49 +481,8 @@ export function ExecutionServiceProvider({
 						);
 					}
 				}
-			} else if (backend.boardState.prerunBoard) {
-				// prerunBoard exists but the earlier call failed — fall back to local board
-				try {
-					const board = await backend.boardState.getBoard(
-						appId,
-						boardId,
-						boardVersion,
-					);
-					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-					if (
-						executionMode === IExecutionMode.Remote &&
-						backend.boardState.executeBoardRemote
-					) {
-						effectiveIsRemote = true;
-					}
-					varsNeedingValues = getVariablesNeedingPrompt(
-						board,
-						effectiveIsRemote,
-					);
-				} catch {
-					// Board not found either, execute anyway
-					if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
-						return backend.boardState.executeBoardRemote(
-							appId,
-							boardId,
-							payload,
-							streamState,
-							eventId,
-							cb,
-						);
-					}
-					return backend.boardState.executeBoard(
-						appId,
-						boardId,
-						payload,
-						streamState,
-						eventId,
-						cb,
-						skipConsentCheck,
-					);
-				}
 			} else {
-				// prerunBoard not available - use getBoard
+				// Prerun is unavailable or failed — read the board itself
 				try {
 					const board = await backend.boardState.getBoard(
 						appId,
@@ -505,100 +490,45 @@ export function ExecutionServiceProvider({
 						boardVersion,
 					);
 					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-					if (
-						executionMode === IExecutionMode.Remote &&
-						backend.boardState.executeBoardRemote
-					) {
-						effectiveIsRemote = true;
-					}
+					effectiveIsRemote =
+						effectiveIsRemote || executionMode === IExecutionMode.Remote;
 					varsNeedingValues = getVariablesNeedingPrompt(
 						board,
 						effectiveIsRemote,
 					);
-				} catch {
-					// Board not found, execute anyway
-					if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
-						return backend.boardState.executeBoardRemote(
+				} catch (error) {
+					if (!effectiveIsRemote) {
+						effectiveIsRemote = await canEscalateUnreadableBoard(
 							appId,
-							boardId,
-							payload,
-							streamState,
-							eventId,
-							cb,
+							Boolean(executeBoardRemote),
 						);
+						if (!effectiveIsRemote) throw error;
 					}
-					return backend.boardState.executeBoard(
-						appId,
-						boardId,
-						payload,
-						streamState,
-						eventId,
-						cb,
-						skipConsentCheck,
-					);
+					varsNeedingValues = [];
 				}
 			}
 
 			if (varsNeedingValues.length === 0) {
 				// No runtime-configured variables needed, execute directly
-				if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
-					return backend.boardState.executeBoardRemote(
-						appId,
-						boardId,
-						payload,
-						streamState,
-						eventId,
-						cb,
-					);
-				}
-				return backend.boardState.executeBoard(
-					appId,
-					boardId,
-					payload,
-					streamState,
-					eventId,
-					cb,
-					skipConsentCheck,
-				);
+				return dispatch(effectiveIsRemote, payload);
 			}
 
 			// Check if all needed variables are configured
 			const variableIds = varsNeedingValues.map((v) => v.id);
 			const hasAll = await runtimeVarsContext.hasAllValues(appId, variableIds);
 
-			// For local execution, include secrets; for remote, exclude them
-			const includeSecrets = !effectiveIsRemote;
-
 			if (hasAll) {
-				// All variables configured, convert to runtime variables map and execute
+				// All variables configured, convert to runtime variables map and execute.
+				// For local execution, include secrets; for remote, exclude them.
 				const runtimeVariablesMap = await convertToRuntimeVariablesMap(
 					appId,
 					varsNeedingValues,
-					includeSecrets,
+					!effectiveIsRemote,
 				);
-				const payloadWithVars: IRunPayload = {
+				return dispatch(effectiveIsRemote, {
 					...payload,
 					runtime_variables: runtimeVariablesMap,
-				};
-				if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
-					return backend.boardState.executeBoardRemote(
-						appId,
-						boardId,
-						payloadWithVars,
-						streamState,
-						eventId,
-						cb,
-					);
-				}
-				return backend.boardState.executeBoard(
-					appId,
-					boardId,
-					payloadWithVars,
-					streamState,
-					eventId,
-					cb,
-					skipConsentCheck,
-				);
+				});
 			}
 
 			// Need to prompt for runtime variables
@@ -624,12 +554,13 @@ export function ExecutionServiceProvider({
 			});
 		},
 		[
-			backend.boardState,
+			backend,
 			runtimeVarsContext,
 			convertToRuntimeVariablesMap,
 			getVariablesNeedingPrompt,
 			convertPrerunToVariables,
 			checkWasmConsent,
+			canEscalateUnreadableBoard,
 		],
 	);
 
@@ -643,6 +574,33 @@ export function ExecutionServiceProvider({
 			cb: ((event: IIntercomEvent[]) => void) | undefined,
 			skipConsentCheck: boolean | undefined,
 		): Promise<ILogMetadata | undefined> => {
+			const backendAlwaysRemote = backend.eventState.alwaysRemote === true;
+			const executeEventRemote = backend.eventState.executeEventRemote;
+
+			const dispatch = (
+				isRemote: boolean,
+				runPayload: IRunPayload,
+			): Promise<ILogMetadata | undefined> =>
+				isRemote && executeEventRemote
+					? executeEventRemote.call(
+							backend.eventState,
+							appId,
+							eventIdStr,
+							runPayload,
+							streamState,
+							onEventId,
+							cb,
+						)
+					: backend.eventState.executeEvent(
+							appId,
+							eventIdStr,
+							runPayload,
+							streamState,
+							onEventId,
+							cb,
+							skipConsentCheck,
+						);
+
 			// Run WASM consent check first (independent of runtime vars).
 			// Fetch prerun once and reuse the result for runtime vars later.
 			let prerunResult: Awaited<
@@ -691,7 +649,6 @@ export function ExecutionServiceProvider({
 			// Try prerunEvent result if available, otherwise fall back to fetching event + board
 			let varsNeedingValues: IVariable[];
 			let boardId: string;
-			const backendAlwaysRemote = backend.eventState.alwaysRemote === true;
 			let isRemote = backendAlwaysRemote;
 
 			if (prerunResult) {
@@ -699,7 +656,8 @@ export function ExecutionServiceProvider({
 				isRemote =
 					backendAlwaysRemote ||
 					!prerunResult.can_execute_locally ||
-					prerunResult.execution_mode === IExecutionMode.Remote;
+					prerunResult.execution_mode === IExecutionMode.Remote ||
+					prerunResult.event_execution_mode === IEventExecutionMode.Remote;
 
 				varsNeedingValues = convertPrerunToVariables(
 					prerunResult.runtime_variables,
@@ -719,83 +677,47 @@ export function ExecutionServiceProvider({
 						// Fall back to prerun variables if board fetch fails
 					}
 				}
-			} else if (backend.eventState.prerunEvent) {
-				// prerunEvent exists but the earlier call failed — fall back to event + board
-				try {
-					const event = await backend.eventState.getEvent(appId, eventIdStr);
-					boardId = event.board_id;
-					const version = normalizeBoardVersion(event.board_version);
-					const board = await backend.boardState.getBoard(
-						appId,
-						event.board_id,
-						version ?? undefined,
-					);
-					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-					isRemote =
-						backendAlwaysRemote || executionMode === IExecutionMode.Remote;
-					varsNeedingValues = getVariablesNeedingPrompt(board, isRemote);
-				} catch {
-					// Event or board not found, execute anyway
-					return backend.eventState.executeEvent(
-						appId,
-						eventIdStr,
-						payload,
-						streamState,
-						onEventId,
-						cb,
-						skipConsentCheck,
-					);
-				}
 			} else {
-				// prerunEvent not available, use traditional approach
+				// Prerun is unavailable or failed. The event record alone already says
+				// where the run belongs, so it is read before the board: an event pinned
+				// to Remote has no board on this device, and loading one would turn a
+				// server-side run into a "board not found" failure.
+				let event: IEvent;
 				try {
-					const event = await backend.eventState.getEvent(appId, eventIdStr);
-					boardId = event.board_id;
-					const version = normalizeBoardVersion(event.board_version);
+					event = await backend.eventState.getEvent(appId, eventIdStr);
+				} catch {
+					return dispatch(isRemote, payload);
+				}
+
+				boardId = event.board_id;
+				isRemote =
+					backendAlwaysRemote ||
+					event.execution_mode === IEventExecutionMode.Remote;
+
+				try {
 					const board = await backend.boardState.getBoard(
 						appId,
 						event.board_id,
-						version ?? undefined,
+						normalizeBoardVersion(event.board_version) ?? undefined,
 					);
 					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-					isRemote =
-						backendAlwaysRemote || executionMode === IExecutionMode.Remote;
+					isRemote = isRemote || executionMode === IExecutionMode.Remote;
 					varsNeedingValues = getVariablesNeedingPrompt(board, isRemote);
-				} catch {
-					// Event or board not found, execute anyway
-					return backend.eventState.executeEvent(
-						appId,
-						eventIdStr,
-						payload,
-						streamState,
-						onEventId,
-						cb,
-						skipConsentCheck,
-					);
+				} catch (error) {
+					if (!isRemote) {
+						isRemote = await canEscalateUnreadableBoard(
+							appId,
+							Boolean(executeEventRemote),
+						);
+						if (!isRemote) throw error;
+					}
+					varsNeedingValues = [];
 				}
 			}
 
 			if (varsNeedingValues.length === 0) {
 				// No runtime-configured variables, execute directly
-				if (isRemote && backend.eventState.executeEventRemote) {
-					return backend.eventState.executeEventRemote(
-						appId,
-						eventIdStr,
-						payload,
-						streamState,
-						onEventId,
-						cb,
-					);
-				}
-				return backend.eventState.executeEvent(
-					appId,
-					eventIdStr,
-					payload,
-					streamState,
-					onEventId,
-					cb,
-					skipConsentCheck,
-				);
+				return dispatch(isRemote, payload);
 			}
 
 			// Check if all runtime variables are configured
@@ -811,29 +733,10 @@ export function ExecutionServiceProvider({
 					varsNeedingValues,
 					includeSecrets,
 				);
-				const payloadWithVars: IRunPayload = {
+				return dispatch(isRemote, {
 					...payload,
 					runtime_variables: runtimeVariablesMap,
-				};
-				if (isRemote && backend.eventState.executeEventRemote) {
-					return backend.eventState.executeEventRemote(
-						appId,
-						eventIdStr,
-						payloadWithVars,
-						streamState,
-						onEventId,
-						cb,
-					);
-				}
-				return backend.eventState.executeEvent(
-					appId,
-					eventIdStr,
-					payloadWithVars,
-					streamState,
-					onEventId,
-					cb,
-					skipConsentCheck,
-				);
+				});
 			}
 
 			// Need to prompt for runtime variables
@@ -860,13 +763,13 @@ export function ExecutionServiceProvider({
 			});
 		},
 		[
-			backend.eventState,
-			backend.boardState,
+			backend,
 			runtimeVarsContext,
 			convertToRuntimeVariablesMap,
 			getVariablesNeedingPrompt,
 			convertPrerunToVariables,
 			checkWasmConsent,
+			canEscalateUnreadableBoard,
 		],
 	);
 

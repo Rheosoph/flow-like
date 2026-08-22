@@ -1200,6 +1200,7 @@ pub fn run() {
             functions::flow::board::execute_commands,
             functions::flow::board::apply_flowscript,
             functions::flow::board::lint_flowscript,
+            functions::flow::board::redact_flowscript,
             functions::flow::board::check_flowscript_reconcile,
             functions::flow::board::get_flowscript,
             functions::flow::board::get_execution_elements,

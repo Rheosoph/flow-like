@@ -10,6 +10,7 @@ import {
 } from "../../../../lib/date";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
+import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
 import { ScrollArea } from "../../../ui/scroll-area";
 import {
@@ -19,7 +20,13 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../../../ui/sheet";
-import { cellToString, classifyColumn, isNullish } from "./column-types";
+import { UserIdentityCard } from "../../../ui/user-identity";
+import {
+	type ColumnKind,
+	cellToString,
+	classifyColumn,
+	isNullish,
+} from "./column-types";
 
 /** A row detail has room for the exact instant, with the relative reading under it. */
 function TemporalValue({ value }: Readonly<{ value: unknown }>) {
@@ -34,6 +41,16 @@ function TemporalValue({ value }: Readonly<{ value: unknown }>) {
 			</span>
 		</>
 	);
+}
+
+/** Everything the temporal path does not claim, read for what it holds. */
+function RowValue({
+	kind,
+	value,
+}: Readonly<{ kind: ColumnKind; value: unknown }>) {
+	const userId = kind === "user" ? accountIdFromValue(value) : null;
+	if (userId) return <UserIdentityCard userId={userId} className="mt-1" />;
+	return <>{cellToString(value)}</>;
 }
 
 export function RowInspectorSheet({
@@ -103,7 +120,7 @@ export function RowInspectorSheet({
 												) : kind === "temporal" ? (
 													<TemporalValue value={value} />
 												) : (
-													cellToString(value)
+													<RowValue kind={kind} value={value} />
 												)}
 											</dd>
 										</div>

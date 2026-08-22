@@ -2,6 +2,7 @@
 pub mod lancegraph;
 
 use flow_like_types::{Result, Value, async_trait};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,14 +12,14 @@ pub enum TraversalDirection {
     Both,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EdgeLabelCount {
     pub label: String,
     pub count: usize,
 }
 
 /// Population fan-out of one object, as seen through the sampling window.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubgraphNodeStats {
     pub out_by_label: Vec<EdgeLabelCount>,
     /// False when the window did not cover the whole relationship table, which
@@ -26,7 +27,7 @@ pub struct SubgraphNodeStats {
     pub exact: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubgraphNode {
     pub id: String,
     pub label: String,
@@ -39,7 +40,7 @@ pub struct SubgraphNode {
     pub stats: Option<SubgraphNodeStats>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubgraphEdge {
     pub id: String,
     pub source: String,
@@ -48,7 +49,7 @@ pub struct SubgraphEdge {
     pub props: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubgraphResult {
     pub nodes: Vec<SubgraphNode>,
     pub edges: Vec<SubgraphEdge>,
@@ -119,21 +120,21 @@ pub struct GraphAnalyticsResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphLabelInfo {
     pub label: String,
     pub table: String,
     pub properties: Vec<GraphPropertyInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphPropertyInfo {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphSchemaResult {
     pub node_labels: Vec<GraphLabelInfo>,
     pub edge_labels: Vec<GraphLabelInfo>,

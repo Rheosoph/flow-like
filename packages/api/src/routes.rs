@@ -11,6 +11,7 @@ pub mod chat;
 pub mod course;
 pub mod embeddings;
 pub mod execution;
+pub mod flowscript;
 pub mod health;
 pub mod inbound;
 pub mod info;

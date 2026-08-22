@@ -249,6 +249,12 @@ export interface IBackendState {
 
 	capabilities(): ICapabilities;
 	isOffline(appId: string): Promise<boolean>;
+	/**
+	 * True only when this device positively knows the app is local-only.
+	 * `isOffline` also answers true for an app whose visibility has never been
+	 * cached, so it cannot be used to rule out the server.
+	 */
+	isLocalOnly?(appId: string): Promise<boolean>;
 }
 
 interface BackendStoreState {

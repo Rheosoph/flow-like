@@ -7,6 +7,7 @@ import {
 } from "../lib/board-sync-events";
 import { getErrorMessage } from "../lib/error-message";
 import { boardFingerprint } from "../lib/flow-history-stacks";
+import type { FlowScriptApplyOrigin } from "../lib/flowscript-apply-failure";
 import {
 	type BoardEditReceiptHistoryMode,
 	flowIrCommitDeliveryId,
@@ -27,6 +28,8 @@ interface ExecuteCommandsOptions {
 	refetch?: boolean;
 	allowDeletions?: boolean;
 	suppressBlockedToast?: boolean;
+	/** Who authored the FlowScript. Defaults to the editor; FlowPilot passes "agent". */
+	origin?: FlowScriptApplyOrigin;
 }
 
 interface UseCommandExecutionProps {
@@ -314,6 +317,7 @@ export function useCommandExecution({
 					currentLayer,
 					catalogNodes,
 					options.allowDeletions === true,
+					options.origin ?? "editor",
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(

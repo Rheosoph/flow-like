@@ -620,7 +620,8 @@ impl NodeLogic for BrowserGetAllStorageNode {
             "Data",
             "All storage data as JSON object",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "count",

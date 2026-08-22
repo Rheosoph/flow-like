@@ -7,6 +7,7 @@
 //! - [`model`] — the [`BoardAst`] IR types.
 //! - [`render`] — [`BoardAst`] → FlowScript text.
 //! - [`parse`] — FlowScript text → [`BoardAst`].
+//! - [`redact`] — strip declared values and long literals before a source is stored off-machine.
 //! - [`signatures`] — node signature stubs (the ~1200-function problem).
 //! - [`text`] — pure text helpers (casing, quoting).
 //!
@@ -15,6 +16,7 @@
 
 pub mod model;
 pub mod parse;
+pub mod redact;
 pub mod render;
 pub mod schema;
 pub mod signatures;
@@ -22,6 +24,7 @@ pub mod text;
 
 pub use model::*;
 pub use parse::{ParseError, parse};
+pub use redact::{MAX_LITERAL_CHARS, MAX_SOURCE_CHARS, RedactedFlowScript, redact_flowscript};
 pub use render::{RenderOptions, render, render_type_ref};
 pub use schema::{
     apply_interface_schemas, interface_name_for_schema, interfaces_for_variables, normalize_schema,

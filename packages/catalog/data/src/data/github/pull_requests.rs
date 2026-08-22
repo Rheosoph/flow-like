@@ -66,6 +66,21 @@ fn parse_review(review: &Value) -> Option<GitHubPullRequestReview> {
 // Get Pull Request Node
 // =============================================================================
 
+/// A single inline review comment, in the shape GitHub's review API expects.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ReviewComment {
+    /// File the comment belongs to, relative to the repository root.
+    pub path: String,
+    /// The comment text.
+    pub body: String,
+    /// Line in the diff the comment is anchored to.
+    pub line: Option<i64>,
+    /// First line, when the comment spans a range.
+    pub start_line: Option<i64>,
+    /// Which side of the diff: LEFT for the old file, RIGHT for the new one.
+    pub side: Option<String>,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct GetGitHubPullRequestNode {}
@@ -1379,7 +1394,8 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             "Inline review comments with path, position or line, and body",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_schema::<crate::data::github::pull_requests::ReviewComment>();
 
         node.add_input_pin("event", "Event", "Review event type", VariableType::String)
             .set_default_value(Some(json!("COMMENT")))

@@ -101,7 +101,8 @@ impl NodeLogic for KgExtractNode {
             "Array of extracted entity objects with label, id, and properties",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "extracted_edges",
@@ -109,7 +110,8 @@ impl NodeLogic for KgExtractNode {
             "Array of extracted relationship objects with label, source, target, and properties",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "entity_count",

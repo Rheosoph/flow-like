@@ -2050,6 +2050,7 @@ function FlowPilotImpl({
 					}
 					applyResult = await onApplyFlowScript(flowscriptWorkspace, {
 						suppressBlockedToast: true,
+						origin: "agent",
 					});
 					if (!applyResult) return;
 
@@ -2233,7 +2234,7 @@ function FlowPilotImpl({
 		try {
 			const applyResult = await onApplyFlowScript(
 				destructiveApplyRequest.flowscript,
-				{ allowDeletions: true },
+				{ allowDeletions: true, origin: "agent" },
 			);
 			if (!applyResult) return;
 

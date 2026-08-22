@@ -149,6 +149,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/sink", routes::sink::routes())
         .nest("/aliases", routes::alias::routes())
         .nest("/telemetry", routes::telemetry::routes())
+        .nest("/flowscript", routes::flowscript::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
         .with_state(state.clone())
         .route("/version", get(|| async { "0.0.0" }))

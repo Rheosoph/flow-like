@@ -21,6 +21,7 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "../../../components/a2ui/types";
+import type { FlowScriptApplyOrigin } from "../../../lib/flowscript-apply-failure";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -172,6 +173,7 @@ export class EmptyBoardState implements IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions?: boolean,
+		origin?: FlowScriptApplyOrigin,
 	): Promise<IApplyFlowScriptResponse> {
 		throw new Error("Method not implemented.");
 	}

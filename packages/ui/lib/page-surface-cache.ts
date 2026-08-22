@@ -1,5 +1,6 @@
 import { type UseStore, createStore, del, get, keys, set } from "idb-keyval";
 import type { Surface } from "../components/a2ui/types";
+import { hasExpiredAssetUrl } from "./stable-asset-url";
 
 /**
  * Last-known-good surfaces.
@@ -138,11 +139,21 @@ export async function readPageSurfaceCache(
 	}
 
 	try {
-		const record = await get<PageSurfaceCacheRecord>(
-			cacheKey(identity),
-			surfaceStore(),
-		);
-		return record?.surface ?? null;
+		const key = cacheKey(identity);
+		const record = await get<PageSurfaceCacheRecord>(key, surfaceStore());
+		if (!record?.surface) return null;
+
+		// A surface is stored with its media already signed, and a signature outlives
+		// neither the credential that made it nor the day. Replaying one whose links
+		// have died shows broken images that nothing on the page can repair — the
+		// storage paths they were signed from are not in the record — so a stale entry
+		// is dropped and the run builds the page from scratch instead.
+		if (hasExpiredAssetUrl(record.surface)) {
+			void del(key, surfaceStore()).catch(() => undefined);
+			return null;
+		}
+
+		return record.surface;
 	} catch {
 		return null;
 	}

@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::time::Duration;
 
 #[cfg(feature = "aws")]
 use aws_credentials::AwsRuntimeCredentials;
@@ -255,6 +256,55 @@ impl RuntimeCredentials {
         }
     }
 
+    /// When this credential set stops working, or `None` for a static one.
+    ///
+    /// Scoped credentials are short-lived session credentials on every provider
+    /// that mints them, so anything derived from them — a signed URL above all —
+    /// dies with them no matter what deadline it advertises.
+    pub fn expiration(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            #[cfg(feature = "aws")]
+            RuntimeCredentials::Aws(aws) => aws.expiration,
+            #[cfg(feature = "azure")]
+            RuntimeCredentials::Azure(azure) => azure.expiration,
+            #[cfg(feature = "gcp")]
+            RuntimeCredentials::Gcp(gcp) => gcp.expiration,
+            #[cfg(feature = "r2")]
+            RuntimeCredentials::R2(r2) => r2.expiration,
+            RuntimeCredentials::Mixed(mixed) => mixed.content.expiration(),
+        }
+    }
+
+    /// The longest a URL signed with this credential can honestly claim to live.
+    ///
+    /// A SigV4 presigned URL carries the signing credential in its query string,
+    /// so an object store rejects it the moment that credential expires — a URL
+    /// signed for 24 hours with a one-hour session token is dead after the hour
+    /// and answers 403 for the remaining twenty-three. That matters beyond the
+    /// wasted requests: clients cache signed URLs by the deadline the URL states,
+    /// so an overstated deadline makes them hold a dead link and suppress the
+    /// re-signed one that would have worked.
+    ///
+    /// The margin covers the round trip from here to the browser that will use
+    /// the URL, and the floor keeps a nearly-expired credential from producing a
+    /// URL that is already useless — such a URL still fails, but it fails while
+    /// the caller is looking at it rather than silently later.
+    pub fn signing_ttl(&self, desired: Duration) -> Duration {
+        const MARGIN: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
+        const FLOOR: Duration = Duration::from_secs(60);
+
+        let Some(expiration) = self.expiration() else {
+            return desired;
+        };
+
+        let remaining = expiration - chrono::Utc::now() - MARGIN;
+        let Ok(remaining) = remaining.to_std() else {
+            return FLOOR;
+        };
+
+        desired.min(remaining).max(FLOOR)
+    }
+
     pub async fn scoped(
         sub: &str,
         app_id: &str,
@@ -467,5 +517,80 @@ mod storage_path_segment_tests {
         );
         assert_eq!(global_prefix, "tmp/global/apps/app-1");
         assert!(!user_prefix.contains(':'), "{user_prefix}");
+    }
+}
+
+#[cfg(all(test, feature = "aws"))]
+mod signing_ttl_tests {
+    use super::*;
+
+    fn credentials_expiring_at(
+        expiration: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> RuntimeCredentials {
+        RuntimeCredentials::Aws(AwsRuntimeCredentials {
+            access_key_id: Some("AKIATEST".to_string()),
+            secret_access_key: Some("secret".to_string()),
+            session_token: Some("token".to_string()),
+            meta_bucket: "meta".to_string(),
+            content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
+            region: "us-east-1".to_string(),
+            expiration,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
+        })
+    }
+
+    /// A signed URL carries its signing credential, so it dies with it. Advertising
+    /// a longer deadline is what makes a client cache a link that is already dead.
+
+    #[test]
+    fn signing_ttl_never_outlives_a_session_credential() {
+        let credentials =
+            credentials_expiring_at(Some(chrono::Utc::now() + chrono::Duration::minutes(40)));
+
+        let ttl = credentials.signing_ttl(Duration::from_secs(60 * 60 * 24));
+        assert!(
+            ttl <= Duration::from_secs(40 * 60),
+            "a 24h TTL must be cut down to the credential's 40 remaining minutes, got {ttl:?}"
+        );
+        assert!(
+            ttl >= Duration::from_secs(30 * 60),
+            "the clamp must not throw away usable lifetime, got {ttl:?}"
+        );
+    }
+
+    /// A mixed deployment signs content with its content credential, so that is the
+    /// one whose lifetime bounds the URL.
+
+    #[test]
+    fn signing_ttl_reads_through_a_mixed_credential_set() {
+        let short =
+            credentials_expiring_at(Some(chrono::Utc::now() + chrono::Duration::minutes(9)));
+        let mixed = RuntimeCredentials::Mixed(mixed_credentials::MixedRuntimeCredentials {
+            meta: Box::new(credentials_expiring_at(None)),
+            content: Box::new(short),
+            logs: Box::new(credentials_expiring_at(None)),
+        });
+
+        assert!(
+            mixed.signing_ttl(Duration::from_secs(60 * 60 * 24)) <= Duration::from_secs(9 * 60)
+        );
+    }
+
+    #[test]
+    fn signing_ttl_keeps_the_request_for_a_static_credential() {
+        let day = Duration::from_secs(60 * 60 * 24);
+        assert_eq!(credentials_expiring_at(None).signing_ttl(day), day);
+    }
+
+    #[test]
+    fn signing_ttl_floors_an_already_dead_credential() {
+        let credentials =
+            credentials_expiring_at(Some(chrono::Utc::now() - chrono::Duration::hours(1)));
+        assert_eq!(
+            credentials.signing_ttl(Duration::from_secs(60 * 60 * 24)),
+            Duration::from_secs(60)
+        );
     }
 }

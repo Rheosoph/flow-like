@@ -62,6 +62,24 @@ pub struct DeltaHistoryEntry {
 // ============================================================================
 
 /// Register a Delta Lake table in DataFusion using FlowPath
+/// A snapshot entry of an Iceberg table, as written to the `snapshots` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct IcebergSnapshot {
+    pub snapshot_id: i64,
+    /// When the snapshot was committed, in milliseconds since the epoch.
+    pub timestamp_ms: i64,
+    /// The snapshot this one was built on, absent for the first.
+    pub parent_snapshot_id: Option<i64>,
+}
+
+/// The partitioning an Iceberg table is currently written with.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct IcebergPartitionSpec {
+    pub spec_id: i32,
+    /// How many columns take part in the partitioning.
+    pub fields_count: usize,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct RegisterDeltaTableNode {}
@@ -1276,25 +1294,29 @@ impl NodeLogic for IcebergTableInfoNode {
             "Schema",
             "Table schema as JSON",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "snapshots",
             "Snapshots",
             "List of all snapshots",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::datafusion::data_lakes::IcebergSnapshot>();
         node.add_output_pin(
             "partition_spec",
             "Partition Spec",
             "Current partition specification",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::datafusion::data_lakes::IcebergPartitionSpec>();
         node.add_output_pin(
             "properties",
             "Properties",
             "Table properties",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.scores = Some(NodeScores {
             privacy: 9,

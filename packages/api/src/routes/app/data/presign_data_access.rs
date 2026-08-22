@@ -114,7 +114,7 @@ pub async fn presign_data_access(
         ApiError::internal("Failed to serialize shared credentials")
     })?;
 
-    let expiration = get_credentials_expiration(&scoped_credentials);
+    let expiration = scoped_credentials.expiration();
 
     Ok(Json(PresignDataAccessResponse {
         shared_credentials,
@@ -191,7 +191,7 @@ pub async fn presign_user_data_access(
         ApiError::internal("Failed to serialize shared credentials")
     })?;
 
-    let expiration = get_credentials_expiration(&scoped_credentials);
+    let expiration = scoped_credentials.expiration();
 
     Ok(Json(PresignDataAccessResponse {
         shared_credentials,
@@ -212,21 +212,5 @@ fn build_user_upload_path(sub: &str, app_id: &str, prefix: Option<&str>) -> Flow
     match prefix {
         Some(prefix) => paths::resolve_user_upload(sub, app_id, prefix),
         None => paths::user_upload_base(sub, app_id),
-    }
-}
-
-fn get_credentials_expiration(
-    credentials: &RuntimeCredentials,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    match credentials {
-        #[cfg(feature = "aws")]
-        RuntimeCredentials::Aws(aws) => aws.expiration,
-        #[cfg(feature = "azure")]
-        RuntimeCredentials::Azure(azure) => azure.expiration,
-        #[cfg(feature = "gcp")]
-        RuntimeCredentials::Gcp(gcp) => gcp.expiration,
-        #[cfg(feature = "r2")]
-        RuntimeCredentials::R2(r2) => r2.expiration,
-        RuntimeCredentials::Mixed(mixed) => get_credentials_expiration(&mixed.content),
     }
 }

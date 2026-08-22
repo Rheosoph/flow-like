@@ -305,6 +305,35 @@ pub async fn lint_flowscript(
     }
 }
 
+/// A FlowScript source stripped of everything that is board *data* rather than board *shape*.
+#[derive(serde::Serialize)]
+pub struct RedactedFlowScript {
+    pub flowscript: String,
+    /// Declarations whose value was dropped.
+    pub dropped_values: usize,
+    /// Long string literals replaced by a `"<str:N>"` placeholder.
+    pub redacted_literals: usize,
+    pub truncated: bool,
+}
+
+/// Redact a FlowScript source locally, before anything about a failed apply is reported to the hub.
+///
+/// The API redacts again on arrival, so this is not what makes the capture safe — it is what keeps
+/// a raw source from leaving the machine in the first place, which matters because an offline app's
+/// board never leaves it otherwise.
+#[tauri::command(async)]
+pub async fn redact_flowscript(
+    flowscript: String,
+) -> Result<RedactedFlowScript, TauriFunctionError> {
+    let redacted = flow_like::flow::ast::redact_flowscript(&flowscript);
+    Ok(RedactedFlowScript {
+        flowscript: redacted.text,
+        dropped_values: redacted.dropped_values,
+        redacted_literals: redacted.redacted_literals,
+        truncated: redacted.truncated,
+    })
+}
+
 /// Read-only result from compiling FlowScript against the authoritative persisted board and the
 /// app-scoped live catalog. Unlike [`lint_flowscript`], this exercises semantic reconciliation
 /// (node resolution, pins, types, execution edges, and board identity) without applying commands.

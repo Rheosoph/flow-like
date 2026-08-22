@@ -50,7 +50,8 @@ impl NodeLogic for CypherQueryNode {
             "Parameters",
             "Query parameters (JSON object)",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_input_pin(
             "limit",
             "Limit",
@@ -78,7 +79,8 @@ impl NodeLogic for CypherQueryNode {
             "Query results as JSON array",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_open_schema();
 
         node
     }

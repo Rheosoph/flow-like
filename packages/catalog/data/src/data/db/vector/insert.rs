@@ -43,7 +43,8 @@ impl NodeLogic for InsertLocalDatabaseNode {
         .set_schema::<NodeDBConnection>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct);
+        node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct)
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",
@@ -121,7 +122,8 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct)
-            .set_value_type(ValueType::Array);
+            .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

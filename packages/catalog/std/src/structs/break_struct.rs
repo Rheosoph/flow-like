@@ -253,7 +253,8 @@ impl NodeLogic for BreakStructNode {
             "Struct",
             "The struct to break apart",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

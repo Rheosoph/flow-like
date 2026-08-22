@@ -51,7 +51,8 @@ impl NodeLogic for GraphSchemaNode {
             "Schema",
             "Graph schema with labels and properties",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like_storage::databases::graph::GraphSchemaResult>();
 
         node
     }

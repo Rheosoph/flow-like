@@ -72,7 +72,8 @@ impl NodeLogic for CompressMemoryNode {
             "Array of memory records to compress (typically older observations from Search Memory)",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_input_pin(
             "model",

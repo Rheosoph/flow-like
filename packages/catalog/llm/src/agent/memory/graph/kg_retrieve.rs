@@ -115,7 +115,8 @@ impl NodeLogic for KgRetrieveNode {
             "Context",
             "Structured subgraph context as JSON (nodes + edges + properties)",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "summary_text",
             "Summary Text",

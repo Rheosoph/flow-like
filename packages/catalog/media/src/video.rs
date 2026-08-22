@@ -1656,6 +1656,23 @@ async fn eval_positive_u64_pin(context: &mut ExecutionContext, name: &str) -> Op
     if value > 0 { Some(value as u64) } else { None }
 }
 
+/// What the video generation node writes to its `metadata` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct VideoGenerationMetadata {
+    /// Provider that served the request.
+    pub provider: String,
+    /// Model identifier used.
+    pub model: String,
+    /// Model version, when the provider reports one.
+    pub version: Option<String>,
+    /// How many clips were produced.
+    pub count: usize,
+    /// Where each clip was written.
+    pub paths: Vec<flow_like_types::Value>,
+    /// Everything else the provider returned, whose shape is the provider's own.
+    pub provider_metadata: flow_like_types::Value,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct MakeOpenAiSoraVideoOptionsNode {}
@@ -2286,7 +2303,8 @@ impl NodeLogic for GenerateVideoNode {
             "Metadata",
             "Generation metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::video::VideoGenerationMetadata>();
         node.set_long_running(true);
         node
     }

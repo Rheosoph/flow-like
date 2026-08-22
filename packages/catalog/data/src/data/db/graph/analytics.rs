@@ -71,7 +71,8 @@ impl NodeLogic for GraphAnalyticsNode {
             "Analytics Payload",
             "Metrics: counts, components, top objects by degree and PageRank",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

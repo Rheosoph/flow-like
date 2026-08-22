@@ -341,7 +341,8 @@ impl NodeLogic for RunDatabricksJobNode {
             "Optional: JSON object with job parameters",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

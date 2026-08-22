@@ -1728,6 +1728,29 @@ async fn eval_seed_pin(context: &mut ExecutionContext) -> Option<u64> {
     if seed > 0 { Some(seed as u64) } else { None }
 }
 
+/// What the image generation node writes to its `metadata` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ImageGenerationMetadata {
+    /// Provider that served the request.
+    pub provider: String,
+    /// Model identifier used.
+    pub model: String,
+    /// Model version, when the provider reports one.
+    pub version: Option<String>,
+    /// How many images were produced.
+    pub count: usize,
+    /// How many were asked for — a provider may return fewer.
+    pub requested_count: usize,
+    /// Image format that was requested.
+    pub output_format: Option<String>,
+    /// System prompt sent alongside the request, when one was set.
+    pub system_prompt: Option<String>,
+    /// Provider specific options that were applied.
+    pub provider_options: flow_like_types::Value,
+    /// One entry per produced asset.
+    pub assets: flow_like_types::Value,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct MakeOpenAiImageOptionsNode {}
@@ -2254,7 +2277,8 @@ impl NodeLogic for GenerateImageNode {
             "Metadata",
             "Generation metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::image::generation::ImageGenerationMetadata>();
         node.set_long_running(true);
         node
     }

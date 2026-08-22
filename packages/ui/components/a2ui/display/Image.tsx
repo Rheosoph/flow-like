@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useAssetImage } from "../../../hooks/use-asset-image";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -13,6 +13,15 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
+const FIT_CLASSES: Record<string, string> = {
+	contain: "object-contain",
+	cover: "object-cover",
+	fill: "object-fill",
+	none: "object-none",
+	scaleDown: "object-scale-down",
+	"scale-down": "object-scale-down",
+};
+
 export function A2UIImage({
 	component,
 	style,
@@ -22,36 +31,35 @@ export function A2UIImage({
 	const fit = useResolved<string>(component.fit);
 	const fallback = useResolved<string>(component.fallback);
 	const loading = useResolved<"lazy" | "eager">(component.loading);
-	const [error, setError] = useState(false);
+	// Sources here are usually signed storage URLs: they expire, and a dead one
+	// has a live replacement the registry already knows about. Failure state is
+	// keyed by URL, so pointing the component at another asset clears it.
+	const image = useAssetImage(src);
 
-	const fitMap: Record<string, string> = {
-		contain: "object-contain",
-		cover: "object-cover",
-		fill: "object-fill",
-		none: "object-none",
-		scaleDown: "object-scale-down",
-		"scale-down": "object-scale-down",
-	};
+	const className = cn(fit && FIT_CLASSES[fit], resolveStyle(style));
+	const inlineStyle = resolveInlineStyle(style);
 
-	if (error && fallback) {
+	if (!image.canRender && fallback) {
 		return (
 			<img
 				src={fallback}
 				alt={alt ?? ""}
-				className={cn(fit && fitMap[fit], resolveStyle(style))}
-				style={resolveInlineStyle(style)}
+				className={className}
+				style={inlineStyle}
 			/>
 		);
 	}
 
 	return (
 		<img
-			src={src}
+			ref={image.imgRef}
+			src={image.src}
 			alt={alt ?? ""}
 			loading={loading ?? "lazy"}
-			onError={() => setError(true)}
-			className={cn(fit && fitMap[fit], resolveStyle(style))}
-			style={resolveInlineStyle(style)}
+			onLoad={image.onLoad}
+			onError={image.onError}
+			className={className}
+			style={inlineStyle}
 		/>
 	);
 }

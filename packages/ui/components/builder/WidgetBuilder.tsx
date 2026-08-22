@@ -783,8 +783,14 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 		? presignedCanvasSettings.backgroundColor
 		: undefined;
 
-	// Presign assets in components for preview rendering
+	// Presign assets in components for preview rendering.
+	//
+	// Every edit restarts this, and the requests can finish out of order — without
+	// the guard, a slow response from two selections ago lands last and pins the
+	// canvas to the asset the user already replaced.
 	useEffect(() => {
+		let stale = false;
+
 		const presignAssets = async () => {
 			const appId = actionContext?.appId;
 			if (!appId) {
@@ -802,22 +808,30 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					componentsArray,
 					backend.storageState,
 				);
+				if (stale) return;
 				const presignedMap = new Map<string, SurfaceComponent>();
 				for (const comp of presigned) {
 					presignedMap.set(comp.id, comp);
 				}
 				setPresignedComponents(presignedMap);
 			} catch (err) {
+				if (stale) return;
 				console.warn("[VisualCanvas] Failed to presign assets:", err);
 				setPresignedComponents(null);
 			}
 		};
 
 		presignAssets();
+
+		return () => {
+			stale = true;
+		};
 	}, [components, actionContext?.appId, backend.storageState]);
 
 	// Presign canvas background image
 	useEffect(() => {
+		let stale = false;
+
 		const presignCanvas = async () => {
 			const appId = actionContext?.appId;
 			if (!appId) {
@@ -831,14 +845,20 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					canvasSettings,
 					backend.storageState,
 				);
+				if (stale) return;
 				setPresignedCanvasSettings(presigned);
 			} catch (err) {
+				if (stale) return;
 				console.warn("[VisualCanvas] Failed to presign canvas settings:", err);
 				setPresignedCanvasSettings(canvasSettings);
 			}
 		};
 
 		presignCanvas();
+
+		return () => {
+			stale = true;
+		};
 	}, [canvasSettings, actionContext?.appId, backend.storageState]);
 
 	// Build the surface for rendering - use presigned components if available
@@ -1138,8 +1158,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		[effectiveSurfaceId, components],
 	);
 
-	// Presign assets in components when they change
+	// Presign assets in components when they change. Responses can land out of
+	// order, so only the newest run is allowed to publish its result.
 	useEffect(() => {
+		let stale = false;
+
 		const presignAssets = async () => {
 			const appId = actionContext?.appId;
 			if (!appId) {
@@ -1158,22 +1181,30 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					componentsArray,
 					backend.storageState,
 				);
+				if (stale) return;
 				const presignedMap = new Map<string, SurfaceComponent>();
 				for (const comp of presigned) {
 					presignedMap.set(comp.id, comp);
 				}
 				setPresignedComponents(presignedMap);
 			} catch (err) {
+				if (stale) return;
 				console.warn("[BuilderPreview] Failed to presign assets:", err);
 				setPresignedComponents(null);
 			}
 		};
 
 		presignAssets();
+
+		return () => {
+			stale = true;
+		};
 	}, [components, previewSurface, actionContext?.appId, backend.storageState]);
 
 	// Presign canvas background image
 	useEffect(() => {
+		let stale = false;
+
 		const presignCanvas = async () => {
 			const appId = actionContext?.appId;
 			if (!appId) {
@@ -1187,8 +1218,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					canvasSettings,
 					backend.storageState,
 				);
+				if (stale) return;
 				setPresignedCanvasSettings(presigned);
 			} catch (err) {
+				if (stale) return;
 				console.warn(
 					"[BuilderPreview] Failed to presign canvas settings:",
 					err,
@@ -1198,6 +1231,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		};
 
 		presignCanvas();
+
+		return () => {
+			stale = true;
+		};
 	}, [canvasSettings, actionContext?.appId, backend.storageState]);
 
 	// The logical surface is whatever runtime messages have produced, falling

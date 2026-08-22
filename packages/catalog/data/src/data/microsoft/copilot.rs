@@ -2559,7 +2559,8 @@ impl NodeLogic for GetUserCopilotSettingsNode {
             "Settings",
             "Raw settings data",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin("error_message", "Error", "", VariableType::String);
 
         node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["AiEnterpriseInteraction.Read"]);

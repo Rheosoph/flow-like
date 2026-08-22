@@ -1161,6 +1161,21 @@
       "auth": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RestAuthConfig\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"const\":\"none\"}},\"required\":[\"type\"]},{\"type\":\"object\",\"properties\":{\"header\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"const\":\"api_key\"}},\"required\":[\"type\",\"header\",\"key\"]},{\"type\":\"object\",\"properties\":{\"token\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"const\":\"bearer_token\"}},\"required\":[\"type\",\"token\"]},{\"type\":\"object\",\"properties\":{\"username\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"const\":\"basic_auth\"}},\"required\":[\"type\",\"username\",\"password\"]},{\"type\":\"object\",\"properties\":{\"secret\":{\"type\":\"string\"},\"signature_header\":{\"type\":\"string\",\"default\":\"x-signature\"},\"timestamp_header\":{\"type\":\"string\",\"default\":\"x-timestamp\"},\"max_skew_seconds\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0,\"default\":300},\"type\":{\"type\":\"string\",\"const\":\"hmac_sha256\"}},\"required\":[\"type\",\"secret\"]},{\"type\":\"object\",\"properties\":{\"issuer\":{\"type\":[\"string\",\"null\"],\"default\":null},\"audience\":{\"type\":[\"string\",\"null\"],\"default\":null},\"required_scopes\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"default\":[]},\"jwks_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"jwks_flow_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"oidc_discovery_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":\"string\",\"const\":\"oauth_bearer\"}},\"required\":[\"type\"]}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
     }
   },
+  "arrayGroupBy": {
+    "outputs": {
+      "groups": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"KeyedGroup\",\"type\":\"object\",\"properties\":{\"key\":true,\"count\":{\"type\":\"integer\",\"format\":\"int64\"},\"items\":{\"type\":\"array\",\"items\":true}},\"required\":[\"key\",\"count\",\"items\"]}"
+    }
+  },
+  "arrayJoinBy": {
+    "outputs": {
+      "pairs": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"JoinedPair\",\"type\":\"object\",\"properties\":{\"left\":true,\"right\":true,\"matched\":{\"type\":\"boolean\"}},\"required\":[\"left\",\"right\",\"matched\"]}"
+    }
+  },
+  "arrayZip": {
+    "outputs": {
+      "pairs": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ZippedPair\",\"type\":\"object\",\"properties\":{\"first\":true,\"second\":true},\"required\":[\"first\",\"second\"]}"
+    }
+  },
   "attachmentFields": {
     "inputs": {
       "attachment": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Attachment\",\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"]},\"content_type\":{\"type\":\"string\"},\"data\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"content_type\",\"data\"]}"
@@ -7318,6 +7333,22 @@
     },
     "outputs": {
       "response": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpResponse\",\"type\":\"object\",\"properties\":{\"status_code\":{\"type\":\"integer\",\"format\":\"uint16\",\"minimum\":0,\"maximum\":65535},\"headers\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"status_code\",\"headers\"]}"
+    }
+  },
+  "structMerge": {
+    "inputs": {
+      "struct": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
+    "outputs": {
+      "merged": "{\"type\":\"object\",\"additionalProperties\":true}"
+    }
+  },
+  "structPick": {
+    "inputs": {
+      "struct": "{\"type\":\"object\",\"additionalProperties\":true}"
+    },
+    "outputs": {
+      "result": "{\"type\":\"object\",\"additionalProperties\":true}"
     }
   },
   "switchOnBit": {

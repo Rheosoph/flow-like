@@ -81,7 +81,8 @@ pub fn add_params_pin(node: &mut Node, flavor: SqlFlavor) {
         ),
         VariableType::Struct,
     )
-    .set_default_value(Some(json!({})));
+    .set_default_value(Some(json!({})))
+    .set_open_schema();
 }
 
 /// Reconciles the node's derived `$placeholder` pins against its query literal.

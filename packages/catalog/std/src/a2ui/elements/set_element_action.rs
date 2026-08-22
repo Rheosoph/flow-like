@@ -52,7 +52,8 @@ impl NodeLogic for SetElementAction {
             "Reference to the element (ID string or element object from Get Element)",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "event_name",

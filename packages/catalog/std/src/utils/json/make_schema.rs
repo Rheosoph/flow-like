@@ -47,7 +47,8 @@ impl NodeLogic for SchemaFromExample {
             "Schema",
             "Generated JSON Schema / Tool Definition",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

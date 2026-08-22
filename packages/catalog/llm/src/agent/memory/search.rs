@@ -85,7 +85,8 @@ impl NodeLogic for SearchMemoryNode {
             "Array of matching memory records (sorted by relevance/recency)",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "result_count",

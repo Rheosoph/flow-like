@@ -153,6 +153,15 @@ declare function controlFlipFlop({ startOnA?: bool }): { isA: bool, tick: int };
  */
 declare function controlGate({ startClosed?: bool }): bool;
 
+/**
+ * Sends the flow down one branch per value. Wire a dropdown pin and the cases fill in by themselves, otherwise list them below
+ * @param value — The value to switch on
+ * @param cases (optional) — Comma separated list of values to branch on. Ignored while the wired pin declares its own values
+ * @returns matchedCase — The case that was taken, empty when the default ran
+ * @impure has side effects / drives control flow
+ */
+declare function controlSwitch({ value: any, cases?: string }): string;
+
 
 // === Control/Functions ===
 
@@ -261,6 +270,21 @@ declare function floatCeil({ float: float }): int;
 declare function floatClamp({ float: float, min: float, max: float }): float;
 
 /**
+ * Provides a mathematical constant such as Pi or E
+ * @param constant (optional) — Which constant to emit
+ * @returns value — The value of the constant
+ */
+declare function floatConstant({ constant?: string }): float;
+
+/**
+ * Takes the magnitude of the first float and the sign of the second
+ * @param float1 — Input Float
+ * @param float2 — Input Float
+ * @returns result — Takes the magnitude of the first float and the sign of the second
+ */
+declare function floatCopysign({ float1: float, float2: float }): float;
+
+/**
  * Divides one float by another
  * @param dividend — The number to be divided
  * @param divisor — The number to divide by
@@ -269,11 +293,91 @@ declare function floatClamp({ float: float, min: float, max: float }): float;
 declare function floatDivide({ dividend: float, divisor: float }): float;
 
 /**
+ * Raises e to the power of a float
+ * @param float — Input Float
+ * @returns result — Raises e to the power of a float
+ */
+declare function floatExp({ float: float }): float;
+
+/**
+ * Raises two to the power of a float
+ * @param float — Input Float
+ * @returns result — Raises two to the power of a float
+ */
+declare function floatExp2({ float: float }): float;
+
+/**
  * Rounds a float down to the nearest integer
  * @param float — Input Float
  * @returns floor — The floor of the float
  */
 declare function floatFloor({ float: float }): int;
+
+/**
+ * Keeps only the fractional part of a float
+ * @param float — Input Float
+ * @returns result — Keeps only the fractional part of a float
+ */
+declare function floatFract({ float: float }): float;
+
+/**
+ * Length of the hypotenuse of a right-angled triangle
+ * @param float1 — Input Float
+ * @param float2 — Input Float
+ * @returns result — Length of the hypotenuse of a right-angled triangle
+ */
+declare function floatHypot({ float1: float, float2: float }): float;
+
+/**
+ * Interpolates linearly between two floats
+ * @param from (optional) — Value at t = 0
+ * @param to (optional) — Value at t = 1
+ * @param t (optional) — Interpolation factor
+ * @param clamp (optional) — Clamp the factor into the range 0 to 1
+ * @returns result — The interpolated value
+ */
+declare function floatLerp({ from?: float, to?: float, t?: float, clamp?: bool }): float;
+
+/**
+ * Natural logarithm of a float
+ * @param float — Input Float
+ * @returns result — Natural logarithm of a float
+ */
+declare function floatLn({ float: float }): float;
+
+/**
+ * Logarithm of a float to a custom base
+ * @param float — Input Float
+ * @param base (optional) — Logarithm base
+ * @returns result — Logarithm of a float to a custom base
+ */
+declare function floatLog({ float: float, base?: float }): float;
+
+/**
+ * Base 10 logarithm of a float
+ * @param float — Input Float
+ * @returns result — Base 10 logarithm of a float
+ */
+declare function floatLog10({ float: float }): float;
+
+/**
+ * Base 2 logarithm of a float
+ * @param float — Input Float
+ * @returns result — Base 2 logarithm of a float
+ */
+declare function floatLog2({ float: float }): float;
+
+/**
+ * Rescales a value from one range into another
+ * @param value — Value to rescale
+ * @param inMin (optional) — In Min
+ * @param inMax (optional) — In Max
+ * @param outMin (optional) — Out Min
+ * @param outMax (optional) — Out Max
+ * @param clamp (optional) — Keep the result inside the output range
+ * @returns result — The rescaled value
+ */
+declare function floatMapRange({ value: float, inMin?: float, inMax?: float, outMin?: float, outMax?: float, clamp?: bool }): float;
 
 /**
  * Returns the larger of two floats
@@ -292,12 +396,40 @@ declare function floatMax({ float1: float, float2: float }): float;
 declare function floatMin({ float1: float, float2: float }): float;
 
 /**
+ * Remainder of a float division
+ * @param float1 — Dividend
+ * @param float2 — Divisor
+ * @param euclidean (optional) — Return a non-negative remainder
+ * @returns remainder — Remainder of the division
+ */
+declare function floatModulo({ float1: float, float2: float, euclidean?: bool }): float;
+
+/**
+ * Multiplies two floats and adds a third in one rounding step
+ * @param float — Input Float
+ * @param factor (optional) — Multiplied with the input
+ * @param addend (optional) — Added to the product
+ * @returns result — Input multiplied by the factor plus the addend
+ */
+declare function floatMulAdd({ float: float, factor?: float, addend?: float }): float;
+
+/**
  * Multiplies two floats together
  * @param float1 — First Float
  * @param float2 — Second Float
  * @returns product — The product of the two floats
  */
 declare function floatMultiply({ float1: float, float2: float }): float;
+
+/**
+ * How much a value moved relative to where it started
+ * @param from (optional) — Earlier value
+ * @param to (optional) — Later value
+ * @returns percent — Change in percent, negative when the value fell
+ * @returns delta — Absolute change
+ * @returns defined — False when the earlier value was zero, which has no percentage
+ */
+declare function floatPercentChange({ from?: float, to?: float }): { percent: float, delta: float, defined: bool };
 
 /**
  * Calculates the power of a float
@@ -308,6 +440,13 @@ declare function floatMultiply({ float1: float, float2: float }): float;
 declare function floatPower({ base: float, exponent: float }): float;
 
 /**
+ * One divided by a float
+ * @param float — Input Float
+ * @returns result — One divided by a float
+ */
+declare function floatRecip({ float: float }): float;
+
+/**
  * Calculates the nth root of a float
  * @param radicand — The float to take the root of
  * @param degree — The degree of the root
@@ -316,11 +455,35 @@ declare function floatPower({ base: float, exponent: float }): float;
 declare function floatRoot({ radicand: float, degree: int }): float;
 
 /**
- * Rounds a float to the nearest integer
+ * Rounds a float to the given number of decimal places
  * @param float — Input Float
+ * @param decimals (optional) — Number of decimal places to keep
  * @returns rounded — The rounded float
  */
-declare function floatRound({ float: float }): float;
+declare function floatRound({ float: float, decimals?: int }): float;
+
+/**
+ * Snaps a value to the nearest multiple, for example the nearest 0.05 or 25
+ * @param value — Value to snap
+ * @param multiple (optional) — Step size to snap to
+ * @param mode (optional) — Which direction to snap in
+ * @returns result — The snapped value
+ */
+declare function floatRoundToMultiple({ value: float, multiple?: float, mode?: string }): float;
+
+/**
+ * Returns -1 or 1 depending on the sign of a float
+ * @param float — Input Float
+ * @returns result — Returns -1 or 1 depending on the sign of a float
+ */
+declare function floatSignum({ float: float }): float;
+
+/**
+ * Square root of a float
+ * @param float — Input Float
+ * @returns result — Square root of a float
+ */
+declare function floatSqrt({ float: float }): float;
 
 /**
  * Subtracts one float from another
@@ -329,6 +492,89 @@ declare function floatRound({ float: float }): float;
  * @returns difference — The difference between the two floats
  */
 declare function floatSubtract({ float1: float, float2: float }): float;
+
+/**
+ * Converts a float into an integer using the selected rounding
+ * @param float — Input Float
+ * @param rounding (optional) — How to remove the fractional part
+ * @returns integer — The converted value
+ */
+declare function floatToInt({ float: float, rounding?: string }): int;
+
+/**
+ * Drops the fractional part of a float
+ * @param float — Input Float
+ * @returns result — Drops the fractional part of a float
+ */
+declare function floatTrunc({ float: float }): float;
+
+
+// === Math/Float/Aggregate ===
+
+/**
+ * Arithmetic mean of every float in an array
+ * @param floats — Input Floats
+ * @returns result — Arithmetic mean of every float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatAverage({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Largest float in an array
+ * @param floats — Input Floats
+ * @returns result — Largest float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatMaxOf({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Middle value of an array, averaging the two middle values for even counts
+ * @param floats — Input Floats
+ * @returns result — Middle value of an array, averaging the two middle values for even counts
+ * @returns empty — True when the input array held no values
+ */
+declare function floatMedian({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Smallest float in an array
+ * @param floats — Input Floats
+ * @returns result — Smallest float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatMinOf({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Value at a percentile of an array, interpolating between neighbours
+ * @param floats — Input Floats
+ * @param percentile (optional) — Percentile between 0 and 100
+ * @returns result — Value at a percentile of an array, interpolating between neighbours
+ * @returns empty — True when the input array held no values
+ */
+declare function floatPercentile({ floats: float[], percentile?: float }): { result: float, empty: bool };
+
+/**
+ * Population standard deviation of every float in an array
+ * @param floats — Input Floats
+ * @returns result — Population standard deviation of every float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatStdDev({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Adds up every float in an array
+ * @param floats — Input Floats
+ * @returns result — Adds up every float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatSum({ floats: float[] }): { result: float, empty: bool };
+
+/**
+ * Population variance of every float in an array
+ * @param floats — Input Floats
+ * @returns result — Population variance of every float in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function floatVariance({ floats: float[] }): { result: float, empty: bool };
 
 
 // === Math/Float/Comparison ===
@@ -357,6 +603,27 @@ declare function floatGreaterThan({ float1: float, float2: float }): bool;
  * @returns isGreaterOrEqual — True if float1 is greater than or equal to float2, false otherwise
  */
 declare function floatGreaterThanOrEqual({ float1: float, float2: float }): bool;
+
+/**
+ * True when the value is a real, finite number
+ * @param float — Input Float
+ * @returns result — True when the value is a real, finite number
+ */
+declare function floatIsFinite({ float: float }): bool;
+
+/**
+ * True when the value is positive or negative infinity
+ * @param float — Input Float
+ * @returns result — True when the value is positive or negative infinity
+ */
+declare function floatIsInfinite({ float: float }): bool;
+
+/**
+ * True when the value is missing or not a real number
+ * @param float — Input Float
+ * @returns result — True when the value is missing or not a real number
+ */
+declare function floatIsNan({ float: float }): bool;
 
 /**
  * Checks if one float is less than another
@@ -395,6 +662,94 @@ declare function floatUnequal({ float1: float, float2: float, tolerance: float }
 declare function floatRandomInRange({ min: float, max: float }): float;
 
 
+// === Math/Float/Trigonometry ===
+
+/**
+ * Arc cosine in radians, input must be between -1 and 1
+ * @param float — Input Float
+ * @returns result — Arc cosine in radians, input must be between -1 and 1
+ */
+declare function floatAcos({ float: float }): float;
+
+/**
+ * Arc sine in radians, input must be between -1 and 1
+ * @param float — Input Float
+ * @returns result — Arc sine in radians, input must be between -1 and 1
+ */
+declare function floatAsin({ float: float }): float;
+
+/**
+ * Arc tangent in radians
+ * @param float — Input Float
+ * @returns result — Arc tangent in radians
+ */
+declare function floatAtan({ float: float }): float;
+
+/**
+ * Angle in radians between the positive x axis and the point (x, y)
+ * @param float1 — Input Float
+ * @param float2 — Input Float
+ * @returns result — Angle in radians between the positive x axis and the point (x, y)
+ */
+declare function floatAtan2({ float1: float, float2: float }): float;
+
+/**
+ * Cosine of an angle in radians
+ * @param float — Input Float
+ * @returns result — Cosine of an angle in radians
+ */
+declare function floatCos({ float: float }): float;
+
+/**
+ * Hyperbolic cosine
+ * @param float — Input Float
+ * @returns result — Hyperbolic cosine
+ */
+declare function floatCosh({ float: float }): float;
+
+/**
+ * Sine of an angle in radians
+ * @param float — Input Float
+ * @returns result — Sine of an angle in radians
+ */
+declare function floatSin({ float: float }): float;
+
+/**
+ * Hyperbolic sine
+ * @param float — Input Float
+ * @returns result — Hyperbolic sine
+ */
+declare function floatSinh({ float: float }): float;
+
+/**
+ * Tangent of an angle in radians
+ * @param float — Input Float
+ * @returns result — Tangent of an angle in radians
+ */
+declare function floatTan({ float: float }): float;
+
+/**
+ * Hyperbolic tangent
+ * @param float — Input Float
+ * @returns result — Hyperbolic tangent
+ */
+declare function floatTanh({ float: float }): float;
+
+/**
+ * Converts radians into degrees
+ * @param float — Input Float
+ * @returns result — Converts radians into degrees
+ */
+declare function floatToDegrees({ float: float }): float;
+
+/**
+ * Converts degrees into radians
+ * @param float — Input Float
+ * @returns result — Converts degrees into radians
+ */
+declare function floatToRadians({ float: float }): float;
+
+
 // === Math/Int ===
 
 /**
@@ -422,6 +777,32 @@ declare function intAdd({ integer1: int, integer2: int }): int;
 declare function intClamp({ integer: int, min: int, max: int }): int;
 
 /**
+ * Decreases an integer by a step
+ * @param integer — Input Integer
+ * @param step (optional) — Step width
+ * @returns result — Decreases an integer by a step
+ */
+declare function intDecrement({ integer: int, step?: int }): int;
+
+/**
+ * Divides two integers and truncates towards zero
+ * @param integer1 — Dividend
+ * @param integer2 — Divisor
+ * @returns result — Truncated quotient
+ * @returns success — False when the divisor was zero
+ */
+declare function intDiv({ integer1: int, integer2: int }): { result: int, success: bool };
+
+/**
+ * Divides two integers and rounds towards negative infinity
+ * @param integer1 — Dividend
+ * @param integer2 — Divisor
+ * @returns result — Euclidean quotient
+ * @returns success — False when the divisor was zero
+ */
+declare function intDivEuclid({ integer1: int, integer2: int }): { result: int, success: bool };
+
+/**
  * Divides two Integers (handles division by zero)
  * @param integer1 — Dividend
  * @param integer2 — Divisor
@@ -436,6 +817,23 @@ declare function intDivide({ integer1: int, integer2: int }): float;
  * @returns equal — True if the integers are equal, false otherwise
  */
 declare function intEqual({ integer1: int, integer2: int }): bool;
+
+/**
+ * Parses an integer from binary, octal, decimal or hexadecimal text
+ * @param string — Text to parse
+ * @param radix (optional) — Numeric base
+ * @returns integer — The parsed integer
+ * @returns success — True when the text was a valid number in that base
+ */
+declare function intFromRadix({ string: string, radix?: string }): { integer: int, success: bool };
+
+/**
+ * Largest integer that divides both inputs
+ * @param integer1 — Input Integer
+ * @param integer2 — Input Integer
+ * @returns result — Largest integer that divides both inputs
+ */
+declare function intGcd({ integer1: int, integer2: int }): int;
 
 /**
  * Checks if the first integer is greater than the second
@@ -454,6 +852,50 @@ declare function intGreaterThan({ integer1: int, integer2: int }): bool;
 declare function intGreaterThanOrEqual({ integer1: int, integer2: int }): bool;
 
 /**
+ * Increases an integer by a step
+ * @param integer — Input Integer
+ * @param step (optional) — Step width
+ * @returns result — Increases an integer by a step
+ */
+declare function intIncrement({ integer: int, step?: int }): int;
+
+/**
+ * Checks whether an integer is divisible by two
+ * @param integer — Input Integer
+ * @returns result — Checks whether an integer is divisible by two
+ */
+declare function intIsEven({ integer: int }): bool;
+
+/**
+ * Checks whether an integer is less than zero
+ * @param integer — Input Integer
+ * @returns result — Checks whether an integer is less than zero
+ */
+declare function intIsNegative({ integer: int }): bool;
+
+/**
+ * Checks whether an integer is not divisible by two
+ * @param integer — Input Integer
+ * @returns result — Checks whether an integer is not divisible by two
+ */
+declare function intIsOdd({ integer: int }): bool;
+
+/**
+ * Checks whether an integer is greater than zero
+ * @param integer — Input Integer
+ * @returns result — Checks whether an integer is greater than zero
+ */
+declare function intIsPositive({ integer: int }): bool;
+
+/**
+ * Smallest positive integer that both inputs divide
+ * @param integer1 — Input Integer
+ * @param integer2 — Input Integer
+ * @returns result — Smallest positive integer that both inputs divide
+ */
+declare function intLcm({ integer1: int, integer2: int }): int;
+
+/**
  * Checks if the first integer is less than the second
  * @param integer1 — Input Integer
  * @param integer2 — Input Integer
@@ -468,6 +910,13 @@ declare function intLessThan({ integer1: int, integer2: int }): bool;
  * @returns lessThanOrEqual — True if integer1 <= integer2, false otherwise
  */
 declare function intLessThanOrEqual({ integer1: int, integer2: int }): bool;
+
+/**
+ * The smallest and largest representable integer
+ * @returns min — Smallest representable integer
+ * @returns max — Largest representable integer
+ */
+declare function intLimits(): { min: int, max: int };
 
 /**
  * Returns the larger of two integers
@@ -502,12 +951,28 @@ declare function intModulo({ integer1: int, integer2: int }): int;
 declare function intMultiply({ integer1: int, integer2: int }): int;
 
 /**
+ * Flips the sign of an integer
+ * @param integer — Input Integer
+ * @returns result — Flips the sign of an integer
+ */
+declare function intNegate({ integer: int }): int;
+
+/**
  * Calculates the power of an integer
  * @param base — Base integer
  * @param exponent — Exponent integer
  * @returns power — Result of the power calculation
  */
 declare function intPower({ base: int, exponent: int }): int;
+
+/**
+ * Remainder that is always positive, unlike the % operator
+ * @param integer1 — Dividend
+ * @param integer2 — Divisor
+ * @returns result — Non-negative remainder
+ * @returns success — False when the divisor was zero
+ */
+declare function intRemEuclid({ integer1: int, integer2: int }): { result: int, success: bool };
 
 /**
  * Calculates the nth root of an integer
@@ -518,6 +983,13 @@ declare function intPower({ base: int, exponent: int }): int;
 declare function intRoot({ radicand: int, degree: int }): float;
 
 /**
+ * Returns -1, 0 or 1 depending on the sign of an integer
+ * @param integer — Input Integer
+ * @returns result — Returns -1, 0 or 1 depending on the sign of an integer
+ */
+declare function intSignum({ integer: int }): int;
+
+/**
  * Subtracts two Integers
  * @param integer1 — Minuend
  * @param integer2 — Subtrahend
@@ -526,12 +998,173 @@ declare function intRoot({ radicand: int, degree: int }): float;
 declare function intSubtract({ integer1: int, integer2: int }): int;
 
 /**
+ * Converts an integer into a float
+ * @param integer — Input Integer
+ * @returns float — The converted value
+ */
+declare function intToFloat({ integer: int }): float;
+
+/**
+ * Formats an integer as binary, octal, decimal or hexadecimal text
+ * @param integer — Input Integer
+ * @param radix (optional) — Numeric base
+ * @param uppercase (optional) — Use upper case letters for hexadecimal digits
+ * @returns string — The formatted number
+ */
+declare function intToRadix({ integer: int, radix?: string, uppercase?: bool }): string;
+
+/**
  * Checks if two integers are unequal
  * @param integer1 — Input Integer
  * @param integer2 — Input Integer
  * @returns unequal — True if the integers are unequal, false otherwise
  */
 declare function intUnequal({ integer1: int, integer2: int }): bool;
+
+
+// === Math/Int/Aggregate ===
+
+/**
+ * Arithmetic mean of every integer in an array
+ * @param integers — Input Integers
+ * @returns result — Arithmetic mean of every integer in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function intAverage({ integers: int[] }): { result: float, empty: bool };
+
+/**
+ * Largest integer in an array
+ * @param integers — Input Integers
+ * @returns result — Largest integer in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function intMaxOf({ integers: int[] }): { result: int, empty: bool };
+
+/**
+ * Smallest integer in an array
+ * @param integers — Input Integers
+ * @returns result — Smallest integer in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function intMinOf({ integers: int[] }): { result: int, empty: bool };
+
+/**
+ * Multiplies every integer in an array
+ * @param integers — Input Integers
+ * @returns result — Multiplies every integer in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function intProduct({ integers: int[] }): { result: int, empty: bool };
+
+/**
+ * Adds up every integer in an array
+ * @param integers — Input Integers
+ * @returns result — Adds up every integer in an array
+ * @returns empty — True when the input array held no values
+ */
+declare function intSum({ integers: int[] }): { result: int, empty: bool };
+
+
+// === Math/Int/Bitwise ===
+
+/**
+ * Bitwise AND of two integers
+ * @param integer1 — Input Integer
+ * @param integer2 — Input Integer
+ * @returns result — Bitwise AND of two integers
+ */
+declare function intBitand({ integer1: int, integer2: int }): int;
+
+/**
+ * Inverts every bit of an integer
+ * @param integer — Input Integer
+ * @returns result — The integer with all bits inverted
+ */
+declare function intBitnot({ integer: int }): int;
+
+/**
+ * Bitwise OR of two integers
+ * @param integer1 — Input Integer
+ * @param integer2 — Input Integer
+ * @returns result — Bitwise OR of two integers
+ */
+declare function intBitor({ integer1: int, integer2: int }): int;
+
+/**
+ * Bitwise XOR of two integers
+ * @param integer1 — Input Integer
+ * @param integer2 — Input Integer
+ * @returns result — Bitwise XOR of two integers
+ */
+declare function intBitxor({ integer1: int, integer2: int }): int;
+
+/**
+ * Number of bits that are set to one
+ * @param integer — Input Integer
+ * @returns result — Number of bits that are set to one
+ */
+declare function intCountOnes({ integer: int }): int;
+
+/**
+ * Number of zero bits before the highest set bit
+ * @param integer — Input Integer
+ * @returns result — Number of zero bits before the highest set bit
+ */
+declare function intLeadingZeros({ integer: int }): int;
+
+/**
+ * Shifts the bits of an integer to the left
+ * @param integer — Input Integer
+ * @param shift (optional) — Number of bit positions to shift by
+ * @returns result — Shifts the bits of an integer to the left
+ */
+declare function intShl({ integer: int, shift?: int }): int;
+
+/**
+ * Shifts the bits of an integer to the right
+ * @param integer — Input Integer
+ * @param shift (optional) — Number of bit positions to shift by
+ * @returns result — Shifts the bits of an integer to the right
+ */
+declare function intShr({ integer: int, shift?: int }): int;
+
+/**
+ * Number of zero bits after the lowest set bit
+ * @param integer — Input Integer
+ * @returns result — Number of zero bits after the lowest set bit
+ */
+declare function intTrailingZeros({ integer: int }): int;
+
+
+// === Math/Int/Overflow ===
+
+/**
+ * Arithmetic that reports overflow and division by zero instead of failing
+ * @param integer1 — Left hand side
+ * @param integer2 — Right hand side
+ * @param operation (optional) — Arithmetic operation to apply
+ * @returns result — Arithmetic that reports overflow and division by zero instead of failing
+ * @returns success — False on overflow or division by zero
+ */
+declare function intCheckedOp({ integer1: int, integer2: int, operation?: string }): { result: int, success: bool };
+
+/**
+ * Arithmetic that clamps to the integer limits instead of overflowing
+ * @param integer1 — Left hand side
+ * @param integer2 — Right hand side
+ * @param operation (optional) — Arithmetic operation to apply
+ * @returns result — Arithmetic that clamps to the integer limits instead of overflowing
+ */
+declare function intSaturatingOp({ integer1: int, integer2: int, operation?: string }): int;
+
+/**
+ * Arithmetic that wraps around the integer limits
+ * @param integer1 — Left hand side
+ * @param integer2 — Right hand side
+ * @param operation (optional) — Arithmetic operation to apply
+ * @returns result — Arithmetic that wraps around the integer limits
+ */
+declare function intWrappingOp({ integer1: int, integer2: int, operation?: string }): int;
 
 
 // === Math/Int/Random ===
@@ -592,6 +1225,16 @@ declare function structMake(): Struct;
  */
 declare function structMakeFromSchema(): Struct;
 
+/**
+ * Lays structs over each other, later ones winning. Useful for defaults plus overrides
+ * @param struct — Base struct
+ * @param struct — Laid over the base
+ * @param deep (optional) — Merge nested structs field by field instead of replacing them
+ * @param skipNull (optional) — Ignore fields that are null in a later struct
+ * @returns merged — The combined struct
+ */
+declare function structMerge({ struct: Struct, struct: Struct, deep?: bool, skipNull?: bool }): Struct;
+
 
 // === Structs/Fields ===
 
@@ -619,6 +1262,15 @@ declare function structGetFields({ struct: Struct }): { fieldNames: string[], fi
  * @returns found — Indicates if the value was found
  */
 declare function structHas({ struct: Struct, field: string }): bool;
+
+/**
+ * Keeps only the listed fields, dropping everything else. Use before logging or sending a struct on
+ * @param struct — Input Struct
+ * @param fields — Top level field names to keep
+ * @param mode (optional) — Keep only these fields, or drop them and keep the rest
+ * @returns result — The projected struct
+ */
+declare function structPick({ struct: Struct, fields: string[], mode?: string }): Struct;
 
 /**
  * Removes a field from a struct (supports dot notation and array access)
@@ -1552,8 +2204,33 @@ declare function a2uiSurfaceUpdate({ surfaceId?: string, components: Struct[] })
  */
 declare function cuid(): string;
 
+/**
+ * A random identifier
+ * @param uppercase (optional) — Write the hex digits in upper case
+ * @returns uuid — A random identifier
+ * @impure has side effects / drives control flow
+ */
+declare function uuidV4({ uppercase?: bool }): string;
+
+/**
+ * A time ordered identifier — sorts by creation time, which keeps database indexes tidy
+ * @param uppercase (optional) — Write the hex digits in upper case
+ * @returns uuid — A time ordered identifier — sorts by creation time, which keeps database indexes tidy
+ * @impure has side effects / drives control flow
+ */
+declare function uuidV7({ uppercase?: bool }): string;
+
 
 // === Utils/Array ===
+
+/**
+ * Splits an array into batches of a fixed size
+ * @param arrayIn — Your Array
+ * @param size (optional) — Elements per batch
+ * @returns chunks — One entry per batch, each holding up to Size elements
+ * @returns chunkCount — How many batches were produced
+ */
+declare function arrayChunk({ arrayIn: any[], size?: int }): { chunks: any[], chunkCount: int };
 
 /**
  * Removes all elements from an array
@@ -1571,6 +2248,21 @@ declare function arrayClear({ arrayIn: any[] }): any[];
  * @impure has side effects / drives control flow
  */
 declare function arrayExtend({ arrayIn: any[], values: any[] }): any[];
+
+/**
+ * Keeps the elements whose key passes a comparison
+ * @param arrayIn — Your Array
+ * @param key (optional) — Field to read from each element, dot notation for nested fields (customer.address.city). Empty uses the element itself
+ * @param operator (optional) — How the key is compared against the value
+ * @param value (optional) — What to compare against. In List takes a comma separated list
+ * @param compare (optional) — Comparator used by the ordering operators
+ * @param ignoreCase (optional) — Compare text without regard to upper/lower case
+ * @param invert (optional) — Keep the elements that do not pass instead
+ * @returns arrayOut — The kept elements
+ * @returns kept — How many elements passed
+ * @returns removed — How many elements were dropped
+ */
+declare function arrayFilterBy({ arrayIn: any[], key?: string, operator?: string, value?: string, compare?: string, ignoreCase?: bool, invert?: bool }): { arrayOut: any[], kept: int, removed: int };
 
 /**
  * Removes a specific field from every struct in an array. Elements without the field are kept unchanged. Returns the filtered array and count of removed fields.
@@ -1603,6 +2295,14 @@ declare function arrayFilterFields({ arrayIn: Struct[], fields: string[] }): { a
 declare function arrayFindItem({ arrayIn: any[], item: any }): { index: int, found: bool };
 
 /**
+ * Pulls nested arrays up into a single array
+ * @param arrayIn — Your Array
+ * @param depth (optional) — How many levels to flatten, -1 for all of them
+ * @returns arrayOut — The flattened array
+ */
+declare function arrayFlatten({ arrayIn: any[], depth?: int }): any[];
+
+/**
  * Gets an element from an array by index
  * @param arrayIn — Your Array
  * @param index — Index of the element to get
@@ -1610,6 +2310,15 @@ declare function arrayFindItem({ arrayIn: any[], item: any }): { index: int, fou
  * @returns success — Was the get successful?
  */
 declare function arrayGet({ arrayIn: any[], index: int }): { element: any, success: bool };
+
+/**
+ * Groups elements that share the same key value
+ * @param arrayIn — Your Array
+ * @param key (optional) — Field to read from each element, dot notation for nested fields (customer.address.city). Empty uses the element itself
+ * @returns groups — One entry per distinct key, in first-seen order
+ * @returns groupCount — How many distinct keys were found
+ */
+declare function arrayGroupBy({ arrayIn: any[], key?: string }): { groups: Struct[], groupCount: int };
 
 /**
  * Checks if an array includes a certain value
@@ -1620,11 +2329,54 @@ declare function arrayGet({ arrayIn: any[], index: int }): { element: any, succe
 declare function arrayIncludes({ arrayIn: any[], value: any }): bool;
 
 /**
+ * Matches the elements of two arrays on a shared key, the way a database join does
+ * @param arrayLeft — Left Array
+ * @param arrayRight — Right Array
+ * @param keyLeft (optional) — Field on the left elements, dot notation for nested fields. Empty uses the element itself
+ * @param keyRight (optional) — Field on the right elements. Empty reuses the left key
+ * @param join (optional) — Inner keeps only matches, Left keeps every left element
+ * @returns pairs — One entry per match, holding both sides
+ * @returns matched — How many left elements found a partner
+ */
+declare function arrayJoinBy({ arrayLeft: any[], arrayRight: any[], keyLeft?: string, keyRight?: string, join?: string }): { pairs: Struct[], matched: int };
+
+/**
  * Gets the length of an array
  * @param array — Input Array
  * @returns length — Length of the array
  */
 declare function arrayLength({ array: any[] }): int;
+
+/**
+ * The element with the largest key
+ * @param arrayIn — Your Array
+ * @param compare (optional) — How the key values are ordered. Auto reads each value and falls back to text
+ * @param nulls (optional) — Where elements without a key value end up
+ * @returns element — The element with the largest key
+ * @returns index — Position of the element in the array
+ * @returns found — False when the array was empty
+ */
+declare function arrayMaxBy({ arrayIn: any[], compare?: string, nulls?: string }): { element: any, index: int, found: bool };
+
+/**
+ * The element with the smallest key
+ * @param arrayIn — Your Array
+ * @param compare (optional) — How the key values are ordered. Auto reads each value and falls back to text
+ * @param nulls (optional) — Where elements without a key value end up
+ * @returns element — The element with the smallest key
+ * @returns index — Position of the element in the array
+ * @returns found — False when the array was empty
+ */
+declare function arrayMinBy({ arrayIn: any[], compare?: string, nulls?: string }): { element: any, index: int, found: bool };
+
+/**
+ * Reads one field out of every element
+ * @param arrayIn — Your Array
+ * @param key (optional) — Field to read from each element, dot notation for nested fields (customer.address.city). Empty uses the element itself
+ * @param skipMissing (optional) — Drop elements that do not have the field instead of emitting null
+ * @returns values — The field value of every element
+ */
+declare function arrayPluck({ arrayIn: any[], key?: string, skipMissing?: bool }): any[];
 
 /**
  * Removes and returns the last element of an array
@@ -1654,6 +2406,13 @@ declare function arrayPush({ arrayIn: any[], value: any }): any[];
 declare function arrayRemoveIndex({ arrayIn: any[], index: int }): any[];
 
 /**
+ * The reversed array
+ * @param arrayIn — Your Array
+ * @returns arrayOut — The reversed array
+ */
+declare function arrayReverse({ arrayIn: any[] }): any[];
+
+/**
  * Sets an element at a specific index in an array
  * @param arrayIn — Your Array
  * @param index — Index to set
@@ -1669,6 +2428,50 @@ declare function arraySetIndex({ arrayIn: any[], index: int, value: any }): any[
  * @returns arrayOut — Adjusted Array
  */
 declare function arrayShuffle({ arrayIn: any[] }): any[];
+
+/**
+ * The selected range of elements
+ * @param arrayIn — Your Array
+ * @param start (optional) — First index, negative counts from the end
+ * @param length (optional) — Number of elements to take, -1 for the rest of the array
+ * @returns arrayOut — The selected range of elements
+ */
+declare function arraySlice({ arrayIn: any[], start?: int, length?: int }): any[];
+
+/**
+ * The sorted array
+ * @param arrayIn — Your Array
+ * @param descending (optional) — Sort from largest to smallest
+ * @param compare (optional) — How the key values are ordered. Auto reads each value and falls back to text
+ * @param nulls (optional) — Where elements without a key value end up
+ * @returns arrayOut — The sorted array
+ */
+declare function arraySort({ arrayIn: any[], descending?: bool, compare?: string, nulls?: string }): any[];
+
+/**
+ * Adds up one numeric field across an array of structs
+ * @param arrayIn — Your Array
+ * @param field (optional) — Field to add up, empty sums the values themselves
+ * @returns sum — Sum of the field
+ * @returns counted — How many entries held a number
+ */
+declare function arraySumField({ arrayIn: any[], field?: string }): { sum: float, counted: int };
+
+/**
+ * The array without duplicate values
+ * @param arrayIn — Your Array
+ * @returns arrayOut — The array without duplicates
+ * @returns removed — How many duplicates were dropped
+ */
+declare function arrayUnique({ arrayIn: any[] }): { arrayOut: any[], removed: int };
+
+/**
+ * Pairs up the elements of two arrays, stopping at the shorter one
+ * @param arrayFirst — First Array
+ * @param arraySecond — Second Array
+ * @returns pairs — One entry per index holding both values
+ */
+declare function arrayZip({ arrayFirst: any[], arraySecond: any[] }): Struct[];
 
 /**
  * Creates an array from individual elements. Add more input pins by connecting to the 'element' pins.
@@ -1772,6 +2575,13 @@ declare function arraySetIndexRef({ varRef: string, index: int, value: any }): v
 // === Utils/Bool ===
 
 /**
+ * True when every boolean in the array is true
+ * @param booleans — Input Booleans
+ * @returns result — True when every boolean in the array is true
+ */
+declare function boolAll({ booleans: bool[] }): bool;
+
+/**
  * Boolean And operation
  * @param boolean (optional) — Input Pin for AND Operation
  * @param boolean (optional) — Input Pin for AND Operation
@@ -1780,12 +2590,44 @@ declare function arraySetIndexRef({ varRef: string, index: int, value: any }): v
 declare function boolAnd({ boolean?: bool, boolean?: bool }): bool;
 
 /**
+ * True when at least one boolean in the array is true
+ * @param booleans — Input Booleans
+ * @returns result — True when at least one boolean in the array is true
+ * @returns count — How many values were true
+ */
+declare function boolAny({ booleans: bool[] }): { result: bool, count: int };
+
+/**
  * Boolean Equal
  * @param boolean (optional) — Input Pin for OR Operation
  * @param boolean (optional) — Input Pin for OR Operation
  * @returns result — == operation between all boolean inputs
  */
 declare function boolEqual({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * False only when the premise is true and the conclusion is false
+ * @param premise (optional) — The condition that is assumed
+ * @param conclusion (optional) — What has to hold when the premise is true
+ * @returns result — True when the implication holds
+ */
+declare function boolImplies({ premise?: bool, conclusion?: bool }): bool;
+
+/**
+ * True unless every input is true
+ * @param boolean (optional) — Input Boolean
+ * @param boolean (optional) — Input Boolean
+ * @returns result — True unless every input is true
+ */
+declare function boolNand({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * True only when every input is false
+ * @param boolean (optional) — Input Boolean
+ * @param boolean (optional) — Input Boolean
+ * @returns result — True only when every input is false
+ */
+declare function boolNor({ boolean?: bool, boolean?: bool }): bool;
 
 /**
  * Boolean NOT
@@ -1803,6 +2645,38 @@ declare function boolNot({ boolean?: bool }): bool;
 declare function boolOr({ boolean?: bool, boolean?: bool }): bool;
 
 /**
+ * Converts a boolean into 1 or 0
+ * @param boolean (optional) — Input Boolean
+ * @returns integer — 1 when true, 0 when false
+ */
+declare function boolToInt({ boolean?: bool }): int;
+
+/**
+ * Converts a boolean into text
+ * @param boolean (optional) — Input Boolean
+ * @param trueText (optional) — Text used when the boolean is true
+ * @param falseText (optional) — Text used when the boolean is false
+ * @returns string — The text
+ */
+declare function boolToString({ boolean?: bool, trueText?: string, falseText?: string }): string;
+
+/**
+ * Flips a boolean variable in place
+ * @param varRef — Reference to the boolean variable to flip
+ * @returns newValue — The value the variable holds after flipping
+ * @impure has side effects / drives control flow
+ */
+declare function boolToggle({ varRef: string }): bool;
+
+/**
+ * Checks whether two booleans differ
+ * @param boolean1 (optional) — Input Boolean
+ * @param boolean2 (optional) — Input Boolean
+ * @returns result — True when the booleans differ
+ */
+declare function boolUnequal({ boolean1?: bool, boolean2?: bool }): bool;
+
+/**
  * Boolean XOR
  * @param boolean (optional) — Input Boolean
  * @param boolean (optional) — Input Boolean
@@ -1811,11 +2685,105 @@ declare function boolOr({ boolean?: bool, boolean?: bool }): bool;
 declare function boolXor({ boolean?: bool, boolean?: bool }): bool;
 
 /**
+ * Converts an integer into a boolean, zero is false
+ * @param integer (optional) — Input Integer
+ * @returns boolean — False when the integer was zero
+ */
+declare function intToBool({ integer?: int }): bool;
+
+/**
  * Generates a random boolean value
  * @param probability (optional) — The probability of the boolean being true
  * @returns value — The random boolean value
  */
 declare function randomBool({ probability?: float }): bool;
+
+
+// === Utils/Bytes ===
+
+/**
+ * Appends byte buffers to each other
+ * @param bytes — Part to append
+ * @param bytes — Part to append
+ * @returns result — All parts appended in order
+ */
+declare function bytesConcat({ bytes: bytes[], bytes: bytes[] }): bytes[];
+
+/**
+ * Reads the leading bytes to work out what kind of file a buffer holds
+ * @param bytes — Input Bytes
+ * @returns mimeType — Detected media type, empty when nothing matched
+ * @returns extension — Usual file extension for the detected type
+ * @returns detected — True when a signature matched
+ * @returns isText — True when the first kilobyte reads as UTF-8 text without null bytes
+ */
+declare function bytesDetectType({ bytes: bytes[] }): { mimeType: string, extension: string, detected: bool, isText: bool };
+
+/**
+ * Compares two byte buffers for equality
+ * @param bytes — Input Bytes
+ * @param other — Input Bytes
+ * @returns equal — True when both buffers hold the same bytes
+ */
+declare function bytesEqual({ bytes: bytes[], other: bytes[] }): bool;
+
+/**
+ * Compresses a byte buffer with gzip
+ * @param bytes — Input Bytes
+ * @param level (optional) — Compression level from 0 (store) to 9 (smallest)
+ * @returns result — The compressed bytes
+ * @returns ratio — Compressed size divided by original size
+ */
+declare function bytesGzipCompress({ bytes: bytes[], level?: int }): { result: bytes[], ratio: float };
+
+/**
+ * Restores a gzip compressed byte buffer
+ * @param bytes — Compressed Bytes
+ * @param maxSize (optional) — Refuse to expand beyond this many bytes
+ * @returns result — The restored bytes
+ */
+declare function bytesGzipDecompress({ bytes: bytes[], maxSize?: int }): bytes[];
+
+/**
+ * How many bytes the buffer holds
+ * @param bytes — Input Bytes
+ * @returns length — Number of bytes
+ * @returns isEmpty — True when the buffer holds nothing
+ */
+declare function bytesLength({ bytes: bytes[] }): { length: int, isEmpty: bool };
+
+/**
+ * Takes a range out of a byte buffer
+ * @param bytes — Input Bytes
+ * @param start (optional) — First byte index, negative counts from the end
+ * @param length (optional) — Number of bytes to take, -1 for the rest
+ * @returns result — The selected bytes
+ */
+declare function bytesSlice({ bytes: bytes[], start?: int, length?: int }): bytes[];
+
+/**
+ * Checks a buffer against a leading byte sequence, for example a file signature
+ * @param bytes — Input Bytes
+ * @param prefix — Bytes to look for
+ * @returns startsWith — True when the buffer begins with the prefix
+ */
+declare function bytesStartsWith({ bytes: bytes[], prefix: bytes[] }): bool;
+
+/**
+ * Reads a byte buffer as UTF-8 text
+ * @param bytes — Input Bytes
+ * @param lossy (optional) — Replace invalid sequences instead of failing
+ * @returns text — The decoded text
+ * @returns wasValid — False when the buffer was not valid UTF-8
+ */
+declare function bytesToText({ bytes: bytes[], lossy?: bool }): { text: string, wasValid: bool };
+
+/**
+ * Writes text out as UTF-8 bytes
+ * @param text — Input Text
+ * @returns bytes — The encoded bytes
+ */
+declare function textToBytes({ text: string }): bytes[];
 
 
 // === Utils/CSV ===
@@ -1953,6 +2921,45 @@ declare function cryptoXchacha20EncryptValue({ key: bytes[], value: Struct, asso
 // === Utils/DateTime ===
 
 /**
+ * Moves a date forward or back by working days, skipping weekends
+ * @param date — Input Date
+ * @param days (optional) — Working days to add, negative to go back
+ * @returns result — The shifted date, always landing on a working day
+ */
+declare function utilsDatetimeAddBusinessDays({ date: Date, days?: int }): Date;
+
+/**
+ * Counts the working days between two dates, skipping weekends
+ * @param start — Start of the range
+ * @param end — End of the range
+ * @param includeEnd (optional) — Count the end day itself when it is a working day
+ * @returns days — Working days in the range, negative when the end lies before the start
+ */
+declare function utilsDatetimeBusinessDaysBetween({ start: Date, end: Date, includeEnd?: bool }): int;
+
+/**
+ * Week number, weekend and leap year facts about a date
+ * @param date — Input Date
+ * @returns isWeekend — True on Saturday and Sunday
+ * @returns isLeapYear — True when February has 29 days that year
+ * @returns week — ISO 8601 week number
+ * @returns isoYear — Year the ISO week belongs to
+ * @returns quarter — Quarter of the year, 1 to 4
+ * @returns daysInMonth — Length of the month the date falls in
+ */
+declare function utilsDatetimeCalendarInfo({ date: Date }): { isWeekend: bool, isLeapYear: bool, week: int, isoYear: int, quarter: int, daysInMonth: int };
+
+/**
+ * Pulls a date into a range, leaving it alone when it already fits
+ * @param date — Input Date
+ * @param start — Earliest allowed date
+ * @param end — Latest allowed date
+ * @returns result — The date inside the range
+ * @returns wasClamped — True when the date had to be moved
+ */
+declare function utilsDatetimeClamp({ date: Date, start: Date, end: Date }): { result: Date, wasClamped: bool };
+
+/**
  * Calculates the duration between two dates
  * @param start — Start date
  * @param end — End date
@@ -1979,12 +2986,82 @@ declare function utilsDatetimeDiff({ start: Date, end: Date }): { totalSeconds: 
 declare function utilsDatetimeDuration({ date: Date, days?: int, hours?: int, minutes?: int, seconds?: int }): Date;
 
 /**
+ * The last instant of the day, week, month, quarter or year
+ * @param date — Input Date
+ * @param unit (optional) — Unit to snap to
+ * @returns result — The last instant of the day, week, month, quarter or year
+ */
+declare function utilsDatetimeEndOf({ date: Date, unit?: string }): Date;
+
+/**
  * Converts a DateTime to a formatted string
  * @param date — Date to format
  * @param format (optional) — Format string (e.g., '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', 'rfc3339', 'rfc2822')
  * @returns formatted — Formatted string
  */
 declare function utilsDatetimeFormat({ date: Date, format?: string }): string;
+
+/**
+ * Builds a date from year, month, day and time components
+ * @param year (optional) — Year
+ * @param month (optional) — Month
+ * @param day (optional) — Day
+ * @param hour (optional) — Hour
+ * @param minute (optional) — Minute
+ * @param second (optional) — Second
+ * @returns date — The assembled date
+ */
+declare function utilsDatetimeFromParts({ year?: int, month?: int, day?: int, hour?: int, minute?: int, second?: int }): Date;
+
+/**
+ * Converts an epoch timestamp into a date
+ * @param timestamp (optional) — Epoch timestamp
+ * @param unit (optional) — Unit of the timestamp. Auto reads it from the magnitude
+ * @returns date — The converted date
+ */
+declare function utilsDatetimeFromUnix({ timestamp?: int, unit?: string }): Date;
+
+/**
+ * Describes how far a date lies from now, for example "3 days ago"
+ * @param date — Input Date
+ * @param reference — What to measure against. Leave empty for the current time
+ * @returns text — Relative description of the distance
+ * @returns isPast — True when the date lies before the reference
+ * @returns seconds — Signed distance in seconds, positive when the date is in the past
+ */
+declare function utilsDatetimeHumanize({ date: Date, reference: Date }): { text: string, isPast: bool, seconds: int };
+
+/**
+ * The later of two dates
+ * @param date — Input Date
+ * @param other — Input Date
+ * @returns result — The later of two dates
+ */
+declare function utilsDatetimeMax({ date: Date, other: Date }): Date;
+
+/**
+ * The latest date in an array
+ * @param dates — Input Dates
+ * @returns result — The latest date in an array
+ * @returns found — False when the array held no readable date
+ */
+declare function utilsDatetimeMaxOf({ dates: Date[] }): { result: Date, found: bool };
+
+/**
+ * The earlier of two dates
+ * @param date — Input Date
+ * @param other — Input Date
+ * @returns result — The earlier of two dates
+ */
+declare function utilsDatetimeMin({ date: Date, other: Date }): Date;
+
+/**
+ * The earliest date in an array
+ * @param dates — Input Dates
+ * @returns result — The earliest date in an array
+ * @returns found — False when the array held no readable date
+ */
+declare function utilsDatetimeMinOf({ dates: Date[] }): { result: Date, found: bool };
 
 /**
  * Returns the current date and time in UTC
@@ -2000,6 +3077,23 @@ declare function utilsDatetimeNow(): Date;
  * @returns date — Parsed date
  */
 declare function utilsDatetimeParse({ input: string, format?: string }): Date;
+
+/**
+ * Calendar-aware shift that keeps the day of month where it exists
+ * @param date — Input Date
+ * @param months (optional) — Months to add, negative to go back
+ * @param years (optional) — Years to add, negative to go back
+ * @returns result — The shifted date
+ */
+declare function utilsDatetimeShiftCalendar({ date: Date, months?: int, years?: int }): Date;
+
+/**
+ * The first instant of the day, week, month, quarter or year
+ * @param date — Input Date
+ * @param unit (optional) — Unit to snap to
+ * @returns result — The first instant of the day, week, month, quarter or year
+ */
+declare function utilsDatetimeStartOf({ date: Date, unit?: string }): Date;
 
 /**
  * Extracts date components from a DateTime
@@ -2021,6 +3115,63 @@ declare function utilsDatetimeToDate({ date: Date }): { year: int, month: int, d
  * @returns nanosecond — Nanosecond (0-999999999)
  */
 declare function utilsDatetimeToTime({ date: Date }): { hour: int, minute: int, second: int, nanosecond: int };
+
+/**
+ * Reads a date in another timezone. The instant stays the same, the wall clock changes
+ * @param date — Input Date
+ * @param timezone (optional) — IANA timezone name, for example Europe/Berlin or America/New_York
+ * @param format (optional) — Format for the text output, for example %Y-%m-%d %H:%M
+ * @returns dateOut — The same instant carrying the target offset
+ * @returns formatted — Local wall clock time as text
+ * @returns offsetSeconds — Offset from UTC at that instant, daylight saving included
+ */
+declare function utilsDatetimeToTimezone({ date: Date, timezone?: string, format?: string }): { dateOut: Date, formatted: string, offsetSeconds: int };
+
+/**
+ * Converts a date into an epoch timestamp
+ * @param date — Input Date
+ * @param unit (optional) — Unit of the produced timestamp
+ * @returns timestamp — Epoch timestamp in the selected unit
+ */
+declare function utilsDatetimeToUnix({ date: Date, unit?: string }): int;
+
+
+// === Utils/DateTime/Comparison ===
+
+/**
+ * True when the first date lies after the second
+ * @param date — Date to test
+ * @param other — Date to compare against
+ * @returns result — True when the first date lies after the second
+ */
+declare function utilsDatetimeAfter({ date: Date, other: Date }): bool;
+
+/**
+ * True when the first date lies before the second
+ * @param date — Date to test
+ * @param other — Date to compare against
+ * @returns result — True when the first date lies before the second
+ */
+declare function utilsDatetimeBefore({ date: Date, other: Date }): bool;
+
+/**
+ * True when a date falls inside a range
+ * @param date — Date to test
+ * @param start — Start of the range
+ * @param end — End of the range
+ * @param inclusive (optional) — Count the boundaries as inside the range
+ * @returns result — True when the date lies in the range
+ */
+declare function utilsDatetimeBetween({ date: Date, start: Date, end: Date, inclusive?: bool }): bool;
+
+/**
+ * True when both dates fall into the same unit
+ * @param date — Date to test
+ * @param other — Date to compare against
+ * @param unit (optional) — Granularity the comparison runs at
+ * @returns result — True when both dates fall into the same unit
+ */
+declare function utilsDatetimeSame({ date: Date, other: Date, unit?: string }): bool;
 
 
 // === Utils/Encoding ===
@@ -2469,6 +3620,49 @@ declare function fakerCellNumber(): string;
 declare function fakerPhoneNumber(): string;
 
 
+// === Utils/Format ===
+
+/**
+ * Turns a byte count into a readable size such as 1.4 MB
+ * @param bytes (optional) — Number of bytes
+ * @param standard (optional) — Decimal counts in 1000s (MB), Binary in 1024s (MiB)
+ * @param decimals (optional) — Decimal places to keep
+ * @returns text — The readable size
+ * @returns unit — The unit that was chosen
+ */
+declare function formatBytes({ bytes?: int, standard?: string, decimals?: int }): { text: string, unit: string };
+
+/**
+ * Writes a number of seconds as a readable duration such as 2h 15m
+ * @param seconds (optional) — Length of the duration in seconds
+ * @param style (optional) — Short writes 2h 15m, Long writes 2 hours 15 minutes, Clock writes 02:15:00
+ * @param maxParts (optional) — How many units to show before stopping, for example 2 gives 2h 15m instead of 2h 15m 3s
+ * @returns text — The readable duration
+ */
+declare function formatDuration({ seconds?: float, style?: string, maxParts?: int }): string;
+
+/**
+ * Renders a number for display with fixed decimals and separators
+ * @param value — Number to format
+ * @param decimals (optional) — Decimal places to keep
+ * @param thousands (optional) — Inserted every three digits, empty for none
+ * @param decimalPoint (optional) — Character between the whole and fractional part
+ * @param prefix (optional) — Put in front, for example a currency symbol
+ * @param suffix (optional) — Appended, for example a unit
+ * @param asPercent (optional) — Multiply by 100 and append a percent sign
+ * @returns text — The formatted number
+ */
+declare function formatNumber({ value: float, decimals?: int, thousands?: string, decimalPoint?: string, prefix?: string, suffix?: string, asPercent?: bool }): string;
+
+/**
+ * Writes a number as 1st, 2nd, 3rd and so on
+ * @param value (optional) — Number to write
+ * @returns text — The ordinal
+ * @returns suffix — Just the two letter suffix
+ */
+declare function formatOrdinal({ value?: int }): { text: string, suffix: string };
+
+
 // === Utils/Hash ===
 
 /**
@@ -2750,6 +3944,30 @@ declare function floatVectorNormalize({ vector: float[] }): float[];
 declare function floatVectorSubtraction({ vector1: float[], vector2: float[] }): float[];
 
 
+// === Utils/Random ===
+
+/**
+ * Picks elements out of an array at random
+ * @param arrayIn — Your Array
+ * @param count (optional) — How many elements to draw
+ * @param allowRepeats (optional) — Draw with replacement, so the same element can come up twice
+ * @returns element — The first drawn element
+ * @returns elements — Every drawn element
+ * @impure has side effects / drives control flow
+ */
+declare function randomChoice({ arrayIn: any[], count?: int, allowRepeats?: bool }): { element: any, elements: any[] };
+
+/**
+ * Generates a random string, for example a token or a short code
+ * @param length (optional) — How many characters to generate
+ * @param alphabet (optional) — Characters to draw from. Unambiguous leaves out l, I, 1, O and 0
+ * @param customAlphabet (optional) — Use exactly these characters instead, when set
+ * @returns result — The generated string
+ * @impure has side effects / drives control flow
+ */
+declare function randomString({ length?: int, alphabet?: string, customAlphabet?: string }): string;
+
+
 // === Utils/Set ===
 
 /**
@@ -2908,33 +4126,82 @@ declare function setInsertRef({ varRef: string, value: any }): bool;
  * Compares two Strings
  * @param string — Input
  * @param string — Input
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
  * @returns equal — Are the strings equal?
  */
-declare function equalString({ string: string, string: string }): bool;
+declare function equalString({ string: string, string: string, ignoreCase?: bool }): bool;
 
 /**
  * Compares two Strings
  * @param string — Input
  * @param string — Input
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
  * @returns unequal — Are the strings equal?
  */
-declare function notEqualString({ string: string, string: string }): bool;
+declare function notEqualString({ string: string, string: string, ignoreCase?: bool }): bool;
+
+/**
+ * Returns the character at a index. Negative indices count from the end
+ * @param string — Input String
+ * @param index (optional) — Character index, negative counts from the end
+ * @returns character — The character at the index, empty when out of range
+ * @returns found — True when the index was in range
+ */
+declare function stringCharAt({ string: string, index?: int }): { character: string, found: bool };
+
+/**
+ * Appends strings to each other without a separator
+ * @param string (optional) — Part to append
+ * @param string (optional) — Part to append
+ * @returns concatenated — All parts appended in order
+ */
+declare function stringConcat({ string?: string, string?: string }): string;
 
 /**
  * Checks if a string contains a substring
  * @param string — Input String
  * @param substring — Substring to search for
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
  * @returns contains — Does the string contain the substring?
  */
-declare function stringContains({ string: string, substring: string }): bool;
+declare function stringContains({ string: string, substring: string, ignoreCase?: bool }): bool;
+
+/**
+ * Checks whether a string contains any of the given substrings
+ * @param string — Input String
+ * @param substrings — Substrings to search for
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
+ * @returns contains — True when at least one substring occurs
+ * @returns matched — The first substring that occurred
+ */
+declare function stringContainsAny({ string: string, substrings: string[], ignoreCase?: bool }): { contains: bool, matched: string };
+
+/**
+ * Counts non-overlapping occurrences of a substring
+ * @param string — Input String
+ * @param substring — Substring to count
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
+ * @returns count — Number of non-overlapping occurrences
+ */
+declare function stringCountMatches({ string: string, substring: string, ignoreCase?: bool }): int;
+
+/**
+ * Shortens a string that is longer than the given number of characters and marks the cut with an ellipsis. A string that already fits is returned unchanged
+ * @param string — Input String
+ * @param maxLength (optional) — Longest the result may be, counted in characters and including the ellipsis itself
+ * @param ellipsis (optional) — Appended in place of what was cut
+ * @returns result — The shortened string, or the input unchanged when it already fits
+ */
+declare function stringEllipsis({ string: string, maxLength?: int, ellipsis?: string }): string;
 
 /**
  * Checks if a string ends with a specific string
  * @param string — Input String
  * @param suffix — String to check against
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
  * @returns endsWith — Does the string end with the suffix?
  */
-declare function stringEndsWith({ string: string, suffix: string }): bool;
+declare function stringEndsWith({ string: string, suffix: string, ignoreCase?: bool }): bool;
 
 /**
  * Escapes special characters in a string (newlines, tabs, carriage returns, backslashes, quotes).
@@ -2944,11 +4211,95 @@ declare function stringEndsWith({ string: string, suffix: string }): bool;
 declare function stringEscape({ string: string }): string;
 
 /**
+ * Pulls every email, link, number or handle out of a text
+ * @param string — Input String
+ * @param pattern (optional) — What to look for
+ * @param unique (optional) — Drop repeated matches
+ * @returns matches — Everything that matched, in order
+ * @returns count — How many matches were found
+ */
+declare function stringExtract({ string: string, pattern?: string, unique?: bool }): { matches: string[], count: int };
+
+/**
  * Formats a string with placeholders
  * @param formatString — String with placeholders
  * @returns formattedString — Formatted string
  */
 declare function stringFormat({ formatString: string }): string;
+
+/**
+ * Finds the character index of the first occurrence of a substring
+ * @param string — Input String
+ * @param substring — Substring to search for
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
+ * @returns index — Character index of the match, -1 when not found
+ * @returns found — True when the substring occurs in the string
+ */
+declare function stringIndexOf({ string: string, substring: string, ignoreCase?: bool }): { index: int, found: bool };
+
+/**
+ * Checks whether every character is a letter or a digit
+ * @param string — Input String
+ * @returns result — True when all characters are alphanumeric
+ */
+declare function stringIsAlphanumeric({ string: string }): bool;
+
+/**
+ * Checks whether a string only contains ASCII characters
+ * @param string — Input String
+ * @returns result — True when the string is pure ASCII
+ */
+declare function stringIsAscii({ string: string }): bool;
+
+/**
+ * Checks whether a string looks like an email address
+ * @param string — Input String
+ * @returns result — True when the string is a plausible email address
+ */
+declare function stringIsEmail({ string: string }): bool;
+
+/**
+ * Checks whether a string contains no characters
+ * @param string — Input String
+ * @param ignoreWhitespace (optional) — Treat whitespace-only strings as empty
+ * @returns isEmpty — True when the string is empty
+ */
+declare function stringIsEmpty({ string: string, ignoreWhitespace?: bool }): bool;
+
+/**
+ * Checks whether a string is an IPv4 or IPv6 address
+ * @param string — Input String
+ * @returns result — True when the string is an IP address
+ */
+declare function stringIsIp({ string: string }): bool;
+
+/**
+ * Checks whether a string parses as JSON
+ * @param string — Input String
+ * @returns result — True when the string is valid JSON
+ */
+declare function stringIsJson({ string: string }): bool;
+
+/**
+ * Checks whether a string can be read as a number
+ * @param string — Input String
+ * @returns result — True when the string parses as a number
+ */
+declare function stringIsNumeric({ string: string }): bool;
+
+/**
+ * Checks whether a string is a URL with a scheme and a host
+ * @param string — Input String
+ * @returns result — True when the string is a plausible URL
+ */
+declare function stringIsUrl({ string: string }): bool;
+
+/**
+ * Checks whether a string is a UUID
+ * @param string — Input String
+ * @returns result — True when the string is a UUID
+ */
+declare function stringIsUuid({ string: string }): bool;
 
 /**
  * Joins multiple strings together
@@ -2959,11 +4310,66 @@ declare function stringFormat({ formatString: string }): string;
 declare function stringJoin({ strings: string[], separator: string }): string;
 
 /**
+ * Finds the character index of the last occurrence of a substring
+ * @param string — Input String
+ * @param substring — Substring to search for
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
+ * @returns index — Character index of the last match, -1 when not found
+ * @returns found — True when the substring occurs in the string
+ */
+declare function stringLastIndexOf({ string: string, substring: string, ignoreCase?: bool }): { index: int, found: bool };
+
+/**
  * Calculates the length of a string
  * @param string — Input String
+ * @param mode (optional) — Characters counts code points, Graphemes counts what a reader sees, Bytes counts UTF-8 bytes
  * @returns length — Length of the string
  */
-declare function stringLength({ string: string }): int;
+declare function stringLength({ string: string, mode?: string }): int;
+
+/**
+ * Splits a string into its lines
+ * @param string — Input String
+ * @param skipEmpty (optional) — Drop lines that are empty or whitespace only
+ * @returns lines — One entry per line
+ */
+declare function stringLines({ string: string, skipEmpty?: bool }): string[];
+
+/**
+ * Hides the middle of a value, keeping a few characters visible
+ * @param string — Input String
+ * @param keepStart (optional) — Characters left visible at the start
+ * @param keepEnd (optional) — Characters left visible at the end
+ * @param maskCharacter (optional) — Character used for the hidden part
+ * @param fixedWidth (optional) — Always use this many mask characters so the length is not leaked, 0 keeps the real length
+ * @returns masked — The masked value
+ */
+declare function stringMask({ string: string, keepStart?: int, keepEnd?: int, maskCharacter?: string, fixedWidth?: int }): string;
+
+/**
+ * Collapses runs of whitespace into single spaces and trims the result
+ * @param string — Input String
+ * @returns normalized — The normalized string
+ */
+declare function stringNormalizeWhitespace({ string: string }): string;
+
+/**
+ * Fills up a string at the end until it reaches the target length
+ * @param string — Input String
+ * @param length (optional) — Target length in characters
+ * @param padding (optional) — Characters used to fill up the string
+ * @returns padded — The padded string, unchanged when it is already long enough
+ */
+declare function stringPadEnd({ string: string, length?: int, padding?: string }): string;
+
+/**
+ * Fills up a string at the start until it reaches the target length
+ * @param string — Input String
+ * @param length (optional) — Target length in characters
+ * @param padding (optional) — Characters used to fill up the string
+ * @returns padded — The padded string, unchanged when it is already long enough
+ */
+declare function stringPadStart({ string: string, length?: int, padding?: string }): string;
 
 /**
  * Template Engine based on Jinja Templates
@@ -2971,6 +4377,14 @@ declare function stringLength({ string: string }): int;
  * @returns rendered — Rendered String
  */
 declare function stringRenderTemplate({ template: string }): string;
+
+/**
+ * Repeats a string a number of times
+ * @param string — Input String
+ * @param count (optional) — How often the string is repeated
+ * @returns repeated — The repeated string
+ */
+declare function stringRepeat({ string: string, count?: int }): string;
 
 /**
  * Replaces occurrences of a substring or regex pattern within a string.
@@ -2983,20 +4397,138 @@ declare function stringRenderTemplate({ template: string }): string;
 declare function stringReplace({ string: string, pattern: string, replacement: string, isRegex?: bool }): string;
 
 /**
+ * Reverses the characters of a string
+ * @param string — Input String
+ * @returns reversed — The reversed string
+ */
+declare function stringReverse({ string: string }): string;
+
+/**
+ * Turns text into a URL safe slug
+ * @param string — Input String
+ * @param separator (optional) — Placed between words
+ * @param maxLength (optional) — Cut the slug at a word boundary, 0 for no limit
+ * @returns slug — The slug
+ */
+declare function stringSlugify({ string: string, separator?: string, maxLength?: int }): string;
+
+/**
  * Splits a string into substrings
  * @param string — Input String
- * @param separator — String to split by
+ * @param separator — String to split by, an empty separator splits into single characters
+ * @param isRegex (optional) — Treat the separator as a regular expression
+ * @param limit (optional) — Maximum number of parts, 0 for no limit. The last part keeps the rest
+ * @param skipEmpty (optional) — Drop parts that are empty
  * @returns substrings — Array of substrings
  */
-declare function stringSplit({ string: string, separator: string }): string[];
+declare function stringSplit({ string: string, separator: string, isRegex?: bool, limit?: int, skipEmpty?: bool }): string[];
+
+/**
+ * Splits a string into two halves at a character index
+ * @param string — Input String
+ * @param index (optional) — Character index to split at, negative counts from the end
+ * @returns before — Characters before the index
+ * @returns after — Characters from the index onwards
+ */
+declare function stringSplitAt({ string: string, index?: int }): { before: string, after: string };
+
+/**
+ * Splits a string at the first (or last) occurrence of a separator
+ * @param string — Input String
+ * @param separator — String to split at
+ * @param fromEnd (optional) — Split at the last occurrence instead of the first
+ * @returns before — Text before the separator, the whole string when it was not found
+ * @returns after — Text after the separator
+ * @returns found — True when the separator was found
+ */
+declare function stringSplitOnce({ string: string, separator: string, fromEnd?: bool }): { before: string, after: string, found: bool };
+
+/**
+ * Splits a string into words, collapsing runs of whitespace
+ * @param string — Input String
+ * @returns words — The separated words
+ */
+declare function stringSplitWhitespace({ string: string }): string[];
 
 /**
  * Checks if a string starts with a specific string
  * @param string — Input String
  * @param prefix — String to check against
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
  * @returns startsWith — Does the string start with the prefix?
  */
-declare function stringStartsWith({ string: string, prefix: string }): bool;
+declare function stringStartsWith({ string: string, prefix: string, ignoreCase?: bool }): bool;
+
+/**
+ * Checks whether a string starts with any of the given prefixes
+ * @param string — Input String
+ * @param prefixes — Prefixes to test
+ * @param ignoreCase (optional) — Compare without regard to upper/lower case
+ * @returns startsWith — True when the string starts with one of the prefixes
+ * @returns matched — The first prefix that matched
+ */
+declare function stringStartsWithAny({ string: string, prefixes: string[], ignoreCase?: bool }): { startsWith: bool, matched: string };
+
+/**
+ * Removes a prefix from a string if it is present
+ * @param string — Input String
+ * @param prefix — Prefix to remove
+ * @returns result — String without the prefix
+ * @returns stripped — True when the prefix was present
+ */
+declare function stringStripPrefix({ string: string, prefix: string }): { result: string, stripped: bool };
+
+/**
+ * Removes a suffix from a string if it is present
+ * @param string — Input String
+ * @param suffix — Suffix to remove
+ * @returns result — String without the suffix
+ * @returns stripped — True when the suffix was present
+ */
+declare function stringStripSuffix({ string: string, suffix: string }): { result: string, stripped: bool };
+
+/**
+ * Extracts a range of characters from a string. Negative start counts from the end, length -1 runs to the end.
+ * @param string — Input String
+ * @param start (optional) — First character index, negative counts from the end
+ * @param length (optional) — Number of characters to take, -1 for the rest of the string
+ * @returns substring — The extracted characters
+ */
+declare function stringSubstring({ string: string, start?: int, length?: int }): string;
+
+/**
+ * Parses a string into a boolean. Accepts true/false, 1/0, yes/no and on/off
+ * @param string — String to parse
+ * @param fallback (optional) — Value used when parsing fails
+ * @returns boolean — The parsed boolean
+ * @returns success — True when the string was a recognized boolean
+ */
+declare function stringToBool({ string: string, fallback?: bool }): { boolean: bool, success: bool };
+
+/**
+ * Splits a string into an array of single characters
+ * @param string — Input String
+ * @returns characters — One entry per character
+ */
+declare function stringToChars({ string: string }): string[];
+
+/**
+ * Parses a string into a float
+ * @param string — String to parse
+ * @param fallback (optional) — Value used when parsing fails
+ * @returns float — The parsed float
+ * @returns success — True when the string was a valid float
+ */
+declare function stringToFloat({ string: string, fallback?: float }): { float: float, success: bool };
+
+/**
+ * Parses a string into an integer
+ * @param string — String to parse
+ * @param fallback (optional) — Value used when parsing fails
+ * @returns integer — The parsed integer
+ * @returns success — True when the string was a valid integer
+ */
+declare function stringToInt({ string: string, fallback?: int }): { integer: int, success: bool };
 
 /**
  * Converts a string to lowercase
@@ -3020,6 +4552,39 @@ declare function stringToUpper({ string: string }): string;
 declare function stringTrim({ string: string }): string;
 
 /**
+ * Removes trailing whitespace from a string
+ * @param string — Input String
+ * @returns trimmedString — String without trailing whitespace
+ */
+declare function stringTrimEnd({ string: string }): string;
+
+/**
+ * Removes the given characters from the start and/or end of a string
+ * @param string — Input String
+ * @param characters (optional) — Set of characters to strip
+ * @param side (optional) — Where to strip
+ * @returns trimmedString — String without the stripped characters
+ */
+declare function stringTrimMatches({ string: string, characters?: string, side?: string }): string;
+
+/**
+ * Removes leading whitespace from a string
+ * @param string — Input String
+ * @returns trimmedString — String without leading whitespace
+ */
+declare function stringTrimStart({ string: string }): string;
+
+/**
+ * Shortens a string to a maximum number of characters, appending an ellipsis when it was cut
+ * @param string — Input String
+ * @param maxLength (optional) — Maximum number of characters including the ellipsis
+ * @param ellipsis (optional) — Appended when the string was cut
+ * @returns truncated — The shortened string
+ * @returns wasTruncated — True when characters were removed
+ */
+declare function stringTruncate({ string: string, maxLength?: int, ellipsis?: string }): { truncated: string, wasTruncated: bool };
+
+/**
  * Unescapes special character sequences in a string (\n, \t, \r, \\, \").
  * @param string — Input String
  * @returns unescaped — String with escape sequences resolved to actual characters
@@ -3027,11 +4592,107 @@ declare function stringTrim({ string: string }): string;
 declare function stringUnescape({ string: string }): string;
 
 /**
+ * Counts words, sentences and reading time
+ * @param string — Input String
+ * @param wordsPerMinute (optional) — Reading speed used for the estimate
+ * @returns words — Number of words
+ * @returns characters — Number of characters
+ * @returns sentences — Number of sentences
+ * @returns readingSeconds — Estimated reading time in seconds
+ */
+declare function stringWordCount({ string: string, wordsPerMinute?: int }): { words: int, characters: int, sentences: int, readingSeconds: int };
+
+/**
  * Converts a byte array to a string using the UTF-8 lossy strategy
  * @param bytes
  * @returns string — Input String
  */
 declare function utf8Lossy({ bytes: bytes[] }): string;
+
+
+// === Utils/String/Case ===
+
+/**
+ * Converts a string to camelCase or PascalCase
+ * @param string — Input String
+ * @param pascalCase (optional) — Upper case the first word as well
+ * @returns result — The converted string
+ */
+declare function stringCamelCase({ string: string, pascalCase?: bool }): string;
+
+/**
+ * Upper cases the first character and leaves the rest untouched
+ * @param string — Input String
+ * @returns result — The converted string
+ */
+declare function stringCapitalize({ string: string }): string;
+
+/**
+ * Rewrites a string in the chosen case style. The input's own style is detected automatically, so any of the supported styles can be fed in
+ * @param string — Input String
+ * @param targetCase (optional) — The case style to write the string in
+ * @returns result — The converted string
+ * @returns detectedCase — The case style the input was written in, or "undetermined" when it carries no evidence of one
+ */
+declare function stringConvertCase({ string: string, targetCase?: string }): { result: string, detectedCase: string };
+
+/**
+ * Names the case style a string is written in
+ * @param string — Input String
+ * @returns detectedCase — The detected case style, or "undetermined" when the string carries no evidence of one
+ */
+declare function stringDetectCase({ string: string }): string;
+
+/**
+ * Converts a string to kebab-case
+ * @param string — Input String
+ * @returns result — The converted string
+ */
+declare function stringKebabCase({ string: string }): string;
+
+/**
+ * Converts a string to snake_case
+ * @param string — Input String
+ * @returns result — The converted string
+ */
+declare function stringSnakeCase({ string: string }): string;
+
+/**
+ * Converts a string to Title Case
+ * @param string — Input String
+ * @returns result — The converted string
+ */
+declare function stringTitleCase({ string: string }): string;
+
+
+// === Utils/String/Regex ===
+
+/**
+ * Extracts the capture groups of the first regular expression match
+ * @param string — Input String
+ * @param pattern — Regular expression pattern
+ * @returns groups — Capture groups, index 0 is the whole match
+ * @returns found — True when the pattern matched
+ */
+declare function stringRegexCaptures({ string: string, pattern: string }): { groups: string[], found: bool };
+
+/**
+ * Returns every match of a regular expression in a string
+ * @param string — Input String
+ * @param pattern — Regular expression pattern
+ * @returns matches — All matching substrings
+ * @returns count — Number of matches
+ */
+declare function stringRegexFindAll({ string: string, pattern: string }): { matches: string[], count: int };
+
+/**
+ * Checks whether a regular expression matches a string
+ * @param string — Input String
+ * @param pattern — Regular expression pattern
+ * @returns isMatch — True when the pattern matches
+ * @returns firstMatch — The first matching text, empty when there is no match
+ */
+declare function stringRegexMatch({ string: string, pattern: string }): { isMatch: bool, firstMatch: string };
 
 
 // === Utils/String/Similarity ===
@@ -3107,6 +4768,14 @@ declare function sorensenDiceCoefficient({ string1: string, string2: string }): 
 declare function utilsTypesFallback({ value: any, default: any }): { result: any, usedFallback: bool };
 
 /**
+ * True for null, an empty string, an empty array and an empty struct
+ * @param value — Value to inspect
+ * @param trim (optional) — Treat whitespace-only text as empty
+ * @returns isEmpty — True when the value holds nothing
+ */
+declare function utilsTypesIsEmpty({ value: any, trim?: bool }): bool;
+
+/**
  * Selects between two values based on a boolean condition. Returns A if true, B if false.
  * @param a — Value returned when condition is true
  * @param b — Value returned when condition is false
@@ -3122,6 +4791,15 @@ declare function utilsTypesSelect({ a: any, b: any, condition?: bool }): any;
  * @returns success — Determines of tje transformation was successful
  */
 declare function utilsTypesTryTransform({ typeIn: any }): { typeOut: any, success: bool };
+
+/**
+ * Reports what a value actually is — useful for data coming back from an API or a model
+ * @param value — Value to inspect
+ * @returns type — One of null, boolean, number, string, array or object
+ * @returns isNull — True when the value is missing
+ * @returns size — Elements for an array, fields for an object, characters for a string, otherwise 0
+ */
+declare function utilsTypesTypeOf({ value: any }): { type: string, isNull: bool, size: int };
 
 
 // === Utils/User ===

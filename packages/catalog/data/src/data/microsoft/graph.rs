@@ -364,7 +364,8 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             VariableType::Struct,
         )
         .set_value_type(ValueType::Normal)
-        .set_default_value(Some(json!(null)));
+        .set_default_value(Some(json!(null)))
+        .set_open_schema();
         node.add_input_pin(
             "paginate",
             "Paginate",
@@ -386,14 +387,16 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             "Response",
             "Raw JSON response",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "values",
             "Values",
             "Paginated collection values",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
         node.add_output_pin(
             "next_link",
             "Next Link",

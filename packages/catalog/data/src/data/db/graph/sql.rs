@@ -76,7 +76,8 @@ impl NodeLogic for GraphSqlQueryNode {
             "Query results as JSON array",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_open_schema();
 
         node
     }

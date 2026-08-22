@@ -5,6 +5,7 @@ import { EyeIcon, SaveIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../lib/monaco-key-guard";
 import { Button } from "./button";
 import { TextEditor } from "./text-editor";
 
@@ -212,6 +213,7 @@ export function MonacoFileEditor({
 					/>
 				) : (
 					<Editor
+						className={FLOW_KEY_OPT_OUT_CLASS}
 						height="100%"
 						language={language}
 						value={content}

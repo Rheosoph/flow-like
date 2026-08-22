@@ -742,6 +742,8 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             | "string_render_template"
             // Mode-driven: pins swap with a dropdown.
             | "a2ui_push_csv_to_chart"
+            // Case-driven: one exec pin per case, from a literal or a wired enum.
+            | "control_switch"
             // Mirror-driven: pins copied from a target function layer.
             | "control_call_function"
             | "control_call_reference"

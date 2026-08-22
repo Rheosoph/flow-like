@@ -162,6 +162,15 @@ declare function controlFlipFlop({ startOnA?: bool }): { isA: bool, tick: int };
  */
 declare function controlGate({ startClosed?: bool }): bool;
 
+/**
+ * Sends the flow down one branch per value. Wire a dropdown pin and the cases fill in by themselves, otherwise list them below
+ * @param value — The value to switch on
+ * @param cases (optional) — Comma separated list of values to branch on. Ignored while the wired pin declares its own values
+ * @returns matchedCase — The case that was taken, empty when the default ran
+ * @impure has side effects / drives control flow
+ */
+declare function controlSwitch({ value: any, cases?: string }): string;
+
 
 // === Control/Functions ===
 

@@ -43,7 +43,8 @@ impl NodeLogic for NavigateTo {
             "Optional query parameters as key-value pairs (e.g., {\"tab\": \"settings\", \"id\": \"123\"})",
             VariableType::Struct,
         )
-        .set_default_value(Some(flow_like_types::json::json!({})));
+        .set_default_value(Some(flow_like_types::json::json!({})))
+        .set_open_schema();
 
         node.add_input_pin(
             "replace",

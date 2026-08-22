@@ -25,6 +25,7 @@ impl NodeLogic for StringContainsNode {
             "Utils/String",
         );
         node.add_icon("/flow/icons/string.svg");
+        node.set_version(1);
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);
         node.add_input_pin(
@@ -33,6 +34,14 @@ impl NodeLogic for StringContainsNode {
             "Substring to search for",
             VariableType::String,
         );
+
+        node.add_input_pin(
+            "ignore_case",
+            "Ignore Case",
+            "Compare without regard to upper/lower case",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "contains",
@@ -47,11 +56,16 @@ impl NodeLogic for StringContainsNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let string = context.evaluate_pin_to_ref("string").await?;
         let substring: String = context.evaluate_pin("substring").await?;
+        let ignore_case: bool = context.evaluate_pin("ignore_case").await?;
 
         let mut contains = false;
 
         if let Some(string) = string.as_str() {
-            contains = string.contains(&substring);
+            contains = if ignore_case {
+                string.to_lowercase().contains(&substring.to_lowercase())
+            } else {
+                string.contains(&substring)
+            };
         }
 
         context.set_pin_value("contains", json!(contains)).await?;

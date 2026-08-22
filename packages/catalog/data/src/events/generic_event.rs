@@ -146,7 +146,8 @@ impl NodeLogic for GenericEventNode {
             "Payload",
             "The payload of the event",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

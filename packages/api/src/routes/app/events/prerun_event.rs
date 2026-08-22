@@ -51,8 +51,8 @@ pub struct PrerunEventResponse {
     /// match the board when the board is not Hybrid.
     #[schema(value_type = String)]
     pub event_execution_mode: EventExecutionMode,
-    /// Whether the user can execute locally (has ReadBoards permission)
-    /// If false, execution must happen on server
+    /// Whether the user can execute locally (has ReadBoards permission and the
+    /// event is not pinned to Remote). If false, execution must happen on server.
     pub can_execute_locally: bool,
     /// Whether the board contains any WASM (external) nodes
     pub has_wasm_nodes: bool,
@@ -125,7 +125,6 @@ pub async fn prerun_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let sub = permission.sub()?;
 
-    let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards);
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
@@ -135,6 +134,11 @@ pub async fn prerun_event(
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     let board_id = event.board_id.clone();
     let event_execution_mode = event.execution_mode;
+    // A Remote event never runs on the caller's device, and its board is not
+    // expected to be there. Saying otherwise sends clients down a local path
+    // that can only end in a missing board.
+    let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards)
+        && event_execution_mode != EventExecutionMode::Remote;
 
     let board = state
         .master_board(&sub, &app_id, &board_id, &state, version)

@@ -76,7 +76,8 @@ impl NodeLogic for UpdateTable {
 
         // Default: Set Data pins
         node.add_input_pin("data", "Data", "Array of row objects", VariableType::Struct)
-            .set_options(PinOptions::new().set_enforce_schema(false).build());
+            .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_open_schema();
 
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
 

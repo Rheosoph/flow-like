@@ -1,6 +1,7 @@
 pub mod fallback;
 pub mod from_bytes;
 pub mod from_string;
+pub mod inspect;
 pub mod select;
 pub mod to_bytes;
 pub mod to_string;

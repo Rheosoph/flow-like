@@ -43,7 +43,8 @@ impl NodeLogic for SetStructBodyNode {
             "Body",
             "The body of the request",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "request_out",

@@ -39,6 +39,7 @@ pub use super::execution_event::Entity as ExecutionEvent;
 pub use super::execution_run::Entity as ExecutionRun;
 pub use super::execution_usage_tracking::Entity as ExecutionUsageTracking;
 pub use super::feedback::Entity as Feedback;
+pub use super::flow_script_apply_failure::Entity as FlowScriptApplyFailure;
 pub use super::global_chat_tool_call::Entity as GlobalChatToolCall;
 pub use super::interaction::Entity as Interaction;
 pub use super::invitation::Entity as Invitation;

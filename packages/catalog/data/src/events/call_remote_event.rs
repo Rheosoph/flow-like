@@ -371,14 +371,14 @@ fn chat_request_inputs() -> Vec<PinSpec> {
             "Local Session",
             "State local to this chat session",
             VariableType::Struct,
-        )
+        ).schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string())
         .default(json!({})),
         PinSpec::new(
             "global_session",
             "Global Session",
             "State shared for the remote chat user",
             VariableType::Struct,
-        )
+        ).schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string())
         .default(json!({})),
         PinSpec::new(
             "tools",
@@ -472,13 +472,13 @@ fn chat_result_outputs() -> Vec<PinSpec> {
             "Local Session",
             "Latest remote local session state",
             VariableType::Struct,
-        ),
+        ).schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string()),
         PinSpec::new(
             "global_session_out",
             "Global Session",
             "Latest remote global session state",
             VariableType::Struct,
-        ),
+        ).schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string()),
         PinSpec::new(
             "model_id",
             "Model ID",

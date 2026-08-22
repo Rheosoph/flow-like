@@ -2023,7 +2023,8 @@ impl NodeLogic for CreateSharePointListItemNode {
             "Fields",
             "Field values keyed by internal field name",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
         node.add_output_pin("error", "Error", "", VariableType::Execution);
@@ -2141,7 +2142,8 @@ impl NodeLogic for UpdateSharePointListItemFieldsNode {
             "Fields",
             "Field values keyed by internal field name",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
         node.add_output_pin("error", "Error", "", VariableType::Execution);
@@ -2150,7 +2152,8 @@ impl NodeLogic for UpdateSharePointListItemFieldsNode {
             "Updated Fields",
             "Updated field value set",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin("error_message", "Error Message", "", VariableType::String);
 
         node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["Sites.ReadWrite.All"]);

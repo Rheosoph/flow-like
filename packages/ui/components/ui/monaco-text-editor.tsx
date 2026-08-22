@@ -4,6 +4,7 @@ import { i18n as i18next } from "@flow-like/locales";
 import Editor, { type Monaco } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../lib/monaco-key-guard";
 
 function injectMonacoStyles() {
 	if (typeof window === "undefined") return;
@@ -67,6 +68,7 @@ export function MonacoTextEditor({
 	return (
 		<div className="monaco-text-editor-wrapper relative rounded-lg border border-input shadow-md transition-all duration-200 focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 focus-within:shadow-lg focus-within:border-primary/50 overflow-hidden px-6">
 			<Editor
+				className={FLOW_KEY_OPT_OUT_CLASS}
 				height={height}
 				language="plaintext"
 				value={value}

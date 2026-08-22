@@ -50,7 +50,8 @@ impl NodeLogic for UpsertGraphNodeNode {
             "Value",
             "Node data as JSON object",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

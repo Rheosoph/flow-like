@@ -38,14 +38,16 @@ impl NodeLogic for PushToContainer {
             "Container",
             "Reference to the container element (ID or element object)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "element_ref",
             "Element",
             "Reference to the element to add (e.g. from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "position",

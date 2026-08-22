@@ -37,6 +37,7 @@ import type {
 	IBoardSummaryInclude,
 	IBoardVariables,
 } from "../../lib/schema/flow/board-summary";
+import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IPrerunBoardResponse } from "./types";
 
@@ -282,6 +283,8 @@ export interface IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions?: boolean,
+		/** Defaults to "editor"; FlowPilot's own applies must pass "agent". */
+		origin?: FlowScriptApplyOrigin,
 	): Promise<IApplyFlowScriptResponse>;
 
 	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */

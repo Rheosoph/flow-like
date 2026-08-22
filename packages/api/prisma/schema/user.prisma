@@ -41,6 +41,7 @@ model User {
   executionUsage              ExecutionUsageTracking[]
   executionRuns               ExecutionRun[]
   feedback                    Feedback[]
+  flowScriptApplyFailures     FlowScriptApplyFailure[]
   assignedPublicationRequests PublicationRequest[]
   publicationLogs             PublicationLog[]
   invitations                 Invitation[]

@@ -951,7 +951,8 @@ impl NodeLogic for GetScheduleNode {
             "Schedule Data",
             "Raw schedule response",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin("error_message", "Error Message", "", VariableType::String);
 
         node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["Calendars.Read"]);

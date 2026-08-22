@@ -268,7 +268,8 @@ impl NodeLogic for MakeStructFromSchemaNode {
             "Struct",
             "The constructed struct",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

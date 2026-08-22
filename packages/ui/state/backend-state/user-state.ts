@@ -1,4 +1,5 @@
 import type { IProfile, IProfileApp, IProfileShortcut } from "../../lib";
+import { looksLikeAccountId } from "../../lib/user-display";
 import type { ISettingsProfile } from "../../types";
 import type {
 	INotification,
@@ -22,6 +23,9 @@ export interface IUserUpdate {
  */
 export const LOCAL_USER_SUB = "local";
 
+/** The hub caps a batch lookup at 100 ids and silently drops the rest. */
+export const USER_LOOKUP_BATCH_LIMIT = 100;
+
 /** Subset of the OIDC id-token claims used to describe the signed-in user. */
 export interface IUserClaims {
 	sub?: string;
@@ -37,6 +41,25 @@ export function isLocalUserSub(userId?: string | null): boolean {
 }
 
 /**
+ * The account a stored value refers to, or null when it refers to nothing the
+ * directory can answer for.
+ *
+ * A column name is what makes a column hold people, but a single row can still
+ * hold something else — `created_by` is `"system"` for a scheduled job — so the
+ * value is checked before a lookup is spent on it.
+ *
+ * The local placeholder is matched exactly rather than through `isLocalUserSub`:
+ * the runtime writes it lowercase, and loosening that would turn an `owner`
+ * column holding the word `Local` into the reader's own face.
+ */
+export function accountIdFromValue(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (trimmed === LOCAL_USER_SUB) return trimmed;
+	return looksLikeAccountId(trimmed) ? trimmed : null;
+}
+
+/**
  * First candidate that identifies a stored account. The local placeholder never
  * does, so it is dropped before an id is rendered or linked to a profile page.
  */
@@ -47,6 +70,43 @@ export function resolveAccountId(
 		(candidate) => candidate && !isLocalUserSub(candidate),
 	);
 	return match ?? undefined;
+}
+
+/**
+ * Splits the ids a batch lookup was handed into the ones the directory can
+ * answer and the local placeholder, which resolves to whoever is signed in and
+ * so is never sent to the hub.
+ */
+export function partitionLookupIds(userIds: string[]): {
+	subs: string[];
+	local: boolean;
+} {
+	const subs = new Set<string>();
+	let local = false;
+
+	for (const userId of userIds) {
+		const trimmed = userId?.trim();
+		if (!trimmed) continue;
+		if (isLocalUserSub(trimmed)) {
+			local = true;
+			continue;
+		}
+		subs.add(trimmed);
+	}
+
+	return { subs: [...subs], local };
+}
+
+/** Slices ids into requests the hub will answer in full rather than truncate. */
+export function chunkLookupIds(
+	subs: string[],
+	size = USER_LOOKUP_BATCH_LIMIT,
+): string[][] {
+	const chunks: string[][] = [];
+	for (let index = 0; index < subs.length; index += size) {
+		chunks.push(subs.slice(index, index + size));
+	}
+	return chunks;
 }
 
 /**
@@ -217,6 +277,13 @@ export interface IUserTemplateInfo {
 
 export interface IUserState {
 	lookupUser(userId: string): Promise<IUserLookup>;
+	/**
+	 * Resolves many accounts in one call. Ids that match nothing are absent from
+	 * the result rather than reported, so callers key the response by `id` — with
+	 * one exception: the local placeholder comes back under the signed-in
+	 * account's own id, because that is who it names.
+	 */
+	lookupUsers(userIds: string[]): Promise<IUserLookup[]>;
 	searchUsers(query: string): Promise<IUserLookup[]>;
 	getNotifications(): Promise<INotificationsOverview>;
 	listNotifications(

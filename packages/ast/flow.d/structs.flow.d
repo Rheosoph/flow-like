@@ -21,6 +21,16 @@ declare function structMake(): Struct;
  */
 declare function structMakeFromSchema(): Struct;
 
+/**
+ * Lays structs over each other, later ones winning. Useful for defaults plus overrides
+ * @param struct — Base struct
+ * @param struct — Laid over the base
+ * @param deep (optional) — Merge nested structs field by field instead of replacing them
+ * @param skipNull (optional) — Ignore fields that are null in a later struct
+ * @returns merged — The combined struct
+ */
+declare function structMerge({ struct: Struct, struct: Struct, deep?: bool, skipNull?: bool }): Struct;
+
 
 // === Structs/Fields ===
 
@@ -48,6 +58,15 @@ declare function structGetFields({ struct: Struct }): { fieldNames: string[], fi
  * @returns found — Indicates if the value was found
  */
 declare function structHas({ struct: Struct, field: string }): bool;
+
+/**
+ * Keeps only the listed fields, dropping everything else. Use before logging or sending a struct on
+ * @param struct — Input Struct
+ * @param fields — Top level field names to keep
+ * @param mode (optional) — Keep only these fields, or drop them and keep the rest
+ * @returns result — The projected struct
+ */
+declare function structPick({ struct: Struct, fields: string[], mode?: string }): Struct;
 
 /**
  * Removes a field from a struct (supports dot notation and array access)

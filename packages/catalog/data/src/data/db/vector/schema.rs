@@ -57,7 +57,8 @@ impl NodeLogic for GetSchemaLocalDatabaseNode {
             "Schema",
             "Local Database Schema",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::db::table_schema::TableSchema>();
         node
     }
 

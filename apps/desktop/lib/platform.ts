@@ -12,6 +12,18 @@ export function isTauriRuntime(): boolean {
 	);
 }
 
+/** Coarse platform label for anything the hub groups by OS (telemetry, captured failures). */
+export function desktopPlatform(): string {
+	if (typeof navigator === "undefined") return "desktop";
+	const ua = navigator.userAgent.toLowerCase();
+	if (ua.includes("android")) return "android";
+	if (/ipad|iphone|ipod/.test(ua)) return "ios";
+	if (ua.includes("mac")) return "macos";
+	if (ua.includes("win")) return "windows";
+	if (ua.includes("linux")) return "linux";
+	return "desktop";
+}
+
 export function isIOSDevice(): boolean {
 	if (typeof navigator === "undefined") return false;
 	return (

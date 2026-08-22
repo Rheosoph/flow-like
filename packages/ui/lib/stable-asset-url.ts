@@ -348,6 +348,32 @@ export function isExpiredAssetUrl(raw: string | null | undefined): boolean {
 	return signed.expiresAt <= Date.now();
 }
 
+/**
+ * True when any string anywhere in `value` is a signed URL whose deadline has
+ * passed.
+ *
+ * Persisted copies of rendered content — a cached page surface, say — freeze
+ * whatever signatures were current when they were written. Replaying one later
+ * paints images that answer 403 and cannot be repaired, because the storage path
+ * they were signed from is no longer anywhere in the record. Callers use this to
+ * discard such a copy rather than render it.
+ *
+ * Only `http(s)` strings are examined, so the walk costs a prefix test per string
+ * on everything else.
+ */
+export function hasExpiredAssetUrl(value: unknown): boolean {
+	if (typeof value === "string") {
+		return value.startsWith("http") && isExpiredAssetUrl(value);
+	}
+	if (Array.isArray(value)) {
+		return value.some(hasExpiredAssetUrl);
+	}
+	if (value && typeof value === "object") {
+		return Object.values(value).some(hasExpiredAssetUrl);
+	}
+	return false;
+}
+
 export interface AssetBearingMetadata {
 	icon?: string | null;
 	thumbnail?: string | null;

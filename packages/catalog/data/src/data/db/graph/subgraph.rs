@@ -91,7 +91,8 @@ impl NodeLogic for GraphSubgraphNode {
             "Subgraph Payload",
             "Subgraph data with nodes and edges",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "truncated",
             "Truncated",

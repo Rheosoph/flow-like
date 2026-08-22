@@ -366,7 +366,8 @@ impl NodeLogic for UpdateGitHubIssueNode {
             "Issue form field values accepted by the GitHub API",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

@@ -406,14 +406,16 @@ impl NodeLogic for ChatEventNode {
             "Local Session",
             "Local to the Chat",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "global_session",
             "Global Session",
             "Global to the User",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "tools",

@@ -1,6 +1,6 @@
 ---
 title: "Is Technical User Node"
-description: "Is Technical User Flow-Like node: Checks if the current execution is triggered by a technical user (API key) rather than a human user."
+description: "Is Technical User Flow-Like node: Checks whether a machine rather than a person triggered this run. Includes pin details, package metadata, and risk ratings."
 sidebar:
   label: "Is Technical User"
 head:
@@ -15,7 +15,7 @@ head:
   - tag: script
     attrs:
       type: application/ld+json
-    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Is Technical User Node\",\"name\":\"Is Technical User\",\"description\":\"Is Technical User Flow-Like node: Checks if the current execution is triggered by a technical user (API key) rather than a human user.\",\"url\":\"https://docs.flow-like.com/nodes/utils/user/utils-user-is-technical-user/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/User\",\"keywords\":\"Is Technical User, Is Technical User node, Flow-Like node, Flow-Like node catalog, workflow automation node, Utils/User, std, utils_user_is_technical_user, Utils, User, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Is Technical User\",\"description\":\"Checks if the current execution is triggered by a technical user (API key) rather than a human user. Technical users don't have a human identity (sub) but do have a key_id.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Is Technical User Node\",\"name\":\"Is Technical User\",\"description\":\"Is Technical User Flow-Like node: Checks whether a machine rather than a person triggered this run. Includes pin details, package metadata, and risk ratings.\",\"url\":\"https://docs.flow-like.com/nodes/utils/user/utils-user-is-technical-user/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/User\",\"keywords\":\"Is Technical User, Is Technical User node, Flow-Like node, Flow-Like node catalog, workflow automation node, Utils/User, std, utils_user_is_technical_user, Utils, User, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Is Technical User\",\"description\":\"Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
 ---
 
 import { NodeReference } from "../../../../../components/node-docs/NodeReference";

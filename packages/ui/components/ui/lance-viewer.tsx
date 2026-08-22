@@ -70,7 +70,9 @@ import {
 	toDateTimeInputValue,
 	toEpochNumber,
 } from "../../lib/date";
+import { looksLikeUserColumnName } from "../../lib/user-display";
 import type { IIndexConfig } from "../../state/backend-state/db-state";
+import { accountIdFromValue } from "../../state/backend-state/user-state";
 import {
 	Badge,
 	Button,
@@ -101,6 +103,7 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
+	buttonVariants,
 } from "./";
 import {
 	Table as DataTable,
@@ -116,6 +119,7 @@ import {
 	IndexTypeSelect,
 	buildAddColumnExpression,
 } from "./table-schema";
+import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
 	| "string"
@@ -1112,6 +1116,34 @@ const DateCell: React.FC<{
 	);
 };
 
+/**
+ * The account a cell refers to, or null when it refers to nothing resolvable.
+ *
+ * Only text is considered: a column that names a person but stores a number is a
+ * foreign key into some other table, not a sub the directory can answer for. The
+ * value has to look like an account id too — a `created_by` holding `"system"`
+ * is a word, and spending a lookup on it would only ever 404.
+ */
+export const resolveUserCell = (
+	field: LanceField,
+	value: unknown,
+): string | null =>
+	looksLikeUserColumnName(field.name) ? accountIdFromValue(value) : null;
+
+const UserCell: React.FC<{
+	userId: string;
+	onClick: () => void;
+}> = ({ userId, onClick }) => (
+	<UserInlineTag
+		userId={userId}
+		onClick={onClick}
+		className={cn(
+			buttonVariants({ variant: "ghost", size: "sm" }),
+			"h-6 px-2 justify-start max-w-[200px]",
+		)}
+	/>
+);
+
 const buildColumnForField = (
 	f: LanceField,
 ): ColumnDef<Record<string, any>> => ({
@@ -1134,6 +1166,7 @@ const Cell: React.FC<{
 	const { fields, onUpdateItem } = useContext(LanceDBContext);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [editValue, setEditValue] = useState("");
+	const userId = useMemo(() => resolveUserCell(field, value), [field, value]);
 
 	const openDialog = useCallback(() => {
 		setEditValue(safeStringify(value, 2));
@@ -1209,6 +1242,9 @@ const Cell: React.FC<{
 				if (field.kind === "unknown" && inferTemporalValue(field.name, value)) {
 					return <DateCell value={value} onClick={openDialog} />;
 				}
+				if (field.kind === "unknown" && userId) {
+					return <UserCell userId={userId} onClick={openDialog} />;
+				}
 				return (
 					<Button
 						variant="ghost"
@@ -1220,6 +1256,11 @@ const Cell: React.FC<{
 					</Button>
 				);
 			default: {
+				// A column that names a person reads as the person, not as the opaque
+				// sub that identifies them.
+				if (userId) {
+					return <UserCell userId={userId} onClick={openDialog} />;
+				}
 				// Check if string value looks like an ISO date
 				if (typeof value === "string" && isISODateString(value)) {
 					return <DateCell value={value} onClick={openDialog} />;
@@ -1434,6 +1475,7 @@ const CellViewDialog: React.FC<{
 		() => resolveTemporalCell(field, value),
 		[field, value],
 	);
+	const userId = useMemo(() => resolveUserCell(field, value), [field, value]);
 
 	useEffect(() => {
 		setLocalValue(valueStr);
@@ -1492,6 +1534,10 @@ const CellViewDialog: React.FC<{
 			return <DateDetail value={value} unit={temporal.unit} />;
 		}
 
+		if (userId) {
+			return <UserIdentityCard userId={userId} />;
+		}
+
 		switch (field.kind) {
 			case "boolean":
 				return (
@@ -1533,7 +1579,7 @@ const CellViewDialog: React.FC<{
 				);
 			}
 		}
-	}, [field.kind, field.dims, value, temporal]);
+	}, [field.kind, field.dims, value, temporal, userId]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -1559,7 +1605,9 @@ const CellViewDialog: React.FC<{
 									onCheckedChange={setIsEditing}
 								/>
 							</div>
-							<Badge variant="outline">{temporal ? "date" : field.kind}</Badge>
+							<Badge variant="outline">
+								{temporal ? "date" : userId ? "user" : field.kind}
+							</Badge>
 						</div>
 					</DialogTitle>
 				</DialogHeader>

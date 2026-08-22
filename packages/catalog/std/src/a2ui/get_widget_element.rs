@@ -37,7 +37,8 @@ impl NodeLogic for GetWidgetElement {
             "Widget",
             "Widget instance reference (from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "element_id",
@@ -51,7 +52,8 @@ impl NodeLogic for GetWidgetElement {
             "Element",
             "The element reference (connect to element nodes)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::A2UIElement>();
 
         node.add_output_pin(
             "exists",

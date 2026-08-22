@@ -222,7 +222,8 @@ impl NodeLogic for ParseWithSchema {
             "Parsed",
             "Parsed and Validated JSON",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

@@ -1,5 +1,6 @@
 import { format, formatDistanceToNow } from "date-fns";
 import type { IDate } from "../types";
+import { splitNameSegments } from "./utils";
 
 export type DateValue = Date | IDate | number | string | null | undefined;
 
@@ -325,14 +326,6 @@ const TEMPORAL_PREFIXES = new Set([
 	"dob",
 ]);
 
-function nameSegments(name: string): string[] {
-	return name
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.split(/[^a-zA-Z0-9]+/)
-		.filter(Boolean)
-		.map((segment) => segment.toLowerCase());
-}
-
 /**
  * Whether a column name promises an instant.
  *
@@ -341,7 +334,7 @@ function nameSegments(name: string): string[] {
  * a number rendered as a date is a worse failure than a date rendered as a number.
  */
 export function looksLikeTemporalName(name: string): boolean {
-	const segments = nameSegments(name);
+	const segments = splitNameSegments(name);
 	if (segments.length === 0) return false;
 	return (
 		TEMPORAL_SUFFIXES.has(segments[segments.length - 1]) ||

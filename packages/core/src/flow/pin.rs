@@ -123,6 +123,10 @@ pub struct Pin {
     pub value: Option<Arc<Mutex<Value>>>,
 }
 
+/// Schema for a Struct pin whose fields are supplied by the user or a remote
+/// service. See [`Pin::set_open_schema`].
+pub const OPEN_OBJECT_SCHEMA: &str = r#"{"type":"object","additionalProperties":true}"#;
+
 impl Pin {
     /// Whether the pin's literal is a secret (API keys, passwords) that must never leave the
     /// server in a board response and is write-only from clients.
@@ -159,6 +163,16 @@ impl Pin {
 
     pub fn set_data_type(&mut self, data_type: VariableType) -> &mut Self {
         self.data_type = data_type;
+        self
+    }
+
+    /// Declares a Struct pin whose fields are supplied by the user or the remote
+    /// service, so no fixed shape exists to describe — a config map, a database
+    /// row, a decoded payload. This is a statement that the shape is open, not a
+    /// placeholder: a pin that *does* have a known shape should use
+    /// [`Pin::set_schema`] instead.
+    pub fn set_open_schema(&mut self) -> &mut Self {
+        self.schema = Some(OPEN_OBJECT_SCHEMA.to_string());
         self
     }
 

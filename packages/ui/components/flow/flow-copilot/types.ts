@@ -1,5 +1,6 @@
 import type React from "react";
 import type { IBoard, ILogMetadata } from "../../../lib";
+import type { FlowScriptApplyOrigin } from "../../../lib/flowscript-apply-failure";
 import type { FlowIrCommitToken } from "../../../lib/schema/copilot";
 import type {
 	BoardCommand,
@@ -45,6 +46,8 @@ export interface FlowScriptApplyResultLike {
 export interface FlowScriptApplyOptions {
 	allowDeletions?: boolean;
 	suppressBlockedToast?: boolean;
+	/** Who authored the source. Defaults to the editor; FlowPilot's own applies pass "agent". */
+	origin?: FlowScriptApplyOrigin;
 }
 
 export interface FlowCopilotProps {

@@ -14,6 +14,7 @@ import {
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../../lib/monaco-key-guard";
 import type { INode } from "../../../lib/schema/flow/node";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -461,6 +462,7 @@ export function FlowScriptPanel({
 				) : (
 					<Editor
 						height="100%"
+						className={FLOW_KEY_OPT_OUT_CLASS}
 						language={FLOWSCRIPT_LANGUAGE_ID}
 						value={text}
 						onChange={(value) => setText(value ?? "")}

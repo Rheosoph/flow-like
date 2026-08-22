@@ -13,6 +13,7 @@ import type {
 import type { INode } from "../../lib/schema/flow/node";
 import type { IApplyFlowIrCommitResponse } from "../../state/backend-state/board-state";
 import type { SurfaceComponent } from "../a2ui/types";
+import type { FlowScriptApplyOptions } from "../flow/flow-copilot/types";
 
 /**
  * Agent mode determines what the copilot operates on:
@@ -244,10 +245,12 @@ export interface FlowScriptApplyResultLike {
 	final_board_node_count?: number;
 }
 
-export interface FlowScriptApplyOptions {
-	allowDeletions?: boolean;
-	suppressBlockedToast?: boolean;
-}
+/**
+ * Re-exported rather than redeclared: the board copilot and the global assistant hand the same
+ * options object to the same apply pipeline, and a second copy of this shape has already drifted
+ * once.
+ */
+export type { FlowScriptApplyOptions } from "../flow/flow-copilot/types";
 
 /**
  * Unified message format for the copilot chat

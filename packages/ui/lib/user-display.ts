@@ -7,6 +7,8 @@
  * `packages/api/src/routes/user/identity.rs`.
  */
 
+import { splitNameSegments } from "./utils";
+
 export interface UserDisplayLike {
 	readonly id?: string;
 	readonly name?: string | null;
@@ -184,4 +186,199 @@ export function userAvatarUrl(
 	user?: UserDisplayLike | null,
 ): string | undefined {
 	return clean(user?.avatar_url) ?? clean(user?.avatar);
+}
+
+/**
+ * Words that name a person in a column: `owner`, `feedback_reporter`, `author_id`.
+ *
+ * Deliberately excludes words that only sometimes mean a person. `subject` is an
+ * email header far more often than a principal, `agent` would drag `user_agent`
+ * in, `account` is a tenant or a billing account in most of this product, and
+ * `profile` is a settings profile. Singular only: `users` and `assignees` are
+ * counts and lists, not one person.
+ */
+const USER_NOUNS = new Set([
+	"user",
+	"owner",
+	"author",
+	"creator",
+	"assignee",
+	"assigner",
+	"reporter",
+	"reviewer",
+	"requester",
+	"requestor",
+	"approver",
+	"submitter",
+	"sender",
+	"recipient",
+	"editor",
+	"uploader",
+	"publisher",
+	"member",
+	"actor",
+	"principal",
+	"invitee",
+	"inviter",
+	"moderator",
+	"maintainer",
+	"contributor",
+	"collaborator",
+	"participant",
+	"commenter",
+	"executor",
+	"caller",
+]);
+
+/**
+ * Trailing words that only point at whatever came before them, and so are peeled
+ * off before the name is judged: `owner_id`, `reviewed_by_id`, `user_sub`.
+ */
+const REFERENCE_SUFFIXES = new Set([
+	"id",
+	"uid",
+	"uuid",
+	"guid",
+	"sub",
+	"ref",
+	"key",
+	"identifier",
+]);
+
+/**
+ * Words that make a trailing `by` the actor of something rather than a clause.
+ * Without this gate every SQL-ish `sort_by`, `group_by` and `partition_by`
+ * column would read as a person.
+ */
+const ACTOR_VERBS = new Set([
+	"created",
+	"updated",
+	"modified",
+	"changed",
+	"edited",
+	"deleted",
+	"removed",
+	"added",
+	"approved",
+	"rejected",
+	"reviewed",
+	"requested",
+	"acknowledged",
+	"submitted",
+	"published",
+	"uploaded",
+	"invited",
+	"granted",
+	"revoked",
+	"assigned",
+	"delegated",
+	"owned",
+	"opened",
+	"closed",
+	"resolved",
+	"claimed",
+	"managed",
+	"started",
+	"triggered",
+	"executed",
+	"imported",
+	"exported",
+	"verified",
+	"signed",
+	"sent",
+	"reported",
+	"escalated",
+	"transferred",
+	"allocated",
+	"authored",
+	"accepted",
+	"declined",
+	"cancelled",
+	"canceled",
+	"archived",
+	"restored",
+	"locked",
+	"unlocked",
+	"shared",
+	"viewed",
+	"seen",
+	"run",
+	"last",
+]);
+
+/**
+ * Words that make a trailing `to` a person rather than a destination or a new
+ * value, so `assigned_to` resolves while `path_to` and `changed_to` do not.
+ */
+const HANDOFF_VERBS = new Set([
+	"assigned",
+	"granted",
+	"delegated",
+	"allocated",
+	"escalated",
+	"transferred",
+	"reported",
+	"addressed",
+]);
+
+/**
+ * Whether a column name promises an account id.
+ *
+ * Anchored to the trailing words, like `looksLikeTemporalName`. A trailing `sub`
+ * names an account outright; otherwise reference words are peeled off so
+ * `owner_id` is judged as `owner` and `reviewed_by_id` as `reviewed_by`, and what
+ * is left has to name a person — either directly, or as the actor of a verb.
+ * Everything else is left alone, so `username`, `user_email` and `user_agent`
+ * stay text, `group_by` and `changed_to` stay clauses, and `app_id`, `board_id`
+ * and `session_id` stay ids of things that are not people.
+ */
+export function looksLikeUserColumnName(name: string): boolean {
+	const segments = splitNameSegments(name);
+	if (segments.length === 0) return false;
+
+	// `sub` names the claim itself, so it is read before it can be peeled off as
+	// a mere reference word: `sub`, `user_sub`, `run_sub`, `target_user_sub`.
+	if (segments[segments.length - 1] === "sub") return true;
+
+	while (
+		segments.length > 1 &&
+		REFERENCE_SUFFIXES.has(segments[segments.length - 1])
+	) {
+		segments.pop();
+	}
+
+	const last = segments[segments.length - 1];
+	const previous = segments[segments.length - 2];
+
+	// `created_by`, `last_modified_by`, `reviewed_by_id` — but not `group_by`.
+	if (last === "by") return Boolean(previous && ACTOR_VERBS.has(previous));
+
+	// `assigned_to`, `escalated_to`.
+	if (last === "to") return Boolean(previous && HANDOFF_VERBS.has(previous));
+
+	// `on_behalf_of`, the sub a principal names as the initiator of a run.
+	if (last === "of") return previous === "behalf";
+
+	// `owner`, `assignee`, `feedback_reporter`, `actor_user_id`.
+	return USER_NOUNS.has(last);
+}
+
+/** Shortest real sub in the wild is a 21-digit Google id; 12 leaves room to spare. */
+const MIN_ACCOUNT_ID_LENGTH = 12;
+
+/**
+ * Whether a stored value is shaped like an account id and therefore worth
+ * resolving against the directory.
+ *
+ * A sub is by definition unreadable — the same property `isIdpHandle` tests — so
+ * anything a human could read (a name, a handle, a repository owner, an email)
+ * is left as the text it is rather than spent on a lookup that would 404.
+ */
+export function looksLikeAccountId(value?: string | null): boolean {
+	const trimmed = value?.trim();
+	if (!trimmed || trimmed.length < MIN_ACCOUNT_ID_LENGTH) return false;
+	// `isIdpHandle` answers "is this unshowable?", for which a run of punctuation
+	// qualifies. A redaction mask is not an id, so it is required to carry one.
+	if (!/[a-z0-9]/i.test(trimmed)) return false;
+	return isIdpHandle(trimmed);
 }

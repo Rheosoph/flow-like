@@ -50,7 +50,8 @@ impl NodeLogic for UpsertGraphEdgeNode {
             "Value",
             "Edge data as JSON object (must include src/dst columns)",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

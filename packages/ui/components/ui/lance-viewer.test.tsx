@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { LanceField } from "./lance-viewer";
 import {
 	arrowToLanceSchema,
 	buildRowIdentityFilter,
 	resolveTemporalCell,
+	resolveUserCell,
 } from "./lance-viewer";
 
 const schema = arrowToLanceSchema({
@@ -163,5 +165,50 @@ describe("buildRowIdentityFilter", () => {
 			),
 		).toBeNull();
 		expect(buildRowIdentityFilter({}, schema.fields)).toBeNull();
+	});
+});
+
+describe("resolveUserCell", () => {
+	const field = (name: string, kind: LanceField["kind"] = "string") =>
+		({ name, kind }) as LanceField;
+	const SUB = "42c52474-5081-70d7-2b23-4bd8c38d8fb0";
+
+	test("reads a sub out of a column that names a person", () => {
+		expect(resolveUserCell(field("sub"), SUB)).toBe(SUB);
+		expect(resolveUserCell(field("user_sub"), SUB)).toBe(SUB);
+		expect(resolveUserCell(field("feedback_reporter"), SUB)).toBe(SUB);
+		expect(resolveUserCell(field("created_by"), SUB)).toBe(SUB);
+	});
+
+	test("keeps the local placeholder, which resolves to the signed-in user", () => {
+		expect(resolveUserCell(field("user_sub"), "local")).toBe("local");
+	});
+
+	test("trims, because a stored id can carry padding", () => {
+		expect(resolveUserCell(field("owner_id"), ` ${SUB} `)).toBe(SUB);
+	});
+
+	test("leaves a column that names something other than a person", () => {
+		expect(resolveUserCell(field("app_id"), SUB)).toBeNull();
+		expect(resolveUserCell(field("session_id"), SUB)).toBeNull();
+		expect(resolveUserCell(field("username"), SUB)).toBeNull();
+	});
+
+	test("leaves a value that is not shaped like an account id", () => {
+		expect(resolveUserCell(field("created_by"), "system")).toBeNull();
+		expect(resolveUserCell(field("owner"), "microsoft")).toBeNull();
+		expect(resolveUserCell(field("assigned_to"), "")).toBeNull();
+	});
+
+	test("ignores everything that is not text", () => {
+		expect(resolveUserCell(field("user_id", "number"), 42)).toBeNull();
+		expect(resolveUserCell(field("owner", "object"), { id: SUB })).toBeNull();
+		expect(resolveUserCell(field("user_sub"), null)).toBeNull();
+	});
+
+	test("never claims a cell the temporal reader already claims", () => {
+		const instant = "2026-08-22T10:30:00Z";
+		expect(resolveUserCell(field("created_by"), instant)).toBeNull();
+		expect(resolveTemporalCell(field("created_at"), instant)).not.toBeNull();
 	});
 });

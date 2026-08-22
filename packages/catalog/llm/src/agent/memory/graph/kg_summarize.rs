@@ -58,7 +58,8 @@ impl NodeLogic for KgSummarizeNode {
             "Subgraph",
             "Subgraph payload (output from KG Retrieve, Neighbors, or Subgraph nodes)",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_input_pin(
             "max_tokens",

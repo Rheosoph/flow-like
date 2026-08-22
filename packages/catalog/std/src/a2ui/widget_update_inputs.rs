@@ -57,7 +57,8 @@ impl NodeLogic for WidgetUpdateInputs {
             "Element Ref",
             "Element reference of a package widget instance (from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 

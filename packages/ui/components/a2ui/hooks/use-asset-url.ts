@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { isExpiredAssetUrl } from "../../../lib/stable-asset-url";
 import { useBackend } from "../../../state/backend-state";
 import { useActionContext } from "../ActionHandler";
 
@@ -11,7 +12,20 @@ interface AssetUrlCache {
 
 const urlCache = new Map<string, AssetUrlCache>();
 
-const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes (URLs valid for 24h, but refresh early)
+const CACHE_DURATION_MS = 30 * 60 * 1000;
+
+/**
+ * A signed URL dies with the credential that signed it, which is shorter than
+ * whatever deadline the entry was given here. Reuse an entry only while both
+ * still hold.
+ */
+function isUsable(cached: AssetUrlCache | undefined): cached is AssetUrlCache {
+	return (
+		cached !== undefined &&
+		cached.expiresAt > Date.now() &&
+		!isExpiredAssetUrl(cached.url)
+	);
+}
 
 function isValidUrl(url: string): boolean {
 	return (
@@ -93,16 +107,20 @@ export function useAssetUrl(assetPath: string | undefined): {
 
 		// Check cache first
 		const cached = urlCache.get(cacheKey);
-		if (cached && cached.expiresAt > Date.now()) {
+		if (isUsable(cached)) {
 			setUrl(cached.url);
 			setIsLoading(false);
 			setError(null);
 			return;
 		}
 
-		// Abort any previous request
+		// Abort any previous request. The guard below has to read this run's own
+		// controller: `abortControllerRef.current` is whatever the *newest* run
+		// installed, which is never aborted, so checking it let a superseded
+		// response overwrite the current one.
 		abortControllerRef.current?.abort();
-		abortControllerRef.current = new AbortController();
+		const controller = new AbortController();
+		abortControllerRef.current = controller;
 
 		setIsLoading(true);
 		setError(null);
@@ -110,7 +128,7 @@ export function useAssetUrl(assetPath: string | undefined): {
 		backend.storageState
 			.downloadStorageItems(appId, [cleanPath])
 			.then((results) => {
-				if (abortControllerRef.current?.signal.aborted) return;
+				if (controller.signal.aborted) return;
 
 				const result = results[0];
 				if (result?.url) {
@@ -137,7 +155,7 @@ export function useAssetUrl(assetPath: string | undefined): {
 				setIsLoading(false);
 			})
 			.catch((err) => {
-				if (abortControllerRef.current?.signal.aborted) return;
+				if (controller.signal.aborted) return;
 				console.warn(
 					"[useAssetUrl] Failed to resolve asset URL, falling back to raw path:",
 					err,
@@ -195,7 +213,7 @@ export function useAssetUrls(assetPaths: string[]): {
 			const cacheKey = appId ? `${appId}:${cleanPath}` : cleanPath;
 
 			const cached = urlCache.get(cacheKey);
-			if (cached && cached.expiresAt > Date.now()) {
+			if (isUsable(cached)) {
 				newUrls[path] = cached.url;
 			} else {
 				pathsToResolve.push(cleanPath);

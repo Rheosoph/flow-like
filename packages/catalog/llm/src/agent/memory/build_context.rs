@@ -62,7 +62,8 @@ impl NodeLogic for BuildMemoryContextNode {
             "Array of memory records from Search Memory node",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_input_pin(
             "header",

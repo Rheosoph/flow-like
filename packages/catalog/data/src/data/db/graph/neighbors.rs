@@ -97,14 +97,16 @@ impl NodeLogic for GraphNeighborsNode {
             "Discovered nodes",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_schema::<flow_like_storage::databases::graph::SubgraphNode>();
         node.add_output_pin(
             "result_edges",
             "Edges",
             "Discovered edges",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_schema::<flow_like_storage::databases::graph::SubgraphEdge>();
 
         node
     }

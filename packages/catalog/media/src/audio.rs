@@ -1953,6 +1953,25 @@ async fn eval_positive_u32_pin(context: &mut ExecutionContext, name: &str) -> Op
     if value > 0 { Some(value as u32) } else { None }
 }
 
+/// What the audio nodes write to their `metadata` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct AudioGenerationMetadata {
+    /// Provider that served the request.
+    pub provider: String,
+    /// Model identifier used.
+    pub model: String,
+    /// Model version, when the provider reports one.
+    pub version: Option<String>,
+    /// Media type of the produced audio.
+    pub mime_type: Option<String>,
+    /// Container or codec that was requested.
+    pub output_format: Option<String>,
+    /// Where the audio was written.
+    pub path: Option<String>,
+    /// Everything else the provider returned, whose shape is the provider's own.
+    pub provider_metadata: flow_like_types::Value,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct MakeOpenAiCompatibleTextToSpeechOptionsNode {}
@@ -2495,7 +2514,8 @@ impl NodeLogic for TextToSpeechNode {
             "Metadata",
             "Generation metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node.set_long_running(true);
         node
     }
@@ -2670,7 +2690,8 @@ impl NodeLogic for LocalTextToSpeechNode {
             "Metadata",
             "Local synthesis metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node
     }
 
@@ -2824,7 +2845,8 @@ impl NodeLogic for SpeechToTextNode {
             "Metadata",
             "Transcription metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node.set_long_running(true);
         node
     }

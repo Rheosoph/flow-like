@@ -18,6 +18,7 @@ execute = [
     "dep:csv",
     "dep:fake",
     "dep:rand",
+    "dep:flate2",
 ]
 
 [dependencies]
@@ -35,7 +36,7 @@ schemars.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-uuid.workspace = true
+uuid = { workspace = true, features = ["v7"] }
 async-trait.workspace = true
 strsim = "0.11.1"
 regex.workspace = true
@@ -44,6 +45,7 @@ chrono-tz.workspace = true
 iana-time-zone.workspace = true
 once_cell = "1.21.3"
 urlencoding.workspace = true
+unicode-segmentation = "1.13"
 sha2 = "0.11"
 md-5 = "0.11"
 aes-gcm.workspace = true
@@ -59,6 +61,7 @@ csv-async = { version = "1.3.0", features = ["tokio"], optional = true }
 csv = { version = "1.3", optional = true }
 fake = { version = "4", features = ["derive"], optional = true }
 rand = { version = "0.9", optional = true }
+flate2 = { workspace = true, optional = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

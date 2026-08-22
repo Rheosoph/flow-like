@@ -82,7 +82,8 @@ impl NodeLogic for SqlQueryNode {
             "Query results as array of row structs with Flow-Like-compatible values",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "row_count",

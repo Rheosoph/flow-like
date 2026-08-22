@@ -41,7 +41,8 @@ impl NodeLogic for PushWidgetsNode {
             "Widget",
             "Widget instance to embed (from Instantiate Widget). Add more pins for multiple widgets.",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_output_pin(
             "exec_out",

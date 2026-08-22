@@ -198,7 +198,8 @@ impl NodeLogic for TimeBinAggregationNode {
             "Query results as array of row structs",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "sql",
@@ -444,7 +445,8 @@ impl NodeLogic for DateTruncAggregationNode {
             "Aggregation results",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 
@@ -617,7 +619,8 @@ impl NodeLogic for WindowAggregationNode {
         .set_schema::<DataFusionSession>();
 
         node.add_output_pin("results", "Results", "Query results", VariableType::Struct)
-            .set_value_type(ValueType::Array);
+            .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 

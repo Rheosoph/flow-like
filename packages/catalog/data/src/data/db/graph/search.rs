@@ -73,7 +73,8 @@ impl NodeLogic for GraphSearchNode {
             "Matching objects",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_schema::<flow_like_storage::databases::graph::SubgraphNode>();
 
         node
     }

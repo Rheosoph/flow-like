@@ -170,7 +170,7 @@ pub async fn presign_db_access(
     let db_path = scoped_db_path(&sub, &app_id);
 
     // Get expiration time if available
-    let expiration = get_credentials_expiration(&scoped_credentials);
+    let expiration = scoped_credentials.expiration();
 
     Ok(Json(PresignDbAccessResponse {
         shared_credentials,
@@ -266,7 +266,7 @@ pub async fn presign_project_db_access(
     })?;
 
     let db_path = format!("apps/{}/storage/db", app_id);
-    let expiration = get_credentials_expiration(&scoped_credentials);
+    let expiration = scoped_credentials.expiration();
 
     Ok(Json(PresignDbAccessResponse {
         shared_credentials,
@@ -275,21 +275,4 @@ pub async fn presign_project_db_access(
         access_mode,
         expiration,
     }))
-}
-
-/// Get expiration time from credentials if available
-fn get_credentials_expiration(
-    credentials: &RuntimeCredentials,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    match credentials {
-        #[cfg(feature = "aws")]
-        RuntimeCredentials::Aws(aws) => aws.expiration,
-        #[cfg(feature = "azure")]
-        RuntimeCredentials::Azure(azure) => azure.expiration,
-        #[cfg(feature = "gcp")]
-        RuntimeCredentials::Gcp(gcp) => gcp.expiration,
-        #[cfg(feature = "r2")]
-        RuntimeCredentials::R2(r2) => r2.expiration,
-        RuntimeCredentials::Mixed(mixed) => get_credentials_expiration(&mixed.content),
-    }
 }

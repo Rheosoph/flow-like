@@ -588,6 +588,20 @@ export function defineFlowScriptThemes(monaco: Monaco): void {
 	});
 }
 
+/**
+ * Register the FlowScript language and apply its theme to one editor instance.
+ *
+ * Every read-only consumer goes through this: registering the language more than once from
+ * separate modules produced mount-order-dependent tokenizer and theme conflicts.
+ */
+export function setupFlowScriptEditor(monaco: Monaco, isDark: boolean): void {
+	registerFlowScriptLanguage(monaco);
+	defineFlowScriptThemes(monaco);
+	monaco.editor.setTheme(
+		isDark ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT,
+	);
+}
+
 /** Blank out string/comment contents (preserving offsets) so bracket scans stay accurate. */
 function maskLiterals(text: string): string {
 	let out = "";

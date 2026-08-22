@@ -96,7 +96,8 @@ impl NodeLogic for GraphPathsNode {
             "Paths Payload",
             "Found paths with their nodes and edges",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "found",
             "Found",

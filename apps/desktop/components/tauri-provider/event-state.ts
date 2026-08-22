@@ -1,7 +1,9 @@
 import {
 	type IBoard,
 	type IEvent,
+	IEventExecutionMode,
 	type IEventState,
+	IExecutionMode,
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
@@ -678,6 +680,27 @@ export class EventState implements IEventState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined> {
+		const event = await this.getEvent(appId, eventId);
+		const runRemotely = () =>
+			this.executeEventRemote(
+				appId,
+				eventId,
+				payload,
+				streamState,
+				onEventId,
+				cb,
+			);
+
+		// An event pinned to Remote has no board on this device. Reading one only
+		// fails on the way to a run that belongs on the server anyway, so the
+		// dispatch happens here rather than after a "board not found".
+		if (
+			event.execution_mode === IEventExecutionMode.Remote &&
+			(await this.canReachServer(appId))
+		) {
+			return runRemotely();
+		}
+
 		const channel = new Channel<IIntercomEvent[]>();
 		let closed = false;
 		let foundRunId = false;
@@ -712,13 +735,28 @@ export class EventState implements IEventState {
 					}
 			  >
 			| undefined;
-		const event = await this.getEvent(appId, eventId);
-		const board: IBoard = await this.backend.boardState.getBoard(
-			appId,
-			event.board_id,
-			(event.board_version as [number, number, number]) ?? undefined,
-			true,
-		);
+		let board: IBoard;
+		try {
+			board = await this.backend.boardState.getBoard(
+				appId,
+				event.board_id,
+				(event.board_version as [number, number, number]) ?? undefined,
+				true,
+			);
+		} catch (error) {
+			// Everything below reads the flow to prepare a local run: packages,
+			// RPA consent, OAuth tokens. A user who may run an event but not read
+			// its board — the normal shape of a published app — gets nothing back
+			// from any of it, and the server can run it instead: it holds the
+			// board, and resolves permissions, secrets and OAuth on its own.
+			if (!(await this.canReachServer(appId))) throw error;
+			console.warn(
+				"[executeEvent] Board unavailable for local execution, running on the server:",
+				error,
+			);
+			return runRemotely();
+		}
+
 		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(
 			appId,
 		);
@@ -1081,15 +1119,12 @@ export class EventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<IPrerunEventResponse> {
-		const isOffline = await this.backend.isOffline(appId);
+		const loadLocalEvent = async (): Promise<IEvent> =>
+			invoke<IEvent>("get_event", { appId, eventId, version });
 
 		// Helper to build prerun response from local event/board
 		const buildLocalPrerun = async (): Promise<IPrerunEventResponse> => {
-			const event: IEvent = await invoke("get_event", {
-				appId,
-				eventId,
-				version,
-			});
+			const event: IEvent = await loadLocalEvent();
 			const board: IBoard = await invoke("get_board", {
 				appId,
 				boardId: event.board_id,
@@ -1141,6 +1176,7 @@ export class EventState implements IEventState {
 				oauth_requirements,
 				requires_local_execution,
 				execution_mode,
+				event_execution_mode: event.execution_mode ?? IEventExecutionMode.Local,
 				can_execute_locally,
 				has_wasm_nodes: wasmPackageIds.size > 0,
 				wasm_package_ids: Array.from(wasmPackageIds),
@@ -1148,30 +1184,102 @@ export class EventState implements IEventState {
 			};
 		};
 
-		// Offline apps: always use local data
-		if (isOffline) {
+		const fetchRemotePrerun =
+			this.backend.profile && this.backend.auth
+				? async () => {
+						let url = `apps/${appId}/events/${eventId}/prerun`;
+						if (version) {
+							url += `?version=${version.join("_")}`;
+						}
+
+						return fetcher<IPrerunEventResponse>(
+							this.backend.profile!,
+							url,
+							{ method: "GET" },
+							this.backend.auth!,
+						);
+					}
+				: undefined;
+
+		// An event pinned to Remote never runs on this device, so its board is not
+		// expected to be here. Answering that preflight from a local board would
+		// report on a machine the run never touches — and usually just fails,
+		// sending the caller down the local path it must not take.
+		const remoteEvent = await this.resolveRemotePinnedEvent(
+			appId,
+			eventId,
+			loadLocalEvent,
+		);
+		if (remoteEvent) {
+			if (fetchRemotePrerun) {
+				try {
+					const remoteResult = await fetchRemotePrerun();
+					if (remoteResult) return remoteResult;
+				} catch (error) {
+					console.warn(
+						"[prerunEvent] API prerun failed for a Remote event:",
+						error,
+					);
+				}
+			}
+
+			return {
+				board_id: remoteEvent.board_id,
+				runtime_variables: [],
+				oauth_requirements: [],
+				requires_local_execution: false,
+				execution_mode: IExecutionMode.Remote,
+				event_execution_mode: IEventExecutionMode.Remote,
+				can_execute_locally: false,
+				has_wasm_nodes: false,
+				wasm_package_ids: [],
+				wasm_package_permissions: {},
+			};
+		}
+
+		// Local-only apps have no server answer to ask for. An app whose
+		// visibility is merely uncached is not one of them — treating it as one
+		// is what left this preflight with only a board it does not have.
+		if (await this.backend.isLocalOnly(appId).catch(() => false)) {
 			return buildLocalPrerun();
 		}
 
 		return resolveLocalFirstPrerun({
 			label: "prerunEvent",
 			buildLocal: buildLocalPrerun,
-			fetchRemote:
-				this.backend.profile && this.backend.auth
-					? async () => {
-							let url = `apps/${appId}/events/${eventId}/prerun`;
-							if (version) {
-								url += `?version=${version.join("_")}`;
-							}
-
-							return fetcher<IPrerunEventResponse>(
-								this.backend.profile!,
-								url,
-								{ method: "GET" },
-								this.backend.auth!,
-							);
-						}
-					: undefined,
+			fetchRemote: fetchRemotePrerun,
 		});
+	}
+
+	/**
+	 * Whether a run can be handed to the server for this app. `isOffline` also
+	 * reports true when the app's visibility has simply never been cached, which
+	 * is not a reason to give up on the server — only an app this device
+	 * positively knows is local-only is.
+	 */
+	private async canReachServer(appId: string): Promise<boolean> {
+		if (!this.backend.profile || !this.backend.auth) return false;
+		return !(await this.backend.isLocalOnly(appId).catch(() => false));
+	}
+
+	/**
+	 * Returns the event when it is pinned to Remote execution, otherwise
+	 * undefined. Reads the device copy first and only asks the hub when there is
+	 * none, so the common case costs one IPC call.
+	 */
+	private async resolveRemotePinnedEvent(
+		appId: string,
+		eventId: string,
+		loadLocalEvent: () => Promise<IEvent>,
+	): Promise<IEvent | undefined> {
+		let event = await loadLocalEvent().catch(() => undefined);
+
+		if (!event && this.backend.profile && this.backend.auth) {
+			event = await this.getEvent(appId, eventId).catch(() => undefined);
+		}
+
+		return event?.execution_mode === IEventExecutionMode.Remote
+			? event
+			: undefined;
 	}
 }

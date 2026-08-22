@@ -23,8 +23,9 @@ pub use diagnostics::{
     structure_reconcile_diagnostics,
 };
 pub use flow_like_ast::{
-    BoardAst, DeclarationFile, NodeSchemas, ParseError, RenderOptions, Signature, SignatureSet,
-    declarations_by_category, declarations_by_package, parse, render, schema_sidecar,
+    BoardAst, DeclarationFile, NodeSchemas, ParseError, RedactedFlowScript, RenderOptions,
+    Signature, SignatureSet, declarations_by_category, declarations_by_package, parse,
+    redact_flowscript, render, schema_sidecar,
 };
 pub use lower::lower_board;
 pub use reconcile::{

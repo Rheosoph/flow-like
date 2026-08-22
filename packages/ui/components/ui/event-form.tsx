@@ -795,7 +795,7 @@ export function EventForm({
 
 			{/* Form Actions — sticky so the primary action stays reachable instead
 			    of sitting past a screenful of type-specific configuration. */}
-			<div className="sticky bottom-0 -mx-1 flex justify-end gap-2 border-t bg-background/95 px-1 pt-3 pb-1 backdrop-blur supports-backdrop-filter:bg-background/85">
+			<div className="sticky bottom-0 flex justify-end gap-2 border-t bg-background/95 pt-3 pb-1 backdrop-blur supports-backdrop-filter:bg-background/85">
 				<Button
 					type="button"
 					variant="outline"

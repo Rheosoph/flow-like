@@ -37,6 +37,7 @@ import type {
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	BoardSyncClient,
 	type IBoardSyncRequest,
@@ -814,6 +815,7 @@ export class WebBoardState implements IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions = false,
+		origin: FlowScriptApplyOrigin = "editor",
 	): Promise<IApplyFlowScriptResponse> {
 		return apiPost<IApplyFlowScriptResponse>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
@@ -821,6 +823,9 @@ export class WebBoardState implements IBoardState {
 				flowscript,
 				current_layer: currentLayer,
 				allow_deletions: allowDeletions,
+				// The endpoint captures failed applies; without this every FlowPilot attempt would
+				// be indistinguishable from a person's edit in the admin view.
+				origin,
 			},
 			this.backend.auth,
 		);

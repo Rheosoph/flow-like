@@ -34,6 +34,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { desktopPlatform } from "../lib/platform";
 import {
 	type ITelemetrySettings,
 	getTelemetrySettings,
@@ -217,16 +218,6 @@ function installGlobalErrorHandlers(): () => void {
 			removeGlobalHandlers = undefined;
 		}
 	};
-}
-
-function desktopPlatform(): string {
-	const ua = navigator.userAgent.toLowerCase();
-	if (ua.includes("android")) return "android";
-	if (/ipad|iphone|ipod/.test(ua)) return "ios";
-	if (ua.includes("mac")) return "macos";
-	if (ua.includes("win")) return "windows";
-	if (ua.includes("linux")) return "linux";
-	return "desktop";
 }
 
 export function TelemetryProvider({

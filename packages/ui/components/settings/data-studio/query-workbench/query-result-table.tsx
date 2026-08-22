@@ -20,11 +20,13 @@ import {
 	MoreHorizontal,
 	ToggleLeft,
 	Type,
+	UserRound,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
+import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
 import {
 	DropdownMenu,
@@ -35,10 +37,11 @@ import {
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
 import { RelativeTime } from "../../../ui/relative-time";
+import { UserInlineTag } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
 	cellToString,
-	classifyColumn,
+	classifyResultColumn,
 	formatNumber,
 	isNullish,
 } from "./column-types";
@@ -59,12 +62,13 @@ const KIND_ICON: Record<ColumnKind, typeof Hash> = {
 	temporal: Calendar,
 	boolean: ToggleLeft,
 	json: Braces,
+	user: UserRound,
 	text: Type,
 };
 
 function sizeForKind(kind: ColumnKind): number {
 	if (kind === "number" || kind === "boolean") return 130;
-	if (kind === "temporal") return 190;
+	if (kind === "temporal" || kind === "user") return 190;
 	return 200;
 }
 
@@ -102,6 +106,12 @@ function CellContent({
 	}
 	if (kind === "temporal") {
 		return <RelativeTime value={value} className="min-w-0 truncate" />;
+	}
+	// A user column still holds text for rows that name no account, so the tag is
+	// used only where the value is an id the directory could answer for.
+	if (kind === "user") {
+		const userId = accountIdFromValue(value);
+		if (userId) return <UserInlineTag userId={userId} />;
 	}
 	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
 }
@@ -209,16 +219,16 @@ export function QueryResultTable({
 		const map = new Map<string, ColumnMeta>();
 		for (const column of columns)
 			map.set(column.name, {
-				kind: classifyColumn(column),
+				kind: classifyResultColumn(column, rows),
 				typeName: column.type_name,
 			});
 		return map;
-	}, [columns]);
+	}, [columns, rows]);
 
 	const columnDefs = useMemo<ColumnDef<ResultRow>[]>(
 		() =>
 			columns.map((column) => {
-				const kind = classifyColumn(column);
+				const kind = classifyResultColumn(column, rows);
 				return {
 					id: column.name,
 					// Map SQL NULL (JS null) to undefined so `sortUndefined: "last"`
@@ -244,7 +254,7 @@ export function QueryResultTable({
 							: "alphanumeric",
 				};
 			}),
-		[columns],
+		[columns, rows],
 	);
 
 	const table = useReactTable({

@@ -304,7 +304,8 @@ impl NodeLogic for WidgetQuery {
             "Element Ref",
             "Package widget reference from Instantiate Widget, or a visual-builder widget from Get Element",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "query",

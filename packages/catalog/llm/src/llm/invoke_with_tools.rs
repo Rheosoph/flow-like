@@ -186,7 +186,8 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             "Tool Call Args",
             "Parsed JSON arguments for the latest tool call",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "stats",

@@ -382,6 +382,20 @@ fn apply_pii_mask(
     (result, detections)
 }
 
+/// One masked span, as written to the `detections` pin.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct PiiDetection {
+    /// Which detector matched, for example "email" or "iban".
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Byte offset the match started at in the original text.
+    pub start: usize,
+    /// Byte offset just past the match in the original text.
+    pub end: usize,
+    /// Length of the text that was replaced.
+    pub original_length: usize,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct PiiMaskRegexNode {}
@@ -557,7 +571,8 @@ impl NodeLogic for PiiMaskRegexNode {
             "Detections",
             "JSON array with detection details (type, position, length)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::pii::pii_mask_regex::PiiDetection>();
 
         node
     }

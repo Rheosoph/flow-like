@@ -67,7 +67,8 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
             "Schema",
             "Updated database schema",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::db::table_schema::TableSchema>();
 
         node.set_version(2);
         node

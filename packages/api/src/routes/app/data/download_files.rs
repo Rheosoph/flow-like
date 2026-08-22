@@ -18,6 +18,10 @@ use flow_like_types::{Value, create_id, json};
 use futures::stream::{self, StreamExt};
 use utoipa::ToSchema;
 
+/// How long a download link is worth handing out, before the signing
+/// credential's own lifetime is taken into account. See
+/// [`RuntimeCredentials::signing_ttl`] — the credential, not this constant, is
+/// what decides the deadline the URL actually advertises.
 const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 
 /// Signs a GET URL per prefix, preserving request order.
@@ -27,15 +31,13 @@ const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 async fn sign_downloads(
     store: &FlowLikeStore,
     entries: Vec<(String, flow_like_storage::Path)>,
+    ttl: Duration,
     sub: &str,
     app_id: &str,
 ) -> Vec<Value> {
     stream::iter(entries)
         .map(|(prefix, download_path)| async move {
-            match store
-                .sign_cached("GET", &download_path, DOWNLOAD_URL_TTL)
-                .await
-            {
+            match store.sign_cached("GET", &download_path, ttl).await {
                 Ok(url) => json::json!({
                     "prefix": prefix,
                     "url": url.to_string(),
@@ -110,11 +112,13 @@ pub async fn download_files(
         .await?;
 
     // Azure SAS tokens cannot generate new signed URLs, so use master credentials for Azure
-    let project_dir = if scoped_creds.as_ref().is_azure() {
-        state.master_credentials().await?.to_store(false).await?
+    let signing_creds = if scoped_creds.as_ref().is_azure() {
+        state.master_credentials().await?
     } else {
-        scoped_creds.to_store(false).await?
+        scoped_creds
     };
+    let ttl = signing_creds.signing_ttl(DOWNLOAD_URL_TTL);
+    let project_dir = signing_creds.to_store(false).await?;
 
     let entries = payload
         .prefixes
@@ -123,7 +127,7 @@ pub async fn download_files(
         .collect();
 
     Ok(Json(
-        sign_downloads(&project_dir, entries, &sub, &app_id).await,
+        sign_downloads(&project_dir, entries, ttl, &sub, &app_id).await,
     ))
 }
 
@@ -171,11 +175,13 @@ pub async fn download_user_files(
         )
         .await?;
 
-    let project_dir = if scoped_creds.as_ref().is_azure() {
-        state.master_credentials().await?.to_store(false).await?
+    let signing_creds = if scoped_creds.as_ref().is_azure() {
+        state.master_credentials().await?
     } else {
-        scoped_creds.to_store(false).await?
+        scoped_creds
     };
+    let ttl = signing_creds.signing_ttl(DOWNLOAD_URL_TTL);
+    let project_dir = signing_creds.to_store(false).await?;
 
     let entries = payload
         .prefixes
@@ -189,6 +195,6 @@ pub async fn download_user_files(
         .collect();
 
     Ok(Json(
-        sign_downloads(&project_dir, entries, &sub, &app_id).await,
+        sign_downloads(&project_dir, entries, ttl, &sub, &app_id).await,
     ))
 }

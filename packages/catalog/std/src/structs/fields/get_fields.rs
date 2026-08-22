@@ -27,7 +27,8 @@ impl NodeLogic for ListStructFields {
         );
         node.add_icon("/flow/icons/struct.svg");
 
-        node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct);
+        node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct)
+        .set_open_schema();
 
         node.add_output_pin("field_names", "Field Names", "Fields", VariableType::String)
             .set_value_type(flow_like::flow::pin::ValueType::Array)

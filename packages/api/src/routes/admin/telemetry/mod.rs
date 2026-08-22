@@ -1,12 +1,14 @@
 //! Admin dashboards over anonymous product telemetry: usage overview, timeseries,
 //! event list, engagement, FlowPilot funnel, crash issues, release health,
-//! distributed traces and performance percentiles.
+//! distributed traces and performance percentiles, plus the one user-attributed surface here:
+//! captured FlowScript apply failures (see `flowscript_failures`).
 
 pub mod alerts;
 pub mod dashboards;
 pub mod engagement;
 pub mod events;
 pub mod flowpilot;
+pub mod flowscript_failures;
 pub mod issues;
 pub mod llm;
 pub mod overview;

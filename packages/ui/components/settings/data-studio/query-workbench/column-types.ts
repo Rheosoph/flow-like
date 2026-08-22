@@ -1,7 +1,15 @@
 import { looksLikeTemporalName } from "../../../../lib/date";
+import { looksLikeUserColumnName } from "../../../../lib/user-display";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
+import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 
-export type ColumnKind = "number" | "temporal" | "boolean" | "json" | "text";
+export type ColumnKind =
+	| "number"
+	| "temporal"
+	| "boolean"
+	| "json"
+	| "user"
+	| "text";
 
 export function classifyColumn(column: QueryColumn): ColumnKind {
 	const type = column.type_name.toLowerCase();
@@ -14,7 +22,32 @@ export function classifyColumn(column: QueryColumn): ColumnKind {
 		return looksLikeTemporalName(column.name) ? "temporal" : "number";
 	}
 	if (/json|struct|list|array|map|object|record/.test(type)) return "json";
-	return "text";
+	// A `created_by` or `user_sub` column holds a person, not a string.
+	return looksLikeUserColumnName(column.name) ? "user" : "text";
+}
+
+/** How many rows are enough to tell a column of people from a column of words. */
+const USER_COLUMN_SAMPLE = 100;
+
+/**
+ * The kind a column reads as in this particular result set.
+ *
+ * Only the user kind differs from `classifyColumn`: a name is a promise, not
+ * proof, so a `created_by` that holds job names stays text rather than putting a
+ * person icon over a column where no cell will ever resolve.
+ */
+export function classifyResultColumn(
+	column: QueryColumn,
+	rows: readonly Record<string, unknown>[],
+): ColumnKind {
+	const kind = classifyColumn(column);
+	if (kind !== "user" || rows.length === 0) return kind;
+
+	return rows
+		.slice(0, USER_COLUMN_SAMPLE)
+		.some((row) => accountIdFromValue(row[column.name]))
+		? "user"
+		: "text";
 }
 
 export function isNumericColumn(column: QueryColumn): boolean {

@@ -102,7 +102,8 @@ impl NodeLogic for SetMediaSource {
             "Reference to the media element",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "file",

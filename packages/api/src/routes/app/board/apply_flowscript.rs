@@ -3,11 +3,17 @@ use std::sync::Arc;
 use crate::{
     ensure_permission,
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::{jwt::AppUser, trace_context::TraceContext},
     permission::role_permission::RolePermissions,
-    routes::app::{
-        board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
-        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    routes::{
+        app::{
+            board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
+            wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+        },
+        flowscript::{
+            FlowScriptApplyFailure, ORIGIN_AGENT, ORIGIN_EDITOR, OUTCOME_ERROR, SOURCE_WEB,
+            outcome_for, record_flowscript_apply_failure,
+        },
     },
     state::AppState,
 };
@@ -26,6 +32,10 @@ pub struct ApplyFlowScriptBody {
     pub current_layer: Option<String>,
     #[serde(default)]
     pub allow_deletions: bool,
+    /// Who authored the source: "editor" (default) or "agent". FlowPilot applies through this same
+    /// endpoint, and the captured-failure view is only readable if the two can be told apart.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 #[utoipa::path(
@@ -46,11 +56,12 @@ pub struct ApplyFlowScriptBody {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/board/{board_id}/flowscript/apply",
-    skip(state, user, params)
+    skip(state, user, trace, params)
 )]
 pub async fn apply_flowscript(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
+    trace: Option<Extension<TraceContext>>,
     Path((app_id, board_id)): Path<(String, String)>,
     Json(params): Json<ApplyFlowScriptBody>,
 ) -> Result<Json<ApplyFlowScriptResult>, ApiError> {
@@ -88,16 +99,70 @@ pub async fn apply_flowscript(
     let mut catalog_nodes = builtin_nodes;
     catalog_nodes.extend(wasm_nodes);
 
+    let origin = match params.origin.as_deref() {
+        Some(ORIGIN_AGENT) => ORIGIN_AGENT,
+        _ => ORIGIN_EDITOR,
+    };
+
+    // Bound before the apply so a failure can be recorded with the source that caused it; see
+    // `crate::routes::flowscript`.
+    let capture = |outcome: &'static str, failure: FlowScriptApplyFailure| {
+        record_flowscript_apply_failure(
+            &state,
+            FlowScriptApplyFailure {
+                user_id: Some(sub.clone()),
+                app_id: app_id.clone(),
+                board_id: board_id.clone(),
+                layer_id: params.current_layer.clone(),
+                source: SOURCE_WEB,
+                origin,
+                outcome,
+                trace_id: trace.as_ref().map(|t| t.trace_id.clone()),
+                ..failure
+            },
+        );
+    };
+
     let result = flow_like::flow::ast::apply_flowscript_to_board(
         &mut board,
         &params.flowscript,
         &catalog_nodes,
         flow_state,
-        params.current_layer,
+        params.current_layer.clone(),
         params.allow_deletions,
     )
-    .await
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    .await;
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let message = error.to_string();
+            capture(
+                OUTCOME_ERROR,
+                FlowScriptApplyFailure {
+                    error_message: Some(message.clone()),
+                    flowscript: params.flowscript.clone(),
+                    allow_deletions: params.allow_deletions,
+                    ..FlowScriptApplyFailure::empty()
+                },
+            );
+            return Err(ApiError::bad_request(message));
+        }
+    };
+
+    if let Some(outcome) = outcome_for(result.commands.len(), result.diagnostics.len()) {
+        capture(
+            outcome,
+            FlowScriptApplyFailure {
+                diagnostics: result.diagnostics.clone(),
+                corrections: result.corrections.clone(),
+                command_count: result.commands.len(),
+                flowscript: params.flowscript.clone(),
+                allow_deletions: params.allow_deletions,
+                ..FlowScriptApplyFailure::empty()
+            },
+        );
+    }
 
     if !result.commands.is_empty() {
         let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;

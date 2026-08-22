@@ -52,7 +52,8 @@ impl NodeLogic for ToJsonNode {
             "Struct",
             "The body of the response as json",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

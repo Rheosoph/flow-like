@@ -45,7 +45,8 @@ impl NodeLogic for SetFormBodyNode {
             "Form fields to encode",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_input_pin(
             "set_content_type",

@@ -63,3 +63,4 @@ export * from "./user-display";
 export * from "./widget-schema-form";
 export * from "./widget-contract-form";
 export * from "./layer-cache";
+export * from "./monaco-key-guard";

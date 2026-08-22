@@ -251,7 +251,8 @@ impl NodeLogic for TriggerWorkflowNode {
             "Workflow inputs as JSON object",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
         node.add_input_pin(
             "return_run_details",
             "Return Run Details",

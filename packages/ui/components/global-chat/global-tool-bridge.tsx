@@ -4824,7 +4824,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 										// undo history and board refetch — no query invalidation needed.
 										const applyResult = await applyLive.applyFlowScript(
 											flowscript,
-											{ allowDeletions, suppressBlockedToast: true },
+											{
+												allowDeletions,
+												suppressBlockedToast: true,
+												origin: "agent",
+											},
 										);
 										appliedCommands = applyResult?.commands?.length ?? 0;
 										appliedSourceCorrections =
@@ -4840,6 +4844,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												undefined,
 												catalog,
 												allowDeletions,
+												"agent",
 											);
 										appliedCommands = applyResult.commands?.length ?? 0;
 										appliedSourceCorrections =

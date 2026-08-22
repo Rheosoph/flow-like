@@ -44,7 +44,8 @@ impl NodeLogic for FilterArrayFieldNode {
             "Array of structs to filter",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_input_pin(
             "field",
@@ -61,7 +62,8 @@ impl NodeLogic for FilterArrayFieldNode {
             "Array with the field removed from each struct",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "removed_count",

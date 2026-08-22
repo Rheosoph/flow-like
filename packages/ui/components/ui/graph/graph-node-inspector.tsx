@@ -20,18 +20,21 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { inferTemporalValue } from "../../../lib/date";
+import { looksLikeUserColumnName } from "../../../lib/user-display";
 import type {
 	GraphOverlay,
 	NodeLabelMapping,
 	OntologyActionDefinition,
 	SubgraphNode,
 } from "../../../state/backend-state/graph-state";
+import { accountIdFromValue } from "../../../state/backend-state/user-state";
 import { Badge } from "../badge";
 import { Button } from "../button";
 import { Checkbox } from "../checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { RelativeTime } from "../relative-time";
 import { ScrollArea } from "../scroll-area";
+import { UserInlineTag } from "../user-identity";
 import { getGraphIcon } from "./icons";
 
 export interface ConnectionInfo {
@@ -77,6 +80,7 @@ export type ValueKind =
 	| "number"
 	| "boolean"
 	| "date"
+	| "user"
 	| "vector"
 	| "array"
 	| "object"
@@ -122,6 +126,13 @@ function inferValueKind(
 			return { kind: "date" };
 		}
 		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
+		// A property that names a person and holds an account id is that person.
+		if (
+			propKey &&
+			looksLikeUserColumnName(propKey) &&
+			accountIdFromValue(value)
+		)
+			return { kind: "user" };
 		return { kind: "string" };
 	}
 	return { kind: "unknown" };
@@ -256,6 +267,14 @@ function PropertyValue({
 			return (
 				<div className="group flex items-center justify-between">
 					<RelativeTime value={value} className="text-sm" />
+					<CopyButton text={String(value)} />
+				</div>
+			);
+
+		case "user":
+			return (
+				<div className="group flex items-center justify-between gap-2">
+					<UserInlineTag userId={String(value).trim()} className="text-sm" />
 					<CopyButton text={String(value)} />
 				</div>
 			);

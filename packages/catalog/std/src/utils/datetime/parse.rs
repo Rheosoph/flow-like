@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -6,22 +6,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 
-/// A bare epoch integer carries no unit, so its magnitude decides — Arrow and
-/// Lance hand temporal columns back in microseconds, browsers and most JSON
-/// producers in milliseconds, and Unix tooling in seconds. Mirrors
-/// `detectEpochUnit` in `packages/ui/lib/date.ts`.
-fn datetime_from_epoch(units: i64) -> Option<DateTime<Utc>> {
-    const MAX_EPOCH_SECONDS: i64 = 100_000_000_000;
-    const MAX_EPOCH_MILLIS: i64 = 100_000_000_000_000;
-    const MAX_EPOCH_MICROS: i64 = 100_000_000_000_000_000;
-
-    match units.unsigned_abs() {
-        magnitude if magnitude < MAX_EPOCH_SECONDS as u64 => DateTime::from_timestamp(units, 0),
-        magnitude if magnitude < MAX_EPOCH_MILLIS as u64 => DateTime::from_timestamp_millis(units),
-        magnitude if magnitude < MAX_EPOCH_MICROS as u64 => DateTime::from_timestamp_micros(units),
-        _ => Some(DateTime::from_timestamp_nanos(units)),
-    }
-}
+use super::util::{parse_auto, parse_with_format};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -61,55 +46,10 @@ impl NodeLogic for DateTimeParseNode {
         let input: String = context.evaluate_pin("input").await?;
         let format: String = context.evaluate_pin("format").await.unwrap_or_default();
 
-        let dt_utc: Option<DateTime<Utc>> = if !format.is_empty() {
-            // Try custom format
-            if let Ok(dt) = NaiveDateTime::parse_from_str(&input, &format) {
-                Some(dt.and_utc())
-            } else if let Ok(date) = NaiveDate::parse_from_str(&input, &format) {
-                date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
-            } else {
-                None
-            }
+        let dt_utc: Option<DateTime<Utc>> = if format.is_empty() {
+            parse_auto(&input)
         } else {
-            // Auto-detect format
-            // Try RFC3339 first (most common)
-            if let Ok(dt) = DateTime::parse_from_rfc3339(&input) {
-                Some(dt.with_timezone(&Utc))
-            }
-            // Try RFC2822
-            else if let Ok(dt) = DateTime::parse_from_rfc2822(&input) {
-                Some(dt.with_timezone(&Utc))
-            }
-            // Try epoch timestamp
-            else if let Ok(units) = input.parse::<i64>() {
-                datetime_from_epoch(units)
-            }
-            // Try common formats
-            else {
-                let formats = [
-                    "%Y-%m-%d %H:%M:%S",
-                    "%Y-%m-%dT%H:%M:%S",
-                    "%Y-%m-%d %H:%M:%S%.f",
-                    "%Y-%m-%dT%H:%M:%S%.f",
-                    "%Y-%m-%d",
-                    "%d/%m/%Y",
-                    "%m/%d/%Y",
-                    "%d.%m.%Y",
-                    "%Y/%m/%d",
-                    "%d-%m-%Y",
-                    "%m-%d-%Y",
-                ];
-
-                formats.iter().find_map(|fmt| {
-                    if let Ok(dt) = NaiveDateTime::parse_from_str(&input, fmt) {
-                        Some(dt.and_utc())
-                    } else if let Ok(date) = NaiveDate::parse_from_str(&input, fmt) {
-                        date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
-                    } else {
-                        None
-                    }
-                })
-            }
+            parse_with_format(&input, &format)
         };
 
         match dt_utc {
@@ -130,7 +70,7 @@ impl NodeLogic for DateTimeParseNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::util::datetime_from_epoch;
 
     fn parsed(units: i64) -> String {
         datetime_from_epoch(units)

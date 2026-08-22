@@ -495,7 +495,8 @@ impl NodeLogic for InstantiateWidget {
             "Element Ref",
             "Element reference for the instantiated widget (connect to Push To Container)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.set_can_reference_fns(true);
         node.set_long_running(true);

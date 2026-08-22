@@ -41,8 +41,10 @@ impl NodeLogic for SetStructFieldNode {
             "Done with the Execution",
             VariableType::Execution,
         );
-        node.add_output_pin("struct_out", "Struct", "Struct Out", VariableType::Struct);
-        node.add_input_pin("struct_in", "Struct", "Struct In", VariableType::Struct);
+        node.add_output_pin("struct_out", "Struct", "Struct Out", VariableType::Struct)
+        .set_open_schema();
+        node.add_input_pin("struct_in", "Struct", "Struct In", VariableType::Struct)
+        .set_open_schema();
 
         node.add_input_pin(
             "field",

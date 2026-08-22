@@ -17,6 +17,10 @@ use flow_like_types::{Value, create_id, json};
 use futures::stream::{self, StreamExt};
 use utoipa::ToSchema;
 
+/// How long an upload link is worth handing out, before the signing
+/// credential's own lifetime is taken into account. See
+/// [`RuntimeCredentials::signing_ttl`] — the credential, not this constant, is
+/// what decides the deadline the URL actually advertises.
 const UPLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 
 #[derive(Debug, Clone, serde::Deserialize, ToSchema)]
@@ -31,12 +35,13 @@ pub struct UploadFilesPayload {
 async fn sign_uploads(
     store: &FlowLikeStore,
     entries: Vec<(String, flow_like_storage::Path)>,
+    ttl: Duration,
     sub: &str,
     app_id: &str,
 ) -> Vec<Value> {
     stream::iter(entries)
         .map(|(prefix, upload_path)| async move {
-            match store.sign("PUT", &upload_path, UPLOAD_URL_TTL).await {
+            match store.sign("PUT", &upload_path, ttl).await {
                 Ok(url) => json::json!({
                     "prefix": prefix,
                     "url": url.to_string(),
@@ -106,11 +111,13 @@ pub async fn upload_files(
         .await?;
 
     // Azure SAS tokens cannot generate new signed URLs, so use master credentials for Azure
-    let project_dir = if scoped_creds.as_ref().is_azure() {
-        state.master_credentials().await?.to_store(false).await?
+    let signing_creds = if scoped_creds.as_ref().is_azure() {
+        state.master_credentials().await?
     } else {
-        scoped_creds.to_store(false).await?
+        scoped_creds
     };
+    let ttl = signing_creds.signing_ttl(UPLOAD_URL_TTL);
+    let project_dir = signing_creds.to_store(false).await?;
 
     let mut entries = Vec::with_capacity(payload.prefixes.len());
     for prefix in &payload.prefixes {
@@ -119,7 +126,7 @@ pub async fn upload_files(
     }
 
     Ok(Json(
-        sign_uploads(&project_dir, entries, &sub, &app_id).await,
+        sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await,
     ))
 }
 
@@ -164,11 +171,13 @@ pub async fn upload_user_files(
         )
         .await?;
 
-    let project_dir = if scoped_creds.as_ref().is_azure() {
-        state.master_credentials().await?.to_store(false).await?
+    let signing_creds = if scoped_creds.as_ref().is_azure() {
+        state.master_credentials().await?
     } else {
-        scoped_creds.to_store(false).await?
+        scoped_creds
     };
+    let ttl = signing_creds.signing_ttl(UPLOAD_URL_TTL);
+    let project_dir = signing_creds.to_store(false).await?;
 
     let mut entries = Vec::with_capacity(payload.prefixes.len());
     for prefix in &payload.prefixes {
@@ -179,6 +188,6 @@ pub async fn upload_user_files(
     }
 
     Ok(Json(
-        sign_uploads(&project_dir, entries, &sub, &app_id).await,
+        sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await,
     ))
 }

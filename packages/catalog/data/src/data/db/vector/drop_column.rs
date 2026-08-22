@@ -59,7 +59,8 @@ impl NodeLogic for DropColumnLocalDatabaseNode {
             "Schema",
             "Updated database schema",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::db::table_schema::TableSchema>();
 
         node
     }

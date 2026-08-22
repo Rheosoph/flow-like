@@ -52,7 +52,8 @@ impl NodeLogic for CopilotToolConfigNode {
             "Tool parameters JSON schema",
             VariableType::Struct,
         )
-        .set_default_value(Some(json::json!({})));
+        .set_default_value(Some(json::json!({})))
+        .set_open_schema();
 
         node.add_output_pin("tool", "Tool", "Configured tool", VariableType::Struct)
             .set_schema::<CopilotToolConfig>()
