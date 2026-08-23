@@ -728,14 +728,15 @@ export async function executeNodeRuntime(
 	executeBoard: RuntimeBoardState["executeBoard"],
 	args: ExecuteNodeRuntimeArgs,
 ) {
-	const board = await boardState.getBoard(
-		args.appId,
-		args.boardId,
-		undefined,
-		true,
-	);
-	const node = board.nodes[args.nodeId];
-	if (!node) {
+	// The board read only resolves the node's display name and validates the id
+	// early. A caller who may run the board but not read it — the normal shape
+	// of a published app — has no board here; the executor escalates that run
+	// to the server, which resolves the node itself.
+	const board = await boardState
+		.getBoard(args.appId, args.boardId, undefined, true)
+		.catch(() => undefined);
+	const node = board?.nodes[args.nodeId];
+	if (board && !node) {
 		throw new Error(
 			`Node '${args.nodeId}' was not found on board '${args.boardId}'.`,
 		);
@@ -762,7 +763,7 @@ export async function executeNodeRuntime(
 		app_id: args.appId,
 		board_id: args.boardId,
 		node_id: args.nodeId,
-		node_name: node.friendly_name || node.name,
+		node_name: node ? node.friendly_name || node.name : undefined,
 		run_id: metadata?.run_id ?? runId,
 		metadata: compactLogMetadata(metadata),
 		live_event_count: liveEvents.length,

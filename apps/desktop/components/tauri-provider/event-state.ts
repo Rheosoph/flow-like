@@ -1026,12 +1026,32 @@ export class EventState implements IEventState {
 		tokens?: Record<string, IOAuthToken>;
 		missingProviders: IOAuthProvider[];
 	}> {
-		// Get the board for this event
-		const board: IBoard = await invoke("get_board", {
-			appId: appId,
-			boardId: event.board_id,
-			version: event.board_version,
-		});
+		// An event pinned to Remote has no board on this device, and the server
+		// resolves OAuth on its own for runs it hosts.
+		if (event.execution_mode === IEventExecutionMode.Remote) {
+			return { missingProviders: [] };
+		}
+
+		let board: IBoard;
+		try {
+			board = await this.backend.boardState.getBoard(
+				appId,
+				event.board_id,
+				(event.board_version as [number, number, number]) ?? undefined,
+				true,
+			);
+		} catch (error) {
+			// A user who may run an event but not read its board — the normal
+			// shape of a published app — cannot resolve OAuth here and does not
+			// need to: the run is handed to the server, which holds the board.
+			// A local run re-checks OAuth inside executeEvent, so skipping this
+			// preflight never skips the gate.
+			console.warn(
+				"[checkEventOAuth] Board unavailable, skipping local OAuth preflight:",
+				error,
+			);
+			return { missingProviders: [] };
+		}
 
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {

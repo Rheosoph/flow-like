@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { normalizeDatabaseTableIdentifier } from "../lib/database-table-name";
-import { resolveUiInspectWidgetEntries } from "./use-frontend-runtime-tool-executor";
+import {
+	executeNodeRuntime,
+	resolveUiInspectWidgetEntries,
+} from "./use-frontend-runtime-tool-executor";
 
 describe("normalizeDatabaseTableIdentifier", () => {
 	test("keeps valid physical identifiers unchanged", () => {
@@ -80,5 +83,51 @@ describe("resolveUiInspectWidgetEntries", () => {
 		expect(
 			resolveUiInspectWidgetEntries(list, "app-expenses").match,
 		).toBeUndefined();
+	});
+});
+
+/**
+ * A published app's users hold execute permission without board read — the
+ * board is neither on the device nor fetchable. The node run still has to
+ * happen: the executor escalates it to the server, which resolves the node.
+ */
+describe("executeNodeRuntime", () => {
+	const args = { appId: "app-1", boardId: "board-1", nodeId: "node-1" };
+
+	test("runs the node even when the board cannot be read", async () => {
+		const executeBoard = async (
+			_appId: string,
+			_boardId: string,
+			_payload: unknown,
+			_streamState: boolean,
+			onId?: (id: string) => void,
+		) => {
+			onId?.("run-1");
+			return undefined;
+		};
+
+		const result = await executeNodeRuntime(
+			{ getBoard: () => Promise.reject(new Error("forbidden")) } as never,
+			executeBoard as never,
+			args,
+		);
+
+		expect(result.status).toBe("ok");
+		expect(result.run_id).toBe("run-1");
+		expect(result.node_name).toBeUndefined();
+	});
+
+	test("still rejects an unknown node on a readable board", async () => {
+		const executeBoard = async () => {
+			throw new Error("must not execute");
+		};
+
+		await expect(
+			executeNodeRuntime(
+				{ getBoard: () => Promise.resolve({ nodes: {} }) } as never,
+				executeBoard as never,
+				args,
+			),
+		).rejects.toThrow("was not found on board");
 	});
 });
