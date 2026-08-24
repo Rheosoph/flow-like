@@ -195,9 +195,9 @@ function filterSources(hash: string) {   //@l:hoi8axwhzf5rsnqd7f5fadcf
     let elements: Elements[] = []   //@v:a1oam4lr08evh4en1l0uiu6b
     elements = []   //@n:jogjrym9t2ckqc7lefcn1lrw
     for (const item3 of userConfiguration.sources) {   //@n:oeymidn9082x3mm0lktcdg4y
-        const { hash: hash2 } = md5({ input: item3.content })   //@n:f4ke1z1vfuzkjnwo29xvghxy
+        const hash2 = md5({ input: item3.content })   //@n:f4ke1z1vfuzkjnwo29xvghxy
         if (hash != hash2) {   //@n:sv415xl87fy0awvlpif045dh
-            const { arrayOut: arrayOut3 } = elements.push(item3)   //@n:oq8idmw577alcusz7tt73f2d
+            const arrayOut3 = elements.push(item3)   //@n:oq8idmw577alcusz7tt73f2d
             elements = arrayOut3   //@n:mo4qljck5gzmy7dnhjjz8oaz
         }
     }
@@ -209,21 +209,21 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
     log::info({ message: source, toast: false })   //@n:kmnq9axj91191hj4dhri2kn0
     label = source.label   //@n:vmsn1tvdsgy5awzat1onblqk
     if (source.type == "Search") {   //@n:yp9yatv5kw64ialzmx14g0lz
-        const { historyOut: historyOut3 } = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))   //@n:m61srpwfgpw0e3b3jgt2yahv
+        const historyOut3 = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))   //@n:m61srpwfgpw0e3b3jgt2yahv
         const { stats: stats2 } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [search, fetchPage, addNews] }).invoke(historyOut3)   //@n:ipq19pcofpgvjfneot279qfq
         pushStat({ stepName: source.label, stat: stats2 })   //@n:p9iba145p9uamrftvnhk0eel
     } else {
-        const { response } = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()   //@n:nzij3qvr1wfrjc9htrlxa2cn
-        const { text: text2 } = response.toText()   //@n:qd4o2qqa0hu8ce5juxzq4zk6
-        const { date: date4 } = now()   //@n:mw87b8svsezs8f2540idrp11
+        const response = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()   //@n:nzij3qvr1wfrjc9htrlxa2cn
+        const text2 = response.toText()   //@n:qd4o2qqa0hu8ce5juxzq4zk6
+        const date4 = now()   //@n:mw87b8svsezs8f2540idrp11
         if (filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems.length > 0) {   //@n:tkbjwinvzjuhdad10tvd7r0p
-            const { historyOut } = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems }) }))   //@n:ceatqefijmyfzvfb59ninb6h
+            const historyOut = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems }) }))   //@n:ceatqefijmyfzvfb59ninb6h
             const { stats } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [fetchPage, addNews] }).invoke(historyOut)   //@n:e8uj88d24q9xipxgczs1ktio
             pushStat({ stepName: source.label, stat: stats })   //@n:i21zjcs446mtx5m26ae2mvpu
         }
     }
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
-        const { arrayOut: arrayOut2 } = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
+        const arrayOut2 = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
         reportEntry = arrayOut2   //@n:l2fh63vjftwrfgsrqmzlcl0y
         return `Successfully Added`   //@n:ia430e904bgj81jzpeh2plyf
     }
@@ -232,8 +232,8 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
         const aPICall = request({ method: "GET", url: url }).fetch()   //@n:det2l9brnyojanawng1zvj6x
         aPICall {
             execSuccess: {
-                const { text } = aPICall.response.toText()   //@n:idbdkfu6b8jq6eovcn9fqgw0
-                const { markdown } = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })   //@n:b10najenij7p74aebpgfb107
+                const text = aPICall.response.toText()   //@n:idbdkfu6b8jq6eovcn9fqgw0
+                const markdown = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })   //@n:b10najenij7p74aebpgfb107
                 return markdown   //@n:rl6l97y8l3h2yjo7j8cnr0rq
             }
             execError: {
@@ -246,7 +246,7 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
         const aPICall3 = request({ method: "GET", url: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}".format({ page: page.fallback(1).result, lang: language.fallback("en-US").result, q: urlEncode({ input: query }) }) }).fetch()   //@n:yvrx5rql2ap186ojffngs067
         aPICall3 {
             execSuccess: {
-                const { struct: struct2 } = aPICall3.response.toJson()   //@n:b6adf2qe4yg3ejon9sigwm0i
+                const struct2 = aPICall3.response.toJson()   //@n:b6adf2qe4yg3ejon9sigwm0i
                 return struct2   //@n:xyos4tlvpfkx2wfhhytxorop
             }
             execError: {
@@ -261,28 +261,28 @@ function saveConfig(config: Struct) {   //@l:ssdi5toh4f9nza4w0a35p3rt
 }
 
 eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
-    const { database: database2 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
-    const { session: session2 } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
+    const database2 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
+    const session2 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
     session2.registerLance({ database: database2, tableName: "reports" })   //@n:hiopuc2c1i4f3gvgzfpjmygn
     const { rows: rows2 } = session2.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })   //@n:u62nc1zm4i39z61uv1gpea8c
     navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })   //@n:kngou6wcb3yk0b89zop3bbl0
 }
 
 eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
-    const { database } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
-    const { session } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
+    const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
+    const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
     session.registerLance({ database: database, tableName: "reports" })   //@n:n6dh9c7lm3xi6l2abxmf36ik
     const { rows: rows3 } = session.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })   //@n:xt3at38ofd71hzdw2spsjftu
     setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: "{num} Briefing(s)".format({ num: rows3.length }) })   //@n:nfurt08eliw4h6jl9oz6vb8q
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: rows3[0].title })   //@n:szjhznefdjy7k5pw7fpzftgb
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: rows3[0].description })   //@n:q62hurliutk42ygbn3c6dh5l
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: format({ date: rows3[0].created, format: "%A, %B %-d, %Y" }) })   //@n:lvfexsdysfpcipkhxgzwmkyk
-    const { date: date6 } = now()   //@n:xv4ih0xfvry8j90a0lhbr0te
+    const date6 = now()   //@n:xv4ih0xfvry8j90a0lhbr0te
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: date6.format("%A, %B %-d, %Y") })   //@n:ccesyi9dsgwrngkz6xw00sib
     clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })   //@n:wwwbru83ooqgwier1j533qdl
     for (const [index, item2] of rows3) {   //@n:mdaixcpu3wdlq45ra56uu0qo
         if (index > 0) {   //@n:ottdsy7nj4w6v0xw1d7lk79z
-            const { elementRef: elementRef2 } = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })   //@n:dp0o5wfagxzaz0trwmemw3uu
+            const elementRef2 = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })   //@n:dp0o5wfagxzaz0trwmemw3uu
             pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef2, position: -1 })   //@n:dkkd7mm8ti115zvm66t1349w
         }
     }
@@ -295,7 +295,7 @@ eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string
 
 eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
     if (exists({ path: userDir({ nodeScope: false }).child("config.json") })) { // exec_out_exists   //@n:c3yjqmja8bew8bt8qov3o4m9
-        const { content } = userDir({ nodeScope: false }).child("config.json").readToString()   //@n:gs15p43h9q8ij93r0yiy75ae
+        const content = userDir({ nodeScope: false }).child("config.json").readToString()   //@n:gs15p43h9q8ij93r0yiy75ae
         userConfiguration = parse({ string: content })   //@n:g9y2k569dbrivxfc15r7d95v
     } else { // exec_out_missing
         userConfiguration = { general: { arXiv: false, hn: false, news: false }, sources: [] }   //@n:lkfs3rjbb1l0r2wpsruh0i9z
@@ -304,25 +304,25 @@ eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
 }
 
 eventsSimple generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
-    const { model: model2 } = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
+    const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
     model = model2   //@n:y563bdthcxcs4hkac7wp12bn
-    const { cuid: cuid3 } = cuid()   //@n:o1ortq2qc4bky6lvb90iekj0
+    const cuid3 = cuid()   //@n:o1ortq2qc4bky6lvb90iekj0
     reportID = cuid3   //@n:nn1g4pqsadqum4yr0ah8hp0i
-    const { database: database3 } = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:q9efkxbqdi6u04rqncnqaoyf
+    const database3 = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:q9efkxbqdi6u04rqncnqaoyf
     reportDB = database3   //@n:x29mzdl1orralbroofrfabih
     loadConfig()   //@n:w12o6fz0k2xco3pe3jalmaty
-    const { date: date2 } = now()   //@n:bmb70c0rnoa7fisa0ti9mv5g
-    const { historyOut: historyOut5 } = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))   //@n:uow7mjbghdvwiclhahtm27ys
+    const date2 = now()   //@n:bmb70c0rnoa7fisa0ti9mv5g
+    const historyOut5 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))   //@n:uow7mjbghdvwiclhahtm27ys
     rSSHistory = historyOut5   //@n:es62kvohohwa4569k9sj8nol
-    const { historyOut: historyOut4 } = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))   //@n:osipofe4ux5vg2a9r3491yjv
+    const historyOut4 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))   //@n:osipofe4ux5vg2a9r3491yjv
     searchHistory = historyOut4   //@n:hd7t7qimvpmvog8wyk4ro0lz
-    const { date: date5 } = now()   //@n:o6o3eahhw1y22r2xys4cekxj
+    const date5 = now()   //@n:o6o3eahhw1y22r2xys4cekxj
     for (const parallelForEach2 of parallelForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {   //@n:mg9afo8j3iouifkp4f204jbe
         perpareNews({ source: parallelForEach2.value })   //@n:s8kbh3fipnmzdvg77v3i56f4
     }
     reportDB.batchInsert(reportEntry)   //@n:bmxguigo7uebsql0qmjbee3w
-    const { historyOut: historyOut6 } = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")   //@n:wja9hj3m4cj3akx299qv0l1j
-    const { historyOut: historyOut2 } = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date5 }) }))   //@n:cnjm7p8qvitw1uujn0m77swz
+    const historyOut6 = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")   //@n:wja9hj3m4cj3akx299qv0l1j
+    const historyOut2 = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date5 }) }))   //@n:cnjm7p8qvitw1uujn0m77swz
     const { stats: stats3 } = fromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [writeReport] }).invoke(historyOut2)   //@n:xmkaaite5b89sqjmm76rm9bs
     pushStat({ stepName: "Briefing", stat: stats3 })   //@n:wpz4z5uik2f28nf4ymlw8wcn
 }
@@ -333,7 +333,7 @@ eventsSimple simpleEvent() {   //@n:vnb84qc8e5e3sfz2oe0ltwo7
 
 eventsSimple setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     loadConfig()   //@n:x2zjntfxkcmuozxqjg17s7mw
-    const { arrayOut } = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })   //@n:aabbfwmtsy6qwe4in41kp9b5
+    const arrayOut = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })   //@n:aabbfwmtsy6qwe4in41kp9b5
     userConfiguration = { general: userConfiguration.general, sources: arrayOut }   //@n:zrz69ge5y0gc7yoxf4pggnza
     saveConfig({ config: userConfiguration })   //@n:dolfpjyy08hukrzkfy56t4yi
     loadConfigDashboard()   //@n:flak8id73uvvv8rtoq9rqvi3
@@ -343,8 +343,8 @@ eventsSimple loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
     clearChildren({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })   //@n:ub0bgb5wpynm6yr5jipyfr6q
     loadConfig()   //@n:yu47nfi83y7o1gw30y43kx40
     for (const item4 of userConfiguration.sources) {   //@n:xy143hbqc8n42y6oj5fitzbz
-        const { hash: hash3 } = md5({ input: item4.content })   //@n:v78kxflsekh1el3nmo4t2lpt
-        const { elementRef } = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })   //@n:ai58ul4gl4bgfvtyiq3fmxbw
+        const hash3 = md5({ input: item4.content })   //@n:v78kxflsekh1el3nmo4t2lpt
+        const elementRef = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })   //@n:ai58ul4gl4bgfvtyiq3fmxbw
         pushChild({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: elementRef })   //@n:eurx9h0tte19xbi7vgutysak
     }
 }
@@ -353,8 +353,8 @@ eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     const { value, exists: exists2 } = getQueryParam({ paramName: "report_id" })   //@n:b1nflz22aqijhrfjcflily63
     if (exists2) {   //@n:mpv7ra68y2rhmvi7nbkb6oim
         if (parallel({ threadModel: "tasks" })) { // exec_out   //@n:eobh50rj59v0xo70mlc7o7mp
-            const { database: database4 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:r4e5rd12y3q9739ekqnrczb4
-            const { values } = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })   //@n:uw95hamks43awllq55e8xpgx
+            const database4 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:r4e5rd12y3q9739ekqnrczb4
+            const values = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })   //@n:uw95hamks43awllq55e8xpgx
             if (values.get(0).success) {   //@n:zlg546ynwdwucsqgt23tv2b0
                 setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: values[0].report_id })   //@n:bul42ywazmy0ttpm60vjvw8f
                 setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: format({ date: values[0].created, format: "%A, %B %-d, %Y" }) })   //@n:ryzpm49zr5pwim8t3xi5lb22
@@ -363,14 +363,14 @@ eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
             }
         } else { // exec_out[#2]
             clearChildren({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })   //@n:i3pijb894g70u3iiiqlr4d3h
-            const { database: database5 } = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:r4uu3hszndilivnipjor4xbt
-            const { session: session3 } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:k0ii91rv27455pb7tpjzfqax
+            const database5 = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:r4uu3hszndilivnipjor4xbt
+            const session3 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:k0ii91rv27455pb7tpjzfqax
             session3.registerLance({ database: database5, tableName: "reports" })   //@n:ynbydo8tsnjpk5z0mo4lty48
             const { rows, rowCount } = session3.sqlQuery({ query: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;".format({ id: value }) })   //@n:dpukvyi7s2i8814rznrdjspo
             setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: "{cnt} Stories".format({ cnt: rowCount }) })   //@n:j65crp36fsk937g3d3gc11u1
             for (const item of rows) {   //@n:kww9p0cl3ajziwoef49qi5hp
-                const { cuid: cuid2 } = cuid()   //@n:h4ebqjzraxsrp40pahtazohg
-                const { elementRef: elementRef3 } = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })   //@n:nprn90lsy7kb0eigzv068ogy
+                const cuid2 = cuid()   //@n:h4ebqjzraxsrp40pahtazohg
+                const elementRef3 = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })   //@n:nprn90lsy7kb0eigzv068ogy
                 pushToContainer({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: elementRef3, position: -1 })   //@n:fw3bozmoj4gcjksjuqe7ec79
             }
         }
@@ -385,13 +385,13 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
         return `Already created a report`   //@n:rkd57x855lzb6sr1lyatwt2h
     } else {
         reportCreated = true   //@n:c3z9pjjhjpy4njl7v5pl1exk
-        const { date: date3 } = now()   //@n:ijrzyi85455n11q11zjlins6
+        const date3 = now()   //@n:ijrzyi85455n11q11zjlins6
         let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
         record.title = title   //@n:xw6ifsysoanbo9ka83d72cpt
         record.report = report   //@n:udwegq14u2johkogeuk3etlm
         record.description = shortSummary   //@n:g4msinux2ooq26k7tk6hdvss
         record.report_id = reportID   //@n:l3uwlikddjsnscukz2cfu8ll
-        const { database: database6 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
+        const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
         database6.insertOne(record)   //@n:fqn428vwps1mlqa5qqa5ttbm
         user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q
         return `Successfully created Report. You are done now!`   //@n:u44suc8lkffroaz9f30waxaf

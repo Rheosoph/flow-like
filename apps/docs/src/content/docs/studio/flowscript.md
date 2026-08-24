@@ -48,8 +48,8 @@ function saveConfig(config: Struct) {
 }
 
 eventsSimple clickLatestOverview() {
-    const { database } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const { session } = df::createSession({ sessionName: "default" })
+    const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const session = df::createSession({ sessionName: "default" })
     session.registerLance({ database: database, tableName: "reports" })
     const { rows } = session.sqlQuery({ query: "SELECT report_id FROM reports ORDER BY created DESC LIMIT 1;" })
     navigateTo({ route: `/briefing?report_id=${rows[0].report_id}` })
@@ -66,9 +66,9 @@ Every catalog node has a **namespace** and an **alias**. A call is the qualified
 an object whose keys are the node's exact input pin names:
 
 ```ts
-const { hash } = hash::md5({ input: item.content })
+const hash = hash::md5({ input: item.content })
 log::info({ message: source, toast: false })
-const { markdown } = md::fromHtml({ html: text, skippedTags: ["script", "style"] })
+const markdown = md::fromHtml({ html: text, skippedTags: ["script", "style"] })
 ```
 
 `::` separates namespace segments; `.` is field or method access on a *value*. The same node can
@@ -86,7 +86,7 @@ the namespace's own value type (`string`, `int`, `float`, `bool`, `array`, `map`
 when exactly one input remains it may be passed positionally:
 
 ```ts
-const { arrayOut } = elements.push(item)
+const arrayOut = elements.push(item)
 const label = "Topic {label}\nGoal: {Goal}".format({ goal: source.goal, label: source.label })
 setElementText({ elementRef: "page/generated-date", text: date.format("%A, %B %-d, %Y") })
 if (values.get(0).success) { … }
@@ -96,18 +96,19 @@ Numeric literal receivers need parentheses (`(5).abs()`), exactly as in JavaScri
 
 ### Outputs
 
-A call expression evaluates to the node's default output. Pick other outputs by pin name, either
-through destructuring or field access:
+A call expression evaluates to the node's default output. A node with a single data output is
+the value itself; pick outputs of a multi-output node by pin name, either through destructuring
+or field access:
 
 ```ts
-const { hash: hash2 } = md5({ input: item3.content })
+const hash2 = md5({ input: item3.content })
 const { rows, rowCount } = sqlQuery({ session: session3, query: "SELECT …" })
 const { value, exists } = getQueryParams({ paramName: "report_id" })
 const aPICall = fetch({ request: makeRequest({ method: "GET", url: url }) })
-const { text } = responseToText({ response: aPICall.response })
+const text = responseToText({ response: aPICall.response })
 ```
 
-Destructuring renames with `pin: local` (`{ hash: hash2 }`); a binding used as a whole value
+Destructuring renames with `pin: local` (`{ value: reportId }`); a binding used as a whole value
 (`aPICall`) is the node's default output and still exposes every pin as a field.
 
 ## `use`
@@ -172,7 +173,7 @@ execution pin the branch follows:
 ```ts
 aPICall {
     execSuccess: {
-        const { text } = responseToText({ response: aPICall.response })
+        const text = responseToText({ response: aPICall.response })
         return text
     }
     execError: {
@@ -181,7 +182,7 @@ aPICall {
 }
 
 if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
-    const { content } = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
+    const content = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
     userConfiguration = fromString({ string: content })
 } else { // exec_out_missing
     userConfiguration = { general: { arXiv: false, hn: false, news: false }, sources: [] }
@@ -195,9 +196,9 @@ if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false })
 function filterSources(hash: string) {
     let elements: Elements[] = []
     for (const item3 of userConfiguration.sources) {
-        const { hash: hash2 } = md5({ input: item3.content })
+        const hash2 = md5({ input: item3.content })
         if (hash != hash2) {
-            const { arrayOut: arrayOut3 } = elements.push(item3)
+            const arrayOut3 = elements.push(item3)
             elements = arrayOut3
         }
     }

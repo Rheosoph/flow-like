@@ -947,7 +947,7 @@ mod lower_tests {
         );
         assert!(matches!(
             &function.body.stmts[1],
-            Stmt::Destructure {
+            Stmt::Let {
                 anchor: Some(anchor),
                 ..
             } if anchor == "query"
@@ -961,7 +961,7 @@ mod lower_tests {
                 ..Default::default()
             },
         );
-        let branch_end = text.find("    const { rows } = ").expect("top-level query");
+        let branch_end = text.find("    const rows = ").expect("top-level query");
         let return_start = text.find("    return rows").expect("return query rows");
         assert!(
             branch_end < return_start,

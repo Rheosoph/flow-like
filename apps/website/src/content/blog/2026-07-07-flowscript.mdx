@@ -35,9 +35,9 @@ Logic reads like code, too. Here's a real event from a test board — a `for…o
 
 ```typescript
 eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {
-    const { session } = createSession({ sessionName: "default", batchSize: 8192 })
+    const session = createSession({ sessionName: "default", batchSize: 8192 })
     for (const item of tables) {
-        const { database } = openLocalDb({ name: item, userScoped: true, batchSize: 1000 })
+        const database = openLocalDb({ name: item, userScoped: true, batchSize: 1000 })
         registerLance({ session: session, database: database, tableName: item })
     }
     const { rows } = sqlQuery({ session: session, query: query })
@@ -45,7 +45,7 @@ eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {
 }
 ```
 
-Node outputs are destructured by pin name (`const { session } = …`, `const { rows } = …`), or read as field access on the binding (`result.rows`). Branching nodes open a block per execution pin. And there's syntactic sugar for the thing everyone does constantly — building up a struct field by field:
+A call with a single data output is the value itself (`const session = …`); multi-output nodes are destructured by pin name (`const { rows } = …`) or read as field access on the binding (`result.rows`). Branching nodes open a block per execution pin. And there's syntactic sugar for the thing everyone does constantly — building up a struct field by field:
 
 ```typescript
 let record = struct::set({ structIn: {}, field: "files", value: paths }).structOut
@@ -65,7 +65,7 @@ A text ⇄ graph round-trip is easy to get subtly wrong, so FlowScript is built 
 **1. Every node has an anchor.** In the editable view, each statement carries a trailing comment that is the node's stable identity:
 
 ```typescript
-const { date } = now()   //@n:j37yxnwykc08y10reikmija1
+const date = now()   //@n:j37yxnwykc08y10reikmija1
 attachedFiles = {}       //@n:xal689cwuihke7lvj801euk9
 ```
 

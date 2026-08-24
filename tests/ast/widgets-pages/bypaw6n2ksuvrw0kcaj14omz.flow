@@ -195,9 +195,9 @@ function filterSources(hash: string) {
     let elements: Elements[] = []
     elements = []
     for (const item3 of userConfiguration.sources) {
-        const { hash: hash2 } = md5({ input: item3.content })
+        const hash2 = md5({ input: item3.content })
         if (hash != hash2) {
-            const { arrayOut: arrayOut3 } = elements.push(item3)
+            const arrayOut3 = elements.push(item3)
             elements = arrayOut3
         }
     }
@@ -209,21 +209,21 @@ function perpareNews(source: Struct) {
     log::info({ message: source, toast: false })
     label = source.label
     if (source.type == "Search") {
-        const { historyOut: historyOut3 } = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))
+        const historyOut3 = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))
         const { stats: stats2 } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [search, fetchPage, addNews] }).invoke(historyOut3)
         pushStat({ stepName: source.label, stat: stats2 })
     } else {
-        const { response } = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()
-        const { text: text2 } = response.toText()
-        const { date: date4 } = now()
+        const response = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()
+        const text2 = response.toText()
+        const date4 = now()
         if (filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems.length > 0) {
-            const { historyOut } = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems }) }))
+            const historyOut = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems }) }))
             const { stats } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [fetchPage, addNews] }).invoke(historyOut)
             pushStat({ stepName: source.label, stat: stats })
         }
     }
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {
-        const { arrayOut: arrayOut2 } = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })
+        const arrayOut2 = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })
         reportEntry = arrayOut2
         return `Successfully Added`
     }
@@ -232,8 +232,8 @@ function perpareNews(source: Struct) {
         const aPICall = request({ method: "GET", url: url }).fetch()
         aPICall {
             execSuccess: {
-                const { text } = aPICall.response.toText()
-                const { markdown } = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })
+                const text = aPICall.response.toText()
+                const markdown = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })
                 return markdown
             }
             execError: {
@@ -246,7 +246,7 @@ function perpareNews(source: Struct) {
         const aPICall3 = request({ method: "GET", url: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}".format({ page: page.fallback(1).result, lang: language.fallback("en-US").result, q: urlEncode({ input: query }) }) }).fetch()
         aPICall3 {
             execSuccess: {
-                const { struct: struct2 } = aPICall3.response.toJson()
+                const struct2 = aPICall3.response.toJson()
                 return struct2
             }
             execError: {
@@ -261,28 +261,28 @@ function saveConfig(config: Struct) {
 }
 
 eventsSimple clickLatestOverview() {
-    const { database: database2 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const { session: session2 } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    const database2 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const session2 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     session2.registerLance({ database: database2, tableName: "reports" })
     const { rows: rows2 } = session2.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })
     navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })
 }
 
 eventsSimple loadOverview() {
-    const { database } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const { session } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     session.registerLance({ database: database, tableName: "reports" })
     const { rows: rows3 } = session.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })
     setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: "{num} Briefing(s)".format({ num: rows3.length }) })
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: rows3[0].title })
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: rows3[0].description })
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: format({ date: rows3[0].created, format: "%A, %B %-d, %Y" }) })
-    const { date: date6 } = now()
+    const date6 = now()
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: date6.format("%A, %B %-d, %Y") })
     clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
     for (const [index, item2] of rows3) {
         if (index > 0) {
-            const { elementRef: elementRef2 } = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })
+            const elementRef2 = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })
             pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef2, position: -1 })
         }
     }
@@ -295,7 +295,7 @@ eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string
 
 eventsSimple loadConfig() {
     if (exists({ path: userDir({ nodeScope: false }).child("config.json") })) { // exec_out_exists
-        const { content } = userDir({ nodeScope: false }).child("config.json").readToString()
+        const content = userDir({ nodeScope: false }).child("config.json").readToString()
         userConfiguration = parse({ string: content })
     } else { // exec_out_missing
         userConfiguration = { general: { arXiv: false, hn: false, news: false }, sources: [] }
@@ -304,25 +304,25 @@ eventsSimple loadConfig() {
 }
 
 eventsSimple generateFeed() {
-    const { model: model2 } = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
+    const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
     model = model2
-    const { cuid: cuid3 } = cuid()
+    const cuid3 = cuid()
     reportID = cuid3
-    const { database: database3 } = open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const database3 = open({ name: "reports", userScoped: true, batchSize: 1000 })
     reportDB = database3
     loadConfig()
-    const { date: date2 } = now()
-    const { historyOut: historyOut5 } = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))
+    const date2 = now()
+    const historyOut5 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))
     rSSHistory = historyOut5
-    const { historyOut: historyOut4 } = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))
+    const historyOut4 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))
     searchHistory = historyOut4
-    const { date: date5 } = now()
+    const date5 = now()
     for (const parallelForEach2 of parallelForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {
         perpareNews({ source: parallelForEach2.value })
     }
     reportDB.batchInsert(reportEntry)
-    const { historyOut: historyOut6 } = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")
-    const { historyOut: historyOut2 } = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date5 }) }))
+    const historyOut6 = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")
+    const historyOut2 = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date5 }) }))
     const { stats: stats3 } = fromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [writeReport] }).invoke(historyOut2)
     pushStat({ stepName: "Briefing", stat: stats3 })
 }
@@ -333,7 +333,7 @@ eventsSimple simpleEvent() {
 
 eventsSimple setupNewElement() {
     loadConfig()
-    const { arrayOut } = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })
+    const arrayOut = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })
     userConfiguration = { general: userConfiguration.general, sources: arrayOut }
     saveConfig({ config: userConfiguration })
     loadConfigDashboard()
@@ -343,8 +343,8 @@ eventsSimple loadConfigDashboard() {
     clearChildren({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })
     loadConfig()
     for (const item4 of userConfiguration.sources) {
-        const { hash: hash3 } = md5({ input: item4.content })
-        const { elementRef } = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })
+        const hash3 = md5({ input: item4.content })
+        const elementRef = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })
         pushChild({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: elementRef })
     }
 }
@@ -353,8 +353,8 @@ eventsSimple showBriefing() {
     const { value, exists: exists2 } = getQueryParam({ paramName: "report_id" })
     if (exists2) {
         if (parallel({ threadModel: "tasks" })) { // exec_out
-            const { database: database4 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
-            const { values } = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })
+            const database4 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+            const values = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })
             if (values.get(0).success) {
                 setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: values[0].report_id })
                 setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: format({ date: values[0].created, format: "%A, %B %-d, %Y" }) })
@@ -363,14 +363,14 @@ eventsSimple showBriefing() {
             }
         } else { // exec_out[#2]
             clearChildren({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })
-            const { database: database5 } = open({ name: "reports", userScoped: true, batchSize: 1000 })
-            const { session: session3 } = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+            const database5 = open({ name: "reports", userScoped: true, batchSize: 1000 })
+            const session3 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
             session3.registerLance({ database: database5, tableName: "reports" })
             const { rows, rowCount } = session3.sqlQuery({ query: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;".format({ id: value }) })
             setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: "{cnt} Stories".format({ cnt: rowCount }) })
             for (const item of rows) {
-                const { cuid: cuid2 } = cuid()
-                const { elementRef: elementRef3 } = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })
+                const cuid2 = cuid()
+                const elementRef3 = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })
                 pushToContainer({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: elementRef3, position: -1 })
             }
         }
@@ -385,13 +385,13 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
         return `Already created a report`
     } else {
         reportCreated = true
-        const { date: date3 } = now()
+        const date3 = now()
         let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut
         record.title = title
         record.report = report
         record.description = shortSummary
         record.report_id = reportID
-        const { database: database6 } = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+        const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
         database6.insertOne(record)
         user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })
         return `Successfully created Report. You are done now!`

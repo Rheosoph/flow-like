@@ -17906,21 +17906,20 @@ function constantFlag(): (flag: bool) {
         .expect("loop accumulator script applies");
         assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
 
-        // The lowerer names the destructured output after the pin, not after the binding the
+        // The lowerer names the single-output binding after the pin, not after the binding the
         // script authored, so find the accumulator's rendered name instead of assuming the
         // authored one survived.
         let text = anchored_text(&board);
         let local = text
             .lines()
             .find_map(|line| {
-                let (pattern, call) = line.trim().strip_prefix("const { ")?.split_once(" } = ")?;
-                if !call.starts_with("items.push(") {
+                let (name, call) = line.trim().strip_prefix("const ")?.split_once(" = ")?;
+                if name.contains('{') || !call.starts_with("items.push(") {
                     return None;
                 }
-                let (_, name) = pattern.split_once(": ").unwrap_or((pattern, pattern));
                 Some(name.to_string())
             })
-            .unwrap_or_else(|| panic!("the accumulator must lower as a destructured binding inside the loop body:\n{text}"));
+            .unwrap_or_else(|| panic!("the accumulator must lower as a pin-named binding inside the loop body:\n{text}"));
         assert!(
             text.contains(&format!("return {local}")),
             "the lowered board must still read the loop-local accumulator:\n{text}"
@@ -27196,7 +27195,7 @@ eventsSimple() {
         };
         let text = super::super::board_to_flowscript(&board, &anchored);
         assert!(
-            text.contains("const { path } = data::makeData()")
+            text.contains("const path = data::makeData()")
                 && text.contains("debug::log({ text: `Path ${path} missing` })"),
             "{text}"
         );

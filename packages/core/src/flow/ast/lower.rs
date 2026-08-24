@@ -517,7 +517,8 @@ struct Lowering<'a> {
     struct_accumulators: HashMap<String, String>,
     /// node id -> the consumed outputs of a binding rendered as `const { pin, … } = call(...)`.
     destructured: HashMap<String, Vec<DestructureField>>,
-    /// output pin id -> the bare local a destructured binding exposes it as.
+    /// output pin id -> the bare local its read renders as: a destructured binding's local, or
+    /// the pin-named binding of a single-data-output value.
     destructure_locals: HashMap<&'a str, String>,
     /// Lowercase names every minted binding must avoid.
     reserved: HashSet<String>,
@@ -755,12 +756,15 @@ impl<'a> Lowering<'a> {
         self.used_names = used_names;
     }
 
-    /// Pre-pass: render a binding as `const { pin, … } = call(...)` when every read of it
-    /// selects an output (`b.pin`) and nothing needs the binding as a whole value — it is not a
-    /// branch handle (`b { execSuccess: … }`), not a loop handle, not referenced by `tools:` /
-    /// `fnRef`, and not one of the statement sugars (`structSet` accumulators, assignments,
-    /// returns) or an event/handler header. Each consumed output becomes a bare local named
-    /// after the pin; the `pin: local` form renames it when the pin name is already taken.
+    /// Pre-pass over bindings whose reads only select outputs (`b.pin`) and which nothing needs
+    /// as a whole value — not a branch handle (`b { execSuccess: … }`), not a loop handle, not
+    /// referenced by `tools:` / `fnRef`, and not one of the statement sugars (`structSet`
+    /// accumulators, assignments, returns) or an event/handler header. A node with exactly one
+    /// data output is a value, not an object: it keeps the plain `const name = call(...)` form,
+    /// renamed after its output pin (`const date = datetime::now()`), and reads render as the
+    /// bare binding. Nodes with two or more data outputs render as
+    /// `const { pin, … } = call(...)`; each consumed output becomes a bare local named after
+    /// the pin, and the `pin: local` form renames it when the pin name is already taken.
     fn assign_destructures(
         &mut self,
         function_nodes: &HashMap<&'a str, Vec<&'a Node>>,
@@ -806,7 +810,7 @@ impl<'a> Lowering<'a> {
             .filter_map(|id| self.nodes_by_id.get(id.as_str()).copied())
             .collect();
         bound.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut candidates: Vec<(&'a Node, Vec<&'a Pin>)> = Vec::new();
+        let mut candidates: Vec<(&'a Node, Vec<&'a Pin>, bool)> = Vec::new();
         for node in bound {
             if headers.contains(node.id.as_str())
                 || referenced.contains(node.id.as_str())
@@ -829,24 +833,47 @@ impl<'a> Lowering<'a> {
                 })
                 .collect();
             outputs.sort_by_key(|p| (p.index, p.id.as_str()));
-            if outputs.is_empty()
-                || outputs
+            if outputs.is_empty() {
+                continue;
+            }
+            let single_output = node
+                .pins
+                .values()
+                .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+                .count()
+                == 1;
+            if !single_output
+                && outputs
                     .iter()
                     .any(|pin| !is_valid_identifier(&util::to_camel_case(&pin.name)))
             {
                 continue;
             }
-            candidates.push((node, outputs));
+            candidates.push((node, outputs, single_output));
         }
 
         // The handle name is no longer rendered: release it so a local may take it.
         let mut used_names = std::mem::take(&mut self.used_names);
-        for (node, _) in &candidates {
+        for (node, _, _) in &candidates {
             if let Some(name) = self.bindings.remove(&node.id) {
                 used_names.remove(&name.to_lowercase());
             }
         }
-        for (node, outputs) in candidates {
+        for (node, outputs, single_output) in candidates {
+            if single_output {
+                let pin = outputs[0];
+                let base = util::to_camel_case(&pin.name);
+                let base = if is_valid_identifier(&base) && !flow_like_ast::is_keyword(&base) {
+                    base
+                } else {
+                    binding_base_name(node)
+                };
+                let name = unique_name(&base, &mut used_names);
+                self.destructure_locals
+                    .insert(pin.id.as_str(), name.clone());
+                self.bindings.insert(node.id.clone(), name);
+                continue;
+            }
             let fields: Vec<DestructureField> = outputs
                 .iter()
                 .map(|pin| {
@@ -3854,8 +3881,8 @@ mod rendering_tests {
         assert_eq!(text.matches("s.trim()").count(), 2, "{text}");
     }
 
-    /// event(hash) → md5(event.s) consumed twice.
-    fn hash_board(with_param: bool) -> Board {
+    /// event(hash) → md5(event.s) consumed twice; `multi_output` adds the `length` output.
+    fn hash_board(with_param: bool, multi_output: bool) -> Board {
         let mut board = board();
         let params: &[(&str, VariableType)] = if with_param {
             &[("s", VariableType::String), ("hash", VariableType::String)]
@@ -3869,7 +3896,9 @@ mod rendering_tests {
         md5.add_input_pin("input", "Input", "", VariableType::String);
         md5.add_output_pin("exec_out", "Out", "", VariableType::Execution);
         md5.add_output_pin("hash", "Hash", "", VariableType::String);
-        md5.add_output_pin("length", "Length", "", VariableType::Integer);
+        if multi_output {
+            md5.add_output_pin("length", "Length", "", VariableType::Integer);
+        }
         add(&mut board, md5);
         add(&mut board, log("log"));
         add(&mut board, log("log2"));
@@ -3878,24 +3907,39 @@ mod rendering_tests {
         wire(&mut board, ("md5", "exec_out"), ("log", "exec_in"));
         wire(&mut board, ("log", "exec_out"), ("log2", "exec_in"));
         wire(&mut board, ("md5", "hash"), ("log", "message"));
-        wire(&mut board, ("md5", "length"), ("log2", "message"));
+        if multi_output {
+            wire(&mut board, ("md5", "length"), ("log2", "message"));
+        } else {
+            wire(&mut board, ("md5", "hash"), ("log2", "message"));
+        }
         board
     }
 
     #[test]
     fn field_reads_destructure_the_binding() {
-        let board = hash_board(false);
-        let text = text(&board);
+        let board = hash_board(false, false);
+        let single = text(&board);
         assert!(
-            text.contains("    const { hash, length } = s.stats()\n    info({ message: hash })\n    info({ message: length })\n"),
-            "{text}"
+            single.contains(
+                "    const hash = s.stats()\n    info({ message: hash })\n    info({ message: hash })\n"
+            ),
+            "a single-output node is a value, not an object:\n{single}"
+        );
+        assert!(!single.contains("const {"), "{single}");
+        assert_roundtrip(&board);
+
+        let board = hash_board(false, true);
+        let multi = text(&board);
+        assert!(
+            multi.contains("    const { hash, length } = s.stats()\n    info({ message: hash })\n    info({ message: length })\n"),
+            "{multi}"
         );
         assert_roundtrip(&board);
     }
 
     #[test]
     fn destructured_pin_colliding_with_a_param_is_renamed() {
-        let board = hash_board(true);
+        let board = hash_board(true, true);
         let text = text(&board);
         assert!(
             text.contains("const { hash: hash2, length } = s.stats()"),
@@ -3906,8 +3950,25 @@ mod rendering_tests {
     }
 
     #[test]
+    fn single_output_binding_is_named_after_its_pin() {
+        let board = hash_board(false, false);
+        let plain = text(&board);
+        assert!(plain.contains("const hash = s.stats()"), "{plain}");
+        assert_roundtrip(&board);
+
+        let board = hash_board(true, false);
+        let renamed = text(&board);
+        assert!(
+            renamed.contains("const hash2 = s.stats()"),
+            "a binding colliding with a param keeps the dedupe suffix:\n{renamed}"
+        );
+        assert!(renamed.contains("info({ message: hash2 })"), "{renamed}");
+        assert_roundtrip(&board);
+    }
+
+    #[test]
     fn a_binding_used_as_a_whole_value_keeps_the_let_form() {
-        let mut board = hash_board(false);
+        let mut board = hash_board(false, true);
         let mut register = Node::new(
             "agent_register_function_tools",
             "Register Tools",

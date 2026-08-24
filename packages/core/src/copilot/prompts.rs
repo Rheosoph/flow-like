@@ -795,7 +795,7 @@ in a top-level variable via its variable set node. Downstream functions read the
 place.
 - Embedding models load from a Bit, never from an invented id:
   `const bit = ai::loadBit({ bitId: "" })` — leave `bitId` as the empty string; the user selects
-  the concrete bit on the board later — then `const { model } = ai::embedding::loadModel({ bit: bit })`
+  the concrete bit on the board later — then `const model = ai::embedding::loadModel({ bit: bit })`
   and store `model` into a top-level variable.
 - Databases: `db::open({ name: "..." })` stored into a variable the same way.
 
@@ -1030,7 +1030,7 @@ function renderSources(rows: Struct[]) {
     const { element: grid } = getElement({ elementRef: "<page_id>/sources-list" })
     clearChildren({ containerRef: grid })
     for (const row of rows) {
-        const { elementRef: instance } = instantiateWidget({
+        const instance = instantiateWidget({
             widgetSelector: "Knowledge Source Card",
             instanceId: row.get({ field: "id" }).value,
             dynPathDocument: row.get({ field: "document" }).value,
@@ -1332,8 +1332,10 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
   `for (const [index, item] of items) { … }`, `@parallel for (const item of items) { … }`, and
   `while (cond) { … }` (`control::whileLoop`). The explicit `for (const it of control::forEach({ array: items }))`
   handle form, with `it.value`, stays accepted.
-- Destructure outputs by pin name: `const { text, usage } = ai::invoke({ … })`,
-  `const { hash: digest } = content.md5()`. `const x = call()` binds the default output.
+- Destructure MULTI-output nodes by pin name: `const { text, usage } = ai::invoke({ … })`,
+  `const { value, exists } = ui::getElementValue({ … })`. A single-output call is the value
+  itself — write `const digest = content.md5()`, never `const { hash: digest } = content.md5()`.
+  `const x = call()` binds the default output.
 - Top-level `const name = "literal"` infers `string | int | float | bool` (JSON object → `Struct`,
   array → `any[]`); `const name: Type = …` is still required for anything else. Operators:
   `+ - * / % **`, comparisons, `&& || !`, unary `-x`, `+= -= *= /=`, ternary `c ? a : b`.
@@ -1570,8 +1572,8 @@ function run() {
 use ai::embedding::*
 
 function run(embeddingBit: Struct) {
-    const { database } = db::open({ name: "email_vectors" })
-    const { model } = loadModel({ bit: embeddingBit })
+    const database = db::open({ name: "email_vectors" })
+    const model = loadModel({ bit: embeddingBit })
     const vector = embedDocument({ model: model, queryString: "<BODY>" })
     const id = random::cuid()
     let rows = []
@@ -1608,9 +1610,9 @@ const reportID = ""
 const reportRows: Struct[] = []
 
 function generateReport() {
-    const { cuid } = random::cuid()
+    const cuid = random::cuid()
     reportID = cuid
-    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const database = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
     database.batchInsert({ value: reportRows })
 }
 ```
@@ -1618,9 +1620,9 @@ function generateReport() {
 ### 2. Build dynamic database rows with struct::set chains
 ```ts
 function ingestRows() {
-    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
-    const { cuid } = random::cuid()
-    const { date } = datetime::now()
+    const database = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const cuid = random::cuid()
+    const date = datetime::now()
     let rows = []
     let row = struct::make()
     row = row.set({ field: "id", value: cuid })
@@ -1644,8 +1646,8 @@ function search(query: string, language: string, page: int, payload: Struct): (r
         method: "GET",
         url: `https://search.flow-like.com/search?q=${q}&format=json&pageno=${pageNumber}&language=${lang}`
     })
-    const { response } = fetch({ request: request })
-    const { struct: json } = responseToJson({ response: response })
+    const response = fetch({ request: request })
+    const json = responseToJson({ response: response })
     return json
 }
 ```
@@ -1657,7 +1659,7 @@ use path::*
 
 function loadConfig() {
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
-        const { content } = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
+        const content = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
         userConfiguration = json::parse({ string: content })
     } else { // exec_out_missing
         userConfiguration = { general: { news: false }, sources: [] }
@@ -1680,14 +1682,14 @@ parameter instead of recreating it per helper.
 use df::*
 
 function loadOverview(session: Struct): (rows: Struct[]) {
-    const { database } = db::open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const database = db::open({ name: "report_overview", userScoped: true, batchSize: 1000 })
     registerLance({ session: session, database: database, tableName: "reports" })
     const { rows } = sqlQuery({ session: session, query: "SELECT report_id, title, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
     return rows
 }
 
 eventsSimple() {
-    const { session } = createSession({ sessionName: "default" })
+    const session = createSession({ sessionName: "default" })
     const overview = loadOverview({ session: session })
     log::info({ message: overview })
 }
@@ -1711,8 +1713,8 @@ function runResearch(task: string): (answer: string) {
     })
     const { response } = invoke({ agent: agent, history: history })
     fetchPage(url: string) {
-        const { response: page } = fetch({ request: makeRequest({ method: "GET", url: url }) })
-        const { text } = responseToText({ response: page })
+        const page = fetch({ request: makeRequest({ method: "GET", url: url }) })
+        const text = responseToText({ response: page })
         return md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] }).markdown
     }
     return ai::response::lastContent({ response: response }).content
@@ -1728,8 +1730,8 @@ use df::*
 use ui::*
 
 function briefingPageLoad() {
-    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
-    const { session } = createSession({ sessionName: "default" })
+    const database = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const session = createSession({ sessionName: "default" })
     registerLance({ session: session, database: database, tableName: "reports" })
     const { rows, rowCount } = sqlQuery({ session: session, query: "SELECT report_id, title, summary, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
     setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: `${rowCount} Briefing(s)` })
@@ -1740,7 +1742,7 @@ function briefingPageLoad() {
 function fillArticles(rows: Struct[]) {
     clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
     for (const row of rows) {
-        const { elementRef } = instantiateWidget({ widgetSelector: "Article", instanceId: row.report_id, dynPathTitle: row.title, dynPathSummary: row.summary, dynPathDate: row.created_at.format("%B %-d, %Y"), fnRefs: [openBriefing] })
+        const elementRef = instantiateWidget({ widgetSelector: "Article", instanceId: row.report_id, dynPathTitle: row.title, dynPathSummary: row.summary, dynPathDate: row.created_at.format("%B %-d, %Y"), fnRefs: [openBriefing] })
         pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef, position: -1 })
     }
 }
@@ -1761,8 +1763,8 @@ use df::*
 use ui::*
 
 function renderTrend() {
-    const { database } = db::open({ name: "metrics", userScoped: true, batchSize: 1000 })
-    const { session } = createSession({ sessionName: "default" })
+    const database = db::open({ name: "metrics", userScoped: true, batchSize: 1000 })
+    const session = createSession({ sessionName: "default" })
     registerLance({ session: session, database: database, tableName: "metrics" })
     const { table } = sqlQuery({ session: session, query: "SELECT day, SUM(amount) AS total FROM metrics GROUP BY day ORDER BY day;" })
     pushCsvToChart({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/trend-chart" }).element, library: "Nivo", format: "CSV", table: table, chartType: "Line" })
@@ -3479,7 +3481,8 @@ mod tests {
             assert!(prompt.contains("The legacy camelCase name"));
             assert!(prompt.contains("Template literals lower to `string::format`"));
             assert!(prompt.contains("for (const [index, item] of items)"));
-            assert!(prompt.contains("Destructure outputs by pin name"));
+            assert!(prompt.contains("Destructure MULTI-output nodes by pin name"));
+            assert!(prompt.contains("A single-output call is the value"));
             assert!(prompt.contains("never rename an argument"));
             assert!(!prompt.contains("There is no unary minus"));
             assert!(!prompt.contains("Do not invent aliases"));
