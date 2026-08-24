@@ -117,6 +117,149 @@ from the exact guarantees of a particular release. Security, performance, scale,
 deployment claims will be tied to implementation evidence or measurements rather than
 treated as adjectives.
 
+## AI changes what is cheap
+
+Flow-Like was not conceived as a response to generative AI. The major-incident call that
+supplied its founding question came earlier. So did the influence of visual programming and
+the conviction that domain experts should be able to work directly with application logic.
+The role of AI crystallized later.
+
+AI did not replace the original argument. It made the fault line wider.
+
+> AI made scaling development cheap. Maintenance and architecture skill remain scarce.
+
+Here, *scaling development* means multiplying the amount of software we can produce. It does
+not mean that the resulting software scales.
+
+AI-assisted development is a real advance. Vibe coding shows how dramatically it can lower
+the cost of a first prototype. An experienced developer can explore an unfamiliar library,
+remove repetitive work, test several approaches, and turn a clear design into a working
+implementation much faster than before. A founder or domain expert can reach a prototype
+without waiting for a complete delivery team. Those gains are worth keeping.
+
+But generation compresses the time required to emit code. It does not automatically supply a
+sound architecture, discover an unstated operational requirement, or recognize that a
+plausible local decision will become disastrous at production scale. An experienced engineer
+often notices the model's false assumption because it conflicts with a mental model built over
+years. To somebody without that context, the same answer may simply look finished.
+
+The result can be a prototype that technically exists but is expensive to run, difficult to
+deploy, and almost impossible to maintain. More code was produced. The scarce work merely
+moved downstream.
+
+This is not an argument that only expert programmers should use AI. It is an argument for
+putting more of their hard-won knowledge into the environment in which AI works: typed
+contracts, approved operations, bounded changes, visible structure, shared runtime services,
+and evidence from actual executions.
+
+### Do not ask a model to add one
+
+In August 2025, an experimental Python package called
+[`vibeincrement`](https://pypi.org/project/vibeincrement/) appeared with one job: increment a
+positive integer. Instead of evaluating `n + 1`, its
+[implementation](https://github.com/tahayparker/vibeincrement/blob/main/src/vibeincrement/ai.py)
+serializes the number and the requested operation, sends them to `gpt-4o-mini`, asks for a
+structured integer response, and returns the model's answer. The project explicitly warns that
+it is not for production.
+
+The package reads as satire, but it is an experiment—not evidence that production teams
+routinely add one this way. The example works because it exaggerates a genuine temptation:
+once a model is available, every problem starts to look like a prompt.
+
+That is the wrong default.
+
+If an operation can be expressed deterministically, express it deterministically. Arithmetic,
+parsing, exact filtering, known routing rules, identifiers, schema validation, and ordinary
+data transformations do not become better merely because a model performs them. In
+FlowScript, an increment should remain exactly what it says:
+
+```ts
+let nextRevision = revision + 1
+```
+
+Every unnecessary model call adds a probabilistic boundary. It may also add network latency,
+variable cost, provider dependence, new data exposure, and another failure mode. Even a local
+model consumes compute and makes an exact operation less exact.
+
+Flow-Like's AI authoring assistant, FlowPilot, encodes this rule directly in its current
+guidance: model calls are for semantic work, not arithmetic, counting, number parsing, or
+revision increments. The larger doctrine is just as blunt:
+
+> If we can solve it deterministically, we should. Use a model only where uncertainty is useful.
+
+### Two very different roles for AI
+
+The phrase *AI software* hides an important distinction.
+
+First, AI can be an **author**. It can propose FlowScript, assemble a Flow, connect existing
+nodes, or adapt a known App. In that role, its output should be treated as an untrusted change,
+not as a privileged command. The catalog limits what it can call. Declarations tell it the
+real signatures. Types and reconciliation reject invalid connections. A preview can expose
+the graph operations before they are applied. The current reconciler also rejects an edit that
+would leave any one layer with more than one hundred nodes, pushing large logic into named,
+reviewable functions.
+
+Second, AI can be an **operation inside the running application**. A model may classify an
+ambiguous request, extract meaning from prose, summarize a document, or formulate a response.
+That operation is intentionally probabilistic. It therefore belongs at an explicit node with
+typed inputs and outputs, a narrow permission surface, recorded usage, an error path, and
+deterministic logic around it.
+
+These roles need different controls, but they share one principle: the model does not get to
+erase the structure of the application.
+
+For critical work, “correct 99 percent of the time” can still be unusable. It means roughly one
+miss in every hundred opportunities before we account for the way failures accumulate across
+steps and repeated executions. The right response is not to pretend a model has become
+deterministic. It is to make the uncertain boundary small, evaluate it for the actual task,
+handle its failure explicitly, and keep the rest of the Flow exact.
+
+### Spend intelligence where it matters
+
+The most capable model is not the correct default for every call. The target is the smallest
+model that satisfies the measured requirements of one focused task.
+
+Deterministic nodes should prepare the input before the call: retrieve only the relevant
+material, remove fields the model does not need, and compute exact values outside the prompt.
+The model should receive a narrow question and return a narrow, typed result. Deterministic
+nodes should then validate, route, store, or reject that result. This reduces cost and latency,
+but it also reduces the number of places in which a plausible mistake can enter the system.
+
+Cost control follows the same hierarchy. We should be able to attribute model use to an App
+and a user, see which provider and model were invoked, set limits, and select models under
+explicit cost and capability preferences. Over time, each App should carry task-specific
+evaluations so a model earns its place through observed quality rather than reputation or
+size.
+
+<Aside type="note" title="What exists today">
+Flow-Like's hosted-call accounting can record App, user, model, provider, token, latency, and
+cost context for model and embedding usage. It exposes App-wide and technical-user usage
+limits, and user-owned profiles can select hosted or local models using configured weights
+such as cost, speed, reasoning, safety, and coding. A feature-gated governance inventory can
+reconcile models declared in an App with models observed in use.
+
+That is not yet the whole doctrine. Editing a separate budget for every human user, evaluating
+model quality automatically for each task in an App, and guaranteeing selection of the
+smallest adequate model remain incomplete. Provider-reported cost can also arrive only after a
+hosted call, so a hard limit is not a universal pre-call spending guarantee. Later chapters
+will keep those boundaries visible.
+</Aside>
+
+Reuse is another form of efficiency. Many applications are not blank-page inventions; they
+are variations of a shape that already works. A governed document assistant, for example,
+should be forked, configured with the new App's data and permissions, and adapted where the
+domain genuinely differs. Starting from a visible, parameterized App gives a human or an AI a
+smaller solution space and the organization a lineage it can inspect.
+
+This is Flow-Like's AI bet: use AI to expand who can build software without expanding the
+software's blast radius. Let it accelerate experienced developers. Let it help domain experts
+express what they know. Let it perform the semantic work for which uncertainty is actually
+valuable. But keep the application's spine typed, visible, deterministic, and cheap.
+
+The useful question is therefore not, “Where can we insert AI?” It is:
+
+> Where is uncertainty necessary, and how small can we make that boundary?
+
 ## Who belongs here
 
 This book is for people who arrive with different kinds of expertise.

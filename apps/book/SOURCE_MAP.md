@@ -47,6 +47,7 @@ which claims were checked.
 | `SRC-RECONCILER` | `packages/core/src/flow/ast/reconcile.rs`; `packages/core/src/flow/ast/lower.rs`; `packages/core/src/flow/ast/diagnostics.rs` | How edited text is matched to and lowered into Board changes | Reconciliation is the heart of the two-view contract. Document preservation behavior and failure cases, not only successful generation. |
 | `SRC-EXPRESSIONS-SUGAR` | `packages/ast/src/parse/parser.rs`; `packages/ast/src/parse/lexer.rs`; `packages/core/src/flow/ast/lower.rs`; `packages/core/src/flow/ast/reconcile.rs`; `packages/core/src/flow/ast/template.rs`; `packages/catalog/std/src/utils/types/select.rs`; colocated operator, template, and Struct-accumulator tests | Operator families and precedence, unary/compound normalization, Select and template lowering, lossless rendering guards, and temporal Struct rebinding | Parser vocabulary is broader than catalog-backed operators. Float equality/inequality, Integer division, and Struct Get output selection have current round-trip gaps documented below. |
 | `SRC-EXPLICIT-CONVERSIONS` | `packages/catalog/std/src/utils/types/try_transform.rs`; `packages/catalog/std/src/utils/string/parse.rs`; `packages/ast/flow.d/utils.flow.d`; `packages/core/src/flow/ast/apply.rs`; `packages/core/src/flow/ast/diagnostics.rs` | Typed parsing, target-shaped Try Transform behavior, conversion failure outputs, and atomic Apply on diagnostics | No current quick fix chooses or inserts an operator conversion. Try Transform returns `null` plus `success = false` on conversion failure; ignoring `success` can defer failure downstream. |
+| `SRC-CONTROL-FLOW` | `packages/ast/src/model.rs`; `packages/ast/src/parse/parser.rs`; `packages/core/src/flow/ast/lower.rs`; `packages/core/src/flow/ast/reconcile.rs`; `packages/catalog/std/src/control/for_each.rs`; `packages/catalog/std/src/control/par_for_each.rs`; `packages/catalog/std/src/control/while_loop.rs`; `packages/catalog/std/src/control/for_each_with_break.rs`; `packages/catalog/data/src/events/generic_event/push_generic_result.rs`; `packages/api/src/execution/sse_proxy.rs` | Boolean and named branches, collection and While sugar, hidden defaults, loop runtime ownership, Function/Event return lowering, and result collection | Child errors are currently swallowed by loop nodes; While exhaustion is silent; `break`/`continue` syntax and function-wide early return do not exist; competing result selection varies by execution surface. |
 | `SRC-APPLY` | `packages/core/src/flow/ast/apply.rs`; `packages/api/src/routes/app/board/apply_flowscript.rs`; `packages/ui/components/flow/flowscript/flowscript-apply-preview.tsx` | Previewing and applying FlowScript edits through Board commands | UI preview, API validation, and command application are distinct stages and can fail differently. |
 | `SRC-EDITOR` | `packages/ui/components/flow/flowscript/flowscript-panel.tsx`; `packages/ui/components/flow/flowscript/flowscript-language.ts`; `packages/ui/components/flow/flowscript/flowscript-language-features.ts`; `packages/ui/lib/flowscript-persistence.ts`; `packages/api/src/routes/app/board/get_flowscript.rs`; `apps/desktop/src-tauri/src/functions/flow/board.rs` | Current editor behavior, language assistance, anchored source retrieval, navigation, and persistence | This surface is actively changing. Record screenshots and instructions against one named release. |
 | `SRC-EDITOR-TESTS` | `packages/ui/components/flow/flowscript/*.test.ts`; `packages/ui/lib/flowscript-persistence.test.ts`; `packages/ui/lib/flowscript-apply-failure.test.ts` | Editor language, anchor, preview, persistence, and failure-path behavior | A UI unit test is not proof of cross-client parity. Confirm web, desktop, and mobile support separately. |
@@ -172,6 +173,38 @@ the examples should be reported and documented against the affected release.
   conversion repairs, then Apply and canonically render the chosen visible node. Do not silently
   choose numeric addition versus text concatenation.
 
+### Code-verified control-flow notes
+
+- `else if` is accepted when authoring and canonicalizes to an `if` nested in the preceding False
+  arm. Named execution-arm blocks preserve the exact execution output names of a catalog node.
+- Sequential For Each evaluates its array once, processes values in input order, and awaits each
+  body chain before the next item. A child error ends that item path, is logged, and does not stop
+  later items.
+- Parallel For Each defaults to 30 active item/body-root tasks. A positive value bounds active
+  tasks; non-positive means unlimited. It schedules remaining items after child failures, waits
+  for all children before Done, and exposes no collected result whose ordering could be promised.
+- Plain `@parallel for` and `while (condition)` preserve only hidden defaults. Custom concurrency
+  or maximum iteration values render as explicit `control::parallelForEach` or
+  `control::whileLoop` calls.
+- While reevaluates condition dependencies before each body, runs at most 15 iterations by
+  default, and silently activates Done if the condition remains true at that ceiling. It has no
+  duration limit or Exhausted arm. Child errors are logged and later iterations continue.
+- Sequential, parallel, While, and break-capable loop nodes currently absorb child errors and
+  return Ok. As a result, Error evidence can coexist with a terminal Success run. This conflicts
+  with the intended aggregate-failure invariant and needs explicit runtime coverage.
+- FlowScript has no `break` or `continue` AST statements. For Each (Break) is a separate visual
+  node controlled by a Boolean input and is not registered for structured loop lowering.
+- Function `return` wires data sources positionally to Function boundary outputs and does not
+  terminate execution. The safe supported shape is one final unconditional return. Event/handler
+  return creates a terminal Return Result node for one branch and accepts one value.
+- There is no platform-wide first/last rule for competing Event results. Synchronous collectors
+  commonly retain the first emitted result, while context merging and UI state can retain the
+  most recently merged or observed result. Publish one logical result path instead of racing them.
+- Two statically identified round-trip edges need release tests before publication: a consumed
+  While `iter` output can lose its handle name because While syntax has no binding, and duplicate
+  same-named execution outputs use an indexed selector internally that the current renderer appears
+  to normalize into a different label. Do not use either shape in worked examples yet.
+
 ## Platform and application model
 
 | Evidence ID | Primary repository sources | What it supports | Drafting cautions |
@@ -184,7 +217,9 @@ the examples should be reported and documented against the affected release.
 | `SRC-EVENTS` | `apps/docs/src/content/docs/apps/events.md`; `packages/core/src/flow/event.rs`; `packages/api/src/routes/app/events/` | Flow event nodes, App Events, validation, registration, versions, and invocation | Keep an event inside a Flow distinct from the external App Event that exposes or schedules it. |
 | `SRC-LAYERS` | `apps/docs/src/content/docs/studio/layers.md`; `packages/core/src/flow/board/commands/layer.rs`; `packages/core/src/flow/board/cleanup/bridge_layers.rs` | Layers, collapsed logic, boundaries, and graph maintenance | Confirm how every layer construct renders as a FlowScript function before claiming perfect parity. |
 | `SRC-VARIABLES` | `apps/docs/src/content/docs/studio/variables.md`; `apps/docs/src/content/docs/apps/runtime-variables.md`; `packages/core/src/flow/variable.rs`; `packages/catalog/std/src/variables/` | Board variables, runtime variables, reads, writes, and mutation | Top-level `const` means non-exposed and top-level `let` means exposed; this is not JavaScript immutability. `@readonly` maps separately to editability metadata. Function-local bindings have different semantics. |
-| `SRC-REDACTION` | `packages/ast/src/redact.rs`; `packages/api/src/routes/app/board/secrets.rs`; `apps/desktop/lib/university/courses/advanced/app-governance/content/05-secrets-and-execution.md` | Secret handling, source redaction, and protected deletion paths | Verify all serialization, logs, previews, and error paths before using an absolute “secrets never leak” formulation. |
+| `SRC-RUNTIME-CONFIG` | `apps/{web,desktop}/lib/runtime-vars-db.ts`; `packages/ui/state/execution-service-context.tsx`; `packages/api/src/routes/app/prerun_shared.rs`; `packages/api/src/routes/app/events/db.rs`; `packages/core/src/flow/execution.rs`; `apps/desktop/app/library/config/configuration/page.tsx` | Local runtime-value persistence, override precedence, interactive preflight, remote secret filtering, Event overrides, and exposed configuration editing | The local key is App plus variable, not authenticated user; presence is not full validation; core/direct execution can fall back to defaults or `null`; and official remote clients omit secret runtime values. Do not promise strict per-user isolation or universal fail-closed preflight yet. |
+| `SRC-REDACTION` | `packages/ast/src/redact.rs`; `packages/core/src/flow/ast/lower.rs`; `packages/core/src/flow/ast/reconcile.rs`; `packages/api/src/routes/app/board/secrets.rs`; `packages/api/src/routes/app/events/db.rs`; `packages/catalog/std/src/variables/get.rs`; `packages/catalog/std/src/logging/info.rs`; `apps/desktop/lib/university/courses/advanced/app-governance/content/05-secrets-and-execution.md` | Secret omission from source/read APIs, guarded secret writes and schema changes, and protected deletion paths | Secret metadata is not taint tracking. A downstream node can still log or return a secret. Masking also does not prove independent encryption at rest; verify every serialization, preview, error, and deployment storage path before making broader claims. |
+| `SRC-PROVIDER-CREDENTIALS` | `packages/ui/components/settings/model-catalog/add-custom-model-dialog.tsx`; `packages/api/src/routes/user/bits.rs`; `packages/api/src/utils/crypto.rs`; `packages/api/src/execution/dispatch.rs`; `apps/desktop/components/tauri-provider/bit-state.ts`; `apps/desktop/src-tauri/src/settings.rs` | Private hosted model/provider credentials, server-side encryption, response filtering, execution hydration, and the offline Desktop copy | Hosted server storage and offline Desktop storage have different boundaries. Do not imply that the downloaded Desktop settings copy receives the server store's application-level encryption. |
 | `SRC-VERSIONING` | `apps/docs/src/content/docs/studio/versioning.md`; `packages/api/src/routes/app/board/version_board.rs`; `packages/api/src/routes/app/board/get_board_versions.rs` | Board versions and publication/execution relationships | Specify what a version freezes: Board, package resolution, data, configuration, and runtime dependencies may have different lifetimes. |
 
 ## Execution, observability, and compiled artifacts
@@ -227,6 +262,7 @@ the examples should be reported and documented against the affected release.
 | Evidence ID | Primary repository sources | What it supports | Drafting cautions |
 | --- | --- | --- | --- |
 | `SRC-DATA` | `apps/docs/src/content/docs/apps/storage.md`; `packages/storage/`; `packages/catalog/data/src/data/` | App storage, files, paths, tables, SQL, vectors, and data nodes | Storage guarantees depend on provider and deployment. Avoid treating every backend as behaviorally or operationally identical. |
+| `SRC-STATE-LIFETIMES` | `packages/core/src/flow/execution.rs`; `packages/core/src/flow/execution/context.rs`; `packages/catalog/data/src/data/cache/`; `packages/api/src/cache/types.rs`; `packages/catalog/data/src/data/path.rs`; `packages/catalog/data/src/data/db/vector.rs`; `packages/ui/components/interfaces/chat-default/chat-db.ts`; `packages/ui/components/interfaces/chat-default.tsx` | Run- and invocation-local values, durable key-value cache, file storage paths, App/user database scope, and current chat-session persistence | Key-value cache and the file cache directory are different mechanisms. Cache is replaceable state, database versions are not automatically a permanent audit history, and current chat “global” state is still local to a client/App/Event rather than organization-wide. |
 | `SRC-DATA-VERSIONS` | `apps/desktop/src-tauri/src/functions/app/tables.rs`; `packages/storage/Cargo.toml`; `packages/storage/src/databases/vector.rs`; `packages/storage/src/databases/vector/lancedb.rs`; `packages/ui/components/ui/lance-viewer.tsx`; `packages/catalog/data/src/data/db/vector/optimize.rs`; `packages/catalog/data/src/data/datafusion/data_lakes.rs`; `apps/docs/src/content/docs/topics/datascience/datafusion.md` | Inspected desktop Data Studio table storage, LanceDB version pruning, and explicit Delta/Iceberg time-travel operations | The current VectorStore API exposes optimization but not version checkout. “Keep Versions” follows the storage engine's bounded retention behavior; it does not mean permanent history. Delta/Iceberg support is feature-gated. Do not imply that every backend is versioned identically or that Re-Run automatically selects a historic data snapshot. |
 | `SRC-DATA-STUDIO` | `apps/docs/src/content/docs/apps/data-studio.md`; `apps/website/src/content/blog/2026-07-12-data-studio-ontologies.mdx`; `packages/catalog/data/src/data/db/graph/` | Data Studio concepts, ontology-backed data, graph operations, and actions | Distinguish implemented editors and operations from the full ontology/governance vision. |
 | `SRC-DATA-PIPELINES` | `apps/docs/src/content/docs/topics/data-pipelines/overview.md`; `packages/catalog/data/src/data/datafusion.rs`; relevant generated declarations under `packages/ast/flow.d/` | Ingestion, transformation, query, and storage building blocks | “Big data” and scale language requires measurements for the actual storage and execution backend. |
@@ -234,6 +270,38 @@ the examples should be reported and documented against the affected release.
 | `SRC-CHAT` | `apps/docs/src/content/docs/apps/chat-ui.md`; `apps/docs/src/content/docs/topics/genai/chat.md`; chat interface code under `packages/ui/components/interfaces/` | Chat as an App surface and its connection to Flows | Keep UI affordances separate from agent/runtime guarantees. |
 | `SRC-AI-AUTHORING` | `apps/docs/src/content/docs/studio/flowpilot.md`; `apps/docs/src/content/docs/studio/flowpilot-external-agents.md`; `packages/core/src/flow/copilot/`; `packages/ui/lib/flowpilot/` | AI context, declarations, validation, edit delivery, and guarded Board changes | AI generation still needs review. Explain that constraints narrow and validate the solution space; do not promise correctness. |
 | `SRC-FLOWPILOT` | `apps/desktop/lib/university/courses/foundations/building-with-flowpilot/`; `apps/website/src/content/blog/2026-07-05-flowpilot-whole-app.mdx`; `packages/ui/lib/flowpilot/flowscript-generation-receipt.ts` | The practical human/AI authoring loop and change receipts | Label provider support and whole-App generation by release maturity. Marketing examples are not reliability studies. |
+| `SRC-AI-DETERMINISTIC-FIRST` | `packages/core/src/copilot/prompts.rs`; `packages/core/src/flow/ast/reconcile.rs` | Model-facing guidance that reserves LLM calls for semantic work and the current 100-node per-layer reconciliation limit | A node budget constrains edit shape; it does not establish correctness or security. The number is release-specific. |
+| `SRC-AI-USAGE-CONTROLS` | `packages/api/src/entity/llm_usage_tracking.rs`; `packages/api/src/entity/embedding_usage_tracking.rs`; `packages/api/src/routes/app/analytics/overview.rs`; `packages/api/src/routes/admin/usage.rs`; `packages/api/src/routes/usage/history.rs`; `packages/api/src/usage_accounting.rs`; `packages/api/src/usage_limits.rs` | Usage attribution and aggregation by App, human user, technical user, and model; cost/token windows, warnings, and hard limits | The shipped editor covers App and technical-user limits, not a separate limit for every human user. Hosted LLM prices may be provider-reported after a call, so limits are not universal pre-call guarantees. |
+| `SRC-AI-MODEL-SELECTION` | `packages/core/src/bit.rs`; `packages/core/src/profile.rs`; `packages/catalog/llm/src/llm/find_llm.rs`; `packages/catalog/llm/src/llm/preferences/`; `packages/ui/components/settings/model-catalog/add-custom-model-dialog.tsx` | User-owned model profiles and weighted selection by cost, speed, reasoning, safety, coding, and other traits | Weights score authored classification metadata. They do not prove live task quality or guarantee the smallest adequate model. |
+| `SRC-AI-MODEL-INVENTORY` | `packages/api/src/routes/app/ai_act/board_scan.rs`; `packages/api/src/routes/admin/ai_act/reconcile.rs`; `packages/api/src/routes/admin/models/sync_models.rs`; `packages/ui/components/ui/model-benchmarks.tsx` | Feature-gated App model inventory, observed-use reconciliation, and imported benchmark metadata | This is not automatic task-level model evaluation. Current usage rows do not identify a Board node or semantic task. |
+| `SRC-VIBEINCREMENT` | `https://pypi.org/project/vibeincrement/`; `https://github.com/tahayparker/vibeincrement/blob/main/src/vibeincrement/ai.py` | The August 2025 experimental package and its actual GPT-backed increment implementation | Say that it reads as satire without asserting authorial intent. It is not representative production practice, and the model call does not perform local arithmetic. |
+
+### Code-verified state and configuration notes
+
+- Every run creates fresh values from caller, Event, or Board configuration. Function locals are
+  fresh per invocation; Flow variables can be shared across branches of one run. Parallel writes
+  are serialized by the runtime lock but their winning order is not deterministic.
+- Exposed `let` values are currently edited through Board configuration and Board-write
+  permission. Do not promise a separate configuration-only role until the routes use the existing
+  config permission flags.
+- Web and Desktop runtime-value records use `${appId}:${variableId}` in local IndexedDB. No user ID,
+  sync, logout cleanup, or application-level encryption is present in that store. Standard clients
+  send non-secret runtime values to remote execution and deliberately omit secret ones.
+- Interactive execution prompts when a saved runtime record is absent. The check is presence-only,
+  and the core runtime still resolves missing inputs through Event value, Board default, then
+  `null`. Universal typed fail-closed preflight remains an intended invariant.
+- `@readonly` prevents definition/configuration edits today, but Set Variable does not inspect the
+  editable flag. Runtime immutability remains an intended invariant.
+- Secret defaults are omitted from rendered FlowScript and ordinary Board/Event reads; non-empty
+  secret initializers are rejected. Once read at runtime, however, a secret travels as an ordinary
+  value and can be exposed by an author-written log or result.
+- For `lastSuccessfulSync`, use cache only when loss safely causes repeated work. Use a durable
+  database record when loss can skip work, repeat an irreversible effect, or violate recovery or
+  audit requirements. Choose reference-data storage by access pattern: file for bulk/static,
+  cache for small derived/rebuildable data, and database/Data Studio for evolving/queryable data.
+- A private provider profile is the implemented hosted OpenAI BYOK boundary. Server credentials
+  are encrypted and hydrated only for execution; offline Desktop downloads a local copy under a
+  different at-rest boundary.
 
 ## WASM nodes and packages
 

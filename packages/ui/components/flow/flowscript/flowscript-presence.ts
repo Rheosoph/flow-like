@@ -18,14 +18,17 @@ import {
 	anchorAtOrAbove,
 	parseFlowScriptAnchors,
 } from "./flowscript-anchors";
+import { sameScopeNodeIds } from "./flowscript-panel-state";
 import {
 	FLOWSCRIPT_CLAIMS_FIELD,
 	FLOWSCRIPT_CURSOR_FIELD,
+	FLOWSCRIPT_SCOPE_FIELD,
 	type FlowScriptCursorPayload,
 	MAX_CLAIM_ANCHORS,
 	MAX_WIRE_DLINE,
 	sanitizeClaimsForWire,
 	sanitizeCursorForWire,
+	sanitizeScopeForWire,
 } from "./flowscript-presence-protocol";
 
 /* ── Anchor-relative translation (pure) ────────────────────────────────── */
@@ -291,10 +294,17 @@ export interface FlowScriptRemoteCanvasSelection {
 	nodeIds: string[];
 }
 
+export interface FlowScriptRemoteScope {
+	sub?: string;
+	/** Node ids of the peer's shared "edit selection" scope. */
+	nodeIds: string[];
+}
+
 export interface FlowScriptPresenceSnapshot {
 	cursors: FlowScriptRemoteCursor[];
 	claims: FlowScriptRemoteClaims[];
 	canvasSelections: FlowScriptRemoteCanvasSelection[];
+	scopes: Map<number, FlowScriptRemoteScope>;
 }
 
 export interface FlowScriptPresenceStore {
@@ -306,6 +316,7 @@ export const EMPTY_FLOWSCRIPT_PRESENCE: FlowScriptPresenceSnapshot = {
 	cursors: [],
 	claims: [],
 	canvasSelections: [],
+	scopes: new Map(),
 };
 
 export const EMPTY_FLOWSCRIPT_PRESENCE_STORE: FlowScriptPresenceStore = {
@@ -348,6 +359,25 @@ function cursorsEqual(
 			p.sel?.endDLine !== n.sel?.endDLine ||
 			p.sel?.endColumn !== n.sel?.endColumn
 			// ts deliberately excluded: heartbeat re-broadcasts must not re-render
+		)
+			return false;
+	}
+	return true;
+}
+
+function scopesEqual(
+	a: Map<number, FlowScriptRemoteScope>,
+	b: Map<number, FlowScriptRemoteScope>,
+): boolean {
+	if (a.size !== b.size) return false;
+	for (const [clientId, scope] of a) {
+		const other = b.get(clientId);
+		if (
+			!other ||
+			other.sub !== scope.sub ||
+			other.nodeIds.length !== scope.nodeIds.length ||
+			other.nodeIds.some((id, i) => id !== scope.nodeIds[i])
+			// ts is not stored: scope heartbeats must not re-render
 		)
 			return false;
 	}
@@ -402,6 +432,7 @@ export function createFlowScriptPresenceStore(
 		const cursors: FlowScriptRemoteCursor[] = [];
 		const claims: FlowScriptRemoteClaims[] = [];
 		const canvasSelections: FlowScriptRemoteCanvasSelection[] = [];
+		const scopeEntries: [number, FlowScriptRemoteScope][] = [];
 		states.forEach((state, clientId) => {
 			if (clientId === awareness.clientID) return;
 			if (invalidPeers?.has(clientId)) return;
@@ -415,10 +446,14 @@ export function createFlowScriptPresenceStore(
 				(state?.selection as { nodes?: unknown } | undefined)?.nodes,
 			).sort();
 			if (nodeIds.length > 0) canvasSelections.push({ clientId, sub, nodeIds });
+			const scope = sanitizeScopeForWire(state?.[FLOWSCRIPT_SCOPE_FIELD]);
+			if (scope) scopeEntries.push([clientId, { sub, nodeIds: scope.nodeIds }]);
 		});
 		cursors.sort((a, b) => a.clientId - b.clientId);
 		claims.sort((a, b) => a.clientId - b.clientId);
 		canvasSelections.sort((a, b) => a.clientId - b.clientId);
+		scopeEntries.sort((a, b) => a[0] - b[0]);
+		const scopes = new Map(scopeEntries);
 
 		const unchanged =
 			cursorsEqual(snapshot.cursors, cursors) &&
@@ -429,9 +464,10 @@ export function createFlowScriptPresenceStore(
 			idListsEqual(
 				snapshot.canvasSelections.map((c) => ({ ...c, ids: c.nodeIds })),
 				canvasSelections.map((c) => ({ ...c, ids: c.nodeIds })),
-			);
+			) &&
+			scopesEqual(snapshot.scopes, scopes);
 		if (unchanged) return;
-		snapshot = { cursors, claims, canvasSelections };
+		snapshot = { cursors, claims, canvasSelections, scopes };
 		for (const listener of listeners) listener();
 	};
 
@@ -461,6 +497,133 @@ export function createFlowScriptPresenceStore(
 			listeners.clear();
 		},
 	};
+}
+
+/* ── Shared scoped sessions (rule 2: node ids only) ────────────────────── */
+
+/**
+ * Peers whose broadcast scope is the SAME node set as `ownNodeIds` (set
+ * equality — render order is irrelevant). One entry per user: a user's second
+ * session in the same scope is not another "with" name.
+ */
+export function peersSharingFlowScriptScope(
+	scopes: ReadonlyMap<number, FlowScriptRemoteScope>,
+	ownNodeIds: readonly string[],
+): { clientId: number; sub?: string }[] {
+	if (ownNodeIds.length === 0) return [];
+	const peers: { clientId: number; sub?: string }[] = [];
+	const seen = new Set<string>();
+	for (const [clientId, scope] of scopes) {
+		if (!sameScopeNodeIds(scope.nodeIds, ownNodeIds)) continue;
+		const key = scope.sub ?? `client:${clientId}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		peers.push({ clientId, sub: scope.sub });
+	}
+	return peers;
+}
+
+/** First scope per user (clientId order), keyed by sub for the presence bar. */
+export function deriveScopesBySub(
+	scopes: ReadonlyMap<number, FlowScriptRemoteScope>,
+): Map<string, string[]> {
+	const bySub = new Map<string, string[]>();
+	for (const scope of scopes.values()) {
+		if (!scope.sub || bySub.has(scope.sub)) continue;
+		bySub.set(scope.sub, scope.nodeIds);
+	}
+	return bySub;
+}
+
+function scopesBySubEqual(
+	a: Map<string, string[]>,
+	b: Map<string, string[]>,
+): boolean {
+	if (a.size !== b.size) return false;
+	for (const [sub, nodeIds] of a) {
+		const other = b.get(sub);
+		if (
+			!other ||
+			other.length !== nodeIds.length ||
+			other.some((id, i) => id !== nodeIds[i])
+		)
+			return false;
+	}
+	return true;
+}
+
+/**
+ * Broadcast the local panel's scoped-session node ids while it is open in
+ * scoped mode. Deliberately NOT tied to editor focus: the scope persists
+ * across blur and stays on the wire until scope exit, panel close, or unmount
+ * (the effect cleanup withdraws the field).
+ */
+export function useFlowScriptScopeBroadcast({
+	awareness,
+	enabled,
+	nodeIds,
+}: {
+	// biome-ignore lint/suspicious/noExplicitAny: Yjs awareness is untyped
+	awareness: any | undefined;
+	enabled: boolean;
+	nodeIds: readonly string[] | undefined;
+}): void {
+	// Content-keyed (sorted, deduped) so re-renders and id reordering never
+	// re-publish; node ids match WIRE_ANCHOR_ID_PATTERN, so "," is safe.
+	const scopeKey =
+		enabled && nodeIds && nodeIds.length > 0
+			? [...new Set(nodeIds)].sort().join(",")
+			: "";
+	useEffect(() => {
+		if (!awareness || !scopeKey) return;
+		const payload = sanitizeScopeForWire({
+			nodeIds: scopeKey.split(","),
+			ts: Date.now(),
+		});
+		if (!payload) return;
+		awareness.setLocalStateField(FLOWSCRIPT_SCOPE_FIELD, payload);
+		return () => {
+			awareness.setLocalStateField(FLOWSCRIPT_SCOPE_FIELD, undefined);
+		};
+	}, [awareness, scopeKey]);
+}
+
+const EMPTY_PEER_SCOPES: Map<string, string[]> = new Map();
+
+/**
+ * Peers' shared scopes keyed by sub, for the canvas presence bar's
+ * "Join code scope" action. rAF-coalesced like every awareness consumer;
+ * updates React state only when a scope actually changed.
+ */
+export function useFlowScriptPeerScopes({
+	awareness,
+	sub,
+}: {
+	// biome-ignore lint/suspicious/noExplicitAny: Yjs awareness is untyped
+	awareness: any | undefined;
+	sub?: string;
+}): Map<string, string[]> {
+	const [scopes, setScopes] =
+		useState<Map<string, string[]>>(EMPTY_PEER_SCOPES);
+	useEffect(() => {
+		if (!awareness) {
+			setScopes(EMPTY_PEER_SCOPES);
+			return;
+		}
+		const store = createFlowScriptPresenceStore(awareness, { selfSub: sub });
+		const apply = () => {
+			const next = deriveScopesBySub(store.getSnapshot().scopes);
+			setScopes((prev) => (scopesBySubEqual(prev, next) ? prev : next));
+		};
+		const unsubscribe = store.subscribe(apply);
+		apply();
+		return () => {
+			unsubscribe();
+			store.dispose();
+			setScopes(EMPTY_PEER_SCOPES);
+		};
+	}, [awareness, sub]);
+	return scopes;
 }
 
 /* ── Local presence publisher (throttled, change-gated) ────────────────── */

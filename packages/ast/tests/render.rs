@@ -78,6 +78,7 @@ fn renders_event_with_let_and_named_args() {
                 ],
             },
         }],
+        modules: vec![],
     };
 
     let text = render(&ast, &RenderOptions::default());
@@ -135,6 +136,7 @@ fn renders_if_else_branch() {
                 }],
             },
         }],
+        modules: vec![],
     };
 
     let text = render(&ast, &RenderOptions::default());
@@ -180,6 +182,7 @@ fn expr_text(value: Expr) -> String {
                 }],
             },
         }],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let line = text
@@ -349,6 +352,7 @@ fn renders_return_statement() {
                 }],
             },
         }],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let expected = "\
@@ -384,6 +388,7 @@ fn renders_event_with_multiple_params() {
             anchor: None,
             body: Block { stmts: vec![] },
         }],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let expected = "\

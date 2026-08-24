@@ -435,6 +435,12 @@ impl Parser<'_> {
                     self.apply_fn_decorators(&mut func, &decorators)?;
                     ast.functions.push(func);
                 }
+                Tok::Ident(_) if self.at_module_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on modules are not supported"));
+                    }
+                    ast.modules.push(self.module_decl()?);
+                }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
                         return Err(self.err("decorators on events are not yet supported"));
@@ -656,6 +662,111 @@ impl Parser<'_> {
             body,
             anchor,
         })
+    }
+
+    /// Whether the cursor opens a module block.
+    ///
+    /// `module` is a *contextual* keyword: it claims the statement only in the exact shape
+    /// `module <ident> {` at a declaration position. Everywhere else (`module` as a binding, a pin
+    /// key, an event name, a call argument) it stays an ordinary identifier, so adding modules
+    /// cannot break a board that already uses the word.
+    fn at_module_header(&self) -> bool {
+        self.is_ident("module")
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::LBrace))
+    }
+
+    /// `module name { … }` — assumes [`Self::at_module_header`] just returned true.
+    fn module_decl(&mut self) -> Result<ModuleDecl, ParseError> {
+        self.bump(); // module
+        let name = self.ident()?;
+        self.expect(&Tok::LBrace)?;
+        let anchor = self.take_anchor();
+        let mut decl = ModuleDecl {
+            name,
+            anchor,
+            functions: Vec::new(),
+            events: Vec::new(),
+            modules: Vec::new(),
+        };
+        self.module_body(&mut decl)?;
+        Ok(decl)
+    }
+
+    /// Parse a module body up to and including its closing `}`. Nesting is bounded by the same
+    /// budget as blocks and expressions so user-authored input cannot overflow the stack.
+    fn module_body(&mut self, decl: &mut ModuleDecl) -> Result<(), ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("module nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.module_body_inner(decl);
+        self.depth -= 1;
+        result
+    }
+
+    fn module_body_inner(&mut self, decl: &mut ModuleDecl) -> Result<(), ParseError> {
+        while !matches!(self.cur(), Tok::RBrace) {
+            if self.at_eof() {
+                return Err(self.err(format!(
+                    "unexpected end of input inside module `{}`",
+                    decl.name
+                )));
+            }
+            if self.eat(&Tok::Semi) {
+                continue;
+            }
+            let decorators = self.decorators()?;
+            match self.cur().clone() {
+                Tok::Ident(kw) if kw == "function" => {
+                    let mut func = self.fn_decl()?;
+                    self.apply_fn_decorators(&mut func, &decorators)?;
+                    decl.functions.push(func);
+                }
+                Tok::Ident(kw) if kw == "const" || kw == "let" => {
+                    return Err(self.err(format!(
+                        "`{kw}` is not allowed inside a `module` block: variables are declared in main.flow"
+                    )));
+                }
+                Tok::Ident(kw) if kw == "use" || kw == "interface" => {
+                    return Err(self.err(format!(
+                        "`{kw}` is not allowed inside a `module` block: use/interface declarations belong at the top of the file"
+                    )));
+                }
+                Tok::Ident(_) if self.at_module_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on modules are not supported"));
+                    }
+                    decl.modules.push(self.module_decl()?);
+                }
+                Tok::Ident(_) => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on events are not yet supported"));
+                    }
+                    decl.events.push(self.event_block()?);
+                }
+                Tok::Comment(_) => {
+                    if !decorators.is_empty() {
+                        return Err(self.err(
+                            "decorators must be immediately followed by a declaration",
+                        ));
+                    }
+                    // Stray comment inside a module body (no AST slot): skip.
+                    self.bump();
+                }
+                other => {
+                    return Err(self.err(format!(
+                        "unexpected token inside module `{}`: `{other:?}`",
+                        decl.name
+                    )));
+                }
+            }
+        }
+        self.bump(); // }
+        Ok(())
     }
 
     /// Parse a comma-separated `name: Type` parameter list up to (not including) `end`.

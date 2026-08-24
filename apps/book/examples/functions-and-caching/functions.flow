@@ -1,0 +1,43 @@
+use agent::{ registerFunctionTools }
+use data::cache::{ open }
+use log::{ info }
+
+function normalizeSystemId(systemId: string): (normalized: string) {
+    return systemId.trim()
+}
+
+@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600, scope: "app" })
+function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
+    let team = "platform-on-call"
+    let runbook = "runbooks/general.md"
+    if (systemId == "payments") {
+        team = "payments-on-call"
+        runbook = "runbooks/payments.md"
+    }
+    return team, runbook
+}
+
+eventsGeneric coordinateIncident(payload: Struct, systemId: string, directoryRevision: string) {
+    const normalized = systemId.normalizeSystemId()
+    const { team, runbook } = normalized.resolveSystem(directoryRevision)
+    info({ message: `Route ${normalized} to ${team}; open ${runbook}`, toast: false })
+    return runbook
+}
+
+eventsGeneric configureIncidentAgent(payload: Struct, agent: Struct, directoryRevision: string) {
+    const configuredAgent = registerFunctionTools({ agentIn: agent, tools: [resolveSystemTool] })
+    info({ message: "Registered the incident system resolver", toast: false })
+    eventsGeneric resolveSystemTool(systemId: string) {
+        const normalized = systemId.normalizeSystemId()
+        const { team, runbook } = normalized.resolveSystem(directoryRevision)
+        return { team: team, runbook: runbook }
+    }
+    return configuredAgent
+}
+
+eventsGeneric invalidateSystemDirectory(payload: Struct, directoryRevision: string) {
+    const directoryCache = open({ scope: "app", namespace: "incident-system-directory-v1" })
+    const deleted = directoryCache.invalidateNamespace()
+    info({ message: `Revision ${directoryRevision}: invalidated ${deleted} cached system resolution(s)`, toast: false })
+    return deleted
+}

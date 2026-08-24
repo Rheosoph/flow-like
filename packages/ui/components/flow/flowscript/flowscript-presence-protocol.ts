@@ -20,6 +20,8 @@
 export const FLOWSCRIPT_CURSOR_FIELD = "flowscriptCursor";
 /** Awareness field carrying a peer's soft edit claims (dirty-touched anchors). */
 export const FLOWSCRIPT_CLAIMS_FIELD = "flowscriptClaims";
+/** Awareness field carrying the node ids of a peer's shared "edit selection" scope. */
+export const FLOWSCRIPT_SCOPE_FIELD = "flowscriptScope";
 
 /** Board entity ids (cuid2-style). Anything else is rejected, never truncated. */
 export const WIRE_ANCHOR_ID_PATTERN = /^[A-Za-z0-9_-]{10,32}$/;
@@ -38,6 +40,8 @@ export const MAX_WIRE_DLINE = 500;
 export const MAX_WIRE_COLUMN = 1000;
 /** Max anchors one peer may claim at once. */
 export const MAX_CLAIM_ANCHORS = 64;
+/** Max node ids a shared scope may carry on the wire. */
+export const MAX_SCOPE_NODES = 64;
 /** Longest string permitted anywhere in a payload (anchor ids are ≤ 32). */
 export const MAX_WIRE_STRING_LENGTH = 32;
 
@@ -69,6 +73,12 @@ export interface FlowScriptCursorPayload {
 export interface FlowScriptClaimsPayload {
 	/** Anchors whose statements differ from the peer's baseline (≤ MAX_CLAIM_ANCHORS). */
 	anchorIds: string[];
+	ts: number;
+}
+
+export interface FlowScriptScopePayload {
+	/** Node ids the peer's scoped session is editing (≤ MAX_SCOPE_NODES). */
+	nodeIds: string[];
 	ts: number;
 }
 
@@ -151,6 +161,19 @@ export function sanitizeCursorForWire(
 	return payload;
 }
 
+/** Non-id entries dropped, duplicates removed, the set capped at `max`. */
+function boundedIdList(value: unknown, max: number): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const ids: string[] = [];
+	for (const entry of value) {
+		const id = wireAnchorId(entry);
+		if (!id || ids.includes(id)) continue;
+		ids.push(id);
+		if (ids.length >= max) break;
+	}
+	return ids.length > 0 ? ids : undefined;
+}
+
 /**
  * Validate/bound a claims payload for the wire: non-id entries are dropped,
  * duplicates removed, the set capped at {@link MAX_CLAIM_ANCHORS}.
@@ -158,16 +181,23 @@ export function sanitizeCursorForWire(
 export function sanitizeClaimsForWire(
 	value: unknown,
 ): FlowScriptClaimsPayload | undefined {
-	if (!isRecord(value) || !Array.isArray(value.anchorIds)) return undefined;
-	const anchorIds: string[] = [];
-	for (const entry of value.anchorIds) {
-		const id = wireAnchorId(entry);
-		if (!id || anchorIds.includes(id)) continue;
-		anchorIds.push(id);
-		if (anchorIds.length >= MAX_CLAIM_ANCHORS) break;
-	}
-	if (anchorIds.length === 0) return undefined;
+	if (!isRecord(value)) return undefined;
+	const anchorIds = boundedIdList(value.anchorIds, MAX_CLAIM_ANCHORS);
+	if (!anchorIds) return undefined;
 	return { anchorIds, ts: wireTs(value.ts) };
+}
+
+/**
+ * Validate/bound a shared-scope payload for the wire: same closed shape as
+ * claims — node ids only, deduped, capped at {@link MAX_SCOPE_NODES}.
+ */
+export function sanitizeScopeForWire(
+	value: unknown,
+): FlowScriptScopePayload | undefined {
+	if (!isRecord(value)) return undefined;
+	const nodeIds = boundedIdList(value.nodeIds, MAX_SCOPE_NODES);
+	if (!nodeIds) return undefined;
+	return { nodeIds, ts: wireTs(value.ts) };
 }
 
 /** Single entry point: sanitize any FlowScript presence field for the wire. */
@@ -180,11 +210,20 @@ export function sanitizeForWire(
 	value: unknown,
 ): FlowScriptClaimsPayload | undefined;
 export function sanitizeForWire(
+	field: typeof FLOWSCRIPT_SCOPE_FIELD,
+	value: unknown,
+): FlowScriptScopePayload | undefined;
+export function sanitizeForWire(
 	field: string,
 	value: unknown,
-): FlowScriptCursorPayload | FlowScriptClaimsPayload | undefined {
+):
+	| FlowScriptCursorPayload
+	| FlowScriptClaimsPayload
+	| FlowScriptScopePayload
+	| undefined {
 	if (field === FLOWSCRIPT_CURSOR_FIELD) return sanitizeCursorForWire(value);
 	if (field === FLOWSCRIPT_CLAIMS_FIELD) return sanitizeClaimsForWire(value);
+	if (field === FLOWSCRIPT_SCOPE_FIELD) return sanitizeScopeForWire(value);
 	return undefined;
 }
 
@@ -200,10 +239,11 @@ const WIRE_KEY_ALLOWLIST = new Set([
 	"endColumn",
 	"ts",
 	"anchorIds",
+	"nodeIds",
 ]);
 
 const MAX_WIRE_DEPTH = 4;
-const MAX_WIRE_ARRAY_LENGTH = MAX_CLAIM_ANCHORS;
+const MAX_WIRE_ARRAY_LENGTH = Math.max(MAX_CLAIM_ANCHORS, MAX_SCOPE_NODES);
 
 /**
  * Structural safety walk over a wire payload (rule 2 enforcement, used by the

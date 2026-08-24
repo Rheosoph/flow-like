@@ -232,12 +232,11 @@ node and expose a clear contract to the rest of the team. The domain expert can 
 capability without inheriting its implementation language or internal complexity. The
 extension adds a building block instead of creating a secret application inside a box.
 
-The same principle applies to AI-authored software. An AI system can generate prototypes
-quickly, but speed does not make the result understandable or reliable. Restricting generation
-to declared operations, typed connections, validation, and reviewable changes narrows the
-solution space. Logs and diagnostics can give the system better evidence when something fails.
-None of this guarantees correctness. It makes the generated result easier for humans and tools
-to inspect.
+AI does not get an exception to these principles. As an author, it proposes reviewable changes
+over declared, typed operations. Inside a running App, it should occupy only the smallest
+boundary where ambiguity or judgment is genuinely required; exact work stays exact. These
+constraints do not guarantee correctness, but they make generated and model-assisted software
+easier for humans and tools to inspect.
 
 We are willing to offer fewer arbitrary ways to inject credentials, deployment assumptions,
 invisible side effects, or unreviewed code. That is the freedom we trade.

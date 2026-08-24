@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	canApplyFlowScript,
 	resolveFlowScriptScope,
+	resolveJoinableScopeNodeIds,
+	sameScopeNodeIds,
 	shouldReloadFlowScriptAfterApply,
 } from "./flowscript-panel-state";
 
@@ -106,5 +108,52 @@ describe("FlowScript apply state with merge conflicts", () => {
 		expect(
 			canApplyFlowScript({ ...editableDirtyState, unresolvedConflicts: false }),
 		).toBe(true);
+	});
+});
+
+describe("shared scope set equality", () => {
+	test("matches the same node set regardless of order and duplicates", () => {
+		expect(sameScopeNodeIds(["a", "b"], ["b", "a"])).toBe(true);
+		expect(sameScopeNodeIds(["a", "a", "b"], ["b", "a"])).toBe(true);
+		expect(sameScopeNodeIds([], [])).toBe(true);
+	});
+
+	test("rejects subsets, supersets and disjoint sets", () => {
+		expect(sameScopeNodeIds(["a"], ["a", "b"])).toBe(false);
+		expect(sameScopeNodeIds(["a", "b"], ["a"])).toBe(false);
+		expect(sameScopeNodeIds(["a"], ["c"])).toBe(false);
+		expect(sameScopeNodeIds([], ["a"])).toBe(false);
+	});
+});
+
+describe("joining a peer's shared scope", () => {
+	const known = new Set(["node-a", "node-b"]);
+	const isKnown = (id: string) => known.has(id);
+
+	test("keeps every id the local board knows", () => {
+		expect(resolveJoinableScopeNodeIds(["node-a", "node-b"], isKnown)).toEqual([
+			"node-a",
+			"node-b",
+		]);
+	});
+
+	test("drops unknown ids but joins the surviving partial scope", () => {
+		expect(
+			resolveJoinableScopeNodeIds(["node-a", "node-gone"], isKnown),
+		).toEqual(["node-a"]);
+	});
+
+	test("an all-unknown scope yields nothing to join", () => {
+		expect(resolveJoinableScopeNodeIds(["x", "y"], isKnown)).toEqual([]);
+		expect(resolveJoinableScopeNodeIds([], isKnown)).toEqual([]);
+	});
+
+	test("dedupes and returns an independent copy of the peer's ids", () => {
+		const requested = ["node-a", "node-a", "node-b"];
+		const joined = resolveJoinableScopeNodeIds(requested, isKnown);
+		expect(joined).toEqual(["node-a", "node-b"]);
+		// Mutating the peer's array after joining must not reach the local scope.
+		requested.length = 0;
+		expect(joined).toEqual(["node-a", "node-b"]);
 	});
 });

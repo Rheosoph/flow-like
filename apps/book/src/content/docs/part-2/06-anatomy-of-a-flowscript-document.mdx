@@ -269,17 +269,19 @@ Annotations expose the remaining Board metadata. The current variable decorators
 | `@category("…")` | UI grouping metadata |
 | `@secret` | Sensitive handling; the value stays outside rendered FlowScript |
 | `@readonly` | User-editable metadata is false |
-| `@runtime` | Configure the value per user at runtime |
+| `@runtime` | Configure the value through the runtime channel |
 | `@schema("…")` | Legacy inline schema metadata when no interface represents it |
 
 Their canonical order is description, category, legacy schema, secret, readonly, then runtime.
 Each annotation applies to the declaration immediately below it; placing a comment between a
 decorator and its variable is currently a parse error.
 
-The names can also invite the wrong conclusions. `@readonly` does not create a runtime write
-guard; it prevents ordinary user editing of that Board variable's configuration. `@runtime` does
-not make a value global to the platform; it selects the runtime-configuration channel for the
-current user or Event. `@secret` does not permit credentials to be pasted into source.
+The names can also invite the wrong conclusions. `@readonly` does not yet create a runtime write
+guard; it locks ordinary edits to that Board variable's definition and configuration. `@runtime`
+does not make a value global to the platform; it selects a runtime-configuration channel. Current
+Web and Desktop storage is local to the client profile and device, while an Event can carry its own
+trusted override. `@secret` does not permit credentials to be pasted into source. Chapter 11
+examines those boundaries and the remaining enforcement gaps.
 
 A secret declaration is intentionally value-free when rendered:
 

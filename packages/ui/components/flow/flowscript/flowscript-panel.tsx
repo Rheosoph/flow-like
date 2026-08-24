@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
+import { createId } from "@paralleldrive/cuid2";
 import {
 	AlertTriangleIcon,
 	AnchorIcon,
@@ -30,7 +31,9 @@ import {
 	PEER_COLOR_COUNT,
 	type PeerUserInfo,
 	peerColorSlot,
+	usePeerUserInfo,
 } from "../../../hooks/use-peer-users";
+import { formatRelativeTime } from "../../../lib/date";
 import {
 	getFlowScriptNamesTable,
 	onFlowScriptNamesTableLoaded,
@@ -39,6 +42,7 @@ import {
 	FLOW_KEY_OPT_OUT_CLASS,
 	shieldFlowBoardKeys,
 } from "../../../lib/monaco-key-guard";
+import type { IComment } from "../../../lib/schema/flow/board";
 import type { INode } from "../../../lib/schema/flow/node";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -77,6 +81,19 @@ import {
 	summarizeBoardCommands,
 } from "./flowscript-apply-preview";
 import {
+	FlowScriptCommentOverlay,
+	type FlowScriptCommentThreadState,
+} from "./flowscript-comment-widgets";
+import {
+	type FlowScriptNodeSpatial,
+	buildFlowScriptComment,
+	deriveFlowScriptCommentAddLines,
+	deriveFlowScriptCommentIndicators,
+	deriveFlowScriptCommentThreads,
+	formatFlowScriptCommentPreview,
+	withFlowScriptCommentContent,
+} from "./flowscript-comments";
+import {
 	FLOWSCRIPT_DIAGNOSTIC_OWNER,
 	FLOWSCRIPT_LANGUAGE_ID,
 	FLOWSCRIPT_THEME_DARK,
@@ -104,8 +121,10 @@ import {
 	EMPTY_FLOWSCRIPT_PRESENCE,
 	deriveClaimedAnchorIds,
 	findClaimCollision,
+	peersSharingFlowScriptScope,
 	resolveWireCursor,
 	useFlowScriptPresence,
+	useFlowScriptScopeBroadcast,
 } from "./flowscript-presence";
 import {
 	type FlowScriptDeferredReloadRunner,
@@ -214,6 +233,14 @@ export interface FlowScriptPanelProps {
 	runnableEventNodes?: ReadonlyMap<string, FlowScriptRunCapability>;
 	/** Peers' currently executing nodes — line tints in the peer's color slot. */
 	remoteExecutions?: readonly FlowScriptRemoteExecutionLike[];
+	/** Board comments — text comments surface as margin threads on their anchor's line. */
+	comments?: Record<string, IComment>;
+	/** Create/update a board comment through the board's command funnel (undo-able). */
+	onUpsertComment?: (comment: IComment) => Promise<void>;
+	/** Delete a board comment through the board's command funnel (undo-able). */
+	onRemoveComment?: (comment: IComment) => Promise<void>;
+	/** Board-node position/layer lookup for placing editor-created comments on the canvas. */
+	getNodeSpatial?: (nodeId: string) => FlowScriptNodeSpatial | undefined;
 }
 
 function rustDiagnosticToMarker(
@@ -276,6 +303,10 @@ export function FlowScriptPanel({
 	onRunEventNode,
 	runnableEventNodes,
 	remoteExecutions,
+	comments,
+	onUpsertComment,
+	onRemoveComment,
+	getNodeSpatial,
 }: Readonly<FlowScriptPanelProps>) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
@@ -320,6 +351,9 @@ export function FlowScriptPanel({
 	const [remoteTouched, setRemoteTouched] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
+	const [commentThreadState, setCommentThreadState] = useState<
+		FlowScriptCommentThreadState | undefined
+	>(undefined);
 
 	const readOnly = typeof version !== "undefined";
 	const dirty = text !== baseline;
@@ -353,6 +387,21 @@ export function FlowScriptPanel({
 	const revealOnBoardLabel = t("revealOnBoard", "Reveal on board");
 	const revealOnBoardLabelRef = useRef(revealOnBoardLabel);
 	revealOnBoardLabelRef.current = revealOnBoardLabel;
+	const commentsOnLineLabel = t(
+		"flowscriptCommentsOnLine",
+		"Comments on this line",
+	);
+	const commentsOnLineLabelRef = useRef(commentsOnLineLabel);
+	commentsOnLineLabelRef.current = commentsOnLineLabel;
+	const addCommentLabel = t("flowscriptAddComment", "Add comment");
+	const addCommentLabelRef = useRef(addCommentLabel);
+	addCommentLabelRef.current = addCommentLabel;
+	const noCommentAnchorLabel = t(
+		"flowscriptNoCommentAnchor",
+		"No statement here to attach a comment to",
+	);
+	const noCommentAnchorLabelRef = useRef(noCommentAnchorLabel);
+	noCommentAnchorLabelRef.current = noCommentAnchorLabel;
 	const runLensLabels: FlowScriptRunLensLabels = {
 		runEvent: t("runEvent", "Run"),
 		runRemote: t("runRemote", "Run on server"),
@@ -394,6 +443,14 @@ export function FlowScriptPanel({
 	onRevealNodeRef.current = onRevealNode;
 	const onExitScopeRef = useRef(onExitScope);
 	onExitScopeRef.current = onExitScope;
+	const onUpsertCommentRef = useRef(onUpsertComment);
+	onUpsertCommentRef.current = onUpsertComment;
+	const onRemoveCommentRef = useRef(onRemoveComment);
+	onRemoveCommentRef.current = onRemoveComment;
+	const getNodeSpatialRef = useRef(getNodeSpatial);
+	getNodeSpatialRef.current = getNodeSpatial;
+	const subRef = useRef(sub);
+	subRef.current = sub;
 
 	const catalogRef = useRef<INode[] | undefined>(catalogNodes);
 	catalogRef.current = catalogNodes;
@@ -417,6 +474,10 @@ export function FlowScriptPanel({
 		| {
 				seat: FlowScriptSeat;
 				oldIndex: ReturnType<typeof parseFlowScriptAnchors>;
+				/** The exact text the swap will install; set once known. A text
+				 *  change that does not match is NOT the swap (the user typed, or
+				 *  the reload was a no-op) — the seat is dropped, never replayed. */
+				expectedText?: string;
 		  }
 		| undefined
 	>(undefined);
@@ -448,6 +509,15 @@ export function FlowScriptPanel({
 		[scopeNodeIds, backend],
 	);
 	const scoped = scopeMode.kind === "scoped" && !readOnly;
+
+	// Shared scoped sessions: broadcast this panel's scope node ids while it is
+	// open in scoped mode so teammates can join from the presence bar. Persists
+	// across editor blur; withdrawn on scope exit, panel close, and unmount.
+	useFlowScriptScopeBroadcast({
+		awareness,
+		enabled: (presenceEnabled ?? true) && scoped,
+		nodeIds: scopeMode.kind === "scoped" ? scopeMode.nodeIds : undefined,
+	});
 
 	// `version` is a fresh array reference every render; key on its stable string
 	// form so load() (and the effects depending on it) don't re-fire in a loop.
@@ -485,7 +555,7 @@ export function FlowScriptPanel({
 		return { flowscript: script };
 	}, [backend, appId, boardId, versionKey, scopeMode]);
 
-	const load = useCallback(async () => {
+	const load = useCallback(async (): Promise<string | undefined> => {
 		setLoading(true);
 		setLoadError(undefined);
 		try {
@@ -497,12 +567,14 @@ export function FlowScriptPanel({
 			setMergeConflicts([]);
 			setRemoteTouched(new Set());
 			preMergeLocalTextRef.current = undefined;
+			return render.flowscript;
 		} catch (error) {
 			setLoadError(
 				error instanceof Error
 					? error.message
 					: t("failedToRenderFlowscript", "Failed to render FlowScript"),
 			);
+			return undefined;
 		} finally {
 			setLoading(false);
 		}
@@ -546,10 +618,17 @@ export function FlowScriptPanel({
 
 	// Restore the captured seat once the swapped-in text is in the model. Runs
 	// on every text change but is a no-op without a pending seat.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: text is the trigger — everything else resolves through refs
 	useEffect(() => {
 		const pending = pendingSeatRef.current;
 		if (!pending) return;
+		if (pending.expectedText !== text) {
+			// Once the expected swap text is known, any other change means the
+			// swap never happened as captured — drop the seat instead of yanking
+			// the cursor on a later keystroke. Before it is known, keep waiting.
+			if (typeof pending.expectedText === "string")
+				pendingSeatRef.current = undefined;
+			return;
+		}
 		pendingSeatRef.current = undefined;
 		const editor = editorRef.current;
 		const monaco = monacoRef.current;
@@ -622,7 +701,12 @@ export function FlowScriptPanel({
 			return;
 		if (!dirtyRef.current) {
 			captureSeat();
-			await load();
+			const rendered = await load();
+			const pending = pendingSeatRef.current;
+			if (pending) {
+				if (typeof rendered === "string") pending.expectedText = rendered;
+				else pendingSeatRef.current = undefined;
+			}
 			return;
 		}
 		try {
@@ -638,6 +722,8 @@ export function FlowScriptPanel({
 				return;
 			}
 			captureSeat();
+			if (pendingSeatRef.current)
+				pendingSeatRef.current.expectedText = result.mergedText;
 			preMergeLocalTextRef.current = textRef.current;
 			setText(result.mergedText);
 			setBaseline(fresh.flowscript);
@@ -666,7 +752,9 @@ export function FlowScriptPanel({
 			} else {
 				toast.info(
 					t("flowscriptMergedRemote", {
-						defaultValue:
+						defaultValue_one:
+							"Merged {{count}} remote change — your edits were kept",
+						defaultValue_other:
 							"Merged {{count}} remote changes — your edits were kept",
 						count:
 							result.stats.tookFresh + result.stats.freshAdded ||
@@ -914,6 +1002,115 @@ export function FlowScriptPanel({
 		onRevealNodeRef.current?.(anchor.id);
 	}, []);
 
+	// ── Board comments in the editor ─────────────────────────────────────
+	// Text comments bound to a statement (Comment.node_id) surface as margin
+	// threads on their anchor's line; every mutation routes through the board's
+	// command funnel (undo-able, sync-propagated). Image/Video comments and
+	// dangling/unanchored notes stay canvas-only.
+	const commentsEnabled = typeof comments !== "undefined";
+	const commentsEditable =
+		commentsEnabled && !readOnly && Boolean(onUpsertComment);
+	const commentsEnabledRef = useRef(commentsEnabled);
+	commentsEnabledRef.current = commentsEnabled;
+	const commentModel = useMemo(
+		() => deriveFlowScriptCommentThreads(comments, anchorIndex),
+		[comments, anchorIndex],
+	);
+	const commentModelRef = useRef(commentModel);
+	commentModelRef.current = commentModel;
+	const lookupUser = useMemo(
+		() => backend.userState.lookupUser.bind(backend.userState),
+		[backend],
+	);
+	const commentAuthorSubs = useMemo(() => {
+		const subs = new Set<string>();
+		for (const thread of commentModel.threads) {
+			for (const comment of thread.comments) {
+				if (comment.author && comment.author !== "anonymous")
+					subs.add(comment.author);
+			}
+		}
+		return [...subs];
+	}, [commentModel]);
+	const commentAuthors = usePeerUserInfo(commentAuthorSubs, lookupUser, 24);
+
+	/** Every entry point (margin click, context menu, add affordance) lands here. */
+	const openCommentsAtLine = useCallback(
+		(line: number, focusComposer: boolean) => {
+			if (!commentsEnabledRef.current) return;
+			const model = commentModelRef.current;
+			const anchor =
+				anchorAtLine(anchorIndexRef.current, line) ??
+				anchorAtOrAbove(anchorIndexRef.current, line);
+			const thread =
+				model.threads.find((entry) => entry.line === line) ??
+				(anchor ? model.threadsByAnchorId.get(anchor.id) : undefined);
+			if (thread) {
+				setCommentThreadState({
+					anchorId: thread.anchorId,
+					line: thread.line,
+					focusComposer,
+				});
+				return;
+			}
+			// Fresh threads bind to node statements only — variables and function
+			// headers have no board node a comment could follow on the canvas.
+			if (!anchor || anchor.kind !== "node") {
+				toast.info(noCommentAnchorLabelRef.current);
+				return;
+			}
+			setCommentThreadState({
+				anchorId: anchor.id,
+				line: anchor.line,
+				focusComposer,
+			});
+		},
+		[],
+	);
+	const openCommentsAtLineRef = useRef(openCommentsAtLine);
+	openCommentsAtLineRef.current = openCommentsAtLine;
+	const closeCommentThread = useCallback(
+		() => setCommentThreadState(undefined),
+		[],
+	);
+
+	const handleCreateComment = useCallback(
+		async (anchorId: string, content: string) => {
+			const upsert = onUpsertCommentRef.current;
+			if (!upsert) return;
+			await upsert(
+				buildFlowScriptComment({
+					id: createId(),
+					anchorId,
+					content,
+					author: subRef.current,
+					node: getNodeSpatialRef.current?.(anchorId),
+					nowMs: Date.now(),
+				}),
+			);
+		},
+		[],
+	);
+	const handleUpdateComment = useCallback(
+		async (comment: IComment, content: string) => {
+			await onUpsertCommentRef.current?.(
+				withFlowScriptCommentContent(comment, content),
+			);
+		},
+		[],
+	);
+	const handleDeleteComment = useCallback(async (comment: IComment) => {
+		await onRemoveCommentRef.current?.(comment);
+	}, []);
+
+	// The open thread's anchor left the document (statement deleted, scope
+	// switch, reload) — close instead of floating on a stale line.
+	useEffect(() => {
+		if (!commentThreadState) return;
+		if (!anchorIndex.firstLineById.has(commentThreadState.anchorId))
+			setCommentThreadState(undefined);
+	}, [anchorIndex, commentThreadState]);
+
 	const handleEditorMount: OnMount = useCallback(
 		(editor, monaco) => {
 			editorRef.current = editor;
@@ -1017,6 +1214,42 @@ export function FlowScriptPanel({
 				run: () => {
 					revealCursorLineOnBoard();
 				},
+			});
+			editor.addAction({
+				id: "flowscript.commentsOnLine",
+				label: commentsOnLineLabelRef.current,
+				contextMenuGroupId: "navigation",
+				contextMenuOrder: 1.6,
+				run: () => {
+					const line = editor.getPosition()?.lineNumber;
+					if (line) openCommentsAtLineRef.current(line, false);
+				},
+			});
+			editor.addAction({
+				id: "flowscript.addComment",
+				label: addCommentLabelRef.current,
+				contextMenuGroupId: "navigation",
+				contextMenuOrder: 1.7,
+				run: () => {
+					const line = editor.getPosition()?.lineNumber;
+					if (line) openCommentsAtLineRef.current(line, true);
+				},
+			});
+			// Margin clicks: a thread indicator opens its thread, the hover "+"
+			// affordance opens the composer for the line's anchor.
+			editor.onMouseDown((event) => {
+				if (
+					event.target.type !==
+					monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS
+				)
+					return;
+				const line = event.target.position?.lineNumber;
+				const element = event.target.element;
+				if (!line || !element) return;
+				if (element.classList.contains("flowscript-comment-margin"))
+					openCommentsAtLineRef.current(line, false);
+				else if (element.classList.contains("flowscript-comment-add"))
+					openCommentsAtLineRef.current(line, true);
 			});
 			// Editor → canvas: highlight (never focus/center) the entity whose line
 			// holds the cursor. Muted briefly after a canvas-driven reveal so the two
@@ -1263,6 +1496,94 @@ export function FlowScriptPanel({
 		conflictLensHandleRef.current?.refresh();
 	}, [mergeConflicts, anchorIndex, editorReady, t]);
 
+	// Comment indicators in the line-decorations margin: one peer-colored dot
+	// (with count) per thread line, hover previews via the margin tooltip, and
+	// a hover-revealed "+" on commentable lines without a thread. Written only
+	// when the derived key actually moves (same contract as the run trace).
+	const commentDecorationsRef = useRef<DecorationsCollection | null>(null);
+	const commentDecorationKeyRef = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		const editor = editorRef.current;
+		const monaco = monacoRef.current;
+		if (!editorReady || !editor || !monaco) return;
+		const model = editor.getModel();
+		if (!model) return;
+		const collection =
+			commentDecorationsRef.current ?? editor.createDecorationsCollection([]);
+		commentDecorationsRef.current = collection;
+		if (!commentsEnabled) {
+			if (commentDecorationKeyRef.current !== "") {
+				commentDecorationKeyRef.current = "";
+				collection.set([]);
+			}
+			return;
+		}
+		const nameFor = (author?: string) =>
+			(author ? commentAuthors.get(author)?.name : undefined) ??
+			t("common:user", "User");
+		const timeFor = (ms: number) => formatRelativeTime(ms, "short");
+		const { indicators, key: indicatorKey } = deriveFlowScriptCommentIndicators(
+			commentModel.threads,
+			peerColorSlot,
+		);
+		const previews = new Map(
+			commentModel.threads.map((thread) => [
+				thread.anchorId,
+				formatFlowScriptCommentPreview(thread, nameFor, timeFor),
+			]),
+		);
+		const addLines = commentsEditable
+			? deriveFlowScriptCommentAddLines(anchorIndex, commentModel)
+			: [];
+		const key = `${indicatorKey}|p:${[...previews.values()].join("¦")}|a:${addLines.join(",")}`;
+		if (commentDecorationKeyRef.current === key) return;
+		commentDecorationKeyRef.current = key;
+		const maxLine = model.getLineCount();
+		type CommentDecoration = Parameters<
+			DecorationsCollection["set"]
+		>[0][number];
+		const decorations: CommentDecoration[] = [];
+		const threadLines = new Set<number>();
+		for (const indicator of indicators) {
+			if (indicator.line > maxLine) continue;
+			threadLines.add(indicator.line);
+			const slotClass =
+				typeof indicator.slot === "number"
+					? ` flowscript-peer-slot-${indicator.slot}`
+					: "";
+			const countClass =
+				indicator.count >= 10
+					? " flowscript-comment-count-many"
+					: ` flowscript-comment-count-${indicator.count}`;
+			decorations.push({
+				range: new monaco.Range(indicator.line, 1, indicator.line, 1),
+				options: {
+					linesDecorationsClassName: `flowscript-comment-margin${countClass}${slotClass}`,
+					linesDecorationsTooltip: previews.get(indicator.anchorId) ?? null,
+				},
+			});
+		}
+		for (const line of addLines) {
+			if (line > maxLine || threadLines.has(line)) continue;
+			decorations.push({
+				range: new monaco.Range(line, 1, line, 1),
+				options: {
+					linesDecorationsClassName: "flowscript-comment-add",
+					linesDecorationsTooltip: addCommentLabelRef.current,
+				},
+			});
+		}
+		collection.set(decorations);
+	}, [
+		commentModel,
+		anchorIndex,
+		commentAuthors,
+		commentsEnabled,
+		commentsEditable,
+		editorReady,
+		t,
+	]);
+
 	// CodeLens gate/label changes Monaco cannot observe (dirty flips, board
 	// capability changes, language switches) — poke the provider to recompute.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are re-render triggers — the provider reads current values through refs
@@ -1456,13 +1777,18 @@ export function FlowScriptPanel({
 		revealAndFlashLine(line);
 	}, [selectedKey, editorReady, revealAndFlashLine]);
 
-	// Follow mode → editor: the followed peer moved their text cursor; jump there.
+	// Follow mode / canvas "Go to code" → editor: jump to the anchor's line.
+	// The anchor may not exist yet when the reveal opened the panel (text still
+	// loading) — retry as the index fills in, consuming each token exactly once.
+	const consumedRevealTokenRef = useRef<number | undefined>(undefined);
 	useEffect(() => {
 		if (!revealRequest || !editorReady) return;
-		const line = anchorIndexRef.current.firstLineById.get(revealRequest.nodeId);
+		if (consumedRevealTokenRef.current === revealRequest.token) return;
+		const line = anchorIndex.firstLineById.get(revealRequest.nodeId);
 		if (!line) return;
+		consumedRevealTokenRef.current = revealRequest.token;
 		revealAndFlashLine(line);
-	}, [revealRequest, editorReady, revealAndFlashLine]);
+	}, [revealRequest, editorReady, anchorIndex, revealAndFlashLine]);
 
 	// Realtime linting: instant client-side structural markers everywhere, authoritative
 	// positioned diagnostics from the native parser where available, and — on the same
@@ -1637,6 +1963,25 @@ export function FlowScriptPanel({
 	}, [remoteTouched, baseline, text, dirty]);
 
 	const scopedSectionCount = scopeAnchors?.length ?? 0;
+	// Peers whose broadcast scope equals ours (set equality on node ids) — shown
+	// as "with NAME" in the scoped banner. Sessions stay independent: a peer
+	// leaving this list never affects the local scope.
+	const scopeSharers = useMemo(
+		() =>
+			scoped && scopeMode.kind === "scoped"
+				? peersSharingFlowScriptScope(
+						presenceSnapshot.scopes,
+						scopeMode.nodeIds,
+					)
+				: [],
+		[scoped, scopeMode, presenceSnapshot.scopes],
+	);
+	const scopeSharerName =
+		scopeSharers.length > 0
+			? ((scopeSharers[0].sub
+					? peerUsers?.get(scopeSharers[0].sub)?.truncatedName
+					: undefined) ?? t("common:user", "User"))
+			: undefined;
 
 	return (
 		<div
@@ -1791,6 +2136,30 @@ export function FlowScriptPanel({
 										"Editing {{selected}} selected sections — out-of-scope content is untouched",
 									selected: scopedSectionCount,
 								})}
+						{scopeSharerName && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="shrink-0 font-medium text-primary">
+										{scopeSharers.length > 1
+											? t("flowscriptScopedWithOthers", {
+													defaultValue: "with {{name}} +{{count}}",
+													name: scopeSharerName,
+													count: scopeSharers.length - 1,
+												})
+											: t("flowscriptScopedWith", {
+													defaultValue: "with {{name}}",
+													name: scopeSharerName,
+												})}
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom" className="max-w-64 text-xs">
+									{t(
+										"flowscriptScopedWithTooltip",
+										"Sessions in a shared scope are independent — a teammate exiting or closing theirs never ejects you.",
+									)}
+								</TooltipContent>
+							</Tooltip>
+						)}
 					</span>
 					<Button
 						variant="outline"
@@ -1937,6 +2306,31 @@ export function FlowScriptPanel({
 							suggestSelection: "recentlyUsedByPrefix",
 							parameterHints: { enabled: true },
 						}}
+					/>
+				)}
+				{commentThreadState && commentsEnabled && !loading && !loadError && (
+					<FlowScriptCommentOverlay
+						editor={editorReady ? editorRef.current : null}
+						monaco={monacoRef.current}
+						anchorId={commentThreadState.anchorId}
+						line={
+							commentModel.threadsByAnchorId.get(commentThreadState.anchorId)
+								?.line ??
+							anchorIndex.firstLineById.get(commentThreadState.anchorId) ??
+							commentThreadState.line
+						}
+						comments={
+							commentModel.threadsByAnchorId.get(commentThreadState.anchorId)
+								?.comments ?? []
+						}
+						authors={commentAuthors}
+						sub={sub}
+						editable={commentsEditable}
+						focusComposer={commentThreadState.focusComposer}
+						onCreate={handleCreateComment}
+						onUpdate={handleUpdateComment}
+						onDelete={handleDeleteComment}
+						onClose={closeCommentThread}
 					/>
 				)}
 			</div>

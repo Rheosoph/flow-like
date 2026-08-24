@@ -36,6 +36,7 @@ pub struct BoardLayerCounts {
     pub collapsed: u32,
     pub function: u32,
     pub r#macro: u32,
+    pub module: u32,
 }
 
 /// The metrics the flows overview renders per board. Mirrors `packages/ui/lib/board-metrics.ts`,
@@ -125,6 +126,7 @@ impl Board {
                 LayerType::Collapsed => layer_counts.collapsed += 1,
                 LayerType::Function => layer_counts.function += 1,
                 LayerType::Macro => layer_counts.r#macro += 1,
+                LayerType::Module => layer_counts.module += 1,
             }
         }
 
@@ -168,6 +170,10 @@ mod tests {
             "f".into(),
             super::super::Layer::new("f".into(), "Fn".into(), LayerType::Function),
         );
+        board.layers.insert(
+            "m".into(),
+            super::super::Layer::new("m".into(), "Mod".into(), LayerType::Module),
+        );
 
         let metrics = board.summary_metrics();
         assert_eq!(metrics.total_node_count, 2);
@@ -177,7 +183,8 @@ mod tests {
         assert_eq!(metrics.variable_counts.secret, 1);
         assert_eq!(metrics.variable_counts.prompted_at_runtime, 2);
         assert_eq!(metrics.layer_counts.function, 1);
-        assert_eq!(metrics.layer_counts.total, 1);
+        assert_eq!(metrics.layer_counts.module, 1);
+        assert_eq!(metrics.layer_counts.total, 2);
 
         let entries = board.summary_entry_nodes();
         assert_eq!(entries.len(), 1);

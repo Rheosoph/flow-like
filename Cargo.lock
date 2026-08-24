@@ -8797,6 +8797,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowscript-render-data"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "flow-like",
+ "flow-like-catalog",
+ "flow-like-storage",
+ "flow-like-types",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fluent-uri"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -184,7 +184,7 @@
 		},
 		"LayerType": {
 			"type": "string",
-			"enum": ["Function", "Macro", "Collapsed"]
+			"enum": ["Function", "Macro", "Collapsed", "Module"]
 		},
 		"Node": {
 			"type": "object",

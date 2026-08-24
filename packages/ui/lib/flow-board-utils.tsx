@@ -560,6 +560,7 @@ export function parseBoard(
 	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
 	selectorDataRef?: FlowSelectorDataRef,
 	selectorDataVersion?: number,
+	onOpenCommentInCode?: (comment: IComment) => void,
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
@@ -1109,6 +1110,10 @@ export function parseBoard(
 					});
 					await executeCommand(command, false);
 				},
+				onOpenInCode:
+					comment.node_id && onOpenCommentInCode
+						? () => onOpenCommentInCode(comment)
+						: undefined,
 			},
 			selected: selected.has(comment.id),
 		});

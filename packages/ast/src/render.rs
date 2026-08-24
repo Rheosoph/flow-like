@@ -104,6 +104,16 @@ impl Writer<'_> {
             first_section = false;
             self.event_block(event);
         }
+
+        // Modules render last, in the order the caller put them in — ordering is a lowering
+        // decision, not a rendering one.
+        for module in &ast.modules {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.module_decl(module);
+        }
     }
 
     fn use_decl(&mut self, decl: &UseDecl) {
@@ -302,6 +312,43 @@ impl Writer<'_> {
         self.anchor("n", event.anchor.as_deref());
         self.out.push('\n');
         self.block(&event.body);
+        self.indent();
+        self.out.push_str("}\n");
+    }
+
+    fn module_decl(&mut self, module: &ModuleDecl) {
+        self.indent();
+        self.out.push_str("module ");
+        self.out.push_str(&module.name);
+        self.out.push_str(" {");
+        self.anchor("l", module.anchor.as_deref());
+        self.out.push('\n');
+
+        self.depth += 1;
+        let mut first_section = true;
+        for func in &module.functions {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.fn_decl(func);
+        }
+        for event in &module.events {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.event_block(event);
+        }
+        for nested in &module.modules {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.module_decl(nested);
+        }
+        self.depth -= 1;
+
         self.indent();
         self.out.push_str("}\n");
     }

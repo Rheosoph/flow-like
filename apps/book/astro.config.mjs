@@ -13,14 +13,53 @@ export default defineConfig({
 			title: "FlowBook",
 			description:
 				"The FlowScript book: build reliable software in code and as a visible workflow.",
+			credits: false,
+			favicon: "https://flow-like.com/favicon.svg",
 			customCss: ["./src/styles/book.css"],
+			components: {
+				ContentPanel: "./src/components/BookContentPanel.astro",
+				Hero: "./src/components/BookHero.astro",
+			},
 			editLink: {
 				baseUrl: "https://github.com/Rheosoph/flow-like/edit/main/apps/book/",
 			},
 			head: [
 				{
 					tag: "meta",
-					attrs: { name: "theme-color", content: "#171513" },
+					attrs: { name: "theme-color", content: "#0c0e13" },
+				},
+				{
+					tag: "meta",
+					attrs: {
+						property: "og:image",
+						content: "https://book.flow-like.com/og.png",
+					},
+				},
+				{
+					tag: "meta",
+					attrs: { property: "og:image:width", content: "1200" },
+				},
+				{
+					tag: "meta",
+					attrs: { property: "og:image:height", content: "630" },
+				},
+				{
+					tag: "meta",
+					attrs: {
+						property: "og:image:alt",
+						content: "FlowBook — source code becoming a visible workflow",
+					},
+				},
+				{
+					tag: "meta",
+					attrs: { name: "twitter:card", content: "summary_large_image" },
+				},
+				{
+					tag: "meta",
+					attrs: {
+						name: "twitter:image",
+						content: "https://book.flow-like.com/og.png",
+					},
 				},
 			],
 			social: [
@@ -83,6 +122,14 @@ export default defineConfig({
 						{
 							label: "9. Expressions, Operators, and Readable Sugar",
 							slug: "part-2/09-expressions-operators-readable-sugar",
+						},
+						{
+							label: "10. Branches, Loops, Parallelism, and Return",
+							slug: "part-2/10-branches-loops-parallelism-return",
+						},
+						{
+							label: "11. State, Configuration, Runtime Values, and Secrets",
+							slug: "part-2/11-state-configuration-runtime-values-secrets",
 						},
 					],
 				},

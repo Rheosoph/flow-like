@@ -2324,3 +2324,94 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 	margin-left: 2px;
 	border-radius: 2px;
 }
+
+/* ── FlowScript board comments ─────────────────────────────────────────── */
+
+/* Margin indicator for a comment thread bound to this line's statement: a
+   speech-bubble dot in the first author's peer color (flowscript-peer-slot-N
+   sets --fs-peer; neutral primary otherwise). Thread size ≥ 2 renders its
+   count via the matching count class below. */
+.flowscript-comment-margin {
+	cursor: pointer;
+}
+
+.flowscript-comment-margin::before {
+	content: "";
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 9px;
+	height: 9px;
+	transform: translateY(-50%);
+	border-radius: 6px 6px 6px 1px;
+	background: var(--fs-peer, var(--primary));
+	opacity: 0.85;
+}
+
+.flowscript-comment-margin::after {
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 9px;
+	transform: translateY(-50%);
+	text-align: center;
+	font-size: 7px;
+	font-weight: 700;
+	line-height: 9px;
+	color: white;
+}
+
+.flowscript-comment-count-2::after {
+	content: "2";
+}
+.flowscript-comment-count-3::after {
+	content: "3";
+}
+.flowscript-comment-count-4::after {
+	content: "4";
+}
+.flowscript-comment-count-5::after {
+	content: "5";
+}
+.flowscript-comment-count-6::after {
+	content: "6";
+}
+.flowscript-comment-count-7::after {
+	content: "7";
+}
+.flowscript-comment-count-8::after {
+	content: "8";
+}
+.flowscript-comment-count-9::after {
+	content: "9";
+}
+.flowscript-comment-count-many::after {
+	content: "+";
+}
+
+/* Hover-revealed "add a comment" affordance on commentable statement lines
+   without a thread. The margin div exists only for those lines, so the
+   opacity scoping is naturally per line. */
+.flowscript-comment-add {
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+
+.flowscript-comment-add:hover {
+	opacity: 0.9;
+}
+
+.flowscript-comment-add::before {
+	content: "+";
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 10px;
+	transform: translateY(-50%);
+	text-align: center;
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 10px;
+	color: var(--muted-foreground);
+}

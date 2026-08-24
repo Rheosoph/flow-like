@@ -3,7 +3,8 @@ title: "FlowBook: The FlowScript Book"
 description: Build reliable software in code and as a visible workflow.
 template: splash
 hero:
-  tagline: Software that explains itself.
+  title: "Software that <em>explains itself.</em>"
+  tagline: "A field guide to building typed, visible, governable software in Flow-Like—without choosing between precise source and an honest system view."
   actions:
     - text: Start reading
       link: /introduction/
@@ -13,75 +14,8 @@ hero:
       link: /contents/
       icon: open-book
       variant: minimal
-head:
-  - tag: meta
-    attrs:
-      property: og:image
-      content: https://book.flow-like.com/og.png
-  - tag: meta
-    attrs:
-      property: og:image:width
-      content: "1200"
-  - tag: meta
-    attrs:
-      property: og:image:height
-      content: "630"
-  - tag: meta
-    attrs:
-      property: og:image:alt
-      content: FlowBook — source code becoming a visible workflow
-  - tag: meta
-    attrs:
-      name: twitter:card
-      content: summary_large_image
-  - tag: meta
-    attrs:
-      name: twitter:image
-      content: https://book.flow-like.com/og.png
-  - tag: meta
-    attrs:
-      name: twitter:image:alt
-      content: FlowBook — source code becoming a visible workflow
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import BookHome from '../../components/BookHome.astro';
 
-FlowScript gives one program two honest ways to be understood: readable source code and a
-visible, typed workflow. The text is efficient when the system grows. The graph makes its
-structure, execution, and failures accessible to builders, reviewers, operators, and domain
-experts.
-
-This is the book about that contract—and about the platform designed around it.
-
-<CardGrid>
-  <Card title="Build in both views" icon="pencil">
-    Write FlowScript, inspect the same logic as a graph, and learn what every language
-    construct becomes at runtime.
-  </Card>
-  <Card title="Follow the evidence" icon="approve-check">
-    Run real Flows, break them deliberately, and trace each result or failure back to the
-    responsible building block.
-  </Card>
-  <Card title="Extend without hiding" icon="puzzle">
-    Use the catalog first, then add capability-scoped WASM nodes when the application needs a
-    reusable primitive that does not exist yet.
-  </Card>
-  <Card title="Ship the application" icon="rocket">
-    Connect logic to data, interfaces, Events, permissions, versions, governance, and the
-    shared Flow-Like runtime.
-  </Card>
-</CardGrid>
-
-## Two applications carry the story
-
-The first is **Incident Triage**, a small deterministic Flow that can be understood in a few
-minutes. You will build it visually, read it as FlowScript, change it from both directions,
-and diagnose a failure.
-
-The second is **Incident Room**, a private runbook and document assistant. It grows the same
-ideas into a complete application with data, retrieval, agent tools, interfaces, local
-models, versions, and observable executions.
-
-> The goal is not to turn every builder into an infrastructure specialist. It is to let
-> people solve the problem they understand without silently creating the next 3 a.m.
-> mystery.
+<BookHome />

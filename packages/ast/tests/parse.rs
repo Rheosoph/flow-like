@@ -1795,3 +1795,169 @@ fn call_serde_omits_empty_phase2_fields_and_accepts_their_absence() {
     let call: flow_like_ast::Call = serde_json::from_value(legacy).expect("legacy shape loads");
     assert!(call.path.is_empty() && call.receiver.is_none() && call.positional.is_empty());
 }
+
+// ---- module blocks (phase 3a) --------------------------------------------------------------
+
+#[test]
+fn roundtrip_module_blocks() {
+    let text = concat!(
+        "module checkout {\n",
+        "    function helper(x: string): (out: string) {\n",
+        "        return x\n",
+        "    }\n",
+        "\n",
+        "    eventsSimple onLoad() {\n",
+        "        logInfo({ message: \"hi\" })\n",
+        "    }\n",
+        "\n",
+        "    module payments {\n",
+        "        function charge(amount: float): (ok: bool) {\n",
+        "            return true\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "module shipping {\n",
+        "    eventsSimple shipped() {\n",
+        "        logInfo({ message: \"shipped\" })\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("module blocks parse");
+    assert_eq!(ast.modules.len(), 2);
+    assert_eq!(ast.modules[0].name, "checkout");
+    assert_eq!(ast.modules[0].functions.len(), 1);
+    assert_eq!(ast.modules[0].events.len(), 1);
+    assert_eq!(ast.modules[0].modules[0].name, "payments");
+    assert_eq!(ast.modules[0].modules[0].functions[0].name, "charge");
+    assert_eq!(ast.modules[1].name, "shipping");
+    assert!(ast.functions.is_empty() && ast.events.is_empty());
+
+    // Rendering is stable across passes, not just equal to the source once.
+    let once = render(&ast, &RenderOptions::default());
+    let twice = render(&parse(&once).expect("re-parses"), &RenderOptions::default());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn modules_render_after_the_other_sections() {
+    let text = concat!(
+        "use string::*\n",
+        "\n",
+        "const goal = \"ship\"\n",
+        "\n",
+        "function root(): (out: string) {\n",
+        "    return goal\n",
+        "}\n",
+        "\n",
+        "eventsSimple() {\n",
+        "    logInfo({ message: goal })\n",
+        "}\n",
+        "\n",
+        "module checkout {\n",
+        "    function helper(): (out: string) {\n",
+        "        return \"a\"\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn empty_module_block_round_trips() {
+    let text = "module checkout {\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("empty module parses");
+    assert_eq!(ast.modules.len(), 1);
+    assert!(ast.modules[0].functions.is_empty());
+    assert!(ast.modules[0].events.is_empty());
+    assert!(ast.modules[0].modules.is_empty());
+}
+
+#[test]
+fn module_anchor_survives_a_round_trip() {
+    let text = concat!(
+        "module checkout {   //@l:mod1\n",
+        "    function helper(): (out: string) {   //@l:fn1\n",
+        "        return \"a\"\n",
+        "    }\n",
+        "\n",
+        "    module payments {   //@l:mod2\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &anchored_opts());
+
+    let ast = parse(text).expect("anchored module parses");
+    assert_eq!(ast.modules[0].anchor.as_deref(), Some("mod1"));
+    assert_eq!(ast.modules[0].functions[0].anchor.as_deref(), Some("fn1"));
+    assert_eq!(ast.modules[0].modules[0].anchor.as_deref(), Some("mod2"));
+}
+
+#[test]
+fn module_is_a_contextual_keyword() {
+    // `module` only opens a block in the exact `module <ident> {` shape; everywhere else it is an
+    // ordinary identifier and must keep parsing as one.
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    const module = loadModule({ name: \"a\" })\n",
+        "    logInfo({ message: module, module: module.id })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("`module` as a binding parses");
+    assert!(ast.modules.is_empty());
+
+    // An event *type* or event *name* spelled `module` is still an event, not a module block.
+    let ast = parse("module() {\n    logInfo({ message: \"x\" })\n}\n").expect("event `module`");
+    assert!(ast.modules.is_empty());
+    assert_eq!(ast.events[0].name, "module");
+
+    let ast = parse("eventsSimple module() {\n    logInfo({ message: \"x\" })\n}\n")
+        .expect("event named `module`");
+    assert!(ast.modules.is_empty());
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("module"));
+}
+
+#[test]
+fn variable_declarations_inside_a_module_are_rejected() {
+    for source in [
+        "module checkout {\n    const x: string = \"a\"\n}\n",
+        "module checkout {\n    let x: string = \"a\"\n}\n",
+    ] {
+        let err = parse(source).expect_err("module bodies hold no variables");
+        assert!(
+            err.message.contains("variables are declared in main.flow"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn use_and_interface_declarations_inside_a_module_are_rejected() {
+    for source in [
+        "module checkout {\n    use foo::*\n}\n",
+        "module checkout {\n    interface X {}\n}\n",
+    ] {
+        let err = parse(source).expect_err("module bodies hold no use/interface declarations");
+        assert!(
+            err.message
+                .contains("declarations belong at the top of the file"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn unterminated_module_block_names_the_module() {
+    let err = parse("module checkout {\n    function helper() {\n    }\n").expect_err("unclosed");
+    assert!(
+        err.message.contains("inside module `checkout`"),
+        "{}",
+        err.message
+    );
+}

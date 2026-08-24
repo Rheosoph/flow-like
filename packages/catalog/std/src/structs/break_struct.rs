@@ -5,11 +5,11 @@ use flow_like::flow::{
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
-use std::collections::HashSet;
 use flow_like_types::{
     Value, async_trait,
     json::{Map, json},
 };
+use std::collections::HashSet;
 
 /// Unique identifier prefix for break struct pins to enable special connection rules
 pub const BREAK_STRUCT_PIN_PREFIX: &str = "__break_struct_field__";

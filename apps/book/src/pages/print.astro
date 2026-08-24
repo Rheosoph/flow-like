@@ -1,0 +1,247 @@
+---
+import { getEntry, render } from "astro:content";
+import flowLikeMark from "../../../web/public/base-logo.svg?raw";
+import {
+	CURRENT_BOOK_EDITION,
+	type BookEditionEntry,
+} from "../lib/book-edition";
+
+import "@fontsource-variable/inter";
+import "@fontsource-variable/source-serif-4";
+import "@fontsource-variable/jetbrains-mono";
+import "../styles/print.css";
+
+const edition = CURRENT_BOOK_EDITION;
+
+async function resolveEditionEntry<T extends BookEditionEntry>(reference: T) {
+	const entry = await getEntry("docs", reference.entryId);
+
+	if (!entry) {
+		throw new Error(
+			`FlowBook print edition references a missing docs entry: ${reference.entryId}`,
+		);
+	}
+
+	const { Content } = await render(entry);
+
+	return {
+		...reference,
+		entry,
+		Content,
+		title: entry.data.title,
+		description: entry.data.description,
+	};
+}
+
+const introduction = await resolveEditionEntry(edition.introduction);
+const IntroductionContent = introduction.Content;
+const parts = await Promise.all(
+	edition.parts.map(async (part) => ({
+		...part,
+		chapters: await Promise.all(
+			part.chapters.map((chapter) => resolveEditionEntry(chapter)),
+		),
+	})),
+);
+
+const chapterTitle = (title: string) => title.replace(/^\d+\.\s*/, "");
+const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*/, "");
+const canonicalUrl = new URL("/print/", Astro.site ?? Astro.url).toString();
+---
+
+<!doctype html>
+<html
+	lang={edition.language}
+	data-theme="light"
+	data-pagefind-ignore="all"
+	data-print-edition={edition.id}
+>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light" />
+		<meta name="theme-color" content="#0c0e13" />
+		<meta
+			name="description"
+			content={`${edition.description} ${edition.editionLabel}.`}
+		/>
+		<meta name="robots" content="noindex, follow" />
+		<link rel="canonical" href={canonicalUrl} />
+		<title>{edition.title}: {edition.subtitle} — Print edition</title>
+	</head>
+	<body class="flowbook-print">
+		<a class="print-skip-link" href="#print-main">Skip to book content</a>
+
+		<div class="print-front" data-pdf-front>
+			<header class="print-cover" aria-labelledby="print-book-title">
+				<div class="print-cover__brand">
+					<span
+						class="print-cover__mark print-cover__art"
+						aria-hidden="true"
+						set:html={flowLikeMark}
+					/>
+					<span>{edition.publisher}</span>
+				</div>
+
+				<div class="print-cover__title-block print-cover__content">
+					<p class="print-cover__eyebrow">One program · two honest views</p>
+					<h1 id="print-book-title">{edition.title}</h1>
+					<p class="print-cover__subtitle">{edition.subtitle}</p>
+					<p class="print-cover__description print-cover__thesis">
+						{edition.description}
+					</p>
+				</div>
+
+				<dl class="print-cover__metadata print-cover__meta">
+					<div>
+						<dt>Edition</dt>
+						<dd>{edition.editionLabel}</dd>
+					</div>
+					<div>
+						<dt>Publisher</dt>
+						<dd>{edition.publisher}</dd>
+					</div>
+					<div>
+						<dt>Web</dt>
+						<dd>book.flow-like.com</dd>
+					</div>
+				</dl>
+			</header>
+
+			<nav class="print-toc" aria-labelledby="print-toc-title">
+				<p class="print-toc__kicker">{edition.editionLabel}</p>
+				<h2 id="print-toc-title">Contents</h2>
+
+				<ol class="print-toc__list">
+					<li class="print-toc__entry print-toc__entry--introduction">
+						<a href={`#${introduction.anchor}`} data-toc-target={introduction.anchor}>
+							<span class="print-toc__number toc-number">Introduction</span>
+							<span class="print-toc__title toc-title">{introductionTitle}</span>
+							<span
+								class="print-toc__page toc-page"
+								data-toc-page={introduction.anchor}
+								aria-hidden="true">—</span
+							>
+						</a>
+					</li>
+
+					{
+						parts.map((part) => (
+							<li class="print-toc__part">
+								<a href={`#${part.anchor}`} data-toc-target={part.anchor}>
+									<span class="print-toc__number toc-part">{part.label}</span>
+									<span class="print-toc__title toc-title">{part.title}</span>
+									<span
+										class="print-toc__page toc-page"
+										data-toc-page={part.anchor}
+										aria-hidden="true"
+									>
+										—
+									</span>
+								</a>
+
+								<ol>
+									{part.chapters.map((chapter) => (
+										<li class="print-toc__entry">
+											<a href={`#${chapter.anchor}`} data-toc-target={chapter.anchor}>
+												<span class="print-toc__number toc-number">
+													{String(chapter.number).padStart(2, "0")}
+												</span>
+												<span class="print-toc__title toc-title">
+													{chapterTitle(chapter.title)}
+												</span>
+												<span
+													class="print-toc__page toc-page"
+													data-toc-page={chapter.anchor}
+													aria-hidden="true"
+												>
+													—
+												</span>
+											</a>
+										</li>
+									))}
+								</ol>
+							</li>
+						))
+					}
+				</ol>
+			</nav>
+		</div>
+
+		<main id="print-main" class="print-edition print-body" data-pdf-body>
+			<article
+				class="print-chapter print-chapter--introduction"
+				id={introduction.anchor}
+				data-pdf-chapter
+				data-entry-id={introduction.entryId}
+				data-chapter-title={introduction.title}
+				aria-labelledby={`${introduction.anchor}-title`}
+			>
+				<header class="print-chapter__header">
+					<p class="chapter-kicker">Introduction</p>
+					<h1 id={`${introduction.anchor}-title`}>{introductionTitle}</h1>
+					{
+						introduction.description && (
+							<p class="chapter-description">{introduction.description}</p>
+						)
+					}
+				</header>
+				<div class="chapter-content sl-markdown-content print-table-cards">
+					<IntroductionContent />
+				</div>
+			</article>
+
+			{
+				parts.map((part) => (
+					<>
+						<section
+							class="part-divider"
+							id={part.anchor}
+							data-pdf-part={part.id}
+							aria-labelledby={`${part.anchor}-title`}
+						>
+							<p class="part-divider__label part-kicker">{part.label}</p>
+							<h1 id={`${part.anchor}-title`}>{part.title}</h1>
+							<p class="part-description">{part.description}</p>
+						</section>
+
+						{part.chapters.map((chapter) => {
+							const ChapterContent = chapter.Content;
+							return (
+								<article
+									class="print-chapter"
+									id={chapter.anchor}
+									data-pdf-chapter
+									data-entry-id={chapter.entryId}
+									data-chapter-title={chapter.title}
+									aria-labelledby={`${chapter.anchor}-title`}
+								>
+									<header class="print-chapter__header">
+										<p class="chapter-kicker">
+											{part.label} · Chapter {String(chapter.number).padStart(2, "0")}
+										</p>
+										<h1 id={`${chapter.anchor}-title`}>
+											{chapterTitle(chapter.title)}
+										</h1>
+										{chapter.description && (
+											<p class="chapter-description">{chapter.description}</p>
+										)}
+									</header>
+									<div class="chapter-content sl-markdown-content print-table-cards">
+										<ChapterContent />
+									</div>
+								</article>
+							);
+						})}
+					</>
+				))
+			}
+
+			<footer class="print-footer">
+				<p>{edition.title} · {edition.subtitle}</p>
+				<p>{edition.editionLabel} · © {edition.year} {edition.publisher}</p>
+				<p>book.flow-like.com</p>
+			</footer>
+		</main>
+	</body>
+</html>

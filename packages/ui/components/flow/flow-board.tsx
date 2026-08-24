@@ -105,11 +105,13 @@ import { FlowPages } from "../../components/flow/flow-pages";
 import { EventPayloadForm } from "../../components/flow/flow-node/event-payload-form";
 import { deriveRunCapabilities } from "../../components/flow/flow-run-capabilities";
 import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
+import { resolveJoinableScopeNodeIds } from "../../components/flow/flowscript/flowscript-panel-state";
 import {
 	collectCommandEntityIds,
 	findClaimCollision,
 	readPeerFlowScriptClaims,
 	useFlowScriptCanvasPresence,
+	useFlowScriptPeerScopes,
 } from "../../components/flow/flowscript/flowscript-presence";
 import type {
 	FlowScriptRunCapability,
@@ -459,6 +461,7 @@ export function FlowBoard({
 		setVersion([parts[0], parts[1], parts[2]]);
 	}, [appId, boardId, initialVersionKey]);
 	const [initialized, setInitialized] = useState(false);
+	const [flowInstanceReady, setFlowInstanceReady] = useState(false);
 	const flowPanelRef = useRef<ImperativePanelHandle>(null);
 	const logPanelRef = useRef<ImperativePanelHandle>(null);
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
@@ -935,6 +938,10 @@ export function FlowBoard({
 	// (peer-colored outline + "being edited by" badge).
 	useFlowScriptCanvasPresence({ awareness, sub, setNodes });
 
+	// Peers' shared FlowScript scopes (sub → node ids) for the presence bar's
+	// "Join code scope" action.
+	const peerScopes = useFlowScriptPeerScopes({ awareness, sub });
+
 	// Cross-surface follow: the concrete handler is bound below once the
 	// FlowScript panel state exists; the ref keeps this callback stable.
 	const followEditorAnchorRef = useRef<(anchor: FollowedEditorAnchor) => void>(
@@ -1098,16 +1105,20 @@ export function FlowBoard({
 		if (size < 10) logPanelRef.current.resize(45);
 	}, [logPanelRef.current]);
 
-	const initializeFlow = useCallback(
-		async (_instance: ReactFlowInstance) => {
-			if (initialized) return;
-			if (!nodeId || nodeId === "") return;
+	const initializeFlow = useCallback(async (_instance: ReactFlowInstance) => {
+		setFlowInstanceReady(true);
+	}, []);
 
-			focusNode(nodeId);
-			setInitialized(true);
-		},
-		[nodeId, initialized, focusNode],
-	);
+	// React Flow commonly initializes before the async board query completes. Focusing from
+	// `onInit` therefore used to consume the deep-link exactly once while `board.data` was still
+	// empty. Wait for both halves instead; this is also the deterministic boundary used by the
+	// workflow screenshot CLI's `--focus-node` option.
+	useEffect(() => {
+		if (initialized || !flowInstanceReady || !board.data) return;
+		if (!nodeId || nodeId === "") return;
+		focusNode(nodeId);
+		setInitialized(true);
+	}, [board.data, flowInstanceReady, focusNode, initialized, nodeId]);
 
 	// Check if board is empty (no nodes) for showing template selector
 	const isBoardEmpty = useMemo(() => {
@@ -1310,6 +1321,46 @@ export function FlowBoard({
 		}
 		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
 	}, [selectedNodeIds, isMobile, setSidePanelSize]);
+
+	// Join a teammate's shared scoped session (presence bar action): validate
+	// their broadcast node ids against the local board — peers are untrusted and
+	// nodes may be gone — then open the panel on an independent COPY of the
+	// surviving scope. The peer exiting their session never affects this one.
+	const joinFlowScriptScope = useCallback(
+		(nodeIds: string[]) => {
+			const known = resolveJoinableScopeNodeIds(nodeIds, (nodeId) =>
+				Boolean(boardRef.current?.nodes?.[nodeId]),
+			);
+			if (known.length === 0) {
+				toastError(
+					t("flowscriptScopeGone", "That selection no longer exists"),
+					<XIcon />,
+				);
+				return;
+			}
+			setFlowScriptScope(known);
+			if (isMobile) {
+				setFlowScriptSheetOpen(true);
+				return;
+			}
+			setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
+		},
+		[isMobile, setSidePanelSize, t],
+	);
+
+	// Canvas "Go to code" (anchored comment toolbar): open/reveal the FlowScript
+	// panel at the comment's anchor. The reveal request retries until the
+	// freshly opened panel has rendered the anchor.
+	const openFlowScriptAtNode = useCallback(
+		(nodeId: string) => {
+			if (isMobile) setFlowScriptSheetOpen(true);
+			else setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
+			setFlowScriptRevealRequest({ nodeId, token: Date.now() });
+		},
+		[isMobile, setSidePanelSize],
+	);
+	const openFlowScriptAtNodeRef = useRef(openFlowScriptAtNode);
+	openFlowScriptAtNodeRef.current = openFlowScriptAtNode;
 
 	// Transient FlowScript-cursor highlight: a DOM class toggle on the rendered
 	// node, so it never touches selection, focus or the viewport. Nodes on other
@@ -2591,6 +2642,9 @@ export function FlowBoard({
 			catalogLookup,
 			selectorDataRef,
 			selectorDataVersion,
+			(comment: IComment) => {
+				if (comment.node_id) openFlowScriptAtNodeRef.current(comment.node_id);
+			},
 		);
 
 		setNodes(parsed.nodes);
@@ -3247,6 +3301,35 @@ export function FlowBoard({
 		await executeCommand(command);
 	}, [currentLayer, clickPosition, executeCommand, version]);
 
+	// FlowScript comment bridge: the editor mutates board comments through the
+	// same command funnel as the canvas (undo-able, sync-propagated). A comment
+	// carries its target layer; the upsert routes it via current_layer exactly
+	// like the canvas path does for the layer it renders in.
+	const onUpsertComment = useCallback(
+		async (comment: IComment) => {
+			await executeCommand(
+				upsertCommentCommand({ comment, current_layer: comment.layer ?? null }),
+			);
+		},
+		[executeCommand],
+	);
+	const onRemoveComment = useCallback(
+		async (comment: IComment) => {
+			await executeCommand(removeCommentCommand({ comment }));
+		},
+		[executeCommand],
+	);
+	// Position/layer of an anchored node so an editor-created comment lands
+	// next to it on the canvas.
+	const getNodeSpatial = useCallback((nodeId: string) => {
+		const node = boardRef.current?.nodes[nodeId];
+		if (!node) return undefined;
+		return {
+			coordinates: node.coordinates ?? undefined,
+			layer: node.layer ?? undefined,
+		};
+	}, []);
+
 	const onNodeDrag = useCallback(
 		(event: any, node: Node, nodes: Node[]) => {
 			if (shiftPressed) {
@@ -3692,6 +3775,13 @@ export function FlowBoard({
 						onJumpToLayer={jumpToLayer}
 						onOpenChat={handleToggleChat}
 						unreadCount={unreadCount}
+						peerScopes={peerScopes}
+						onJoinScope={
+							backend.boardState.getFlowScriptScoped &&
+							typeof version === "undefined"
+								? joinFlowScriptScope
+								: undefined
+						}
 					/>
 				)}
 				{/* Follow mode indicator */}
@@ -4178,6 +4268,10 @@ export function FlowBoard({
 							onRunEventNode={onRunEventNode}
 							runnableEventNodes={runnableEventNodes}
 							remoteExecutions={remoteExecutions}
+							comments={board.data.comments}
+							onUpsertComment={onUpsertComment}
+							onRemoveComment={onRemoveComment}
+							getNodeSpatial={getNodeSpatial}
 						/>
 					)}
 				</ResizablePanel>
@@ -4305,6 +4399,10 @@ export function FlowBoard({
 									onRunEventNode={onRunEventNode}
 									runnableEventNodes={runnableEventNodes}
 									remoteExecutions={remoteExecutions}
+									comments={board.data.comments}
+									onUpsertComment={onUpsertComment}
+									onRemoveComment={onRemoveComment}
+									getNodeSpatial={getNodeSpatial}
 								/>
 							</div>
 						)}

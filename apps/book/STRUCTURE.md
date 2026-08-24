@@ -34,6 +34,28 @@ transcripts, intentionally failing examples, and version badges. Establish that 
 node signatures are versioned reference material and that examples target a named Flow-Like
 release.
 
+### Introduction — One Program, Two Ways to See It
+
+Establish the self-explaining-software premise, define the graph/text contract, and explain
+why FlowScript adds textual scale without hiding arbitrary code inside workflow blocks.
+
+#### AI changes what is cheap
+
+Add the AI-era thesis near the beginning rather than waiting for the dedicated authoring
+chapter: AI multiplied development output, but architecture and maintenance skill remain
+scarce. Preserve the real speed gain of vibe coding while showing how plausible hidden
+decisions create expensive prototypes.
+
+Separate AI as an author from AI as a probabilistic runtime operation. State the
+deterministic-first rule, use the experimental `vibeincrement` package as an example that
+reads as satire without asserting its author's intent, argue for the smallest adequate model
+at the narrowest semantic boundary, and distinguish current usage controls from task-level
+evaluation and routing ambitions.
+
+**Evidence:** SRC-AI-AUTHORING, SRC-AI-DETERMINISTIC-FIRST, SRC-AI-USAGE-CONTROLS,
+SRC-AI-MODEL-SELECTION, SRC-AI-MODEL-INVENTORY, and SRC-VIBEINCREMENT.
+**Interview source:** INT-02 AI-era opening follow-up is complete.
+
 ---
 
 # Part I — Software That Explains Itself
@@ -444,8 +466,9 @@ tests and used to relate operators, Select, String Format, and Set Field to one 
 
 ## Chapter 10 — Branches, Loops, Parallelism, and Return
 
-**Summary:** Teach visible control flow while retaining the graph's exact execution arms and
-collection behavior.
+**Summary:** Teach control flow as visible topology: exact execution arms, loop ownership,
+bounded concurrency, explicit stopping conditions, and result boundaries that do not pretend
+to offer function-wide stack unwinding before the runtime can support it.
 
 ### 10.1 `if`, `else if`, and `else`
 
@@ -459,33 +482,54 @@ hidden behind exception-like magic.
 
 ### 10.3 `for … of`
 
-Cover value and index bindings, array inputs, sequential semantics, and the graph loop handle
-behind the sugar.
+Cover value and zero-based index bindings, one-time array evaluation, input-order sequential
+semantics, Done as the join point, and the current rule that the loop logs a failed body path
+and continues with later items.
 
 ### 10.4 `@parallel for`
 
-Make concurrency an opt-in design decision and discuss maximum concurrency, ordering, cost,
-and failure behavior.
+Make concurrency an opt-in design decision. Explain the current default of 30, explicit-call
+form for custom limits, Done as a barrier rather than an ordering guarantee, continued sibling
+work after failure, and the operational questions authors must answer before parallelizing
+external side effects.
 
 ### 10.5 `while`
 
-Teach bounded conditions, progress, cancellation, and why an unbounded workflow loop is an
-operational defect.
+Teach condition reevaluation, the default maximum of 15, explicit custom maximums, progress,
+cooperative cancellation, and why hitting the current silent ceiling must not be confused with
+domain success.
 
-### 10.6 `return`
+### 10.6 Structural stopping and skipping
 
-Connect return expressions to function output pins or event results and clarify which values
-are resolvable at a Flow boundary.
+Record that FlowScript has no `break` or `continue` statements today. Model continue-like skips
+with visible branches. Explain the separate Boolean-controlled For Each (Break) catalog node and
+why it is not currently ordinary loop sugar.
 
-**Evidence:** SRC-FLOWSCRIPT, SRC-RECONCILER, and SRC-EXECUTION.
-**Interview dependency:** INT-04 must define intended failure and concurrency guidance for
-production examples.
+### 10.7 `return`
+
+Connect function return expressions positionally to output pins, and Event returns to one
+terminal result node. Teach one final unconditional Function return and one logical Event result
+path: function-wide early termination is not implemented, Event returns terminate only their
+current branch, and first/last result aggregation differs across execution surfaces.
+
+### 10.8 Read the complete control-flow example
+
+Walk from source to graph through a Boolean branch, exact HTTP execution arms, sequential and
+parallel iteration, bounded While, a Function output, and an Event result.
+
+**Evidence:** SRC-FLOWSCRIPT, SRC-CONTROL-FLOW, SRC-RECONCILER, and SRC-EXECUTION.
+**Interview dependency:** Resolved in INT-04 for current loop ownership, bounded parallelism,
+maximum iteration handling, branch-scoped Event results, and sequential-by-default production
+guidance. Aggregate child-failure status and whole-function early return remain implementation
+gaps rather than interview questions.
+**Worked material:** `examples/control-flow/control.flow`, kept in canonical parser/render tests;
+add catalog-aware reconciliation, execution assertions, and a paired Board capture before final.
 
 ## Chapter 11 — State, Configuration, Runtime Values, and Secrets
 
-**Summary:** Separate ephemeral computation, Flow variables, per-environment configuration,
-secret values, app files, and durable records so readers do not use one mechanism for every
-kind of state.
+**Summary:** Separate ephemeral computation, run-local Flow variables, shared App defaults,
+client-local runtime configuration, secret values, files, caches, and durable records so readers
+do not use one mechanism for every kind of state.
 
 ### 11.1 Local bindings and Flow variables
 
@@ -503,25 +547,44 @@ Neither a previous run's mutation nor JavaScript's top-level immutability model 
 
 Cover `@category`, `@description`, `@readonly`, `@runtime`, and `@secret` as author-visible
 metadata with platform consequences. Clarify that `@readonly` is user-editable metadata, not
-a runtime write guard, and that interfaces are preferred over the legacy `@schema` form.
+a runtime write guard today, and that interfaces are preferred over the legacy `@schema` form.
+Record true runtime immutability as the intended contract rather than silently teaching the gap.
 
 ### 11.4 Runtime configuration
 
-Show how values vary safely by device or execution environment without rewriting the Flow.
+Show how values vary without rewriting the Flow. Distinguish the intended per-user-and-device
+contract from today's IndexedDB key, which is App plus variable inside a local client profile.
+Teach the interactive saved-value preflight, its presence-only check, and the missing universal
+fail-closed check in core/direct execution paths.
 
 ### 11.5 Secrets never become an authoring channel
 
 Explain redacted rendering, empty placeholders, trusted configuration, and the guarded
-declassification/type-change rules.
+declassification/type-change rules. Use local OpenAI BYOK for `@secret @runtime`, then distinguish
+it from hosted provider profiles and trusted server-side Event secrets. Never infer encryption or
+universal downstream redaction merely from masking and source omission.
 
 ### 11.6 Choose the right lifetime
 
 Compare local bindings, Flow variables, runtime values, App Storage, Data Studio records,
-cache, and chat/session state.
+cache, and chat/session state. Choose by the consequence of losing the value: cache only
+rebuildable/miss-tolerant state, use files for bulk static material, and use a database for
+queryable or correctness-bearing facts.
 
-**Evidence:** SRC-VARIABLES, SRC-REDACTION, and SRC-DATA.
-**Interview dependency:** INT-05 should provide the threat model and a real credential
-management example.
+### 11.7 Read the complete configuration example
+
+Walk through exposed URL, retry, and language defaults; a non-editable provider name; and a
+value-free local runtime OpenAI secret. Explain why last-sync and reference data are deliberately
+absent from the variable declarations.
+
+**Evidence:** SRC-VARIABLES, SRC-RUNTIME-CONFIG, SRC-REDACTION, SRC-DATA, and
+SRC-STATE-LIFETIMES.
+**Interview dependency:** Resolved in the INT-03 Chapter 11 follow-up for ownership, intended
+runtime scope, preflight, runtime immutability, lifetime selection, and the OpenAI BYOK example.
+INT-05 still supplies the broader WASM and hostile-package threat model for Chapters 21–22.
+**Worked material:** `examples/state-and-secrets/state.flow`, kept in canonical parser/render
+tests; add catalog-aware reconciliation and separate local/remote credential-path tests before
+final publication.
 
 ## Chapter 12 — Functions, Layers, Handlers, and Caching
 
@@ -902,37 +965,56 @@ reconciliation, review, execution, and logs—not as a privileged bypass around 
 Frame the new gap: generating source is easy, but understanding, scaling, governing, and
 repairing the result remains hard.
 
-### 20.2 Constrain the solution space productively
+### 20.2 Deterministic before probabilistic
+
+Apply the opening doctrine inside real applications: ordinary code and nodes handle exact
+work; model calls begin only where language, ambiguity, or judgment makes uncertainty useful.
+
+### 20.3 Author and runtime operation are different roles
+
+Separate AI proposing an application change from a model making a probabilistic decision
+inside a running Flow. Give each role its appropriate validation, evidence, permissions, and
+failure boundaries.
+
+### 20.4 Spend the smallest adequate intelligence
+
+Design narrow calls, compare task quality, latency, and cost, and use the smallest model that
+meets the measured contract. Show current App/user/model attribution, limits, profiles, and
+weighted routing without presenting automatic task evaluation as complete.
+
+### 20.5 Constrain the solution space productively
 
 Explain how known building blocks, types, permissions, and platform services reduce invalid
 and catastrophic outcomes without claiming that generated software is automatically correct.
 
-### 20.3 Declarations before invention
+### 20.6 Declarations before invention
 
 Show how an agent searches exact live node signatures instead of hallucinating calls and
 arguments.
 
-### 20.4 Draft, check, preview, commit
+### 20.7 Draft, check, preview, commit
 
 Follow retained source through diagnostics, repairs, command preview, explicit deletion
 intent, and an atomic application.
 
-### 20.5 Execute and inspect in a later loop
+### 20.8 Execute and inspect in a later loop
 
 Separate structural success from runtime proof; run the persisted entry, inspect logs, and
 feed concrete failure evidence into a focused repair.
 
-### 20.6 Parametrize and fork instead of rebuilding
+### 20.9 Parametrize and fork instead of rebuilding
 
 Develop the idea that many applications are variations of an existing shape and that a
 clonable, configurable App gives an AI a safer and faster starting point than a blank project.
 
-### 20.7 Humans can still read the result
+### 20.10 Humans can still read the result
 
 Return to the promise: a teammate outside the generation session can inspect the code, graph,
 packages, permissions, data, version, and evidence.
 
-**Evidence:** SRC-AI-AUTHORING, SRC-FLOWPILOT, and SRC-FLOWSCRIPT.
+**Evidence:** SRC-AI-AUTHORING, SRC-FLOWPILOT, SRC-FLOWSCRIPT,
+SRC-AI-DETERMINISTIC-FIRST, SRC-AI-USAGE-CONTROLS, SRC-AI-MODEL-SELECTION, and
+SRC-AI-MODEL-INVENTORY.
 **Interview dependency:** INT-08 is the primary source; it needs one successful and one failed
 AI-generated App story.
 

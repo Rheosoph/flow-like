@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::flow::board::Layer;
+use crate::flow::board::{Layer, LayerType};
 use crate::{
     flow::board::{Board, commands::Command},
     state::FlowLikeState,
@@ -42,6 +42,17 @@ impl Command for UpsertLayerCommand {
         let mut added_coordinates = (0.0, 0.0, 0.0);
         let mut total_coordinates = 0;
 
+        let is_module = matches!(self.layer.r#type, LayerType::Module);
+
+        // A module is organizational only: it has no boundary, so it can carry neither pins nor
+        // the cache that a function-layer call would look up.
+        if is_module {
+            self.layer.pins.clear();
+            self.layer.cache = None;
+            self.layer.in_coordinates = None;
+            self.layer.out_coordinates = None;
+        }
+
         // `current_layer` picks the parent for a layer that is being created. Updating an
         // existing layer must never move it: the boundary nodes of an open layer report that
         // layer as the current one, which would make it its own parent and cut it out of the
@@ -52,6 +63,16 @@ impl Command for UpsertLayerCommand {
             .map(|existing| existing.parent_id.clone())
             .unwrap_or_else(|| self.current_layer.clone())
             .filter(|parent| parent != &self.layer.id);
+
+        // A module only nests inside another module — anything else roots it.
+        if is_module {
+            self.layer.parent_id = self.layer.parent_id.take().filter(|parent| {
+                matches!(
+                    board.layers.get(parent).map(|layer| &layer.r#type),
+                    Some(LayerType::Module)
+                )
+            });
+        }
 
         self.old_layer = board
             .layers
@@ -84,6 +105,11 @@ impl Command for UpsertLayerCommand {
 
         for layer in board.layers.values_mut() {
             if nodes_set.contains(&layer.id) && layer.id != self.layer.id {
+                // A module child would lose its only legal home under anything but a module.
+                if !is_module && matches!(layer.r#type, LayerType::Module) {
+                    continue;
+                }
+
                 layer.parent_id = Some(self.layer.id.clone());
                 total_coordinates += 1;
                 added_coordinates = (
@@ -145,7 +171,9 @@ impl Command for UpsertLayerCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::LayerType;
+    use crate::flow::board::LayerCache;
+    use crate::flow::node::Node;
+    use crate::flow::variable::VariableType;
     use crate::state::{FlowLikeConfig, FlowLikeState};
     use crate::utils::http::HTTPClient;
     use flow_like_storage::Path;
@@ -221,5 +249,82 @@ mod tests {
         command.execute(&mut board, state()).await.expect("upsert");
 
         assert_eq!(board.layers["self"].parent_id, None);
+    }
+
+    fn module(id: &str) -> Layer {
+        Layer::new(id.into(), id.into(), LayerType::Module)
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_never_carries_a_boundary() {
+        let mut board = board_with_nested_layers();
+
+        let mut created = module("mod");
+        let mut node = Node::new("n", "N", "", "test");
+        let pin = node
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .clone();
+        created.pins.insert(pin.id.clone(), pin);
+        created.cache = Some(LayerCache::default());
+        created.in_coordinates = Some((1.0, 2.0, 3.0));
+        created.out_coordinates = Some((4.0, 5.0, 6.0));
+
+        let mut command = UpsertLayerCommand::new(created);
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        let stored = &board.layers["mod"];
+        assert!(stored.pins.is_empty());
+        assert_eq!(stored.cache, None);
+        assert_eq!(stored.in_coordinates, None);
+        assert_eq!(stored.out_coordinates, None);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_created_inside_a_non_module_lands_at_the_root() {
+        let mut board = board_with_nested_layers();
+
+        let mut command = UpsertLayerCommand::new(module("mod"));
+        command.current_layer = Some("inner".into());
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["mod"].parent_id, None);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_created_inside_a_module_keeps_its_parent() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        let parent = module("parent");
+        board.layers.insert(parent.id.clone(), parent);
+
+        let mut command = UpsertLayerCommand::new(module("child"));
+        command.current_layer = Some("parent".into());
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["child"].parent_id.as_deref(), Some("parent"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn adopting_never_moves_a_module_under_a_non_module() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        board.layers.insert("mod".into(), module("mod"));
+
+        let created = Layer::new("group".into(), "Group".into(), LayerType::Collapsed);
+        let mut command = UpsertLayerCommand::new(created);
+        command.node_ids = vec!["mod".into()];
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["mod"].parent_id, None);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_adopts_a_module_child() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        board.layers.insert("child".into(), module("child"));
+
+        let mut command = UpsertLayerCommand::new(module("parent"));
+        command.node_ids = vec!["child".into()];
+        command.execute(&mut board, state()).await.expect("upsert");
+
+        assert_eq!(board.layers["child"].parent_id.as_deref(), Some("parent"));
     }
 }

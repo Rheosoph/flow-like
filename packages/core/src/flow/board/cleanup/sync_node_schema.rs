@@ -537,7 +537,10 @@ mod tests {
         assert_eq!(kept.id, wired_id, "the pin id is what carries its edges");
         assert!(kept.depends_on.contains("upstream_pin"));
         assert!(
-            placed.error.as_deref().is_some_and(|e| e.contains("dropped")),
+            placed
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("dropped")),
             "the mismatch is reported instead of silently repaired, got {:?}",
             placed.error
         );

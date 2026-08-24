@@ -1,0 +1,742 @@
+---
+import { Image } from "astro:assets";
+import { Icon } from "@astrojs/starlight/components";
+import tracing from "../../../docs/src/assets/RunsAndLogs.webp";
+import appAnatomy from "../../../docs/src/assets/FlowLikeAppAnatomy.svg";
+
+const chapters = [
+	{
+		number: "01–04",
+		label: "PART I",
+		title: "Software that explains itself",
+		description:
+			"Begin with the 3 a.m. incident, state the operating principles, and build the first deterministic triage Flow.",
+		href: "/part-1/01-the-3-am-call/",
+	},
+	{
+		number: "05–10",
+		label: "PART II",
+		title: "Think and write in flows",
+		description:
+			"Move between nodes, pins, wires, values, interfaces, the catalog, and readable FlowScript without losing the graph.",
+		href: "/part-2/05-nodes-pins-wires-execution/",
+	},
+	{
+		number: "NEXT",
+		label: "CAPSTONE PATH",
+		title: "From incident triage to Incident Room",
+		description:
+			"Grow one understandable Flow into a governed application with data, interfaces, tools, versions, and observable runs.",
+		href: "/contents/",
+	},
+];
+---
+
+<div class="book-home">
+	<section class="book-home__premise" aria-labelledby="premise-title">
+		<div class="book-home__section-label">
+			<span>01 / THE CONTRACT</span>
+			<b>ONE PROGRAM · TWO HONEST VIEWS</b>
+		</div>
+		<div class="book-home__premise-copy">
+			<h2 id="premise-title">Code for precision.<br /><em>A system you can see.</em></h2>
+			<div>
+				<p>
+					FlowScript gives serious software a compact textual form without hiding the
+					graph, permissions, execution path, or evidence needed to operate it.
+				</p>
+				<a href="/introduction/">Read the premise <Icon name="right-arrow" /></a>
+			</div>
+		</div>
+
+		<div class="book-home__principles" aria-label="Core principles">
+			<article>
+				<span>01</span>
+				<h3>Author in both views</h3>
+				<p>Write precise source. Inspect and edit the same typed logic as a graph.</p>
+			</article>
+			<article>
+				<span>02</span>
+				<h3>Follow the evidence</h3>
+				<p>Trace results and failures back to the exact building block that produced them.</p>
+			</article>
+			<article>
+				<span>03</span>
+				<h3>Extend with boundaries</h3>
+				<p>Use reviewed catalog operations and capability-scoped WASM nodes.</p>
+			</article>
+			<article>
+				<span>04</span>
+				<h3>Ship the whole system</h3>
+				<p>Keep logic, data, interfaces, permissions, versions, and runs together.</p>
+			</article>
+		</div>
+	</section>
+
+	<section class="book-home__evidence" aria-labelledby="evidence-title">
+		<div class="book-home__evidence-copy">
+			<div class="book-home__section-label book-home__section-label--dark">
+				<span>02 / RUNTIME EVIDENCE</span>
+				<b>OBSERVABLE BY DEFAULT</b>
+			</div>
+			<h2 id="evidence-title">Read the logic.<br /><em>See the run.</em></h2>
+			<p>
+				The graph is not a presentation layer pasted over hidden code. It is the
+				persisted program the runtime executes—and the map you use when production asks
+				what happened.
+			</p>
+			<div class="book-home__evidence-facts">
+				<span><i aria-hidden="true"></i> TYPED OPERATIONS</span>
+				<span><i aria-hidden="true"></i> RECORDED RUNS</span>
+				<span><i aria-hidden="true"></i> EXPLICIT FAILURES</span>
+			</div>
+		</div>
+		<figure class="book-home__evidence-visual">
+			<div class="book-home__media-bar">
+				<span>RUN INSPECTOR / EXECUTION TRACE</span>
+				<b>STATUS: HEALTHY</b>
+			</div>
+			<Image
+				src={tracing}
+				alt="Flow-Like workflow with a detailed run inspector and execution logs"
+				width={1400}
+				quality={84}
+				loading="lazy"
+				decoding="async"
+			/>
+			<figcaption>REAL PRODUCT SURFACE · REPRESENTATIVE RUN DATA</figcaption>
+		</figure>
+	</section>
+
+	<section class="book-home__path" id="reading-path" aria-labelledby="path-title">
+		<div class="book-home__path-intro">
+			<div class="book-home__section-label">
+				<span>03 / READING PATH</span>
+				<b>TEN CHAPTERS · ONE BUILD</b>
+			</div>
+			<h2 id="path-title">A field guide,<br /><em>not a syntax tour.</em></h2>
+			<p>
+				Every chapter advances a real system. You will build it, inspect it, break it,
+				and carry the evidence forward.
+			</p>
+			<a class="book-home__text-link" href="/contents/">
+				View complete contents <Icon name="open-book" />
+			</a>
+		</div>
+
+		<div class="book-home__chapters">
+			{chapters.map((chapter) => (
+				<a class="book-home__chapter" href={chapter.href}>
+					<div>
+						<span>{chapter.label}</span>
+						<b>{chapter.number}</b>
+					</div>
+					<h3>{chapter.title}</h3>
+					<p>{chapter.description}</p>
+					<Icon name="right-arrow" />
+				</a>
+			))}
+		</div>
+	</section>
+
+	<section class="book-home__system" aria-labelledby="system-title">
+		<div class="book-home__system-copy">
+			<div class="book-home__section-label">
+				<span>04 / THE APPLICATION</span>
+				<b>LOGIC IS ONLY THE SPINE</b>
+			</div>
+			<h2 id="system-title">Build beyond<br /><em>the happy path.</em></h2>
+			<p>
+				Apps, Flows, data, Events, interfaces, packages, roles, versions, and audit
+				evidence stay in one legible operating model. The capstone brings those pieces
+				together as Incident Room.
+			</p>
+		</div>
+		<figure class="book-home__system-visual">
+			<img
+				src={appAnatomy.src}
+				alt="Architecture of a Flow-Like application from interfaces and events to flows, data, and the governed runtime"
+				width="1600"
+				height="900"
+				loading="lazy"
+				decoding="async"
+			/>
+			<figcaption>APPLICATION ANATOMY / GOVERNED FROM ENTRY POINT TO RUN</figcaption>
+		</figure>
+	</section>
+
+	<section class="book-home__closing" aria-labelledby="closing-title">
+		<div>
+			<span>START WITH THE INCIDENT</span>
+			<h2 id="closing-title">Make the software<br /><em>tell the truth.</em></h2>
+		</div>
+		<div>
+			<p>
+				Enter through the founding 3 a.m. call, then turn that operational pressure
+				into a small Flow you can read from either side.
+			</p>
+			<a class="book-home__start" href="/part-1/01-the-3-am-call/">
+				<span>Begin chapter one</span>
+				<Icon name="right-arrow" />
+			</a>
+		</div>
+	</section>
+
+	<footer class="book-home__footer">
+		<a href="https://flow-like.com">FLOW-LIKE</a>
+		<span>FLOWBOOK / THE FLOWSCRIPT BOOK</span>
+		<a href="https://github.com/Rheosoph/flow-like">OPEN SOURCE · GITHUB</a>
+	</footer>
+</div>
+
+<style>
+	.book-home,
+	.book-home * {
+		box-sizing: border-box;
+	}
+
+	.book-home {
+		--flowbook-ink: #18171b;
+		--flowbook-paper: #fcfaf8;
+		--flowbook-paper-deep: #f1ece8;
+		--flowbook-card: #fff;
+		--flowbook-orange: #f25535;
+		--flowbook-orange-dark: #a93626;
+		--flowbook-muted: #67646d;
+		--flowbook-rule: #e2dad5;
+		--home-content-max: 120rem;
+		--home-content-gutter: clamp(1.375rem, 7vw, 8.375rem);
+		--home-edge: max(
+			var(--home-content-gutter),
+			calc((100vw - var(--home-content-max)) / 2 + var(--home-content-gutter))
+		);
+		margin: 0;
+		font-family: var(--flowbook-sans);
+		color: var(--flowbook-ink);
+	}
+
+	.book-home :is(h2, h3, p, figure) {
+		margin: 0;
+	}
+
+	.book-home__premise,
+	.book-home__path,
+	.book-home__system {
+		padding: clamp(6rem, 10vw, 10rem) var(--home-edge);
+		background: var(--flowbook-paper);
+	}
+
+	.book-home__section-label {
+		display: flex;
+		justify-content: space-between;
+		gap: 2rem;
+		font: 700 0.58rem/1 var(--flowbook-mono);
+		letter-spacing: 0.16em;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__section-label span {
+		color: var(--flowbook-orange-dark);
+	}
+
+	.book-home__premise-copy {
+		margin-top: clamp(3rem, 7vw, 7rem);
+		display: grid;
+		grid-template-columns: minmax(0, 1.3fr) minmax(18rem, 0.7fr);
+		gap: clamp(3rem, 10vw, 11rem);
+		align-items: end;
+	}
+
+	.book-home h2 {
+		font-family: var(--flowbook-sans);
+		font-size: clamp(3.4rem, 6.5vw, 7rem);
+		font-weight: 670;
+		letter-spacing: -0.07em;
+		line-height: 0.9;
+	}
+
+	.book-home h2 em {
+		font-family: var(--flowbook-serif);
+		font-weight: 520;
+		font-style: italic;
+		letter-spacing: -0.055em;
+		color: var(--flowbook-orange);
+	}
+
+	.book-home__premise-copy > div p,
+	.book-home__path-intro > p,
+	.book-home__system-copy > p,
+	.book-home__closing > div:last-child > p {
+		font-family: var(--flowbook-serif);
+		font-size: clamp(1.06rem, 1.4vw, 1.25rem);
+		line-height: 1.65;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__premise-copy > div a,
+	.book-home__text-link {
+		width: fit-content;
+		margin-top: 1.8rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.7rem;
+		font-size: 0.78rem;
+		font-weight: 760;
+		text-decoration: none;
+		color: var(--flowbook-ink);
+	}
+
+	.book-home__premise-copy > div a :global(svg),
+	.book-home__text-link :global(svg) {
+		width: 0.95rem;
+		height: 0.95rem;
+		color: var(--flowbook-orange);
+		transition: transform 160ms ease;
+	}
+
+	.book-home__premise-copy > div a:hover :global(svg),
+	.book-home__text-link:hover :global(svg) {
+		transform: translateX(0.2rem);
+	}
+
+	.book-home__principles {
+		margin-top: clamp(5rem, 9vw, 9rem);
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		border-top: 1px solid var(--flowbook-rule);
+		border-bottom: 1px solid var(--flowbook-rule);
+	}
+
+	.book-home__principles article {
+		min-height: 16rem;
+		padding: 1.35rem 1.35rem 2rem;
+		border-right: 1px solid var(--flowbook-rule);
+	}
+
+	.book-home__principles article:last-child {
+		border-right: 0;
+	}
+
+	.book-home__principles span {
+		font: 700 0.58rem/1 var(--flowbook-mono);
+		letter-spacing: 0.12em;
+		color: var(--flowbook-orange-dark);
+	}
+
+	.book-home__principles h3 {
+		margin-top: 5.25rem;
+		font-size: 1.12rem;
+		letter-spacing: -0.025em;
+	}
+
+	.book-home__principles p {
+		margin-top: 0.75rem;
+		font-family: var(--flowbook-serif);
+		font-size: 0.98rem;
+		line-height: 1.55;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__evidence {
+		display: grid;
+		grid-template-columns: minmax(24rem, 0.7fr) minmax(32rem, 1.3fr);
+		gap: clamp(3rem, 8vw, 9rem);
+		align-items: center;
+		padding: clamp(6rem, 10vw, 10rem) var(--home-edge);
+		background:
+			radial-gradient(circle at 14% 72%, rgba(241, 70, 40, 0.19), transparent 30rem),
+			#0c0e13;
+		color: #f6f1ed;
+	}
+
+	.book-home__section-label--dark {
+		color: rgba(246, 241, 237, 0.68);
+	}
+
+	.book-home__section-label--dark span {
+		color: #ff7658;
+	}
+
+	.book-home__evidence h2 {
+		margin-top: 3rem;
+		color: #f6f1ed;
+	}
+
+	.book-home__evidence-copy > p {
+		max-width: 34rem;
+		margin-top: 2rem;
+		font-family: var(--flowbook-serif);
+		font-size: 1.08rem;
+		line-height: 1.7;
+		color: #a5a7af;
+	}
+
+	.book-home__evidence-facts {
+		margin-top: 2.4rem;
+		display: grid;
+		gap: 0.7rem;
+		font: 650 0.56rem/1 var(--flowbook-mono);
+		letter-spacing: 0.13em;
+		color: rgba(246, 241, 237, 0.62);
+	}
+
+	.book-home__evidence-facts span {
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+	}
+
+	.book-home__evidence-facts i {
+		width: 0.35rem;
+		height: 0.35rem;
+		border-radius: 50%;
+		background: #ff6547;
+		box-shadow: 0 0 0.8rem rgba(255, 101, 71, 0.8);
+	}
+
+	.book-home__evidence-visual {
+		overflow: hidden;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 1.1rem;
+		background: #12151a;
+		box-shadow: 0 3rem 7rem rgba(0, 0, 0, 0.38);
+	}
+
+	.book-home__media-bar {
+		height: 2.85rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 1rem;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.11);
+		font: 650 0.52rem/1 var(--flowbook-mono);
+		letter-spacing: 0.12em;
+		color: rgba(246, 241, 237, 0.68);
+	}
+
+	.book-home__media-bar b {
+		color: #ff7658;
+	}
+
+	.book-home__evidence-visual :global(img),
+	.book-home__system-visual img {
+		width: 100%;
+		height: auto;
+		display: block;
+	}
+
+	.book-home__evidence-visual figcaption,
+	.book-home__system-visual figcaption {
+		padding: 0.8rem 1rem;
+		font: 600 0.5rem/1 var(--flowbook-mono);
+		letter-spacing: 0.12em;
+		color: rgba(246, 241, 237, 0.66);
+	}
+
+	.book-home__path {
+		display: grid;
+		grid-template-columns: minmax(21rem, 0.72fr) minmax(30rem, 1.28fr);
+		gap: clamp(4rem, 10vw, 12rem);
+		align-items: start;
+	}
+
+	.book-home__path-intro {
+		position: sticky;
+		top: calc(var(--sl-nav-height) + 3rem);
+	}
+
+	.book-home__path-intro h2 {
+		margin-top: 3rem;
+	}
+
+	.book-home__path-intro > p {
+		max-width: 30rem;
+		margin-top: 2rem;
+	}
+
+	.book-home__chapters {
+		border-top: 1px solid var(--flowbook-rule);
+	}
+
+	.book-home__chapter {
+		position: relative;
+		min-height: 17rem;
+		display: grid;
+		grid-template-columns: 7rem minmax(0, 1fr);
+		grid-template-rows: auto 1fr;
+		gap: 0.8rem 2.5rem;
+		padding: 1.5rem 3.5rem 2.2rem 0;
+		border-bottom: 1px solid var(--flowbook-rule);
+		text-decoration: none;
+		color: var(--flowbook-ink);
+		transition: color 180ms ease, padding-left 180ms ease;
+	}
+
+	.book-home__chapter > div {
+		grid-row: 1 / span 2;
+		display: grid;
+		align-content: space-between;
+	}
+
+	.book-home__chapter > div span,
+	.book-home__chapter > div b {
+		font: 700 0.56rem/1 var(--flowbook-mono);
+		letter-spacing: 0.13em;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__chapter > div b {
+		font-size: 1.35rem;
+		color: var(--flowbook-orange);
+	}
+
+	.book-home__chapter h3 {
+		align-self: end;
+		max-width: 16ch;
+		font-size: clamp(1.65rem, 2.7vw, 2.75rem);
+		letter-spacing: -0.045em;
+		line-height: 1.02;
+	}
+
+	.book-home__chapter p {
+		max-width: 37rem;
+		font-family: var(--flowbook-serif);
+		font-size: 1rem;
+		line-height: 1.58;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__chapter > :global(svg) {
+		position: absolute;
+		top: 1.5rem;
+		right: 0;
+		width: 1.1rem;
+		height: 1.1rem;
+		color: var(--flowbook-orange);
+		transition: transform 180ms ease;
+	}
+
+	.book-home__chapter:hover {
+		padding-left: 0.75rem;
+		color: var(--flowbook-orange-dark);
+	}
+
+	.book-home__chapter:hover > :global(svg) {
+		transform: translate(0.2rem, -0.2rem);
+	}
+
+	.book-home__system {
+		display: grid;
+		grid-template-columns: minmax(22rem, 0.7fr) minmax(32rem, 1.3fr);
+		gap: clamp(4rem, 8vw, 9rem);
+		align-items: center;
+		background: var(--flowbook-paper-deep);
+	}
+
+	.book-home__system-copy h2 {
+		margin-top: 3rem;
+	}
+
+	.book-home__system-copy > p {
+		max-width: 34rem;
+		margin-top: 2rem;
+	}
+
+	.book-home__system-visual {
+		margin: 0;
+		overflow: hidden;
+		border: 1px solid var(--flowbook-rule);
+		border-radius: 1.15rem;
+		background: #0c0e13;
+		box-shadow: 0 2.5rem 6rem color-mix(in srgb, var(--flowbook-ink) 14%, transparent);
+	}
+
+	.book-home__system-visual figcaption {
+		border-top: 1px solid rgba(255, 255, 255, 0.1);
+	}
+
+	.book-home__closing {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: clamp(4rem, 10vw, 12rem);
+		padding: clamp(5rem, 8vw, 8rem) var(--home-edge);
+		background: linear-gradient(120deg, #641b1c, #8f2523 52%, #a63824);
+		color: white;
+	}
+
+	.book-home__closing > div:first-child > span {
+		font: 700 0.58rem/1 var(--flowbook-mono);
+		letter-spacing: 0.16em;
+		color: rgba(255, 255, 255, 0.9);
+	}
+
+	.book-home__closing h2 {
+		margin-top: 2rem;
+		color: white;
+	}
+
+	.book-home__closing h2 em {
+		color: rgba(255, 255, 255, 0.9);
+	}
+
+	.book-home__closing > div:last-child {
+		align-self: end;
+	}
+
+	.book-home__closing > div:last-child > p {
+		color: #fff;
+	}
+
+	.book-home__start {
+		width: min(100%, 24rem);
+		height: 3.7rem;
+		margin-top: 2rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 1.2rem;
+		border: 1px solid rgba(255, 255, 255, 0.34);
+		border-radius: 0.7rem;
+		background: rgba(255, 255, 255, 0.11);
+		backdrop-filter: blur(1rem);
+		font-size: 0.8rem;
+		font-weight: 760;
+		text-decoration: none;
+		color: white;
+		transition: transform 180ms ease, background 180ms ease;
+	}
+
+	.book-home__start :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	.book-home__start:hover {
+		transform: translateY(-3px);
+		background: rgba(255, 255, 255, 0.19);
+		color: white;
+	}
+
+	.book-home__footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 2rem var(--home-edge);
+		border-top: 1px solid rgba(255, 255, 255, 0.09);
+		background: #0c0e13;
+		font: 650 0.52rem/1 var(--flowbook-mono);
+		letter-spacing: 0.13em;
+		color: rgba(246, 241, 237, 0.66);
+	}
+
+	.book-home__footer a {
+		text-decoration: none;
+		color: #ff7658;
+	}
+
+	.book-home a:focus-visible {
+		outline: 2px solid var(--flowbook-orange);
+		outline-offset: 4px;
+	}
+
+	.book-home a.book-home__start:focus-visible {
+		outline: 3px solid white;
+		outline-offset: 3px;
+		box-shadow: 0 0 0 6px #18171b;
+	}
+
+	@media (max-width: 70rem) {
+		.book-home__principles {
+			grid-template-columns: repeat(2, 1fr);
+		}
+
+		.book-home__principles article:nth-child(2) {
+			border-right: 0;
+		}
+
+		.book-home__principles article:nth-child(-n + 2) {
+			border-bottom: 1px solid var(--flowbook-rule);
+		}
+
+		.book-home__evidence,
+		.book-home__system,
+		.book-home__path {
+			grid-template-columns: 1fr;
+		}
+
+		.book-home__path-intro {
+			position: static;
+		}
+
+		.book-home__evidence-copy,
+		.book-home__system-copy {
+			max-width: 45rem;
+		}
+	}
+
+	@media (max-width: 58rem) {
+		.book-home__premise-copy,
+		.book-home__closing {
+			grid-template-columns: 1fr;
+		}
+
+		.book-home__chapter {
+			min-height: 15rem;
+		}
+	}
+
+	@media (max-width: 38rem) {
+		.book-home__section-label b {
+			display: none;
+		}
+
+		.book-home h2 {
+			font-size: clamp(3.1rem, 15vw, 4.8rem);
+		}
+
+		.book-home__principles {
+			grid-template-columns: 1fr;
+		}
+
+		.book-home__principles article {
+			min-height: 13rem;
+			border-right: 0;
+			border-bottom: 1px solid var(--flowbook-rule);
+		}
+
+		.book-home__principles article:last-child {
+			border-bottom: 0;
+		}
+
+		.book-home__principles h3 {
+			margin-top: 3.5rem;
+		}
+
+		.book-home__media-bar b {
+			display: none;
+		}
+
+		.book-home__chapter {
+			grid-template-columns: 4.5rem minmax(0, 1fr);
+			gap: 0.75rem 1.25rem;
+			padding-right: 2rem;
+		}
+
+		.book-home__footer {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
+		.book-home__footer span {
+			order: -1;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.book-home a,
+		.book-home a :global(svg) {
+			transition: none;
+		}
+	}
+</style>

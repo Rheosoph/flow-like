@@ -205,6 +205,7 @@ export enum ILayerType {
 	Collapsed = "Collapsed",
 	Function = "Function",
 	Macro = "Macro",
+	Module = "Module",
 }
 
 export interface IVariable {

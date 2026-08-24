@@ -1197,6 +1197,7 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
         variables,
         functions: Vec::new(),
         events: Vec::new(),
+        modules: Vec::new(),
     };
     let mut module_node_counts = BTreeMap::new();
     let mut root_node_count = 0_usize;

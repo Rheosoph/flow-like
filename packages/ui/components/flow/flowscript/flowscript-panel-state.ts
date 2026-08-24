@@ -55,6 +55,31 @@ export function resolveFlowScriptScope(
 	return { kind: "scoped", nodeIds: [...requestedNodeIds] };
 }
 
+/** Set equality on scope node ids — order and duplicates are irrelevant. */
+export function sameScopeNodeIds(
+	a: readonly string[],
+	b: readonly string[],
+): boolean {
+	const setA = new Set(a);
+	const setB = new Set(b);
+	if (setA.size !== setB.size) return false;
+	for (const id of setA) if (!setB.has(id)) return false;
+	return true;
+}
+
+/**
+ * Joining a peer's shared scope validates their node ids against the LOCAL
+ * board first: unknown ids (deleted nodes, other boards) are dropped, and an
+ * all-unknown scope yields an empty list so the caller can refuse to open a
+ * session on a selection that no longer exists.
+ */
+export function resolveJoinableScopeNodeIds(
+	requestedNodeIds: readonly string[],
+	isKnownNodeId: (nodeId: string) => boolean,
+): string[] {
+	return [...new Set(requestedNodeIds)].filter(isKnownNodeId);
+}
+
 /** A source-only repair still needs a canonical reload even when no board command executed. */
 export function shouldReloadFlowScriptAfterApply({
 	commandCount,

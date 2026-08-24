@@ -170,8 +170,7 @@ impl WasmModule {
         }
 
         // Create temporary instance to call get_node
-        let mut instance =
-            WasmInstance::new(engine, self.clone(), security.for_metadata()).await?;
+        let mut instance = WasmInstance::new(engine, self.clone(), security.for_metadata()).await?;
         let definition = instance.call_get_node().await?;
 
         // Cache it

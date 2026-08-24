@@ -107,6 +107,10 @@ pub enum LayerType {
     Function,
     Macro,
     Collapsed,
+    /// Purely organizational grouping — a "virtual file" for flow organization. Has no
+    /// boundary pins, no cache and no runtime effect. May only be nested inside another
+    /// `Module`.
+    Module,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]

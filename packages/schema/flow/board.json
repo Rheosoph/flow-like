@@ -887,7 +887,7 @@
 		},
 		"LayerType": {
 			"type": "string",
-			"enum": ["Function", "Macro", "Collapsed"]
+			"enum": ["Function", "Macro", "Collapsed", "Module"]
 		},
 		"LayerCache": {
 			"description": "Result caching for a layer invoked as a function.\n\nA hit replaces the whole call: the function body never runs, so its side effects do\nnot happen either. Only turn this on for layers whose outputs are a function of their\ninputs.",

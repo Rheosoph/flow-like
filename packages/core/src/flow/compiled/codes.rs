@@ -152,6 +152,7 @@ pub fn layer_type_code(v: &LayerType) -> u8 {
         LayerType::Function => 0,
         LayerType::Macro => 1,
         LayerType::Collapsed => 2,
+        LayerType::Module => 3,
     }
 }
 
@@ -160,6 +161,7 @@ pub fn layer_type_from(code: u8) -> Result<LayerType> {
         0 => LayerType::Function,
         1 => LayerType::Macro,
         2 => LayerType::Collapsed,
+        3 => LayerType::Module,
         _ => return Err(anyhow!("invalid LayerType code {code} in compiled board")),
     })
 }

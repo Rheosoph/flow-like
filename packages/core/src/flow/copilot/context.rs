@@ -271,6 +271,7 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
                     LayerType::Function => "Function",
                     LayerType::Macro => "Macro",
                     LayerType::Collapsed => "Collapsed",
+                    LayerType::Module => "Module",
                 }
                 .to_string(),
                 parent_id: layer.parent_id.clone(),

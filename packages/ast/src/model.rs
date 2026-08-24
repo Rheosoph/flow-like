@@ -26,6 +26,26 @@ pub struct BoardAst {
     pub functions: Vec<FnDecl>,
     /// Exec entrypoints (start / event-callback nodes), each owning a block.
     pub events: Vec<EventBlock>,
+    /// Module blocks (from `LayerType::Module`), rendered last in the given order.
+    #[serde(default)]
+    pub modules: Vec<ModuleDecl>,
+}
+
+/// A `module name { … }` block: a namespace grouping functions, events and nested modules.
+///
+/// Purely structural at the language level — resolution and lowering live in core. A module body
+/// carries no `use`/`interface`/variable declarations; those stay at the top of the document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleDecl {
+    pub name: String,
+    /// Stable identity anchor (the layer id).
+    pub anchor: Option<String>,
+    #[serde(default)]
+    pub functions: Vec<FnDecl>,
+    #[serde(default)]
+    pub events: Vec<EventBlock>,
+    #[serde(default)]
+    pub modules: Vec<ModuleDecl>,
 }
 
 /// A top-level `use` declaration (Rust `use`-tree subset over `::` namespace paths).

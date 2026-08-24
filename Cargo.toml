@@ -64,6 +64,7 @@ members = [
     "packages/compiler",
     "packages/wasm",
     "apps/utils/board-decoder",
+    "apps/utils/flowscript-render-data",
     "packages/dexie-tauri-adapter/backend",
 ]
 

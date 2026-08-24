@@ -307,7 +307,8 @@ async fn a_schema_change_never_cuts_a_wired_field_pin() {
         .get_mut(&files)
         .unwrap()
         .schema = Some(
-        r#"{"title":"Renamed","type":"object","properties":{"label":{"type":"string"}}}"#.to_string(),
+        r#"{"title":"Renamed","type":"object","properties":{"label":{"type":"string"}}}"#
+            .to_string(),
     );
 
     settle(&mut board, &logics).await;
@@ -411,7 +412,10 @@ async fn unplugging_a_producer_restores_the_open_marker() {
     assert!(field_pins(&board, "struct_break").is_empty());
     let struct_in = pin_named(&board, "struct_break", "struct_in");
     assert!(
-        struct_in.schema.as_deref().is_some_and(is_open_object_schema),
+        struct_in
+            .schema
+            .as_deref()
+            .is_some_and(is_open_object_schema),
         "struct_in must accept any struct again, got {:?}",
         struct_in.schema
     );

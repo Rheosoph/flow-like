@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
 	FLOWSCRIPT_CLAIMS_FIELD,
 	FLOWSCRIPT_CURSOR_FIELD,
+	FLOWSCRIPT_SCOPE_FIELD,
 	MAX_CLAIM_ANCHORS,
+	MAX_SCOPE_NODES,
 	MAX_WIRE_COLUMN,
 	MAX_WIRE_DLINE,
 	sanitizeClaimsForWire,
 	sanitizeCursorForWire,
 	sanitizeForWire,
+	sanitizeScopeForWire,
 	wireSafetyViolations,
 } from "./flowscript-presence-protocol";
 
@@ -139,9 +142,82 @@ describe("FlowScript presence wire schema (collab rule 2)", () => {
 			}),
 		).toBeDefined();
 		expect(
+			sanitizeForWire(FLOWSCRIPT_SCOPE_FIELD, {
+				nodeIds: [VALID_ID],
+				ts: 1,
+			}),
+		).toBeDefined();
+		expect(
 			// biome-ignore lint/suspicious/noExplicitAny: exercising the unknown-field path
 			(sanitizeForWire as any)("chatMessage", { text: "hi" }),
 		).toBeUndefined();
+	});
+
+	test("scope: passes a valid payload through with only known keys", () => {
+		const sanitized = sanitizeScopeForWire({
+			nodeIds: [VALID_ID, OTHER_ID],
+			ts: 42,
+			note: "leaked code text: const x = 1",
+		});
+		expect(sanitized).toEqual({ nodeIds: [VALID_ID, OTHER_ID], ts: 42 });
+		expect(Object.keys(sanitized as object).sort()).toEqual(["nodeIds", "ts"]);
+	});
+
+	test("scope: drops non-id entries, dedupes, and caps the set", () => {
+		const sanitized = sanitizeScopeForWire({
+			nodeIds: [
+				VALID_ID,
+				VALID_ID,
+				"function main() { return board }",
+				...Array.from(
+					{ length: 200 },
+					(_, i) => `scopenode00${String(i).padStart(8, "0")}`,
+				),
+			],
+			ts: 1,
+		});
+		expect(sanitized).toBeDefined();
+		expect(sanitized?.nodeIds.length).toBe(MAX_SCOPE_NODES);
+		expect(sanitized?.nodeIds[0]).toBe(VALID_ID);
+		expect(sanitized?.nodeIds.filter((id) => id === VALID_ID).length).toBe(1);
+	});
+
+	test("scope: an all-invalid or empty set publishes nothing", () => {
+		expect(
+			sanitizeScopeForWire({ nodeIds: ["free text!", ""], ts: 1 }),
+		).toBeUndefined();
+		expect(sanitizeScopeForWire({ nodeIds: [], ts: 1 })).toBeUndefined();
+		expect(sanitizeScopeForWire({ ts: 1 })).toBeUndefined();
+		expect(sanitizeScopeForWire("nodeIds")).toBeUndefined();
+		expect(sanitizeScopeForWire(undefined)).toBeUndefined();
+	});
+
+	test("scope: hostile payloads come out metadata-only or not at all", () => {
+		const hostile: unknown[] = [
+			{ nodeIds: [VALID_ID, "leak: pin values", OTHER_ID], ts: 123 },
+			{ nodeIds: [VALID_ID], ts: Number.MAX_SAFE_INTEGER, evil: { a: "b" } },
+			{ nodeIds: [VALID_ID], ts: -5 },
+		];
+		for (const payload of hostile) {
+			const sanitized = sanitizeScopeForWire(payload);
+			expect(sanitized).toBeDefined();
+			expect(wireSafetyViolations(sanitized)).toEqual([]);
+		}
+	});
+
+	test("scope: schema walk flags free text and oversized node lists", () => {
+		expect(
+			wireSafetyViolations({ nodeIds: ["some code fragment"], ts: 1 }),
+		).not.toEqual([]);
+		expect(
+			wireSafetyViolations({
+				nodeIds: Array.from({ length: 500 }, () => VALID_ID),
+				ts: 1,
+			}),
+		).not.toEqual([]);
+		expect(
+			wireSafetyViolations({ nodeIds: [VALID_ID], ts: 1, scopeName: "Q3" }),
+		).not.toEqual([]);
 	});
 
 	test("schema walk: every sanitizable hostile payload comes out metadata-only", () => {

@@ -17,7 +17,23 @@ bun run --cwd apps/book dev
 Use `bun run --cwd apps/book check` for content and type diagnostics, and
 `bun run --cwd apps/book build` for the static production build.
 
-The published manuscript lives in `src/content/docs`. The introduction and first nine
+## Export the print edition
+
+Generate the light, A4 print edition from the current manuscript:
+
+```sh
+bun run --cwd apps/book pdf
+```
+
+The command builds the dedicated `/print/` edition, calculates the contents-page
+numbers from the finished body, adds running headers and page numbers, embeds the local
+book fonts, and writes `output/pdf/flowbook.pdf`. If `dist` is already current, use
+`bun run --cwd apps/book pdf:from-dist` to run only the PDF stage.
+
+The browser preview at `/print/` is intentionally light-only so it matches the printable
+artifact rather than the dark documentation UI.
+
+The published manuscript lives in `src/content/docs`. The introduction and first eleven
 chapters are drafted; the complete editorial plan and interview dependencies remain beside
 the app.
 
@@ -120,6 +136,23 @@ Every chapter follows these rules:
    not footnotes to hide.
 8. **Prefer concepts over catalog tours.** The catalog changes; the principles behind typed,
    visible, governable building blocks endure.
+
+## Render workflow screenshots
+
+Book diagrams can be generated directly from the checked-in `.flow` examples with the real
+reconciler, Studio auto-layout, and desktop workflow canvas:
+
+```sh
+bun run workflow:screenshot -- \
+  apps/book/examples/incident-triage/triage.flow \
+  --output apps/book/src/assets/workflows/incident-triage.webp \
+  --layout balanced \
+  --theme light
+```
+
+Use `--list-nodes` to inspect reconciled IDs, then `--focus-node <selector>` for a
+zoomed detail. Keep exploratory captures under `tmp/workflow-screenshots`; committed book
+art belongs under `apps/book/src/assets/workflows`.
 
 ## Editorial files
 

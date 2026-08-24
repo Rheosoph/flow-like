@@ -1,0 +1,25 @@
+use ai::provider::{ openai }
+use log::{ info }
+
+@description("Base URL used by the incident AI provider")
+@category("Incident AI")
+let apiBaseUrl = "https://api.openai.com/v1"
+@description("Maximum number of provider attempts")
+@category("Incident AI")
+let retryLimit = 3
+@description("Language used for generated incident explanations")
+@category("Incident AI")
+let preferredLanguage = "en"
+@description("Provider name fixed by this Flow")
+@readonly
+const providerName = "OpenAI"
+@description("Bring-your-own OpenAI API key for local execution")
+@category("Incident AI")
+@secret
+@runtime
+const openAiApiKey: string
+
+eventsGeneric configureIncidentAssistant(payload: Struct, report: string) {
+    const model = openai({ provider: providerName, endpoint: apiBaseUrl, apiKey: openAiApiKey })
+    info({ message: `Configured ${preferredLanguage} incident analysis with at most ${retryLimit} attempt(s)`, toast: false })
+}

@@ -980,6 +980,7 @@ impl<'a> Lowering<'a> {
             variables,
             functions,
             events,
+            modules: Vec::new(),
         }
     }
 

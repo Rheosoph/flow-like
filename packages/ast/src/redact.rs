@@ -515,6 +515,19 @@ mod tests {
     }
 
     #[test]
+    fn module_blocks_pass_through_untouched() {
+        // Redaction is line-based and keys off `const`/`let`, so a module header carries no value
+        // to drop; only the declarations nested inside one are affected.
+        let source = "module checkout {   //@l:mod1\n    function helper(): (out: string) {\n        let label: string = \"internal\"\n    }\n}";
+        let redacted = redact_flowscript(source);
+        assert_eq!(
+            redacted.text,
+            "module checkout {   //@l:mod1\n    function helper(): (out: string) {\n        let label: string\n    }\n}"
+        );
+        assert_eq!(redacted.dropped_values, 1);
+    }
+
+    #[test]
     fn short_template_literals_survive_and_long_ones_generalize() {
         let source = "call({ text: `hello ${name}` })";
         let redacted = redact_flowscript(source);

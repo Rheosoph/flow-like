@@ -14,7 +14,7 @@ to the speaker for wording approval.
 | --- | --- | --- | --- |
 | INT-01 | Origin and manifesto | Complete | 1, 2, Epilogue |
 | INT-02 | Audience, platform, security, deployment, and AI | Complete, fact-check follow-up required | 2, 3, 20, 22–25 |
-| INT-03 | Language design and the two-view contract | Complete; code-verified notes added | 5–16, 26 |
+| INT-03 | Language design and the two-view contract | Complete; Chapter 11 follow-up code-checked | 5–16, 26 |
 | INT-04 | Runtime reliability, incidents, execution, and observability | In progress; failure, evidence, and rerun answers code-checked | 4, 5, 10, 15, 17, 24 |
 | INT-05 | WASM threat model and the no-inline-code decision | Planned | 11, 21, 22 |
 | INT-06 | Governance, packages, scores, and publication | Planned | 2, 23 |
@@ -120,6 +120,58 @@ agents access to the resulting declarations, validation, and logs. The founder a
 applications as variations that should be parametrized and forked rather than regenerated
 from nothing.
 
+### AI-era opening doctrine
+
+Flow-Like predates the generative-AI wave; the relevance to AI crystallized later. The founder
+uses AI extensively as an experienced developer because it increases exploration and delivery
+speed. The main danger is not code generation itself but plausible, wrongly assumed decisions
+about architecture and implementation. Without experienced guidance, AI is more likely to
+produce a prototype than a complete product: something that may run, but may also be costly to
+generate, expensive to operate, difficult to scale, and impossible for the next person to
+maintain.
+
+The editorial thesis supplied in the interview is:
+
+> AI made scaling development cheap. Maintenance and architecture skill remain scarce.
+
+“Scaling development” means multiplying software output, not making the generated system
+scalable. This is a pro-AI argument for encoding more architectural and operational knowledge
+in the platform rather than expecting every author to supply it from experience.
+
+The founder's deterministic-first rule is: if a task can be solved deterministically, solve it
+that way. Use models as rarely as necessary and at the narrowest possible semantic boundary.
+This covers arithmetic, exact parsing, routing, filtering, deterministic classification, and
+ordinary data transformations. Model calls should be focused and should use the smallest model
+that has demonstrated adequate quality for the task.
+
+The `vibeincrement` Python package is the verified anecdote recalled in the interview. Version
+0.1.0 was published in August 2025 as an explicit experiment, not a production recommendation.
+Its implementation sends the integer and an `increment` instruction to `gpt-4o-mini`, parses a
+structured integer result, and performs no local addition. The book may say it reads as satire
+and use it to expose the real temptation to replace exact software with unnecessary model
+calls; it must not assert the author's intent or present the package as evidence of widespread
+production practice.
+
+AI has two roles that the manuscript should keep distinct. As an author, it proposes source or
+graph changes that must pass through the catalog, type system, reconciliation, preview, and
+normal execution evidence. As a runtime operation, it introduces an intentionally
+probabilistic boundary that should be explicit, narrow, evaluated, costed, and surrounded by
+deterministic preparation, validation, and failure handling. AI authors should receive tighter
+structural limits, including the current per-layer node budget, rather than an ungoverned
+escape hatch.
+
+The cost-control ambition includes App and user attribution, budgets, automatic task-level
+model evaluation, and selecting a model under cost and intelligence constraints. The current
+implementation supports App/user/model usage attribution, App and technical-user limits,
+user-owned model profiles, and weighted selection across cost and capability traits. Automatic
+per-task App evaluation, a smallest-adequate-model guarantee, and human-user budget editing
+must be described as incomplete rather than shipped guarantees.
+
+Reuse is part of the AI thesis. Before generating a fresh application, a human or AI should
+prefer a governed, parameterized App whose structure already works. A document-assistant App
+that is forked and connected to the new owner's files, permissions, and preferred local or
+hosted model is the working example.
+
 ### Follow-up prompts
 
 1. Rank the audiences for the first edition. Who must be delighted even if another audience
@@ -183,14 +235,54 @@ JavaScript semantics:
 - neither keyword makes the runtime value immutable—`@readonly` sets the variable's
   user-editable metadata to false but does not prevent a Flow from assigning the value during
   its run;
-- `@runtime` marks a value as configured per user at runtime, and `@secret` marks it for
-  sensitive handling and redaction; and
+- `@runtime` selects the runtime-configuration channel—currently local client profile/device
+  storage or an Event override—and `@secret` marks a value for sensitive handling and source/read
+  omission; and
 - function-local `const` bindings to node outputs and mutable `let` aliases/accumulators are a
   separate scope with different authoring semantics.
 
 This distinction needs an explicit warning in the variables chapter. It is both a useful
 example of FlowScript serving the graph model and a likely trap for readers arriving from
 TypeScript.
+
+### State, configuration, and secret doctrine for Chapter 11
+
+The founder's placement for the Incident App is deliberately mixed rather than “make everything
+a global variable”:
+
+- `apiBaseUrl`, `retryLimit`, and `preferredLanguage` are exposed shared configuration;
+- an OpenAI API token is a secret runtime value for local bring-your-own-key execution;
+- `lastSuccessfulSync` belongs in cache only when losing it causes a safe repeat, otherwise in a
+  durable database; and
+- reference data belongs in a file, cache, or database according to its size, freshness, query
+  pattern, and consequence of loss.
+
+Flow authors decide which values are configurable. An exposed value lets people authorized to
+edit the App or Board change its shared default without opening FlowScript. A runtime value asks
+the runner to configure their own value. The intended runtime scope is user plus device, stored
+locally. The code check found a narrower current guarantee: Web and Desktop key IndexedDB records
+by App and variable inside the local client profile, with no authenticated user ID in the key and
+no server synchronization. The book therefore says **local client profile/device** until account
+isolation is implemented explicitly.
+
+`@secret` and `@runtime` should be combined for a personal credential. This works for trusted local
+execution today. The standard hosted client removes secret runtime values from remote payloads, so
+hosted OpenAI BYOK should use the private provider/model profile and unattended execution should
+use a trusted server-side Event secret. Neither a masked field nor secret-free FlowScript proves
+that every local store is independently encrypted or that arbitrary downstream logs are redacted.
+
+Two intended invariants are stronger than the current implementation. First, every required value
+must pass configuration preflight before any node runs. The standard interactive path prompts for
+a saved value, but direct/core paths may fall back to an Event override, Board default, or `null`,
+and the saved-record check is not full value validation. Second, `@readonly` should eventually
+prevent assignment during execution. Today it locks definition/configuration editing while Set
+Variable can still mutate the run-local value. Both are recorded as product follow-ups, not current
+guarantees.
+
+The governing editorial rule is:
+
+> Choose a state mechanism by the cost of losing the value, not by the convenience of its write
+> node.
 
 ### Type-safety doctrine for Chapter 7
 
@@ -405,6 +497,39 @@ the book will return to the original 3 a.m. incident as a clearly labeled counte
 node-attributed evidence describes what would have changed, not an outcome Flow-Like historically
 delivered on that call.
 
+For collection loops, the founder wants the loop to own iteration failures: one failed body path
+does not discard later items. That matches the current sequential and parallel loop nodes, which
+log a child error and continue. It does not settle the enclosing terminal status. The intended
+rule remains that an unhandled child error makes the aggregate run Failed after sibling work has
+settled; current loop implementations can instead return Success from the loop and leave the
+overall run successful despite Error evidence. The manuscript must present that as a gap.
+
+Parallelism is configuration, not a visual accident. The current Parallel For Each node already
+has a maximum-concurrency setting: 30 by default, with non-positive values treated as unlimited.
+The founder's production rule is to keep external APIs, model calls, tickets, and database writes
+sequential unless the author has proved that bounded overlap is safe. Order, idempotency,
+downstream quotas, shared state, cost, and recovery all have to be designed explicitly. Failures
+do not cancel sibling iterations, and no stable result order should be inferred from parallel
+completion.
+
+Every While loop needs maximum-iteration handling. Current While reevaluates its condition and is
+bounded to 15 iterations by default, but reaching that ceiling activates Done without a distinct
+Exhausted outcome or warning. A maximum is therefore a runtime guard, not evidence of domain
+success. If exhaustion matters, the Flow must represent and inspect it explicitly.
+
+The founder describes today's `return` as scoped to the current execution branch, with a missing
+whole-function return node. The code check sharpens that statement: an Event/handler return is a
+terminal result node for one branch and does not cancel siblings; a Function return is currently
+only data wiring to Function output pins and terminates no execution path at all. The safe Function
+shape is one final unconditional return. Multiple Event results are also not portable: some
+execution surfaces retain the first emitted result and others retain the last merged or observed
+result. Authors should create one logical result path.
+
+FlowScript has no `break` or `continue` statements today. Continue-like behavior is a visible
+branch that omits the remainder of an iteration. A separate For Each (Break) catalog node samples
+a Boolean Break input, but it is not registered as FlowScript loop sugar and must not be taught as
+a keyword.
+
 ### Remaining questions
 
 - **Q1:** What runtime invariant matters most when a Flow has hundreds or thousands of nodes?
@@ -430,6 +555,15 @@ delivered on that call.
    settle; a successfully handled error remains visible but does not fail the run.
 4. **Implementation follow-up:** remote run history needs a permission-checked path to recover
    the stored payload before it can support the same payload-only Re-Run contract as local runs.
+5. **Resolved:** ordinary iteration failures do not stop later items; production examples should
+   represent per-item outcomes and must not rely on today's loop node to make aggregate status
+   Failed.
+6. **Resolved:** external side effects are sequential by default. Parallel examples use a finite
+   concurrency limit and explain ordering, idempotency, quotas, cost, and recovery.
+7. **Resolved:** While loops require a maximum, but reaching it is not synonymous with success;
+   the current lack of an Exhausted outcome is an implementation follow-up.
+8. **Resolved:** use one final unconditional Function return and one logical Event result path
+   until function-wide termination and consistent result aggregation exist.
 
 ## INT-05 — WASM threat model and the no-inline-code decision
 

@@ -7,13 +7,16 @@ import {
 	cursorToWire,
 	deriveClaimedAnchorIds,
 	deriveRemoteEditorsByNode,
+	deriveScopesBySub,
 	findClaimCollision,
+	peersSharingFlowScriptScope,
 	readPeerFlowScriptClaims,
 	resolveWireCursor,
 } from "./flowscript-presence";
 import {
 	FLOWSCRIPT_CLAIMS_FIELD,
 	FLOWSCRIPT_CURSOR_FIELD,
+	FLOWSCRIPT_SCOPE_FIELD,
 } from "./flowscript-presence-protocol";
 
 const LAYER_ID = "layeranchor000000001";
@@ -301,6 +304,7 @@ describe("remote editors by node (canvas projection)", () => {
 			],
 			claims: [{ clientId: 2, sub: "peer-a", anchorIds: [LOG_ID, IF_ID] }],
 			canvasSelections: [],
+			scopes: new Map(),
 		});
 		expect(byNode.get(LOG_ID)).toEqual([
 			{ clientId: 2, sub: "peer-a", active: true },
@@ -513,5 +517,120 @@ describe("undo/apply claim collisions (rule 3)", () => {
 		expect(readPeerFlowScriptClaims(awareness, "same-user")).toEqual([
 			{ clientId: 2, sub: "peer-a", anchorIds: [NODE_B] },
 		]);
+	});
+});
+
+describe("shared scoped sessions (presence store + helpers)", () => {
+	const scopeState = (nodeIds: string[], ts = 1) => ({
+		[FLOWSCRIPT_SCOPE_FIELD]: { nodeIds, ts },
+	});
+
+	test("collects peers' scopes into a clientId-keyed map, sanitized, self filtered", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(1, { sub: "me", ...scopeState([CONST_ID]) });
+		awareness.states.set(2, { sub: "me", ...scopeState([CONST_ID]) });
+		awareness.states.set(3, {
+			sub: "peer-a",
+			...scopeState([CONST_ID, "free text!", IF_ID]),
+		});
+		awareness.states.set(4, {
+			sub: "peer-b",
+			[FLOWSCRIPT_SCOPE_FIELD]: { nodeIds: [], ts: 1 },
+		});
+		const { raf, caf } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, {
+			raf,
+			caf,
+			selfSub: "me",
+		});
+		const scopes = store.getSnapshot().scopes;
+		expect([...scopes.keys()]).toEqual([3]);
+		expect(scopes.get(3)).toEqual({
+			sub: "peer-a",
+			nodeIds: [CONST_ID, IF_ID],
+		});
+		store.dispose();
+	});
+
+	test("scope heartbeats (ts-only changes) short-circuit without notifying", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(2, { sub: "peer-a", ...scopeState([CONST_ID], 100) });
+		const { raf, caf, flushFrame } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, { raf, caf });
+		let emissions = 0;
+		store.subscribe(() => emissions++);
+		awareness.states.set(2, { sub: "peer-a", ...scopeState([CONST_ID], 200) });
+		awareness.emitChange();
+		flushFrame();
+		expect(emissions).toBe(0);
+
+		awareness.states.set(2, {
+			sub: "peer-a",
+			...scopeState([CONST_ID, IF_ID], 300),
+		});
+		awareness.emitChange();
+		flushFrame();
+		expect(emissions).toBe(1);
+		expect(store.getSnapshot().scopes.get(2)?.nodeIds).toEqual([
+			CONST_ID,
+			IF_ID,
+		]);
+		store.dispose();
+	});
+
+	test("a withdrawn scope leaves the map", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(2, { sub: "peer-a", ...scopeState([CONST_ID]) });
+		const { raf, caf, flushFrame } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, { raf, caf });
+		expect(store.getSnapshot().scopes.size).toBe(1);
+		awareness.states.set(2, { sub: "peer-a" });
+		awareness.emitChange();
+		flushFrame();
+		expect(store.getSnapshot().scopes.size).toBe(0);
+		store.dispose();
+	});
+
+	test("peersSharingFlowScriptScope matches on SET equality, not render order", () => {
+		const scopes = new Map([
+			[2, { sub: "peer-a", nodeIds: [IF_ID, CONST_ID] }],
+			[3, { sub: "peer-b", nodeIds: [CONST_ID] }],
+			[4, { sub: "peer-c", nodeIds: [CONST_ID, IF_ID, LOG_ID] }],
+		]);
+		expect(peersSharingFlowScriptScope(scopes, [CONST_ID, IF_ID])).toEqual([
+			{ clientId: 2, sub: "peer-a" },
+		]);
+		expect(peersSharingFlowScriptScope(scopes, [CONST_ID])).toEqual([
+			{ clientId: 3, sub: "peer-b" },
+		]);
+		expect(peersSharingFlowScriptScope(scopes, [LOG_ID])).toEqual([]);
+		expect(peersSharingFlowScriptScope(scopes, [])).toEqual([]);
+	});
+
+	test("peersSharingFlowScriptScope lists one entry per user across sessions", () => {
+		const scopes = new Map([
+			[2, { sub: "peer-a", nodeIds: [CONST_ID] }],
+			[5, { sub: "peer-a", nodeIds: [CONST_ID] }],
+			[7, { sub: undefined, nodeIds: [CONST_ID] }],
+			[8, { sub: undefined, nodeIds: [CONST_ID] }],
+		]);
+		expect(peersSharingFlowScriptScope(scopes, [CONST_ID])).toEqual([
+			{ clientId: 2, sub: "peer-a" },
+			{ clientId: 7, sub: undefined },
+			{ clientId: 8, sub: undefined },
+		]);
+	});
+
+	test("deriveScopesBySub keys by sub, first session wins, sub-less dropped", () => {
+		const scopes = new Map([
+			[2, { sub: "peer-a", nodeIds: [CONST_ID] }],
+			[5, { sub: "peer-a", nodeIds: [IF_ID] }],
+			[6, { sub: undefined, nodeIds: [LOG_ID] }],
+			[7, { sub: "peer-b", nodeIds: [LOG_ID] }],
+		]);
+		const bySub = deriveScopesBySub(scopes);
+		expect([...bySub.keys()]).toEqual(["peer-a", "peer-b"]);
+		expect(bySub.get("peer-a")).toEqual([CONST_ID]);
+		expect(bySub.get("peer-b")).toEqual([LOG_ID]);
 	});
 });

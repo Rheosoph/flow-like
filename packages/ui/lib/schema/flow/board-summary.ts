@@ -61,6 +61,7 @@ export interface IBoardSummaryMetrics {
 		collapsed: number;
 		function: number;
 		macro: number;
+		module: number;
 	};
 }
 

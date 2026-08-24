@@ -1730,6 +1730,7 @@ fn layer_type_from_str(value: &Option<String>) -> LayerType {
     match value.as_deref().unwrap_or("Collapsed") {
         "Function" | "function" => LayerType::Function,
         "Macro" | "macro" => LayerType::Macro,
+        "Module" | "module" => LayerType::Module,
         _ => LayerType::Collapsed,
     }
 }
