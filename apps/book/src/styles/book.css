@@ -343,10 +343,13 @@ header.header .social-icons::after {
 	text-wrap: balance;
 }
 
-.sl-markdown-content h2 {
-	margin-block-start: 4.5rem;
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
 	padding-top: 1.2rem;
 	border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 78%, transparent);
+}
+
+.sl-markdown-content h2 {
+	margin-block-start: 4.5rem;
 	font-size: clamp(1.9rem, 3.5vw, 2.7rem);
 	line-height: 1.06;
 }
