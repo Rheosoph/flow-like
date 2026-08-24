@@ -6,7 +6,7 @@ function normalizeSystemId(systemId: string): (normalized: string) {
     return systemId.trim()
 }
 
-@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600, scope: "app" })
+@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600 })
 function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
     let team = "platform-on-call"
     let runbook = "runbooks/general.md"

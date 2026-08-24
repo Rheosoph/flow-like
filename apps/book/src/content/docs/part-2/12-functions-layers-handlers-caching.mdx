@@ -230,11 +230,8 @@ shim does not invent additional approval on its own.
 Flow-Like never silently decides that a function should be cached. The author opts in visibly:
 
 ```ts
-@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600, scope: "app" })
-function resolveSystem(
-    systemId: string,
-    directoryRevision: string,
-): (team: string, runbook: string) {
+@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600 })
+function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
     // deterministic lookup
 }
 ```
@@ -281,8 +278,9 @@ exists for exactly this reason.
 
 FlowScript's bare `@cache` currently means namespace `global`, a five-minute lifetime, and App
 scope. The visual Function editor starts from different defaults today, including no expiry. Until
-those surfaces converge, this book always writes the complete object form. `ttlSeconds: 0` means no
-expiry and should be reserved for entries with an explicit invalidation and cleanup plan.
+those surfaces converge, this book writes the settings-object form with an explicit namespace and
+TTL. App scope is the canonical FlowScript default and is therefore omitted here. `ttlSeconds: 0`
+means no expiry and should be reserved for entries with an explicit invalidation and cleanup plan.
 
 Cache failure is designed to degrade into ordinary execution: an unavailable backend or unusable
 entry produces a warning and the function runs. A write is best-effort and does not turn a
@@ -364,7 +362,7 @@ function normalizeSystemId(systemId: string): (normalized: string) {
     return systemId.trim()
 }
 
-@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600, scope: "app" })
+@cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600 })
 function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
     // deterministic, side-effect-free resolution
 }

@@ -1082,7 +1082,6 @@ async function main() {
 	const discoveryPdfPath = resolve(tempDirectory, "body-discovery.pdf");
 	const discoveryTextPath = resolve(tempDirectory, "body-discovery.txt");
 	const bodyPdfPath = resolve(tempDirectory, "body.pdf");
-	const provisionalFrontPdfPath = resolve(tempDirectory, "front-provisional.pdf");
 	const frontPdfPath = resolve(tempDirectory, "front.pdf");
 	const mergedPdfPath = resolve(tempDirectory, "flowbook.pdf");
 
@@ -1130,7 +1129,7 @@ async function main() {
 
 		const printDocument = await normalizePrintDocument(page);
 		console.log(
-			`Prepared ${printDocument.chapters.length} chapters; ` +
+			`Prepared ${printDocument.targets.length} contents targets across ${printDocument.chapters.length} chapters; ` +
 				`${printDocument.stats.convertedTables} dense tables converted, ` +
 				`${printDocument.stats.wideCodeBlocks} wide and ${printDocument.stats.veryWideCodeBlocks} very-wide code blocks classified.`,
 		);
@@ -1138,24 +1137,18 @@ async function main() {
 		await setPrintPass(page, "body");
 		console.log("Rendering body discovery pass...");
 		await renderPdf(page, discoveryPdfPath, {
-			displayHeaderFooter: true,
-			headerTemplate: HEADER_TEMPLATE,
-			footerTemplate: FOOTER_TEMPLATE,
-			margin: { top: "16mm", right: "0mm", bottom: "16mm", left: "0mm" },
+			displayHeaderFooter: false,
 		});
-		const { pageByChapterId } = await discoverChapterPages(
+		const { pageByChapterId: pageByTargetId } = await discoverChapterPages(
 			discoveryPdfPath,
 			discoveryTextPath,
-			printDocument.chapters,
+			printDocument.targets,
 		);
 
 		await removeDiscoveryMarkers(page);
 		console.log("Rendering clean body...");
 		await renderPdf(page, bodyPdfPath, {
-			displayHeaderFooter: true,
-			headerTemplate: HEADER_TEMPLATE,
-			footerTemplate: FOOTER_TEMPLATE,
-			margin: { top: "16mm", right: "0mm", bottom: "16mm", left: "0mm" },
+			displayHeaderFooter: false,
 		});
 		const PDFDocument = pdfLib.PDFDocument;
 		const discoveryPageCount = await readPdfPageCount(PDFDocument, discoveryPdfPath);
@@ -1167,41 +1160,17 @@ async function main() {
 		}
 
 		await setPrintPass(page, "front");
-		await injectTocPageNumbers(page, pageByChapterId, 0);
-		console.log("Measuring front matter...");
-		await renderPdf(page, provisionalFrontPdfPath, {
-			displayHeaderFooter: false,
-			margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
-		});
-		let expectedFrontPageCount = await readPdfPageCount(
-			PDFDocument,
-			provisionalFrontPdfPath,
-		);
-
-		let finalFrontPageCount = expectedFrontPageCount;
-		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const updatedEntries = await injectTocPageNumbers(
-				page,
-				pageByChapterId,
-				expectedFrontPageCount,
+		const updatedEntries = await injectTocPageNumbers(page, pageByTargetId, 0);
+		if (updatedEntries < printDocument.targets.length) {
+			throw new Error(
+				`Only ${updatedEntries} of ${printDocument.targets.length} front-matter TOC entries matched printable sections. Add data-toc-target or href links for every part and chapter.`,
 			);
-			if (updatedEntries === 0) {
-				throw new Error(
-					"No front-matter TOC page labels matched rendered chapters. " +
-						"Add data-toc-target or href links to chapter entries.",
-				);
-			}
-			await renderPdf(page, frontPdfPath, {
-				displayHeaderFooter: false,
-				margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
-			});
-			finalFrontPageCount = await readPdfPageCount(PDFDocument, frontPdfPath);
-			if (finalFrontPageCount === expectedFrontPageCount) break;
-			expectedFrontPageCount = finalFrontPageCount;
-			if (attempt === 2) {
-				throw new Error("Front-matter pagination did not stabilize after three passes.");
-			}
 		}
+		console.log("Rendering front matter with body-local page numbers...");
+		await renderPdf(page, frontPdfPath, {
+			displayHeaderFooter: false,
+		});
+		const finalFrontPageCount = await readPdfPageCount(PDFDocument, frontPdfPath);
 
 		console.log(
 			`Merging ${finalFrontPageCount} front pages with ${bodyPageCount} body pages...`,
@@ -1211,8 +1180,8 @@ async function main() {
 			frontPdfPath,
 			bodyPdfPath,
 			mergedPdfPath,
-			chapters: printDocument.chapters,
-			bodyPageByChapterId: pageByChapterId,
+			targets: printDocument.targets,
+			bodyPageByTargetId: pageByTargetId,
 		});
 
 		await mkdir(dirname(options.outputPath), { recursive: true });
