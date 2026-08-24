@@ -48,6 +48,8 @@ export interface IComment {
 	coordinates: number[];
 	id: string;
 	timestamp: ISystemTime;
+	/** Board node this comment is attached to (presentation only — may dangle if the node is deleted; missing node = unanchored). */
+	node_id?: null | string;
 	[property: string]: any;
 }
 

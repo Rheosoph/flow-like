@@ -1,0 +1,25 @@
+{
+	"name": "@flow-like/flowbook",
+	"type": "module",
+	"version": "0.0.1",
+	"private": true,
+	"scripts": {
+		"dev": "astro dev",
+		"start": "astro dev",
+		"build": "astro build",
+		"check": "astro check",
+		"deploy": "bun run build && bunx wrangler pages deploy dist",
+		"deploy:force": "bun run build && bunx wrangler pages deploy dist --branch main",
+		"preview": "astro preview",
+		"astro": "astro"
+	},
+	"dependencies": {
+		"@astrojs/starlight": "0.41.7",
+		"astro": "^7.2.2",
+		"sharp": "^0.35.3"
+	},
+	"devDependencies": {
+		"@astrojs/check": "0.9.10",
+		"typescript": "^5.9.3"
+	}
+}

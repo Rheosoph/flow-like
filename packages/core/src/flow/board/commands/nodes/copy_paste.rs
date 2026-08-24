@@ -33,6 +33,15 @@ pub struct CopyPasteCommand {
     pub current_layer: Option<String>,
     pub old_mouse: Option<(f32, f32, f32)>,
     pub offset: (f32, f32, f32),
+    /// Source id → minted id for every node, pin and layer this paste created.
+    ///
+    /// Payloads that live outside the board graph — a page hook naming an `events_simple` node, a
+    /// widget binding naming a workflow — have no other way to follow the copy. Kept out of the
+    /// wire format on purpose: the map describes ids this machine minted, and a replay elsewhere
+    /// mints its own, so shipping it would only invite a consumer to trust foreign ids. Replaying
+    /// a pre-computed paste (`new_nodes` already populated) therefore leaves it empty.
+    #[serde(skip)]
+    pub translated_ids: HashMap<String, String>,
 }
 
 impl CopyPasteCommand {
@@ -56,6 +65,7 @@ impl CopyPasteCommand {
             new_layers: vec![],
             added_refs: vec![],
             added_variables: vec![],
+            translated_ids: HashMap::new(),
         }
     }
 
@@ -453,6 +463,8 @@ impl Command for CopyPasteCommand {
                 self.added_refs.push(key.clone());
             }
         }
+
+        self.translated_ids = translated_connection;
 
         Ok(())
     }

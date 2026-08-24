@@ -1,0 +1,174 @@
+---
+title: Introduction — One Program, Two Ways to See It
+description: Why FlowScript exists, what this book promises, and how we will build software that explains itself.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most software has two lives.
+
+There is the life its authors see: source files, services, packages, deployment definitions,
+dashboards, tickets, and the history of decisions that made the system what it is. Then there
+is the life everybody else sees: an interface that works—until it does not.
+
+The distance between those lives is where expensive mysteries accumulate.
+
+A process can be obvious to the person who built it and opaque to the person responsible for
+it at two in the morning. A deployment can be considered routine by the platform team and
+impossible to reproduce by the domain expert who needs one small change. An AI system can
+produce thousands of lines of plausible code in an afternoon while leaving nobody able to
+explain which operation failed, what it was allowed to access, or whether it will survive its
+first real workload.
+
+FlowScript begins with a different expectation:
+
+> Running software should carry enough structure and evidence to explain itself.
+
+That does not mean every system can narrate its own correctness. It does not remove the need
+for engineers, operators, security reviewers, or careful design. It means the logic should
+not disappear when it leaves its author's editor. Its building blocks, boundaries, execution
+order, permissions, versions, and failures should remain inspectable in the environment where
+the software is built and run.
+
+## The graph and the sentence
+
+Visual programming is often presented as a beginner's substitute for “real code.” Textual
+programming is often presented as the inevitable destination once a project becomes serious.
+Both descriptions miss something important.
+
+A graph can make relationships visible that source code asks us to reconstruct mentally. It
+can show where data comes from, which operation follows which, where execution branches, and
+which building block failed. That is valuable to a beginner, but it is not merely beginner
+friendly. During an incident, a good map is useful even to the most experienced engineer in
+the room.
+
+Text has a different strength. It is dense, searchable, reviewable, and fast to manipulate.
+It scales better when a Flow contains many operations or when a developer needs to make a
+precise change across a large system. It works naturally with language tools and with the
+coding agents that increasingly participate in software development.
+
+FlowScript refuses the choice between them.
+
+FlowScript is Flow-Like's typed textual language for authoring Flows. It gives the same
+program a compact code view and an editable visual workflow while keeping execution inside
+the platform's governed node model.
+
+In Flow-Like, Studio and FlowScript are equal authoring surfaces over one underlying Flow
+model. You can change the graph and read the resulting source. You can change the source,
+preview the resulting graph operations, and apply them. Neither view is decorative. Neither
+is an exported diagram that begins drifting away the moment it is created.
+
+<Aside type="note" title="The precise technical contract">
+FlowScript is an authoring language, not a second execution engine. Today, its text is parsed
+and reconciled into the persisted Board behind a Flow. The Rust runtime executes that graph.
+The two views have equal authoring authority; they are not two independently stored programs.
+</Aside>
+
+## Why invent a language?
+
+A visual platform that can solve only simple problems eventually forces its users to leave.
+To keep real application logic inside the platform, it must offer low-level operations as
+well as convenient high-level ones. That flexibility has a cost: honest graphs become large.
+A configuration format may preserve such a graph, but it does not necessarily make the graph
+pleasant to author or review.
+
+Many workflow products answer this pressure by placing an arbitrary JavaScript or Python
+editor inside a node. It is an effective escape hatch. It is also where the visual model can
+stop telling the truth.
+
+The node may appear as one tidy rectangle while containing a small application of its own.
+Its dependencies, network behavior, side effects, error paths, and assumptions are hidden
+behind the label on the box. Repeat this pattern across a workflow and the result combines
+the maintenance problems of conventional software with the weaker navigation of a visual
+configuration. The graph looks simple because the complexity has been concealed, not
+removed.
+
+FlowScript exists to provide textual scale without creating that hidden channel. Its familiar
+syntax still resolves to typed nodes, pins, execution paths, variables, functions, Events,
+and other concepts the graph can represent. When the existing catalog cannot express a
+reusable capability, the extension boundary is a package containing scoped WebAssembly nodes,
+not an invisible script pasted into the middle of an application.
+
+This is constrained freedom. The outcome can be broad; the way we reach it is deliberately
+more opinionated.
+
+## The system around the language
+
+FlowScript is part of Flow-Like, not a language floating apart from its runtime.
+
+An App supplies the project and governance boundary. Flows contain its executable logic.
+Boards are the persisted graphs behind those Flows. Events expose typed entry points to an
+API, schedule, page, chat, quick action, or another supported surface. Data Studio keeps
+files, tables, queries, and ontologies close to the application. Packages add reviewed and
+versioned capabilities. The runtime executes the resulting graph and records evidence about
+the run.
+
+This wider boundary matters because a language alone cannot make software reliable. Types do
+not configure production storage. A readable function does not establish who may invoke it.
+A clean graph does not create versioning, logging, auditing, deployment, or rollback. If every
+team must reconstruct those disciplines around every new application, the domain problem
+again becomes the smallest part of the work.
+
+Flow-Like's thesis is that much of this surrounding discipline can be supplied once, through
+the platform, and reused by every App. Throughout this book we will distinguish that thesis
+from the exact guarantees of a particular release. Security, performance, scale, cost, and
+deployment claims will be tied to implementation evidence or measurements rather than
+treated as adjectives.
+
+## Who belongs here
+
+This book is for people who arrive with different kinds of expertise.
+
+You may be an enterprise developer who wants a faster path from a domain requirement to a
+maintainable service. You may be a founder or technical business user who understands the
+problem deeply but does not want to become an expert in ten adjacent infrastructure
+disciplines. You may be a student learning how data and execution move through a system. You
+may be an experienced Rust developer building WASM nodes for everybody else. You may be
+working with an AI coding agent and need the result to remain understandable after the chat
+window closes.
+
+The shared requirement is not the same programming background. It is the need to collaborate
+around logic that remains visible.
+
+The early chapters keep the graph and source side by side. Later sections open the machinery
+for readers who want to understand parsing, reconciliation, execution, packages, governance,
+and deployment. You can skip those internals and return to the main application path without
+losing the thread.
+
+## How we will build
+
+We will not learn FlowScript as a disconnected sequence of syntax features.
+
+First, we will enter the incident that supplied the founding question. Then we will state the
+design principles clearly enough that you can challenge them. In Chapter 4 we will build
+Incident Triage: a small Flow with no account, model, API key, or external dependency. You
+will see the result before learning every construct. You will edit it from both views and
+break it on purpose.
+
+From there, each language feature will answer four questions:
+
+1. What problem does it solve?
+2. How does it read in FlowScript?
+3. What graph does it represent?
+4. What evidence does it leave when it runs or fails?
+
+The capstone, Incident Room, will then assemble those ideas into a complete private document
+assistant. It will ingest runbooks, retrieve relevant material, expose narrow tools, answer
+through an application interface, and let us inspect the path of a real execution. Later we
+will extend the catalog with a WASM node and follow the App into packaging, governance,
+compiled artifacts, and deployment.
+
+We will take constraints seriously enough to show their edges. If a language construct does
+not round-trip yet, the book will say so. If an execution boundary depends on deployment
+policy, the book will name that dependency. If a benchmark describes one narrow workload, it
+will not be inflated into a universal performance claim.
+
+That candor is part of the premise. Software cannot explain itself if its documentation hides
+the parts that are still being built.
+
+The first question, then, is not about syntax. It is the question from a major-incident call
+in the middle of the night:
+
+**Why did everybody have to wait for the one person who understood the system?**

@@ -69,7 +69,7 @@ pub enum ReconcileMode {
 /// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
 /// absent from the text. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
-    reconcile_inner(existing, new, None, None, ReconcileMode::Replace)
+    reconcile_inner(existing, new, None, None, ReconcileMode::Replace, None)
 }
 
 /// Diff a parsed FlowScript AST against `existing`, using catalog metadata to turn unanchored
@@ -83,7 +83,34 @@ pub fn reconcile_with_catalog(
     new: &BoardAst,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None, ReconcileMode::Replace)
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        ReconcileMode::Replace,
+        None,
+    )
+}
+
+/// Like [`reconcile_with_catalog`] but with an editing scope: board events/functions whose anchor
+/// (entry node id / layer id) is NOT in `scope_anchors` are invisible to the deletion diff — their
+/// nodes are never removed merely for being absent from the (deliberately partial) document. Pass
+/// `None` for whole-document semantics.
+pub fn reconcile_with_catalog_scoped(
+    existing: &Board,
+    new: &BoardAst,
+    catalog: &[NodeMetadata],
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        ReconcileMode::Replace,
+        scope_anchors,
+    )
 }
 
 /// Catalog-aware reconcile with explicit document scope semantics.
@@ -93,7 +120,7 @@ pub fn reconcile_with_catalog_mode(
     catalog: &[NodeMetadata],
     mode: ReconcileMode,
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None, mode)
+    reconcile_inner(existing, new, Some(catalog), None, mode, None)
 }
 
 /// Like [`reconcile_with_catalog`] but runs `enricher` to materialize each new node's dynamic
@@ -111,6 +138,7 @@ pub fn reconcile_with_catalog_enriched(
         Some(catalog),
         Some(enricher),
         ReconcileMode::Replace,
+        None,
     )
 }
 
@@ -130,7 +158,16 @@ fn reconcile_inner(
     catalog: Option<&[NodeMetadata]>,
     enricher: Option<&MetadataEnricher>,
     mode: ReconcileMode,
+    scope_anchors: Option<&[String]>,
 ) -> ReconcileResult {
+    // Selection-scoped applies see only the board sections their document rendered. Out-of-scope
+    // events/functions are excluded from the deletion diff below (`visible`), which is the ONLY
+    // place reconcile plans node removals — so a scoped document can never delete content it did
+    // not render. Everything else (variables, catalog resolution, structural planning) keeps the
+    // full board as context.
+    let scope: Option<HashSet<&str>> =
+        scope_anchors.map(|anchors| anchors.iter().map(String::as_str).collect());
+    let scope = scope.as_ref();
     let mut result = ReconcileResult::default();
     let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(new);
     let duplicate_anchors = duplicate_ast_anchors(new);
@@ -164,8 +201,8 @@ fn reconcile_inner(
     // collectors below diff against / delete. These arenas own the calls and must outlive the
     // `new_calls`/`visible` maps that borrow them, so build them in full up front — pushing to the
     // Vec later would reallocate and invalidate the references.
-    let new_synthesized_calls = collect_anchored_synthesized_calls(new);
-    let board_synthesized_calls = collect_anchored_synthesized_calls(&board_ast);
+    let new_synthesized_calls = collect_anchored_synthesized_calls(new, None);
+    let board_synthesized_calls = collect_anchored_synthesized_calls(&board_ast, scope);
 
     // 1. Index every anchored call in the new AST by node id. A synthesized call replaces the
     //    argument-less placeholder a sugared loop statement registered for the same anchor.
@@ -317,7 +354,7 @@ fn reconcile_inner(
     //    "text-visible" from the board's own lowered AST so sugared/inlined nodes (reroutes,
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
-    collect_statement_calls(&board_ast, &mut visible);
+    collect_statement_calls(&board_ast, scope, &mut visible);
     for call in &board_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
             visible.entry(anchor.to_string()).or_insert(call);
@@ -12060,15 +12097,31 @@ fn field_assign_struct_set_call(
 /// without this the config-edit (`new_calls`) and deletion (`visible`) collectors would never
 /// diff their literal inputs. The returned owned calls back the `&Call` entries those maps key by
 /// anchor. Anchorless statements are fresh (handled by the structural planner) and are skipped.
-fn collect_anchored_synthesized_calls(ast: &BoardAst) -> Vec<Call> {
+fn collect_anchored_synthesized_calls(ast: &BoardAst, scope: Option<&HashSet<&str>>) -> Vec<Call> {
     let mut out = Vec::new();
     for ev in &ast.events {
+        if !section_in_scope(scope, ev.anchor.as_deref()) {
+            continue;
+        }
         collect_synthesized_calls_in_block(&ev.body, &mut out);
     }
     for f in &ast.functions {
+        if !section_in_scope(scope, f.anchor.as_deref()) {
+            continue;
+        }
         collect_synthesized_calls_in_block(&f.body, &mut out);
     }
     out
+}
+
+/// Whether a top-level event/function belongs to the reconcile scope. `None` (whole-document
+/// semantics) admits every section; an explicit scope admits only sections whose anchor is listed,
+/// so an anchor-less section can never be mistaken for in-scope content and deleted.
+fn section_in_scope(scope: Option<&HashSet<&str>>, anchor: Option<&str>) -> bool {
+    match scope {
+        None => true,
+        Some(scope) => anchor.is_some_and(|anchor| scope.contains(anchor)),
+    }
 }
 
 fn collect_synthesized_calls_in_block(block: &Block, out: &mut Vec<Call>) {
@@ -12133,11 +12186,21 @@ fn collect_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
 /// Walk only statement-owned calls. This is intentionally shallower than [`collect_calls`]:
 /// inlined helper expressions are render conveniences, not standalone text-visible statements,
 /// and must not be removed just because their anchors are absent from edited FlowScript.
-fn collect_statement_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
+fn collect_statement_calls<'a>(
+    ast: &'a BoardAst,
+    scope: Option<&HashSet<&str>>,
+    out: &mut HashMap<String, &'a Call>,
+) {
     for ev in &ast.events {
+        if !section_in_scope(scope, ev.anchor.as_deref()) {
+            continue;
+        }
         collect_statement_block(&ev.body, out);
     }
     for f in &ast.functions {
+        if !section_in_scope(scope, f.anchor.as_deref()) {
+            continue;
+        }
         collect_statement_block(&f.body, out);
     }
 }
@@ -12468,16 +12531,27 @@ pub fn reconcile_text_with_catalog(
     text: &str,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
+    reconcile_text_with_catalog_scoped(existing, text, catalog, None)
+}
+
+/// Like [`reconcile_text_with_catalog`] but with an editing scope (see
+/// [`reconcile_with_catalog_scoped`]).
+pub fn reconcile_text_with_catalog_scoped(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
     match flow_like_ast::parse(text) {
-        Ok(ast) => reconcile_with_catalog(existing, &ast, catalog),
-        Err(err) => ReconcileResult {
-            commands: Vec::new(),
-            corrections: Vec::new(),
-            diagnostics: vec![format!(
-                "FlowScript parse error at line {}, col {}: {}",
-                err.line, err.col, err.message
-            )],
-        },
+        Ok(ast) => reconcile_inner(
+            existing,
+            &ast,
+            Some(catalog),
+            None,
+            ReconcileMode::Replace,
+            scope_anchors,
+        ),
+        Err(err) => parse_error_result(&err),
     }
 }
 
@@ -12491,14 +12565,39 @@ pub fn reconcile_text_with_catalog_enriched(
 ) -> ReconcileResult {
     match flow_like_ast::parse(text) {
         Ok(ast) => reconcile_with_catalog_enriched(existing, &ast, catalog, enricher),
-        Err(err) => ReconcileResult {
-            commands: Vec::new(),
-            corrections: Vec::new(),
-            diagnostics: vec![format!(
-                "FlowScript parse error at line {}, col {}: {}",
-                err.line, err.col, err.message
-            )],
-        },
+        Err(err) => parse_error_result(&err),
+    }
+}
+
+/// Enriched text reconcile with an editing scope (see [`reconcile_with_catalog_scoped`]).
+pub fn reconcile_text_with_catalog_enriched_scoped(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_inner(
+            existing,
+            &ast,
+            Some(catalog),
+            Some(enricher),
+            ReconcileMode::Replace,
+            scope_anchors,
+        ),
+        Err(err) => parse_error_result(&err),
+    }
+}
+
+fn parse_error_result(err: &flow_like_ast::ParseError) -> ReconcileResult {
+    ReconcileResult {
+        commands: Vec::new(),
+        corrections: Vec::new(),
+        diagnostics: vec![format!(
+            "FlowScript parse error at line {}, col {}: {}",
+            err.line, err.col, err.message
+        )],
     }
 }
 

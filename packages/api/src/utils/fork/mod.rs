@@ -14,6 +14,10 @@ pub mod cleanup;
 pub mod db_schema;
 pub mod policy;
 pub mod preview;
+use flow_like::a2ui::{
+    id_refs::{self, IdRef},
+    page_remap,
+};
 use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
 };
@@ -414,14 +418,25 @@ pub async fn compute_offline_fork_bundle(
         .filter(|_| policy.flows)
     {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
-        let mut board_proto: proto::Board =
-            match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
-                Ok(b) => b,
-                Err(err) => {
-                    tracing::warn!("skip board {} during offline bundle: {}", src_board_id, err);
-                    continue;
-                }
-            };
+        let mut board_proto: proto::Board = match from_compressed::<proto::Board>(
+            src_meta_store.clone(),
+            board_path,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(err) => {
+                tracing::warn!("skip board {} during offline bundle: {}", src_board_id, err);
+                skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_board_id.clone(),
+                        reason: format!(
+                            "board could not be read from the source app, so its flows, pages and events do not travel: {err}"
+                        ),
+                    });
+                continue;
+            }
+        };
         overlay_board_page_ids_from_rows(&mut board_proto, src_board_id, &page_rows);
         let dst_board_id = maps.translate_board(src_board_id);
         let mut remapped = remap_board(board_proto, &mut maps);
@@ -444,6 +459,12 @@ pub async fn compute_offline_fork_bundle(
                 "skip page {} in offline bundle: row has no board_id",
                 src_page_id
             );
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id,
+                reason: "page row names no board, so it has no place in the destination"
+                    .to_string(),
+            });
             continue;
         };
         let Some(dst_board_id) = maps
@@ -482,11 +503,23 @@ pub async fn compute_offline_fork_bundle(
                     "skip page {} in offline bundle: no readable source file",
                     row.id
                 );
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: row.id.clone(),
+                    reason: "page has no readable source file at either the app-level or the board-scoped path".to_string(),
+                });
                 continue;
             }
         };
 
-        remap_page(&mut page_proto, &new_page_id, &maps);
+        let issues = remap_page(&mut page_proto, &new_page_id, &maps);
+        if !issues.is_empty() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: row.id.clone(),
+                reason: issues.reason("page"),
+            });
+        }
 
         let bytes = encode_proto(&page_proto).await?;
         blobs.push(MetaBlob {
@@ -527,6 +560,11 @@ pub async fn compute_offline_fork_bundle(
             Ok(e) => e,
             Err(err) => {
                 tracing::warn!("skip event {} (db→core conversion): {}", src_event_id, err);
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_event_id.clone(),
+                    reason: format!("event row could not be read: {err}"),
+                });
                 continue;
             }
         };
@@ -628,22 +666,33 @@ pub async fn compute_offline_fork_bundle(
             .child("versions")
             .child(src_board_id.clone())
             .child(format!("{}_{}_{}.board", version.0, version.1, version.2));
-        let board_proto: proto::Board =
-            match from_compressed::<proto::Board>(src_meta_store.clone(), src_versioned_path).await
-            {
-                Ok(b) => b,
-                Err(err) => {
-                    tracing::warn!(
-                        "skip versioned board {} v{}.{}.{}: {}",
-                        src_board_id,
-                        version.0,
-                        version.1,
-                        version.2,
-                        err
-                    );
-                    continue;
-                }
-            };
+        let board_proto: proto::Board = match from_compressed::<proto::Board>(
+            src_meta_store.clone(),
+            src_versioned_path,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(err) => {
+                tracing::warn!(
+                    "skip versioned board {} v{}.{}.{}: {}",
+                    src_board_id,
+                    version.0,
+                    version.1,
+                    version.2,
+                    err
+                );
+                skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_board_id.clone(),
+                        reason: format!(
+                            "pinned board version {}.{}.{} could not be read, so events pinned to it have no board to run: {err}",
+                            version.0, version.1, version.2
+                        ),
+                    });
+                continue;
+            }
+        };
         let mut remapped = remap_board(board_proto, &mut maps);
         // remap_board allocates a fresh board.id; force it back to
         // the destination live-board id so the archive stays
@@ -682,6 +731,13 @@ pub async fn compute_offline_fork_bundle(
                 Ok(w) => w,
                 Err(err) => {
                     tracing::warn!("skip widget {}: {}", src_widget_id, err);
+                    skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_widget_id.clone(),
+                        reason: format!(
+                            "widget definition could not be read from the source app: {err}"
+                        ),
+                    });
                     continue;
                 }
             };
@@ -691,7 +747,15 @@ pub async fn compute_offline_fork_bundle(
                 flow_like_types::Value::String(new_widget_id.clone()),
             );
         }
-        walk_remap_action_refs(&mut widget, &maps);
+        for issue in remap_widget_json(&mut widget, &maps) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_widget_id.clone(),
+                reason: format!(
+                    "widget kept a reference payload the fork could not rewrite: {issue}"
+                ),
+            });
+        }
         let bytes = encode_json(&widget).await?;
         blobs.push(MetaBlob {
             relative_path: format!("{}.widget", new_widget_id),
@@ -719,12 +783,27 @@ pub async fn compute_offline_fork_bundle(
         Vec::new()
     };
     for (src_template_id, new_template_id) in template_pairs {
+        let template_page_ids =
+            list_template_page_ids(&src_meta_store, &src_prefix, &src_template_id, &mut skipped)
+                .await;
+        for src_page_id in &template_page_ids {
+            maps.pages
+                .entry(src_page_id.clone())
+                .or_insert_with(create_id);
+        }
         let src_path = src_prefix.child(format!("{}.template", src_template_id));
         let board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_meta_store.clone(), src_path).await {
                 Ok(b) => b,
                 Err(err) => {
                     tracing::warn!("skip template {}: {}", src_template_id, err);
+                    skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_template_id.clone(),
+                        reason: format!(
+                            "template board could not be read from the source app: {err}"
+                        ),
+                    });
                     continue;
                 }
             };
@@ -735,6 +814,24 @@ pub async fn compute_offline_fork_bundle(
             relative_path: format!("{}.template", new_template_id),
             data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
+
+        for template_page in read_template_pages(
+            &src_meta_store,
+            &src_prefix,
+            &src_template_id,
+            &template_page_ids,
+            &maps,
+            &mut skipped,
+        )
+        .await?
+        {
+            let bytes = encode_proto(&template_page).await?;
+            blobs.push(MetaBlob {
+                relative_path: format!("_template_{}/{}.page", new_template_id, template_page.id),
+                data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            });
+        }
+
         shipped_templates.insert(src_template_id);
     }
 
@@ -1488,14 +1585,25 @@ pub async fn fork_app_with_visibility(
     }
     for src_board_id in src_app_proto.boards.iter().filter(|_| policy.flows) {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
-        let mut board_proto: proto::Board =
-            match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
-                Ok(b) => b,
-                Err(err) => {
-                    tracing::warn!("skipping board {} during fork: {}", src_board_id, err);
-                    continue;
-                }
-            };
+        let mut board_proto: proto::Board = match from_compressed::<proto::Board>(
+            src_meta_store.clone(),
+            board_path,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(err) => {
+                tracing::warn!("skipping board {} during fork: {}", src_board_id, err);
+                skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_board_id.clone(),
+                        reason: format!(
+                            "board could not be read from the source app, so its flows, pages and events do not travel: {err}"
+                        ),
+                    });
+                continue;
+            }
+        };
         overlay_board_page_ids_from_rows(&mut board_proto, src_board_id, &src_page_rows);
         let new_board_id = maps.translate_board(src_board_id);
         let mut remapped = remap_board(board_proto, &mut maps);
@@ -1518,6 +1626,7 @@ pub async fn fork_app_with_visibility(
         &src_page_rows,
         &maps,
         &shipped_boards,
+        &mut skipped,
     )
     .await?;
 
@@ -1559,6 +1668,11 @@ pub async fn fork_app_with_visibility(
             Ok(e) => e,
             Err(err) => {
                 tracing::warn!("skip event {} (db→core conversion): {}", src_event_id, err);
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_event_id.clone(),
+                    reason: format!("event row could not be read: {err}"),
+                });
                 continue;
             }
         };
@@ -1658,21 +1772,33 @@ pub async fn fork_app_with_visibility(
             .child("versions")
             .child(src_board_id.clone())
             .child(format!("{}_{}_{}.board", version.0, version.1, version.2));
-        let board_proto: proto::Board =
-            match from_compressed::<proto::Board>(src_meta_store.clone(), src_path).await {
-                Ok(b) => b,
-                Err(err) => {
-                    tracing::warn!(
-                        "skip versioned board {} v{}.{}.{}: {}",
-                        src_board_id,
-                        version.0,
-                        version.1,
-                        version.2,
-                        err
-                    );
-                    continue;
-                }
-            };
+        let board_proto: proto::Board = match from_compressed::<proto::Board>(
+            src_meta_store.clone(),
+            src_path,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(err) => {
+                tracing::warn!(
+                    "skip versioned board {} v{}.{}.{}: {}",
+                    src_board_id,
+                    version.0,
+                    version.1,
+                    version.2,
+                    err
+                );
+                skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_board_id.clone(),
+                        reason: format!(
+                            "pinned board version {}.{}.{} could not be read, so events pinned to it have no board to run: {err}",
+                            version.0, version.1, version.2
+                        ),
+                    });
+                continue;
+            }
+        };
         let mut remapped = remap_board(board_proto, &mut maps);
         // remap_board allocates a fresh board.id; force it back to the
         // destination live-board id so the archive stays addressable.
@@ -1698,6 +1824,7 @@ pub async fn fork_app_with_visibility(
             &src_prefix,
             &dst_prefix,
             &maps,
+            &mut skipped,
         )
         .await?
     } else {
@@ -1728,6 +1855,7 @@ pub async fn fork_app_with_visibility(
             &src_prefix,
             &dst_prefix,
             &mut maps,
+            &mut skipped,
         )
         .await?
     } else {
@@ -3128,286 +3256,113 @@ async fn read_source_page(
     None
 }
 
-/// Apply the fork's id translations to a page in-place. Covers
-/// every cross-app reference that lives anywhere inside the page
-/// payload:
+/// Everything a fork must rewrite inside one page payload, and the
+/// payloads it could not rewrite.
 ///
-/// * `id`, `board_id` — top-level page metadata.
-/// * `on_load_event_id` / `on_unload_event_id` / `on_interval_event_id`
-///   — despite the name, these are **node** ids (a node id from an
-///   `events_simple` node, per the `.proto` comment), not event row
-///   ids. They translate via `maps.translate_node`.
-/// * `content[].WidgetInstance` — the `widget_id` reference points
-///   at a widget that just got reforked; the `action_bindings` map
-///   carries `workflow_event_id` (node id) and `page_id` references
-///   that must follow the new id space.
-/// * `widget_refs` (per-page snapshot of widget definitions) — the
-///   embedded `Widget.id` is rewritten so the page resolves against
-///   the destination's widget id space.
+/// A page that reaches the destination with even one un-rewritten
+/// reference keeps firing the *source* app's nodes, so a failure here
+/// is reported rather than logged — see [`SkippedKind::Other`].
+#[derive(Debug, Default)]
+struct RemapIssues {
+    /// `component id: reason` for every JSON payload that could not be
+    /// parsed or re-encoded, and therefore still carries source ids.
+    unrewritten: Vec<String>,
+}
+
+impl RemapIssues {
+    fn is_empty(&self) -> bool {
+        self.unrewritten.is_empty()
+    }
+
+    /// One line, not a transcript. The whole report is rendered in a dialog
+    /// and handed verbatim to the agent's `fork_app` tool, so a badly damaged
+    /// app must not be able to turn one page into kilobytes of prose.
+    fn reason(&self, subject: &str) -> String {
+        const NAMED: usize = 5;
+        let listed = self
+            .unrewritten
+            .iter()
+            .take(NAMED)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        let remainder = self.unrewritten.len().saturating_sub(NAMED);
+        let tail = if remainder > 0 {
+            format!(" (+{remainder} more)")
+        } else {
+            String::new()
+        };
+        format!(
+            "{subject} kept {} reference payload(s) the fork could not rewrite, so they still point at the source app: {listed}{tail}",
+            self.unrewritten.len()
+        )
+    }
+}
+
+/// Apply the fork's id translations to a page in-place.
 ///
-/// Without these passes, a forked app's pages still load but every
-/// "on click run this workflow / navigate to this page / show this
-/// widget" hook silently points at the source app's ids.
-fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) {
+/// Which references exist inside a page payload — the board, the three
+/// behaviour hooks (**node** ids despite being named `*_event_id`),
+/// every widget instance and its action bindings, the embedded widget
+/// definitions, and the opaque JSON under all of them — is
+/// [`flow_like::a2ui::page_remap`]'s inventory, shared with template
+/// instantiation. This function supplies only the fork's policy: the
+/// page's new id, and what each source id becomes.
+///
+/// Without it a forked app's pages still load, but every "on click run
+/// this workflow / navigate to this page / show this widget" hook
+/// silently points at the source app's ids.
+fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) -> RemapIssues {
     page.id = new_page_id.to_string();
-    if let Some(b) = page.board_id.as_ref() {
-        page.board_id = Some(maps.translate_board(b));
-    }
-    if let Some(n) = page.on_load_event_id.as_ref() {
-        page.on_load_event_id = Some(maps.translate_node(n));
-    }
-    if let Some(n) = page.on_unload_event_id.as_ref() {
-        page.on_unload_event_id = Some(maps.translate_node(n));
-    }
-    if let Some(n) = page.on_interval_event_id.as_ref() {
-        page.on_interval_event_id = Some(maps.translate_node(n));
-    }
-
-    for content in page.content.iter_mut() {
-        match content.content_type.as_mut() {
-            Some(proto::page_content::ContentType::Widget(instance)) => {
-                remap_widget_instance(instance, maps);
-            }
-            Some(proto::page_content::ContentType::Component(comp)) => {
-                remap_component_blob(comp, maps);
-            }
-            _ => {}
-        }
-    }
-
-    for comp in page.components.iter_mut() {
-        remap_component_blob(comp, maps);
-    }
-
-    for widget_def in page.widget_refs.values_mut() {
-        if let Some(new_id) = maps.widgets.get(&widget_def.id) {
-            widget_def.id = new_id.clone();
-        }
-        for comp in widget_def.components.iter_mut() {
-            remap_component_blob(comp, maps);
-        }
-    }
-}
-
-/// Most component data lives as opaque JSON bytes inside
-/// `proto::Component.component_json` — see `From<SurfaceComponent>` in
-/// `protobuf/a2ui.rs`, which serializes `SurfaceComponent.component`
-/// (a `serde_json::Value`) into those bytes and leaves the typed
-/// `component` oneof unset. That's where buttons store their
-/// `on_click` Action with `name = "workflow_event"` and a context map
-/// holding `nodeId` / `boardId` / `appId` BoundValues, and where
-/// `actionBindings` entries land in the runtime's
-/// `{ workflow: { flowId } }` form. Without a JSON-level rewrite, a
-/// fork's buttons keep firing the source app's nodes.
-///
-/// The walker is deliberately defensive: it only swaps a string when
-/// the source value is present in the corresponding id map, so
-/// non-id fields that happen to share a key name (e.g. a custom
-/// `nodeId` inside a piece of user-authored JSON unrelated to a
-/// workflow Action) are left alone unless they actually match a
-/// known id.
-fn remap_component_blob(comp: &mut proto::Component, maps: &ForkIdMap) {
-    let Some(bytes) = comp.component_json.as_mut() else {
-        return;
+    let mut by_field = fork_field_translator(maps);
+    let mut by_literal = fork_literal_translator(maps);
+    let mut translators = page_remap::IdTranslators {
+        by_field: &mut by_field,
+        by_literal: &mut by_literal,
     };
-    let mut value: flow_like_types::Value = match flow_like_types::json::from_slice(bytes) {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::warn!(
-                "skip component_json remap for component {}: parse failed: {err}",
-                comp.id
-            );
-            return;
+    RemapIssues {
+        unrewritten: page_remap::remap_page_refs(page, &mut translators),
+    }
+}
+
+/// Resolve a reference the a2ui walker found under a recognized field
+/// name. Translation stays opt-in per value: a name only resolves when
+/// the embedded string is actually a key of the corresponding map, so a
+/// user-authored `nodeId` in unrelated game state is left alone, and a
+/// value already on the destination's id space is a no-op.
+fn fork_field_translator(maps: &ForkIdMap) -> impl FnMut(IdRef, &str) -> Option<String> + '_ {
+    move |kind, id| match kind {
+        IdRef::Node => maps.nodes.get(id).cloned(),
+        IdRef::Board => maps.boards.get(id).cloned(),
+        IdRef::Page => maps.pages.get(id).cloned(),
+        IdRef::Widget => maps.widgets.get(id).cloned(),
+        IdRef::Event => maps.events.get(id).cloned(),
+        IdRef::App => {
+            (id == maps.source_app_id && !maps.source_app_id.is_empty() && !maps.app_id.is_empty())
+                .then(|| maps.app_id.clone())
         }
+    }
+}
+
+/// Resolve a reference that arrived without a field name — a widget
+/// customization value, an exposed prop's default. `lookup_id` is the
+/// same whole-string pass pin defaults take, so the two agree on what
+/// counts as an id, and composite element references
+/// (`{page_id}/{component_id}`) follow the page they name.
+fn fork_literal_translator(maps: &ForkIdMap) -> impl FnMut(&str) -> Option<String> + '_ {
+    move |id| lookup_id(id, maps).or_else(|| translate_element_ref(id, maps))
+}
+
+/// Run the shared widget pass over a JSON-serialized `.widget` document with
+/// this fork's translators.
+fn remap_widget_json(widget: &mut flow_like_types::Value, maps: &ForkIdMap) -> Vec<String> {
+    let mut by_field = fork_field_translator(maps);
+    let mut by_literal = fork_literal_translator(maps);
+    let mut translators = page_remap::IdTranslators {
+        by_field: &mut by_field,
+        by_literal: &mut by_literal,
     };
-    walk_remap_action_refs(&mut value, maps);
-    match flow_like_types::json::to_vec(&value) {
-        Ok(new_bytes) => *bytes = new_bytes,
-        Err(err) => {
-            tracing::warn!(
-                "skip component_json remap for component {}: re-encode failed: {err}",
-                comp.id
-            );
-        }
-    }
-}
-
-/// Walk a JSON tree and remap every cross-app reference we recognize
-/// by **field name**. Components embed cross-app ids in lots of
-/// places besides the canonical `workflow_event` action — image
-/// hotspots, dialogue choices, modal/drawer triggers, link routes,
-/// custom user-authored `actions[].context` shapes, runtime
-/// `{ workflow: { flowId } }` bindings, etc. Pattern-matching every
-/// case explicitly was lossy. Instead, translate any value carried
-/// under a known id-bearing key, regardless of where in the tree it
-/// appears.
-///
-/// Field names recognized (both `camelCase` and `snake_case`):
-///
-/// * `nodeId` / `flowId` / `workflowEventId` → `maps.nodes`
-///   (events_simple node ids)
-/// * `workflowEvent.eventId` → `maps.nodes` (legacy JSON
-///   `ActionBinding::WorkflowEvent` shape names the node id
-///   `eventId`)
-/// * `boardId` → `maps.boards`
-/// * `pageId` → `maps.pages`
-/// * `widgetId` → `maps.widgets`
-/// * `eventId` → `maps.events`
-/// * `appId` → source-app-id → destination-app-id
-///
-/// Each value is accepted as either a bare string or a
-/// `{ "literalString": "..." }` BoundValue wrapper. Translation only
-/// fires when the embedded source string is actually present in the
-/// corresponding map — so a user-authored field that happens to
-/// share a name (e.g. a `nodeId` in arbitrary game state) is left
-/// alone unless it actually matches a known source id, and a value
-/// already on the destination's id space (e.g. after a typed remap
-/// pass) is a no-op since it won't be in the map keys.
-fn walk_remap_action_refs(value: &mut flow_like_types::Value, maps: &ForkIdMap) {
-    walk_remap_action_refs_in(value, maps, JsonRefContext::General);
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum JsonRefContext {
-    General,
-    Workflow,
-}
-
-fn walk_remap_action_refs_in(
-    value: &mut flow_like_types::Value,
-    maps: &ForkIdMap,
-    context: JsonRefContext,
-) {
-    match value {
-        flow_like_types::Value::Object(map) => {
-            for (key, val) in map.iter_mut() {
-                match key.as_str() {
-                    "nodeId" | "node_id" | "flowId" | "flow_id" | "workflowId" | "workflow_id"
-                    | "workflowEventId" | "workflow_event_id" => {
-                        translate_bound_string(Some(val), &maps.nodes);
-                    }
-                    "boardId" | "board_id" => {
-                        translate_bound_string(Some(val), &maps.boards);
-                    }
-                    "pageId" | "page_id" => {
-                        translate_bound_string(Some(val), &maps.pages);
-                    }
-                    "widgetId" | "widget_id" => {
-                        translate_bound_string(Some(val), &maps.widgets);
-                    }
-                    "eventId" | "event_id" => {
-                        if context == JsonRefContext::Workflow {
-                            translate_bound_string(Some(val), &maps.nodes);
-                        } else {
-                            translate_bound_string(Some(val), &maps.events);
-                        }
-                    }
-                    "appId" | "app_id" => {
-                        translate_app_id(Some(val), maps);
-                    }
-                    _ => {}
-                }
-                let child_context = match key.as_str() {
-                    "workflow" | "workflowEvent" | "workflow_event" => JsonRefContext::Workflow,
-                    _ => JsonRefContext::General,
-                };
-                walk_remap_action_refs_in(val, maps, child_context);
-            }
-        }
-        flow_like_types::Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                walk_remap_action_refs_in(v, maps, context);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// A `BoundValue` is either a bare string (rare in practice) or
-/// `{ "literalString": "<id>" }` / `{ "literalNumber": ... }` /
-/// `{ "literalBool": ... }` / `{ "path": "..." }`. Only the literal
-/// string form can hold an id reference, so that's the only one we
-/// rewrite. Path bindings resolve at runtime against the data model
-/// and are not cross-app refs.
-fn translate_bound_string(
-    target: Option<&mut flow_like_types::Value>,
-    mapping: &HashMap<String, String>,
-) {
-    let Some(target) = target else { return };
-    match target {
-        flow_like_types::Value::String(s) => {
-            if let Some(new_id) = mapping.get(s.as_str()) {
-                *s = new_id.clone();
-            }
-        }
-        flow_like_types::Value::Object(obj) => {
-            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
-                && let Some(new_id) = mapping.get(s.as_str())
-            {
-                *s = new_id.clone();
-            }
-        }
-        _ => {}
-    }
-}
-
-/// AppId rewrite uses the fork's source→destination app id pair
-/// rather than a generic map. We translate only when the embedded
-/// value matches the known source app id, so unrelated `appId`
-/// strings the user might have authored elsewhere stay untouched.
-fn translate_app_id(target: Option<&mut flow_like_types::Value>, maps: &ForkIdMap) {
-    let Some(target) = target else { return };
-    let src = maps.source_app_id.as_str();
-    let dst = maps.app_id.clone();
-    if src.is_empty() || dst.is_empty() {
-        return;
-    }
-    match target {
-        flow_like_types::Value::String(s) => {
-            if s == src {
-                *s = dst;
-            }
-        }
-        flow_like_types::Value::Object(obj) => {
-            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
-                && s == src
-            {
-                *s = dst;
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Translate every cross-app reference on a `WidgetInstance`. The
-/// instance's `widget_id` lookup follows the widget id map, and each
-/// `ActionBinding` rewrites the `workflow_event_id` (node id) and
-/// `page_id` arms so the destination's runtime fires the right
-/// node / navigates to the right page. URL and custom-action arms
-/// are pure data and are left as-is.
-fn remap_widget_instance(instance: &mut proto::WidgetInstance, maps: &ForkIdMap) {
-    if let Some(new_id) = maps.widgets.get(&instance.widget_id) {
-        instance.widget_id = new_id.clone();
-    }
-    if let Some(widget_ref) = instance.widget_ref.as_mut()
-        && let Some(new_id) = maps.widgets.get(&widget_ref.widget_id)
-    {
-        widget_ref.widget_id = new_id.clone();
-    }
-    for binding in instance.action_bindings.values_mut() {
-        if let Some(binding_type) = binding.binding_type.as_mut() {
-            match binding_type {
-                proto::action_binding::BindingType::WorkflowEventId(id) => {
-                    *id = maps.translate_node(id);
-                }
-                proto::action_binding::BindingType::PageId(id) => {
-                    *id = maps.translate_page(id);
-                }
-                proto::action_binding::BindingType::ExternalUrl(_) => {}
-                proto::action_binding::BindingType::CustomAction(_) => {}
-            }
-        }
-    }
+    page_remap::remap_widget_json(widget, &mut translators)
 }
 
 /// Write a remapped page to the canonical board-scoped layout
@@ -3441,6 +3396,10 @@ async fn write_destination_page(
 /// authoritative `Page` rows for the source app, reads each page from
 /// whichever storage convention has it, remaps ids, and writes to
 /// both destination conventions.
+///
+/// A page that cannot travel is reported, not just logged: the
+/// destination is missing an interface its board still expects, and
+/// only the caller can tell the user.
 async fn fork_pages_db_driven(
     src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
@@ -3449,6 +3408,7 @@ async fn fork_pages_db_driven(
     src_page_rows: &[page::Model],
     maps: &ForkIdMap,
     shipped_boards: &HashSet<String>,
+    skipped: &mut Vec<SkippedItem>,
 ) -> Result<HashSet<String>, ApiError> {
     let mut shipped_pages = HashSet::new();
     for row in src_page_rows {
@@ -3456,6 +3416,12 @@ async fn fork_pages_db_driven(
         let new_page_id = maps.translate_page(&src_page_id);
         let Some(src_board_id) = row.board_id.as_deref() else {
             tracing::warn!("skip page {} during fork: row has no board_id", src_page_id);
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id,
+                reason: "page row names no board, so it has no place in the destination"
+                    .to_string(),
+            });
             continue;
         };
         let Some(new_board_id) = maps
@@ -3469,6 +3435,14 @@ async fn fork_pages_db_driven(
                 src_page_id,
                 src_board_id
             );
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id,
+                reason: format!(
+                    "page points at board {} which was not shipped in the fork",
+                    src_board_id
+                ),
+            });
             continue;
         };
 
@@ -3486,11 +3460,23 @@ async fn fork_pages_db_driven(
                     "skip page {} during fork: no readable source file at app-level or board-scoped path",
                     src_page_id
                 );
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_page_id,
+                    reason: "page has no readable source file at either the app-level or the board-scoped path".to_string(),
+                });
                 continue;
             }
         };
 
-        remap_page(&mut page_proto, &new_page_id, maps);
+        let issues = remap_page(&mut page_proto, &new_page_id, maps);
+        if !issues.is_empty() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id.clone(),
+                reason: issues.reason("page"),
+            });
+        }
         write_destination_page(
             dst_store,
             dst_prefix,
@@ -3584,6 +3570,7 @@ async fn fork_widgets(
     src_prefix: &Path,
     dst_prefix: &Path,
     maps: &ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
 ) -> Result<HashSet<String>, ApiError> {
     let mut shipped_widgets = HashSet::new();
     for (src_widget_id, new_widget_id) in &maps.widgets {
@@ -3593,6 +3580,13 @@ async fn fork_widgets(
                 Ok(w) => w,
                 Err(err) => {
                     tracing::warn!("skip widget {}: {}", src_widget_id, err);
+                    skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_widget_id.clone(),
+                        reason: format!(
+                            "widget definition could not be read from the source app: {err}"
+                        ),
+                    });
                     continue;
                 }
             };
@@ -3603,11 +3597,18 @@ async fn fork_widgets(
             );
         }
         // Components inside the widget def carry the same `Action` /
-        // `actionBindings` shapes that pages do, so we run the same
-        // remap pass over the widget JSON. Without this, a button or
-        // similar element placed *inside* a widget keeps firing the
-        // source app's nodes after fork.
-        walk_remap_action_refs(&mut widget, maps);
+        // `actionBindings` shapes that pages do, and its exposed-prop and
+        // customization defaults hide ids inside byte arrays, so the whole
+        // document goes through the shared widget pass.
+        for issue in remap_widget_json(&mut widget, maps) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_widget_id.clone(),
+                reason: format!(
+                    "widget kept a reference payload the fork could not rewrite: {issue}"
+                ),
+            });
+        }
         let dst_path = dst_prefix.child(format!("{}.widget", new_widget_id));
         compress_to_file_json(dst_store.clone(), dst_path, &widget)
             .await
@@ -3627,6 +3628,7 @@ async fn fork_templates(
     src_prefix: &Path,
     dst_prefix: &Path,
     maps: &mut ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
 ) -> Result<HashSet<String>, ApiError> {
     let mut shipped_templates = HashSet::new();
     let template_pairs: Vec<(String, String)> = maps
@@ -3635,12 +3637,26 @@ async fn fork_templates(
         .map(|(s, d)| (s.clone(), d.clone()))
         .collect();
     for (src_template_id, new_template_id) in template_pairs {
+        let template_page_ids =
+            list_template_page_ids(src_store, src_prefix, &src_template_id, skipped).await;
+        for src_page_id in &template_page_ids {
+            maps.pages
+                .entry(src_page_id.clone())
+                .or_insert_with(create_id);
+        }
         let src_path = src_prefix.child(format!("{}.template", src_template_id));
         let board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_store.clone(), src_path).await {
                 Ok(b) => b,
                 Err(err) => {
                     tracing::warn!("skip template {}: {}", src_template_id, err);
+                    skipped.push(SkippedItem {
+                        kind: SkippedKind::Other,
+                        source_id: src_template_id.clone(),
+                        reason: format!(
+                            "template board could not be read from the source app: {err}"
+                        ),
+                    });
                     continue;
                 }
             };
@@ -3656,9 +3672,143 @@ async fn fork_templates(
         compress_to_file(dst_store.clone(), dst_path, &remapped)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("write template: {e}")))?;
+
+        for template_page in read_template_pages(
+            src_store,
+            src_prefix,
+            &src_template_id,
+            &template_page_ids,
+            maps,
+            skipped,
+        )
+        .await?
+        {
+            let dst_page_path = dst_prefix
+                .child(format!("_template_{}", new_template_id))
+                .child(format!("{}.page", template_page.id));
+            compress_to_file(dst_store.clone(), dst_page_path, &template_page)
+                .await
+                .map_err(|e| ApiError::internal_error(anyhow!("write template page: {e}")))?;
+        }
+
         shipped_templates.insert(src_template_id);
     }
     Ok(shipped_templates)
+}
+
+/// An object store that is a real filesystem reports a prefix with no
+/// objects under it as an error instead of an empty listing, so a
+/// template that never had pages looks like a failure. Object stores
+/// have no typed variant for this, which is why the desktop's fork
+/// applier sniffs the same way.
+fn is_missing_prefix(error: &impl std::fmt::Display) -> bool {
+    let message = error.to_string();
+    message.contains("not found") || message.contains("No such file")
+}
+
+/// List the pages a template snapshotted
+/// (`_template_{template_id}/{page_id}.page`).
+///
+/// Separate from reading them because the ids have to reach `maps.pages`
+/// *before* the template board is remapped: `remap_board` rewrites
+/// `board.page_ids` through that map, and a page the map does not know
+/// would keep its source id there while its file landed under a fresh
+/// one — a template listing pages that do not exist.
+async fn list_template_page_ids(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_prefix: &Path,
+    src_template_id: &str,
+    skipped: &mut Vec<SkippedItem>,
+) -> Vec<String> {
+    let template_dir = src_prefix.child(format!("_template_{}", src_template_id));
+    let mut listing = src_store.list(Some(&template_dir));
+    let mut source_page_ids: Vec<String> = Vec::new();
+    loop {
+        // A template with no pages has no directory at all, and a filesystem
+        // store reports that as an error rather than an empty listing. Losing
+        // a template's pages must never cost the caller the whole fork, so a
+        // listing failure is reported and the template ships without them.
+        match listing.try_next().await {
+            Ok(Some(item)) => {
+                if let Some(page_id) = item
+                    .location
+                    .filename()
+                    .and_then(|name| name.strip_suffix(".page"))
+                {
+                    source_page_ids.push(page_id.to_string());
+                }
+            }
+            Ok(None) => break,
+            Err(err) if is_missing_prefix(&err) => break,
+            Err(err) => {
+                tracing::warn!("list template pages for {src_template_id}: {err}");
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_template_id.to_string(),
+                    reason: format!(
+                        "template pages could not be listed, so the template ships without its interfaces: {err}"
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    source_page_ids
+}
+
+/// Read and remap every page a template snapshotted. A template whose
+/// board arrives without its interfaces instantiates an empty screen, so
+/// these travel with it.
+///
+/// Every id in `src_page_ids` is expected to be in `maps.pages` already
+/// — see [`list_template_page_ids`]. The template's page ids are the
+/// *live board's* ids at snapshot time (`Board::create_template` clones
+/// the board), so most are there from the live pass; one the fork has
+/// never seen is minted by the caller before this runs.
+async fn read_template_pages(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_prefix: &Path,
+    src_template_id: &str,
+    src_page_ids: &[String],
+    maps: &ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
+) -> Result<Vec<proto::Page>, ApiError> {
+    let template_dir = src_prefix.child(format!("_template_{}", src_template_id));
+    let mut pages = Vec::with_capacity(src_page_ids.len());
+    for src_page_id in src_page_ids {
+        let src_path = template_dir.child(format!("{}.page", src_page_id));
+        let mut page_proto = match from_compressed::<proto::Page>(src_store.clone(), src_path).await
+        {
+            Ok(page) => page,
+            Err(err) => {
+                tracing::warn!(
+                    "skip template page {} of template {}: {}",
+                    src_page_id,
+                    src_template_id,
+                    err
+                );
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_page_id.clone(),
+                    reason: format!(
+                        "page snapshotted into template {src_template_id} could not be read: {err}"
+                    ),
+                });
+                continue;
+            }
+        };
+        let new_page_id = maps.translate_page(src_page_id);
+        let issues = remap_page(&mut page_proto, &new_page_id, maps);
+        if !issues.is_empty() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id.clone(),
+                reason: issues.reason(&format!("template {src_template_id} page")),
+            });
+        }
+        pages.push(page_proto);
+    }
+    Ok(pages)
 }
 
 /// Copies the `metadata/` subtree from src to dst, rewriting any path
@@ -4091,7 +4241,8 @@ mod tests {
             "eventId": { "literalString": "src_event" }
         });
 
-        walk_remap_action_refs(&mut value, &maps);
+        let mut translate = fork_field_translator(&maps);
+        id_refs::rewrite_json_ids(&mut value, &mut translate);
 
         assert_eq!(
             value["workflowEvent"]["eventId"]["literalString"],
@@ -4653,5 +4804,286 @@ mod tests {
             templates: false,
         };
         assert_eq!(breakdown.selected(&minimal), (30, 3));
+    }
+
+    fn widget_fork_maps() -> ForkIdMap {
+        let mut maps = ForkIdMap {
+            source_app_id: "src_app".to_string(),
+            app_id: "dst_app".to_string(),
+            ..Default::default()
+        };
+        maps.nodes
+            .insert("src_node".to_string(), "dst_node".to_string());
+        maps.boards
+            .insert("src_board".to_string(), "dst_board".to_string());
+        maps.pages
+            .insert("src_page".to_string(), "dst_page".to_string());
+        maps.widgets
+            .insert("src_widget".to_string(), "dst_widget".to_string());
+        maps
+    }
+
+    fn json_bytes(value: flow_like_types::Value) -> Vec<u8> {
+        flow_like_types::json::to_vec(&value).expect("serialize fixture")
+    }
+
+    fn decode_bytes(bytes: &[u8]) -> flow_like_types::Value {
+        flow_like_types::json::from_slice(bytes).expect("decode fixture")
+    }
+
+    fn component_with_json(id: &str, value: flow_like_types::Value) -> proto::Component {
+        proto::Component {
+            id: id.to_string(),
+            component_json: Some(json_bytes(value)),
+            ..Default::default()
+        }
+    }
+
+    fn literal(value: &str) -> proto::BoundValue {
+        proto::BoundValue {
+            value: Some(proto::bound_value::Value::LiteralString(value.to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn literal_of(bound: &proto::BoundValue) -> &str {
+        match bound.value.as_ref().expect("bound value present") {
+            proto::bound_value::Value::LiteralString(value) => value.as_str(),
+            other => panic!("expected a literal string, got {other:?}"),
+        }
+    }
+
+    fn page_with_instances(instances: Vec<proto::WidgetInstance>) -> proto::Page {
+        proto::Page {
+            content: instances
+                .into_iter()
+                .map(|instance| proto::PageContent {
+                    content_type: Some(proto::page_content::ContentType::Widget(instance)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn instance_at(page: &proto::Page, index: usize) -> &proto::WidgetInstance {
+        match page.content[index].content_type.as_ref() {
+            Some(proto::page_content::ContentType::Widget(instance)) => instance,
+            other => panic!("expected a widget instance, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn widget_instance_references_follow_the_fork_maps() {
+        let maps = widget_fork_maps();
+        let mut binding = proto::ActionBinding {
+            binding_type: Some(proto::action_binding::BindingType::WorkflowEventId(
+                "src_node".to_string(),
+            )),
+            ..Default::default()
+        };
+        for (field, value) in [
+            ("nodeId", "src_node"),
+            ("boardId", "src_board"),
+            ("appId", "src_app"),
+            ("label", "src_node"),
+        ] {
+            binding
+                .context_mapping
+                .insert(field.to_string(), literal(value));
+        }
+
+        let mut instance = proto::WidgetInstance {
+            widget_id: "src_widget".to_string(),
+            instance_id: "instance".to_string(),
+            widget_ref: Some(proto::WidgetRef {
+                app_id: "src_app".to_string(),
+                widget_id: "src_widget".to_string(),
+                version: None,
+            }),
+            ..Default::default()
+        };
+        instance
+            .action_bindings
+            .insert("submit".to_string(), binding);
+        // Keyed by prop id, so only whole-string matching can find these.
+        instance.exposed_prop_values.insert(
+            "target".to_string(),
+            json_bytes(flow_like_types::json::json!({ "literalString": "src_page" })),
+        );
+        instance.customization_values.insert(
+            "start".to_string(),
+            json_bytes(flow_like_types::json::json!("src_node")),
+        );
+        instance.customization_values.insert(
+            "title".to_string(),
+            json_bytes(flow_like_types::json::json!("Ingest files")),
+        );
+
+        let mut page = page_with_instances(vec![instance]);
+        let issues = remap_page(&mut page, "dst_page", &maps);
+        assert!(issues.is_empty(), "{issues:?}");
+
+        let instance = instance_at(&page, 0);
+        let binding = &instance.action_bindings["submit"];
+        assert_eq!(instance.widget_id, "dst_widget");
+        assert_eq!(
+            binding.binding_type,
+            Some(proto::action_binding::BindingType::WorkflowEventId(
+                "dst_node".to_string()
+            ))
+        );
+        assert_eq!(literal_of(&binding.context_mapping["nodeId"]), "dst_node");
+        assert_eq!(literal_of(&binding.context_mapping["boardId"]), "dst_board");
+        assert_eq!(literal_of(&binding.context_mapping["appId"]), "dst_app");
+        // A field the runtime does not treat as a reference keeps its value
+        // even when that value happens to be a known id.
+        assert_eq!(literal_of(&binding.context_mapping["label"]), "src_node");
+        assert_eq!(
+            decode_bytes(&instance.exposed_prop_values["target"])["literalString"],
+            "dst_page"
+        );
+        assert_eq!(
+            decode_bytes(&instance.customization_values["start"]),
+            flow_like_types::Value::String("dst_node".to_string())
+        );
+        assert_eq!(
+            decode_bytes(&instance.customization_values["title"]),
+            flow_like_types::Value::String("Ingest files".to_string())
+        );
+
+        let widget_ref = instance.widget_ref.as_ref().expect("ref kept");
+        assert_eq!(widget_ref.app_id, "dst_app");
+        assert_eq!(widget_ref.widget_id, "dst_widget");
+    }
+
+    #[test]
+    fn a_third_party_widget_ref_is_not_half_translated() {
+        let maps = widget_fork_maps();
+        let mut page = page_with_instances(vec![proto::WidgetInstance {
+            widget_id: "src_widget".to_string(),
+            instance_id: "b".to_string(),
+            widget_ref: Some(proto::WidgetRef {
+                app_id: "other_app".to_string(),
+                widget_id: "src_widget".to_string(),
+                version: None,
+            }),
+            ..Default::default()
+        }]);
+
+        remap_page(&mut page, "dst_page", &maps);
+
+        // Translating half of the pair would address a widget id minted for
+        // this fork inside an app that knows nothing about it.
+        let widget_ref = instance_at(&page, 0).widget_ref.as_ref().expect("ref kept");
+        assert_eq!(widget_ref.app_id, "other_app");
+        assert_eq!(widget_ref.widget_id, "src_widget");
+    }
+
+    #[test]
+    fn embedded_widget_definitions_are_remapped_whole() {
+        let maps = widget_fork_maps();
+        let mut page = proto::Page {
+            board_id: Some("src_board".to_string()),
+            ..Default::default()
+        };
+        let widget = proto::Widget {
+            id: "src_widget".to_string(),
+            components: vec![component_with_json(
+                "button",
+                flow_like_types::json::json!({
+                    "actions": [{ "name": "workflow_event", "context": { "nodeId": "src_node" } }]
+                }),
+            )],
+            exposed_props: vec![proto::ExposedProp {
+                id: "target".to_string(),
+                default_value: Some(json_bytes(
+                    flow_like_types::json::json!({ "literalString": "src_page" }),
+                )),
+                ..Default::default()
+            }],
+            customization_options: vec![proto::CustomizationOption {
+                id: "start".to_string(),
+                default_value: Some(json_bytes(flow_like_types::json::json!("src_node"))),
+                ..Default::default()
+            }],
+            data_model: vec![proto::DataEntry {
+                key: "seed".to_string(),
+                value: json_bytes(flow_like_types::json::json!({ "pageId": "src_page" })),
+            }],
+            ..Default::default()
+        };
+        // The map is keyed by widget *instance* id, not widget id.
+        page.widget_refs.insert("slot-1".to_string(), widget);
+
+        let issues = remap_page(&mut page, "dst_page", &maps);
+        assert!(issues.is_empty(), "{issues:?}");
+
+        assert!(page.widget_refs.contains_key("slot-1"));
+        let widget = &page.widget_refs["slot-1"];
+        assert_eq!(widget.id, "dst_widget");
+        assert_eq!(
+            decode_bytes(widget.components[0].component_json.as_ref().unwrap())["actions"][0]["context"]
+                ["nodeId"],
+            "dst_node"
+        );
+        assert_eq!(
+            decode_bytes(widget.exposed_props[0].default_value.as_ref().unwrap())["literalString"],
+            "dst_page"
+        );
+        assert_eq!(
+            decode_bytes(
+                widget.customization_options[0]
+                    .default_value
+                    .as_ref()
+                    .unwrap()
+            ),
+            flow_like_types::Value::String("dst_node".to_string())
+        );
+        assert_eq!(
+            decode_bytes(&widget.data_model[0].value)["pageId"],
+            "dst_page"
+        );
+    }
+
+    #[test]
+    fn literal_json_action_targets_survive_the_fork() {
+        let maps = widget_fork_maps();
+        let mut page = proto::Page::default();
+        page.components.push(component_with_json(
+            "cta",
+            flow_like_types::json::json!({
+                "data": { "literalJson": "{\"pageId\":\"src_page\",\"label\":\"Open\"}" }
+            }),
+        ));
+
+        let issues = remap_page(&mut page, "dst_page", &maps);
+        assert!(issues.is_empty());
+
+        let decoded = decode_bytes(page.components[0].component_json.as_ref().unwrap());
+        let inner: flow_like_types::Value =
+            flow_like_types::json::from_str(decoded["data"]["literalJson"].as_str().unwrap())
+                .expect("literalJson stays parseable");
+        assert_eq!(inner["pageId"], "dst_page");
+        assert_eq!(inner["label"], "Open");
+    }
+
+    #[test]
+    fn a_payload_the_fork_cannot_rewrite_is_reported_not_swallowed() {
+        let maps = widget_fork_maps();
+        let mut page = proto::Page::default();
+        page.components.push(proto::Component {
+            id: "broken".to_string(),
+            component_json: Some(b"{not json".to_vec()),
+            ..Default::default()
+        });
+
+        let issues = remap_page(&mut page, "dst_page", &maps);
+        assert!(!issues.is_empty());
+        assert!(
+            issues.reason("page").contains("broken"),
+            "the reason names the component: {}",
+            issues.reason("page")
+        );
     }
 }

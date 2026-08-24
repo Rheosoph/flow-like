@@ -24,6 +24,7 @@ import type {
 	IBoardSyncStatus,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
+	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
@@ -101,6 +102,7 @@ export type {
 	IApplyFlowScriptResponse,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
+	IScopedFlowScriptResponse,
 	IEventState,
 	IHelperState,
 	IPageState,

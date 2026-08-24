@@ -10,7 +10,7 @@ use std::{
 use super::{
     board::Board,
     execution::context::ExecutionContext,
-    pin::{Pin, PinType, ValueType},
+    pin::{Pin, PinType, ValueType, is_open_object_schema},
     variable::VariableType,
 };
 
@@ -524,30 +524,60 @@ impl Node {
         self.scores = Some(scores);
     }
 
-    pub fn harmonize_schema(&mut self, pins: Vec<&str>) -> Option<String> {
-        let schema = match self
-            .pins
-            .iter()
-            .find(|(_, pin)| pins.contains(&pin.name.as_str()) && pin.schema.is_some())
-        {
-            Some((_, pin)) => pin.schema.clone(),
-            None => return None,
-        };
-
-        for pin in self.pins.values_mut() {
-            if pins.contains(&pin.name.as_str()) {
-                pin.schema = schema.clone();
+    /// The schema the listed pins should agree on, scanned in the caller's pin order.
+    ///
+    /// Ranked, best first, because a pin's schema is only as trustworthy as where it came from:
+    ///
+    /// 1. A concrete schema on an input pin that has a producer — the shape actually flowing in.
+    /// 2. Any other concrete schema. An output pin can only have inherited one *backwards* from
+    ///    whatever it feeds, which goes stale the moment the producer upstream is swapped out.
+    /// 3. The open-object marker. `set_open_schema` says "this pin accepts any shape", never "its
+    ///    peers have no shape", so a permissive consumer must not erase a real schema.
+    ///
+    /// See [`crate::flow::pin::is_open_object_schema`].
+    fn donor_schema(&self, pins: &[&str]) -> Option<String> {
+        fn rank(pin: &Pin) -> u8 {
+            match pin.schema.as_deref() {
+                None => u8::MAX,
+                Some(schema) if is_open_object_schema(schema) => 2,
+                Some(_) if pin.pin_type == PinType::Input && !pin.depends_on.is_empty() => 0,
+                Some(_) => 1,
             }
         }
 
-        schema
+        let mut best: Option<(u8, &Pin)> = None;
+        for name in pins {
+            for pin in self.pins.values().filter(|pin| pin.name == *name) {
+                let pin_rank = rank(pin);
+                if pin_rank == u8::MAX {
+                    continue;
+                }
+                if best.is_none_or(|(best_rank, _)| pin_rank < best_rank) {
+                    best = Some((pin_rank, pin));
+                }
+            }
+        }
+
+        best.and_then(|(_, pin)| pin.schema.clone())
+    }
+
+    pub fn harmonize_schema(&mut self, pins: Vec<&str>) -> Option<String> {
+        let schema = self.donor_schema(&pins)?;
+
+        for pin in self.pins.values_mut() {
+            if pins.contains(&pin.name.as_str()) {
+                pin.schema = Some(schema.clone());
+            }
+        }
+
+        Some(schema)
     }
 
     pub fn harmonize_type(&mut self, pins: Vec<&str>, schema: bool) -> Option<VariableType> {
         // Scan in the caller's pin order, not map iteration order, so the
         // donor pin is deterministic. The type comes from the first
-        // non-generic pin; the schema from the first pin that actually has
-        // one — a schema-less sibling must never wipe another pin's schema.
+        // non-generic pin; the schema from `donor_schema` — a schema-less or
+        // open-shaped sibling must never wipe another pin's concrete schema.
         let variable_type = pins.iter().find_map(|name| {
             self.pins
                 .values()
@@ -556,12 +586,7 @@ impl Node {
         })?;
 
         let found_schema = if schema {
-            pins.iter().find_map(|name| {
-                self.pins
-                    .values()
-                    .filter(|pin| pin.name == *name)
-                    .find_map(|pin| pin.schema.clone())
-            })
+            self.donor_schema(&pins)
         } else {
             None
         };
@@ -627,7 +652,14 @@ impl Node {
             match pin {
                 Some(pin) => {
                     mutable_pin.data_type = pin.data_type.clone();
-                    mutable_pin.schema = pin.schema.clone();
+                    // The open marker declares "any shape", so there is nothing to inherit from it.
+                    // Adopting it — from a consumer like Break Struct's `struct_in`, which this pin
+                    // reaches through `connected_to` — would erase the shape this pin's own
+                    // producer gave it, and `harmonize_type` would then spread the blank downstream.
+                    mutable_pin.schema = pin
+                        .schema
+                        .clone()
+                        .filter(|schema| !is_open_object_schema(schema));
                     found_type = pin.data_type.clone();
 
                     if value_type.is_none() {
@@ -858,6 +890,9 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             // Mirror-driven: pins copied from a target function layer.
             | "control_call_function"
             | "control_call_reference"
+            // Schema-driven: one pin per field of the struct schema a wired peer declares.
+            | "struct_break"
+            | "struct_make_from_schema"
             // Widget-driven: pins derived from a persisted widget's bindings/contract.
             | "a2ui_instantiate_widget"
             | "a2ui_widget_update_inputs"
@@ -948,6 +983,117 @@ mod tests {
 
     use flow_like_types::{FromProto, ToProto};
     use flow_like_types::{Message, tokio};
+
+    use crate::flow::pin::OPEN_OBJECT_SCHEMA;
+
+    const CONCRETE_SCHEMA: &str =
+        r#"{"title":"A2UIFileInputFile","type":"object","properties":{"name":{"type":"string"}}}"#;
+    const STALE_SCHEMA: &str =
+        r#"{"title":"Bit","type":"object","properties":{"id":{"type":"string"}}}"#;
+
+    /// `Get Element` harmonizes its element pin with its array pin. The element pin reaches its
+    /// *consumer* (Break Struct's open `struct_in`) through `connected_to`, so without a
+    /// preference the open marker would be stamped over the array's real schema.
+    #[test]
+    fn a_concrete_schema_outranks_the_open_marker_when_harmonizing() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        node.add_input_pin("array_in", "Array", "", super::VariableType::Struct)
+            .schema = Some(CONCRETE_SCHEMA.to_string());
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(OPEN_OBJECT_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        for name in ["element", "array_in"] {
+            assert_eq!(
+                node.get_pin_by_name(name).unwrap().schema.as_deref(),
+                Some(CONCRETE_SCHEMA),
+                "`{name}` must keep the concrete schema"
+            );
+        }
+
+        node.harmonize_schema(vec!["element", "array_in"]);
+        assert_eq!(
+            node.get_pin_by_name("element").unwrap().schema.as_deref(),
+            Some(CONCRETE_SCHEMA)
+        );
+    }
+
+    /// A passthrough follows its producer, not the consumer it feeds. The consumer's copy of the
+    /// previous shape would otherwise be stamped back over the array that was just rewired.
+    #[test]
+    fn an_upstream_schema_outranks_one_inherited_from_a_consumer() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        let array_in = node.add_input_pin("array_in", "Array", "", super::VariableType::Struct);
+        array_in.schema = Some(CONCRETE_SCHEMA.to_string());
+        array_in.depends_on.insert("producer-pin".to_string());
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(STALE_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        for name in ["element", "array_in"] {
+            assert_eq!(
+                node.get_pin_by_name(name).unwrap().schema.as_deref(),
+                Some(CONCRETE_SCHEMA),
+                "`{name}` must follow the wired producer"
+            );
+        }
+    }
+
+    /// With nothing concrete to spread, the marker is still the best answer available: the pins
+    /// agree that the shape is open rather than losing the declaration entirely.
+    #[test]
+    fn the_open_marker_still_spreads_when_no_pin_has_a_real_schema() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        node.add_input_pin("array_in", "Array", "", super::VariableType::Struct);
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(OPEN_OBJECT_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        assert_eq!(
+            node.get_pin_by_name("array_in").unwrap().schema.as_deref(),
+            Some(OPEN_OBJECT_SCHEMA)
+        );
+    }
+
+    /// `match_type` on an output pin reads `connected_to`, so it inherits from the consumer.
+    #[tokio::test]
+    async fn match_type_does_not_inherit_an_open_marker_from_a_consumer() {
+        use flow_like_storage::object_store::path::Path;
+
+        let mut board = super::Board::new_detached(Some("match-type".to_string()), Path::default());
+
+        let mut consumer = super::Node::new("struct_break", "Break Struct", "", "Structs");
+        consumer.id = "consumer".to_string();
+        consumer
+            .add_input_pin("struct_in", "Struct", "", super::VariableType::Struct)
+            .set_open_schema();
+        let consumer_pin = consumer.get_pin_by_name("struct_in").unwrap().id.clone();
+        board.nodes.insert(consumer.id.clone(), consumer);
+
+        let mut passthrough = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        passthrough.id = "passthrough".to_string();
+        let element =
+            passthrough.add_output_pin("element", "Element", "", super::VariableType::Generic);
+        element.connected_to.insert(consumer_pin);
+
+        passthrough
+            .match_type("element", &board, Some(super::ValueType::Normal), None)
+            .unwrap();
+
+        assert_eq!(
+            passthrough.get_pin_by_name("element").unwrap().data_type,
+            super::VariableType::Struct,
+            "the data type is still inherited from the consumer"
+        );
+        assert_eq!(
+            passthrough.get_pin_by_name("element").unwrap().schema,
+            None,
+            "the open marker declares nothing, so there is no schema to inherit"
+        );
+    }
 
     #[tokio::test]
     async fn serialize_node() {

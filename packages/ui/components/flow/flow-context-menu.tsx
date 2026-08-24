@@ -1,6 +1,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
+	FileCode2Icon,
 	MessageCircleDashedIcon,
 	PlayCircleIcon,
 	VariableIcon,
@@ -113,10 +114,12 @@ export function FlowContextMenu({
 	children,
 	droppedPin,
 	currentLayerId,
+	selectionCount = 0,
 	onPlaceholder,
 	onNodePlace,
 	onCommentPlace,
 	onCreateVariable,
+	onEditSelectionAsFlowScript,
 	onClose,
 }: Readonly<{
 	nodes: INode[];
@@ -125,10 +128,14 @@ export function FlowContextMenu({
 	children: React.ReactNode;
 	droppedPin?: IPin;
 	currentLayerId?: string;
+	/** Selected flow nodes on the canvas; gates the scoped-FlowScript action. */
+	selectionCount?: number;
 	onPlaceholder: (name: string) => void;
 	onNodePlace: (node: INode) => void;
 	onCommentPlace: () => void;
 	onCreateVariable?: (variable: IVariable) => void;
+	/** Present only when the backend supports selection-scoped FlowScript editing. */
+	onEditSelectionAsFlowScript?: () => void;
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("flow");
@@ -561,6 +568,22 @@ export function FlowContextMenu({
 							<ZapIcon className="w-4 h-4" />
 							{t("placeholder", "Placeholder")}
 						</ContextMenuItem>
+						{onEditSelectionAsFlowScript && selectionCount > 0 && (
+							<ContextMenuItem
+								className="flex flex-row gap-1 items-center"
+								onSelect={(event) => {
+									if (menuBlockedRef.current) {
+										event.preventDefault();
+										return;
+									}
+									onEditSelectionAsFlowScript();
+									onClose();
+								}}
+							>
+								<FileCode2Icon className="w-4 h-4" />
+								{t("editSelectionAsFlowscript", "Edit selection as FlowScript")}
+							</ContextMenuItem>
+						)}
 						{/* TODO: create the get node if input, set node if output! */}
 						{droppedPin &&
 							onCreateVariable &&

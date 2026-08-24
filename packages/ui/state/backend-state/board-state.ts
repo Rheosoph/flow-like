@@ -18,6 +18,7 @@ import type {
 	IVersionType,
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
+import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type {
 	BoardEditJob,
 	BoardEditJobDeliveryClaim,
@@ -37,7 +38,6 @@ import type {
 	IBoardSummaryInclude,
 	IBoardVariables,
 } from "../../lib/schema/flow/board-summary";
-import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IPrerunBoardResponse } from "./types";
 
@@ -75,8 +75,17 @@ export interface ICheckFlowScriptReconcileResponse {
 	reconcile_valid: boolean;
 	idempotent: boolean;
 	command_count: number;
+	/** The reconciled command plan (apply-preview UI); empty when parse/compile failed. */
+	board_commands?: BoardCommand[];
 	corrections: string[];
 	diagnostics: string[];
+}
+
+/** A selection-scoped FlowScript render plus the anchors a scoped apply must be limited to. */
+export interface IScopedFlowScriptResponse {
+	flowscript: string;
+	/** Anchors (event entry node id / function layer id) of the rendered events/functions. */
+	scope_anchors: string[];
 }
 
 /** One queued batch, described well enough for a user to decide whether to discard it. */
@@ -285,6 +294,12 @@ export interface IBoardState {
 		allowDeletions?: boolean,
 		/** Defaults to "editor"; FlowPilot's own applies must pass "agent". */
 		origin?: FlowScriptApplyOrigin,
+		/**
+		 * Anchors from a scoped `getFlowScriptScoped` render. When set, board events/functions
+		 * outside these anchors are invisible to the reconcile diff, so the partial document
+		 * never deletes what it did not render.
+		 */
+		scopeAnchors?: string[],
 	): Promise<IApplyFlowScriptResponse>;
 
 	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
@@ -292,6 +307,32 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
+	/**
+	 * Render only the board slice containing `nodeIds`: the events/functions holding the
+	 * selection, every function they reference, and all variables/interfaces. Apply the edited
+	 * text back through `applyFlowScript` with the returned `scope_anchors` so the unrendered
+	 * rest of the board is never treated as deleted. Optional — present where the backend
+	 * supports selection-scoped editing.
+	 */
+	getFlowScriptScoped?(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors?: boolean,
+	): Promise<IScopedFlowScriptResponse>;
+
+	/**
+	 * Canonically format FlowScript text (`render(parse(text))`). Pure and non-mutating; rejects
+	 * on a parse error so the editor keeps the unformatted source. Optional — present where a
+	 * native/remote formatter exists.
+	 */
+	formatFlowScript?(
+		appId: string,
+		boardId: string,
+		flowscript: string,
 		anchors?: boolean,
 	): Promise<string>;
 
@@ -311,6 +352,8 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		flowscript: string,
+		/** Anchors from a scoped render; limits the compile diff exactly like a scoped apply. */
+		scopeAnchors?: string[],
 	): Promise<ICheckFlowScriptReconcileResponse>;
 
 	getExecutionElements(

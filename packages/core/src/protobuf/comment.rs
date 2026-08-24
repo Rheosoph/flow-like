@@ -39,6 +39,7 @@ impl ToProto<flow_like_types::proto::Comment> for Comment {
             z_index: self.z_index,
             hash: self.hash,
             is_locked: self.is_locked,
+            node_id: self.node_id.clone(),
         }
     }
 }
@@ -66,6 +67,7 @@ impl FromProto<flow_like_types::proto::Comment> for Comment {
             z_index: proto.z_index,
             hash: proto.hash,
             is_locked: proto.is_locked,
+            node_id: proto.node_id,
         }
     }
 }

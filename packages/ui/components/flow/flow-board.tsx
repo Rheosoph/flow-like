@@ -37,6 +37,7 @@ import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
 	Eye,
+	PencilLineIcon,
 	FileCode2Icon,
 	FileTextIcon,
 	HistoryIcon,
@@ -73,6 +74,11 @@ import type {
 } from "react-resizable-panels";
 import {
 	Button,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
 	Sheet,
 	SheetContent,
 	SheetHeader,
@@ -96,7 +102,19 @@ import {
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
 import { FlowPages } from "../../components/flow/flow-pages";
+import { EventPayloadForm } from "../../components/flow/flow-node/event-payload-form";
+import { deriveRunCapabilities } from "../../components/flow/flow-run-capabilities";
 import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
+import {
+	collectCommandEntityIds,
+	findClaimCollision,
+	readPeerFlowScriptClaims,
+	useFlowScriptCanvasPresence,
+} from "../../components/flow/flowscript/flowscript-presence";
+import type {
+	FlowScriptRunCapability,
+	FlowScriptRunMode,
+} from "../../components/flow/flowscript/flowscript-run-lens";
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
@@ -111,7 +129,10 @@ import { useCommandExecution } from "../../hooks/use-command-execution";
 import { useCopilotCommands } from "../../hooks/use-copilot-commands";
 import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import { useFlowPanels } from "../../hooks/use-flow-panels";
-import { useFollowMode } from "../../hooks/use-follow-mode";
+import {
+	type FollowedEditorAnchor,
+	useFollowMode,
+} from "../../hooks/use-follow-mode";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useKeyboardShortcuts } from "../../hooks/use-keyboard-shortcuts";
 import { useLayerNavigation } from "../../hooks/use-layer-navigation";
@@ -158,7 +179,7 @@ import {
 	parseBoard,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
-import { toastError, toastSuccess } from "../../lib/messages";
+import { toastError, toastSuccess, toastWarning } from "../../lib/messages";
 import { isWebkitLite } from "../../lib/platform";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -167,6 +188,7 @@ import {
 	type IBoard,
 	type IComment,
 	ICommentType,
+	ILayerType,
 	type IVariable,
 } from "../../lib/schema/flow/board";
 import { type INode, IVariableType } from "../../lib/schema/flow/node";
@@ -909,12 +931,27 @@ export function FlowBoard({
 		backend.userState.lookupUser.bind(backend.userState),
 	);
 
+	// Peers' FlowScript editor cursors/claims projected onto canvas nodes
+	// (peer-colored outline + "being edited by" badge).
+	useFlowScriptCanvasPresence({ awareness, sub, setNodes });
+
+	// Cross-surface follow: the concrete handler is bound below once the
+	// FlowScript panel state exists; the ref keeps this callback stable.
+	const followEditorAnchorRef = useRef<(anchor: FollowedEditorAnchor) => void>(
+		() => {},
+	);
+	const handleFollowEditorAnchor = useCallback(
+		(anchor: FollowedEditorAnchor) => followEditorAnchorRef.current(anchor),
+		[],
+	);
+
 	// Follow mode
 	const { followingSub, toggleFollow, stopFollowing } = useFollowMode({
 		awareness,
 		sub,
 		setViewport,
 		getViewport,
+		onFollowEditorAnchor: handleFollowEditorAnchor,
 	});
 
 	// Build layer name lookup for presence UI
@@ -1032,7 +1069,7 @@ export function FlowBoard({
 
 	// Execution presence
 	const executionRuns = useRunExecutionStore((state) => state.runs);
-	const { remoteExecutingNodeIds } = useExecutionPresence({
+	const { remoteExecutingNodeIds, remoteExecutions } = useExecutionPresence({
 		awareness,
 		sub,
 		runs: executionRuns,
@@ -1135,6 +1172,27 @@ export function FlowBoard({
 
 	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
 	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
+	// Node ids the FlowScript panel is scoped to ("Edit selection as FlowScript").
+	const [flowScriptScope, setFlowScriptScope] = useState<string[] | undefined>(
+		undefined,
+	);
+	// Follow mode → editor: bumped when the followed peer's text cursor moves to
+	// a new statement; the open panel reveals + flashes that anchor's line.
+	const [flowScriptRevealRequest, setFlowScriptRevealRequest] = useState<
+		{ nodeId: string; token: number } | undefined
+	>(undefined);
+	const flowScriptPanelOpenRef = useRef(false);
+	flowScriptPanelOpenRef.current =
+		flowScriptPanelVisible || flowScriptSheetOpen;
+	// The followed peer is typing in THEIR panel: reveal in ours when open,
+	// otherwise focus the node on canvas. Never auto-opens the panel.
+	followEditorAnchorRef.current = (anchor: FollowedEditorAnchor) => {
+		if (flowScriptPanelOpenRef.current) {
+			setFlowScriptRevealRequest({ nodeId: anchor.id, token: Date.now() });
+			return;
+		}
+		if (anchor.kind !== "variable") focusNode(anchor.id);
+	};
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
@@ -1230,6 +1288,8 @@ export function FlowBoard({
 	}, [isMobile]);
 
 	const toggleFlowScript = useCallback(() => {
+		// The dock/menu entry always opens the whole board, never a stale scope.
+		setFlowScriptScope(undefined);
 		if (isMobile) {
 			setFlowScriptSheetOpen((v) => !v);
 			return;
@@ -1239,6 +1299,51 @@ export function FlowBoard({
 		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
 		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
 	}, [isMobile, setSidePanelSize]);
+
+	// "Edit selection as FlowScript": open the panel on a selection-scoped render.
+	const openFlowScriptForSelection = useCallback(() => {
+		if (selectedNodeIds.length === 0) return;
+		setFlowScriptScope([...selectedNodeIds]);
+		if (isMobile) {
+			setFlowScriptSheetOpen(true);
+			return;
+		}
+		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
+	}, [selectedNodeIds, isMobile, setSidePanelSize]);
+
+	// Transient FlowScript-cursor highlight: a DOM class toggle on the rendered
+	// node, so it never touches selection, focus or the viewport. Nodes on other
+	// layers have no DOM element and simply stay unhighlighted; the explicit
+	// "Reveal on board" action goes through focusNode instead.
+	const flowScriptHighlightRef = useRef<string | undefined>(undefined);
+	const highlightNodeOnCanvas = useCallback((nodeId?: string) => {
+		const previous = flowScriptHighlightRef.current;
+		if (previous === nodeId) return;
+		if (previous) {
+			document
+				.querySelector(`.react-flow__node[data-id="${previous}"]`)
+				?.classList.remove("flowscript-nav-highlight");
+		}
+		flowScriptHighlightRef.current = nodeId;
+		if (nodeId) {
+			document
+				.querySelector(`.react-flow__node[data-id="${nodeId}"]`)
+				?.classList.add("flowscript-nav-highlight");
+		}
+	}, []);
+
+	// Sections a full FlowScript render consists of: event entry nodes + function layers.
+	const totalFlowScriptSections = useMemo(() => {
+		const data = board.data;
+		if (!data) return undefined;
+		const eventSections = Object.values(data.nodes).filter(
+			(node) => node.start,
+		).length;
+		const functionSections = Object.values(data.layers ?? {}).filter(
+			(layer) => layer.type === ILayerType.Function,
+		).length;
+		return eventSections + functionSections;
+	}, [board.data]);
 
 	// Clear selections when version changes
 	useEffect(() => {
@@ -2127,6 +2232,34 @@ export function FlowBoard({
 		}
 	}, [board.data, edges, executeCommands, getNodes, pinCache, version]);
 
+	// Advisory collision toast (FlowScript collab rule 3): an undo/redo batch
+	// that touches statements a peer is editing in the code view still applies
+	// (last-writer-wins) but names the collision. Claims are read straight from
+	// awareness — one cheap sanitized pass, only when history actually fires.
+	const warnOnHistoryClaimCollision = useCallback(
+		(commands: IGenericCommand[]) => {
+			if (!awareness) return;
+			const entityIds = collectCommandEntityIds(commands);
+			if (entityIds.size === 0) return;
+			const hit = findClaimCollision(
+				readPeerFlowScriptClaims(awareness, sub),
+				entityIds,
+			);
+			if (!hit) return;
+			const name =
+				(hit.sub ? peerUsers?.get(hit.sub)?.truncatedName : undefined) ??
+				t("common:user", "User");
+			toastWarning(
+				t("flowscriptEditCollision", {
+					defaultValue: "This change touches statements {{name}} is editing",
+					name,
+				}),
+				<PencilLineIcon className="w-4 h-4" />,
+			);
+		},
+		[awareness, sub, peerUsers, t],
+	);
+
 	useKeyboardShortcuts({
 		board,
 		catalog,
@@ -2141,6 +2274,7 @@ export function FlowBoard({
 		rollbackUndo,
 		rollbackRedo,
 		stampHistory,
+		onHistoryBatch: warnOnHistoryClaimCollision,
 	});
 
 	useEffect(() => {
@@ -2339,6 +2473,90 @@ export function FlowBoard({
 		currentProfile.data?.settings?.connection_mode ?? "default";
 	const isOffline = app.data?.visibility === IAppVisibility.Offline;
 	const hasRemoteExecution = !!backend.boardState.executeBoardRemote;
+
+	// What each event entry node may do, for the FlowScript run lenses. Same
+	// derivation as the canvas play button (deriveRunCapabilities), so the two
+	// surfaces can never disagree.
+	const runnableEventNodes = useMemo(() => {
+		if (!board.data) return undefined;
+		const map = new Map<string, FlowScriptRunCapability>();
+		for (const node of Object.values(board.data.nodes)) {
+			if (!node.start) continue;
+			const capabilities = deriveRunCapabilities({
+				executionMode: board.data.execution_mode,
+				isOffline,
+				hasRemoteExecute: hasRemoteExecution,
+				onlyOffline: node.only_offline,
+			});
+			map.set(node.id, {
+				local: capabilities.canLocalExecute,
+				remote: capabilities.canRemoteExecute,
+			});
+		}
+		return map;
+	}, [board.data, isOffline, hasRemoteExecution]);
+
+	// FlowScript "▶ Run" lens controller. Payload-less events run through the
+	// exact gates the canvas play button uses (executeBoard/executeBoardRemote:
+	// WASM consent → runtime vars → internal execute); events with output pins
+	// open the same EventPayloadForm, hosted in a board-level dialog.
+	const [runDialogNodeId, setRunDialogNodeId] = useState<string | undefined>(
+		undefined,
+	);
+	const runDialogBusyRef = useRef(false);
+	const onRunEventNode = useCallback(
+		async (nodeId: string, mode: FlowScriptRunMode) => {
+			const node = boardRef.current?.nodes[nodeId];
+			if (!node?.start) return;
+			const capability = runnableEventNodes?.get(nodeId);
+			if (mode === "local" && capability?.local !== true) return;
+			if (mode === "remote" && capability?.remote !== true) return;
+			if (Object.keys(node.pins).length <= 1) {
+				if (mode === "remote") await executeBoardRemote(node);
+				else await executeBoard(node);
+				return;
+			}
+			setRunDialogNodeId(nodeId);
+		},
+		[runnableEventNodes, executeBoard, executeBoardRemote],
+	);
+	const runDialogNode = runDialogNodeId
+		? board.data?.nodes[runDialogNodeId]
+		: undefined;
+	const runDialogCapability = runDialogNodeId
+		? runnableEventNodes?.get(runDialogNodeId)
+		: undefined;
+	const closeRunDialog = useCallback(() => setRunDialogNodeId(undefined), []);
+	const runDialogLocalExecute = useCallback(
+		async (payload?: object) => {
+			const node = runDialogNodeId
+				? boardRef.current?.nodes[runDialogNodeId]
+				: undefined;
+			if (!node || runDialogBusyRef.current) return;
+			runDialogBusyRef.current = true;
+			try {
+				await executeBoard(node, payload);
+			} finally {
+				runDialogBusyRef.current = false;
+			}
+		},
+		[runDialogNodeId, executeBoard],
+	);
+	const runDialogRemoteExecute = useCallback(
+		async (payload?: object) => {
+			const node = runDialogNodeId
+				? boardRef.current?.nodes[runDialogNodeId]
+				: undefined;
+			if (!node || runDialogBusyRef.current) return;
+			runDialogBusyRef.current = true;
+			try {
+				await executeBoardRemote(node, payload);
+			} finally {
+				runDialogBusyRef.current = false;
+			}
+		},
+		[runDialogNodeId, executeBoardRemote],
+	);
 
 	useEffect(() => {
 		if (!board.data) return;
@@ -3710,6 +3928,13 @@ export function FlowBoard({
 								refs={board.data?.refs || {}}
 								onClose={() => setDroppedPin(undefined)}
 								nodes={catalog.data ?? []}
+								selectionCount={selectedNodeIds.length}
+								onEditSelectionAsFlowScript={
+									backend.boardState.getFlowScriptScoped &&
+									typeof version === "undefined"
+										? openFlowScriptForSelection
+										: undefined
+								}
 								onPlaceholder={async (name) => {
 									await placePlaceholder(name);
 									setDroppedPin(undefined);
@@ -3925,7 +4150,10 @@ export function FlowBoard({
 					collapsedSize={0}
 					ref={flowScriptPanelRef}
 					onExpand={() => setFlowScriptPanelVisible(true)}
-					onCollapse={() => setFlowScriptPanelVisible(false)}
+					onCollapse={() => {
+						setFlowScriptPanelVisible(false);
+						setFlowScriptScope(undefined);
+					}}
 				>
 					{board.data && flowScriptPanelVisible && (
 						<FlowScriptPanel
@@ -3934,8 +4162,22 @@ export function FlowBoard({
 							version={version}
 							boardUpdatedAt={board.dataUpdatedAt}
 							catalogNodes={catalog.data}
+							selectedNodeIds={selectedNodeIds}
+							onHighlightNode={highlightNodeOnCanvas}
+							onRevealNode={focusNode}
+							scopeNodeIds={flowScriptScope}
+							onExitScope={() => setFlowScriptScope(undefined)}
+							totalSections={totalFlowScriptSections}
 							onApplyFlowScript={handleApplyFlowScript}
 							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
+							awareness={awareness}
+							sub={sub}
+							peerUsers={peerUsers}
+							presenceEnabled={!isMobile}
+							revealRequest={flowScriptRevealRequest}
+							onRunEventNode={onRunEventNode}
+							runnableEventNodes={runnableEventNodes}
+							remoteExecutions={remoteExecutions}
 						/>
 					)}
 				</ResizablePanel>
@@ -4029,7 +4271,13 @@ export function FlowBoard({
 					</SheetContent>
 				</Sheet>
 				{/* FlowScript Sheet (mobile) */}
-				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
+				<Sheet
+					open={flowScriptSheetOpen}
+					onOpenChange={(open) => {
+						setFlowScriptSheetOpen(open);
+						if (!open) setFlowScriptScope(undefined);
+					}}
+				>
 					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
 						<SheetHeader className="px-4 pt-4">
 							<SheetTitle>{t("flowscript", "FlowScript")}</SheetTitle>
@@ -4042,8 +4290,21 @@ export function FlowBoard({
 									version={version}
 									boardUpdatedAt={board.dataUpdatedAt}
 									catalogNodes={catalog.data}
+									selectedNodeIds={selectedNodeIds}
+									onRevealNode={focusNode}
+									scopeNodeIds={flowScriptScope}
+									onExitScope={() => setFlowScriptScope(undefined)}
+									totalSections={totalFlowScriptSections}
 									onApplyFlowScript={handleApplyFlowScript}
 									onClose={() => setFlowScriptSheetOpen(false)}
+									awareness={awareness}
+									sub={sub}
+									peerUsers={peerUsers}
+									presenceEnabled={isMobile}
+									revealRequest={flowScriptRevealRequest}
+									onRunEventNode={onRunEventNode}
+									runnableEventNodes={runnableEventNodes}
+									remoteExecutions={remoteExecutions}
 								/>
 							</div>
 						)}
@@ -4147,6 +4408,45 @@ export function FlowBoard({
 				onSelect={(alg) => autoLayout(alg)}
 				selectionCount={selectedNodeIds.length}
 			/>
+
+			{/* Event payload for FlowScript lens runs — same form the canvas play button opens */}
+			<Dialog
+				open={typeof runDialogNode !== "undefined"}
+				onOpenChange={(open) => {
+					if (!open) closeRunDialog();
+				}}
+			>
+				<DialogContent className="max-w-lg">
+					<DialogHeader>
+						<DialogTitle>
+							{t("common:executeFriendly_name", "Execute {{friendly_name}}", {
+								friendly_name: runDialogNode?.friendly_name,
+							})}
+						</DialogTitle>
+						<DialogDescription>
+							{t(
+								"common:provideInputValuesForTheEventPayload",
+								"Provide input values for the event payload.",
+							)}
+						</DialogDescription>
+					</DialogHeader>
+					{runDialogNode && (
+						<EventPayloadForm
+							node={runDialogNode}
+							boardRef={boardRef}
+							onLocalExecute={
+								runDialogCapability?.local ? runDialogLocalExecute : undefined
+							}
+							onRemoteExecute={
+								runDialogCapability?.remote ? runDialogRemoteExecute : undefined
+							}
+							canLocalExecute={runDialogCapability?.local ?? false}
+							canRemoteExecute={runDialogCapability?.remote ?? false}
+							onClose={closeRunDialog}
+						/>
+					)}
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

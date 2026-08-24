@@ -26,6 +26,7 @@ import {
 	type IRealtimeAccess,
 	type IRunContext,
 	type IRunPayload,
+	type IScopedFlowScriptResponse,
 	type IVersionType,
 	type ProgressToastData,
 	checkOAuthTokens,
@@ -816,6 +817,7 @@ export class WebBoardState implements IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions = false,
 		origin: FlowScriptApplyOrigin = "editor",
+		scopeAnchors?: string[],
 	): Promise<IApplyFlowScriptResponse> {
 		return apiPost<IApplyFlowScriptResponse>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
@@ -826,6 +828,7 @@ export class WebBoardState implements IBoardState {
 				// The endpoint captures failed applies; without this every FlowPilot attempt would
 				// be indistinguishable from a person's edit in the admin view.
 				origin,
+				scope_anchors: scopeAnchors,
 			},
 			this.backend.auth,
 		);
@@ -892,6 +895,42 @@ export class WebBoardState implements IBoardState {
 		params.set("anchors", String(anchors));
 		const response = await apiGet<{ flowscript: string }>(
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
+			this.backend.auth,
+		);
+		return response.flowscript;
+	}
+
+	async getFlowScriptScoped(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		const params = new URLSearchParams();
+		params.set("anchors", String(anchors));
+		params.set("node_ids", nodeIds.join(","));
+		const response = await apiGet<{
+			flowscript: string;
+			scope_anchors?: string[];
+		}>(
+			`apps/${appId}/board/${boardId}/flowscript?${params}`,
+			this.backend.auth,
+		);
+		return {
+			flowscript: response.flowscript,
+			scope_anchors: response.scope_anchors ?? [],
+		};
+	}
+
+	async formatFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		anchors = true,
+	): Promise<string> {
+		const response = await apiPost<{ flowscript: string }>(
+			`apps/${appId}/board/${boardId}/flowscript/format`,
+			{ flowscript, anchors },
 			this.backend.auth,
 		);
 		return response.flowscript;

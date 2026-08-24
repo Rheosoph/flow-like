@@ -401,7 +401,7 @@ const OPEN_OBJECT_SCHEMA_KEYS = new Set(["type", "additionalProperties"]);
  * never contradict a concrete schema and must never be the basis for rejecting a peer pin. The
  * `includes` guard keeps the drag hot path from parsing multi-KB real schemas.
  */
-function isOpenObjectSchema(schema: string): boolean {
+export function isOpenObjectSchema(schema: string): boolean {
 	if (!schema.includes("additionalProperties")) return false;
 	try {
 		const parsed = JSON.parse(schema);

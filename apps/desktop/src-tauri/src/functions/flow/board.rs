@@ -8,7 +8,9 @@ use crate::{
 use flow_like::{
     app::{App, AppVisibility},
     flow::{
-        ast::{ApplyFlowScriptResult, RenderOptions, board_to_flowscript},
+        ast::{
+            ApplyFlowScriptResult, RenderOptions, board_to_flowscript, board_to_flowscript_scoped,
+        },
         board::{
             Board, VersionType,
             commands::GenericCommand,
@@ -276,6 +278,51 @@ pub async fn get_flowscript(
     Err(TauriFunctionError::new("Board not found"))
 }
 
+/// A selection-scoped FlowScript render: the sections containing the selected nodes plus the
+/// anchors a later scoped apply/check must be limited to.
+#[derive(serde::Serialize)]
+pub struct ScopedFlowScriptResponse {
+    pub flowscript: String,
+    /// Anchors (event entry node id / function layer id) of the rendered events/functions.
+    pub scope_anchors: Vec<String>,
+}
+
+/// Render only the board slice containing `node_ids`: the top-level events/functions whose bodies
+/// hold the selection, every function they reference, and the full variable/interface context.
+#[tauri::command(async)]
+pub async fn get_flowscript_scoped(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    node_ids: Vec<String>,
+    version: Option<(u32, u32, u32)>,
+    anchors: Option<bool>,
+) -> Result<ScopedFlowScriptResponse, TauriFunctionError> {
+    let render_options = RenderOptions {
+        anchors: anchors.unwrap_or(true),
+        ..RenderOptions::default()
+    };
+
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?;
+            app.open_board(board_id, Some(true), version)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?
+        }
+    };
+    let board = board.lock().await;
+    let scoped = board_to_flowscript_scoped(&board, &node_ids, &render_options);
+    Ok(ScopedFlowScriptResponse {
+        flowscript: scoped.text,
+        scope_anchors: scoped.scope_anchors,
+    })
+}
+
 /// A positioned FlowScript diagnostic produced by the authoritative Rust parser.
 #[derive(serde::Serialize)]
 pub struct FlowScriptDiagnostic {
@@ -303,6 +350,22 @@ pub async fn lint_flowscript(
             severity: "error".to_string(),
         }]),
     }
+}
+
+/// Canonical FlowScript formatting: parse, then re-render. Parse-only like [`lint_flowscript`]
+/// (no board or catalog is touched), so it is safe as an on-demand editor action. A parse error
+/// fails the command; the editor keeps the unformatted source.
+#[tauri::command(async)]
+pub async fn format_flowscript(
+    flowscript: String,
+    anchors: Option<bool>,
+) -> Result<String, TauriFunctionError> {
+    flow_like::flow::ast::format_flowscript(&flowscript, anchors.unwrap_or(true)).map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "FlowScript parse error at {}:{}: {}",
+            error.line, error.col, error.message
+        ))
+    })
 }
 
 /// A FlowScript source stripped of everything that is board *data* rather than board *shape*.
@@ -344,6 +407,8 @@ pub struct CheckFlowScriptReconcileResult {
     /// True when the source already describes the live board without mutations or migrations.
     pub idempotent: bool,
     pub command_count: usize,
+    /// The reconciled command plan (apply-preview UI); empty when parsing or compiling failed.
+    pub board_commands: Vec<flow_like::flow::copilot::BoardCommand>,
     pub corrections: Vec<String>,
     pub diagnostics: Vec<String>,
 }
@@ -357,6 +422,7 @@ pub async fn check_flowscript_reconcile(
     app_id: String,
     board_id: String,
     flowscript: String,
+    scope_anchors: Option<Vec<String>>,
 ) -> Result<CheckFlowScriptReconcileResult, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let app = App::load(app_id.clone(), flow_like_state.clone()).await?;
@@ -392,6 +458,7 @@ pub async fn check_flowscript_reconcile(
             reconcile_valid: false,
             idempotent: false,
             command_count: 0,
+            board_commands: Vec::new(),
             corrections: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at {}:{}: {}",
@@ -402,13 +469,14 @@ pub async fn check_flowscript_reconcile(
     // Run the exact Apply compiler (including dynamic-pin enrichment) on an in-memory clone. The
     // authoritative board, its undo history, and its persistence store are never touched.
     let mut scratch = board.lock().await.clone();
-    let result = match flow_like::flow::ast::apply_flowscript_to_board(
+    let result = match flow_like::flow::ast::apply_flowscript_to_board_scoped(
         &mut scratch,
         &flowscript,
         &catalog_nodes,
         flow_like_state,
         None,
         true,
+        scope_anchors.as_deref(),
     )
     .await
     {
@@ -419,6 +487,7 @@ pub async fn check_flowscript_reconcile(
                 reconcile_valid: false,
                 idempotent: false,
                 command_count: 0,
+                board_commands: Vec::new(),
                 corrections: Vec::new(),
                 diagnostics: vec![format!("FlowScript compiler error: {error}")],
             });
@@ -433,6 +502,7 @@ pub async fn check_flowscript_reconcile(
         reconcile_valid,
         idempotent,
         command_count: result.board_commands.len(),
+        board_commands: result.board_commands,
         corrections: result.corrections,
         diagnostics: result.diagnostics,
     })
@@ -650,6 +720,7 @@ async fn execute_local_commands(
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_flowscript(
     handler: AppHandle,
     app_id: String,
@@ -658,6 +729,7 @@ pub async fn apply_flowscript(
     current_layer: Option<String>,
     catalog_nodes: Option<Vec<Node>>,
     allow_deletions: Option<bool>,
+    scope_anchors: Option<Vec<String>>,
 ) -> Result<ApplyFlowScriptResult, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
@@ -700,13 +772,14 @@ pub async fn apply_flowscript(
     // unexpectedly large executed/undo receipt can be rejected without leaving the native board
     // ahead of Hub (or falling back to setup/connection chunks).
     let original_board = requires_remote_delivery.then(|| board.clone());
-    let result = match flow_like::flow::ast::apply_flowscript_to_board(
+    let result = match flow_like::flow::ast::apply_flowscript_to_board_scoped(
         &mut board,
         &flowscript,
         &catalog_nodes_for_app,
         flow_like_state,
         current_layer,
         allow_deletions.unwrap_or(false),
+        scope_anchors.as_deref(),
     )
     .await
     {

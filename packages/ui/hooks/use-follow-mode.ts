@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	FLOWSCRIPT_CURSOR_FIELD,
+	type FlowScriptAnchorWireKind,
+	sanitizeCursorForWire,
+} from "../components/flow/flowscript/flowscript-presence-protocol";
 
 interface Viewport {
 	x: number;
 	y: number;
 	zoom: number;
+}
+
+export interface FollowedEditorAnchor {
+	id: string;
+	kind: FlowScriptAnchorWireKind;
 }
 
 interface UseFollowModeProps {
@@ -12,6 +22,13 @@ interface UseFollowModeProps {
 	sub?: string;
 	setViewport: (viewport: Viewport, options?: { duration?: number }) => void;
 	getViewport: () => Viewport;
+	/**
+	 * Invoked when the followed peer's latest activity is a FlowScript editor
+	 * cursor (their text cursor moved more recently than their canvas pointer):
+	 * the caller reveals the anchor in its own panel, or focuses the node on
+	 * canvas when no panel is open. Fired once per anchor change.
+	 */
+	onFollowEditorAnchor?: (anchor: FollowedEditorAnchor) => void;
 }
 
 export function useFollowMode({
@@ -19,12 +36,24 @@ export function useFollowMode({
 	sub,
 	setViewport,
 	getViewport,
+	onFollowEditorAnchor,
 }: UseFollowModeProps) {
 	const [followingSub, setFollowingSub] = useState<string | undefined>(
 		undefined,
 	);
 	const followingSubRef = useRef<string | undefined>(undefined);
 	const lastAppliedViewportRef = useRef<string>("");
+	const onFollowEditorAnchorRef = useRef(onFollowEditorAnchor);
+	onFollowEditorAnchorRef.current = onFollowEditorAnchor;
+	// Activity observed per session, LOCAL wall clock only — remote timestamps
+	// are never compared across machines.
+	const canvasActivityRef = useRef<Map<number, { key: string; at: number }>>(
+		new Map(),
+	);
+	const editorActivityRef = useRef<Map<number, { key: string; at: number }>>(
+		new Map(),
+	);
+	const lastFollowedEditorAnchorRef = useRef<string | undefined>(undefined);
 
 	// Keep ref in sync
 	followingSubRef.current = followingSub;
@@ -55,6 +84,47 @@ export function useFollowMode({
 				number,
 				Record<string, unknown>
 			>;
+
+			// Cross-surface: when the peer's latest activity is a FlowScript editor
+			// cursor, follow them into the text instead of chasing a stale viewport.
+			const now = Date.now();
+			let editorCandidate:
+				| { anchor: FollowedEditorAnchor; at: number }
+				| undefined;
+			for (const [clientId, state] of states) {
+				if (clientId === awareness.clientID) continue;
+				if (state?.sub !== targetSub) continue;
+				const cursor = state?.cursor as { x: number; y: number } | undefined;
+				const canvasKey = cursor ? `${cursor.x}:${cursor.y}` : "";
+				const prevCanvas = canvasActivityRef.current.get(clientId);
+				if (!prevCanvas || prevCanvas.key !== canvasKey)
+					canvasActivityRef.current.set(clientId, { key: canvasKey, at: now });
+				const editorCursor = sanitizeCursorForWire(
+					state?.[FLOWSCRIPT_CURSOR_FIELD],
+				);
+				const editorKey = editorCursor
+					? `${editorCursor.anchor.id}:${editorCursor.dLine}:${editorCursor.column}:${editorCursor.ts}`
+					: "";
+				const prevEditor = editorActivityRef.current.get(clientId);
+				if (!prevEditor || prevEditor.key !== editorKey)
+					editorActivityRef.current.set(clientId, { key: editorKey, at: now });
+				if (!editorCursor) continue;
+				const editorAt = editorActivityRef.current.get(clientId)?.at ?? 0;
+				const canvasAt = canvasActivityRef.current.get(clientId)?.at ?? 0;
+				if (editorAt < canvasAt) continue;
+				if (!editorCandidate || editorAt > editorCandidate.at) {
+					editorCandidate = { anchor: editorCursor.anchor, at: editorAt };
+				}
+			}
+			if (editorCandidate) {
+				if (lastFollowedEditorAnchorRef.current !== editorCandidate.anchor.id) {
+					lastFollowedEditorAnchorRef.current = editorCandidate.anchor.id;
+					onFollowEditorAnchorRef.current?.(editorCandidate.anchor);
+				}
+			} else {
+				// Back on canvas: re-arm so returning to the same statement re-fires.
+				lastFollowedEditorAnchorRef.current = undefined;
+			}
 
 			// Collect viewports from all sessions of this user
 			// Pick the one whose viewport differs most from what we last applied
@@ -102,6 +172,7 @@ export function useFollowMode({
 	const startFollowing = useCallback(
 		(targetSub: string) => {
 			if (targetSub === sub) return;
+			lastFollowedEditorAnchorRef.current = undefined;
 			setFollowingSub(targetSub);
 		},
 		[sub],
@@ -110,6 +181,7 @@ export function useFollowMode({
 	const stopFollowing = useCallback(() => {
 		setFollowingSub(undefined);
 		lastAppliedViewportRef.current = "";
+		lastFollowedEditorAnchorRef.current = undefined;
 	}, []);
 
 	const toggleFollow = useCallback(
@@ -117,6 +189,7 @@ export function useFollowMode({
 			if (targetSub === sub) return;
 			setFollowingSub((prev) => (prev === targetSub ? undefined : targetSub));
 			lastAppliedViewportRef.current = "";
+			lastFollowedEditorAnchorRef.current = undefined;
 		},
 		[sub],
 	);
@@ -131,6 +204,7 @@ export function useFollowMode({
 		const stopFollow = () => {
 			setFollowingSub(undefined);
 			lastAppliedViewportRef.current = "";
+			lastFollowedEditorAnchorRef.current = undefined;
 			wheelCountRef.current = 0;
 		};
 

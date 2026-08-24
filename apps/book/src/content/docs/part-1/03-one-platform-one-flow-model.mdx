@@ -1,0 +1,305 @@
+---
+title: 3. One Platform, One Flow Model
+description: The vocabulary connecting Flow-Like Apps, Flows, Boards, authoring surfaces, data, Events, and execution.
+sidebar:
+  order: 3
+  badge:
+    text: Draft
+    variant: caution
+---
+
+A language does not make a platform.
+
+FlowScript can describe the logic of a process, but logic alone does not decide where files
+belong, who may run the process, which version an API should invoke, or where execution should
+happen. Those concerns live around the language, and they are part of whether an application
+can be understood and operated.
+
+Before we write our first Flow, we therefore need a map:
+
+```text
+Flow-Like
+└── App
+    ├── Flows (each persisted as a Board)
+    │   └── Pages and interfaces
+    ├── App Events
+    ├── Storage and Data Studio
+    ├── Packages
+    └── Members, roles, and publication settings
+```
+
+This is a conceptual map, not a deployment diagram. Flow-Like is the platform. An App is a
+project inside it. A Flow is the author-facing name for an executable workflow; internally,
+that same unit is persisted as a Board. Studio and FlowScript are two ways to author the same
+model.
+
+Once those terms are clear, the rest of the system becomes much easier to place.
+
+## 3.1 Flow-Like, App, Flow, and Board
+
+**Flow-Like** is the whole environment in which applications are created, shared, run, and
+observed. It includes the authoring clients, the node catalog, the Rust execution engine, data
+and storage services, application interfaces, identity and permission boundaries, and the
+remote services used by online deployments.
+
+That makes Flow-Like larger than FlowScript. FlowScript is one language inside the platform;
+it is not the name of the runtime, the visual editor, or the application a user eventually
+opens.
+
+An **App** is the project and governance boundary. It groups the things that belong to one
+solution: its Flows, Events, pages, files, structured data, packages, members, roles, and
+release settings. Our Incident Triage example will be an App. Its classification logic will
+be a Flow. A quick action or API that invokes that logic will be an App Event.
+
+The word *App* does not imply that the result must be a mobile or desktop interface. An App
+might contain an automation, an agent, a data pipeline, an API, a form, an analytical tool, or
+several related experiences. The term tells us where ownership and related resources meet,
+not what shape the final interface must take.
+
+A **Flow** is an executable process inside an App. This is the term authors normally use when
+talking about the logic they are building: “run the triage Flow,” “open the ingestion Flow,” or
+“pin the published Event to version two of this Flow.”
+
+Internally, that Flow is stored as a **Board**. The Board contains the graph: nodes, pins,
+connections, variables, layers, comments, version information, execution settings, and other
+metadata needed to edit and run it. *Flow* is the user-facing unit of logic; *Board* is the
+precise name for its persisted graph representation.
+
+The distinction may feel small at first, but it prevents confusion later. An App can contain
+many Flows, and a Flow can own multiple Pages. Each Flow is persisted as a Board. A
+workflow-backed App Event can point to an entry node on a particular version of that Board.
+The runtime loads the selected Board and executes its graph.
+
+That chain is the spine of the platform:
+
+> An App owns the solution. A Flow expresses one executable process. A Board persists that
+> process as a graph.
+
+## 3.2 Studio and FlowScript
+
+A Board has two serious authoring surfaces.
+
+**Flow-Like Studio** is the visual surface. It places nodes on a canvas and connects them with
+typed wires. Studio is particularly good at revealing locality: where a value originates,
+where execution branches, which operations form one layer, and which node produced a result or
+failure.
+
+**FlowScript** is the textual surface. It expresses the same logic with declarations, calls,
+expressions, branches, loops, functions, and event-entry declarations. Text is denser than a
+canvas. It is usually faster to search, review, compare, and change when a Flow becomes large.
+
+The relationship between them is easy to describe incorrectly. FlowScript is not a program
+that runs beside the Board, and Studio is not a diagram generated after the real work is done.
+
+The durable formulation is:
+
+> Studio and FlowScript are equal authoring surfaces over one underlying Flow model.
+
+In the current implementation, the Board is what Flow-Like persists. Opening FlowScript
+renders that Board as editable text. Applying an edit parses the text, reconciles it with the
+existing graph, and produces Board changes. The Rust runtime then executes the resulting
+graph. FlowScript does not leave the platform or bypass its execution model.
+
+This gives each visible operation one identity across both surfaces. A node selected in Studio
+can be found in the source. An anchored statement edited in FlowScript can update the same
+node rather than creating an unrelated replacement. Later chapters will examine the anchors,
+reconciliation plan, and deletion protections that make this possible.
+
+The contract is ambitious because both directions must remain honest. Formatting a graph as
+text is not enough; applying edited text must preserve the intended graph identity and the
+Board details that source does not need to spell out. When the current implementation cannot
+apply a construct safely, it should report the edge rather than silently inventing a different
+program. Such a mismatch is something to report and improve, not a reason to maintain separate
+textual and visual versions by hand.
+
+For an author, the practical rule is simpler: choose the surface that makes the current
+question easiest, then move to the other without changing programs.
+
+## 3.3 Nodes, pins, wires, and layers
+
+A **node** is a typed operation. It may transform a value, call a service, write a file, branch
+execution, read a variable, produce an interface message, or mark the entry to a Flow.
+
+Calling a node in FlowScript can resemble calling a function, but a node carries more platform
+meaning than an arbitrary function. It has a catalog identity, documentation, declared inputs
+and outputs, execution behavior, and potentially requirements such as OAuth scopes, local-only
+execution, or WASM capabilities. That metadata lets the authoring tools, runtime, and
+governance systems reason about the same building block.
+
+A node communicates through **pins**. Input pins accept values or execution. Output pins
+produce them. Data pins declare a data type and a value shape, such as one value, an array, or
+a set. Structured pins can additionally carry a schema. Defaults and constraints may narrow
+what an input accepts.
+
+A **wire** connects two compatible pins. Data wires carry values. Execution wires carry
+control order. Keeping those two relationships separate is fundamental.
+
+Consider an operation that writes an incident record. The record itself may arrive through a
+data wire, but the write should happen only after a preceding validation step succeeds. The
+data connection answers *what value is available?* The execution connection answers *when
+should this side effect happen?*
+
+This distinction also separates pure and impure work. A **pure node** has no execution pins. It
+is evaluated when a downstream operation needs its value. An **impure node** participates in
+the execution path because it performs work whose order matters. A string conversion can often
+be demand-driven. Sending a message, updating state, or calling an external service usually
+cannot.
+
+FlowScript compresses many of these relationships into familiar source forms, but it does not
+erase them. An expression may lower to a pure node. A statement may represent an impure node
+on an execution chain. A branch or loop becomes visible control structure in both
+representations. Chapter 5 will follow these mappings in detail.
+
+Finally, **layers** organize a graph in depth. A group of nodes can be collapsed behind a
+named boundary with typed inputs and outputs. From the outside, the layer behaves like a
+higher-level operation; inside, its implementation remains a visible graph. Function layers
+also give FlowScript callable functions. Layers let the top level communicate the shape of a
+process without hiding the implementation in an arbitrary code block.
+
+## 3.4 Events and application surfaces
+
+Flow-Like uses the word *Event* at two connected but distinct levels.
+
+An **event node** lives inside a Flow. It is an entry point into the graph. Its output pins
+define the values available when execution begins, and its kind determines which App Event
+types can expose it.
+
+An **App Event** lives at the App level. A Page-target Event opens a Page directly. A
+workflow-backed Event selects a Flow, an event node, a Local or Remote execution location,
+and either the latest draft or a numbered Flow version. Type-specific settings may then add a
+route, schedule, authentication, payload, or interface configuration.
+
+Depending on the event node and environment, that path might be a quick action, chat
+interface, generated form, API endpoint, schedule, deep link, daemon, REST surface, MCP
+server, or an integration such as email or messaging. Page-target Events can open a visual
+page directly. Not every event type is available for every node or execution location; the
+editor constrains the combinations.
+
+This separation is useful because one piece of logic can serve more than one surface. A
+Generic Event node might be exposed as a form for a person and as an API for another system.
+Each workflow-backed App Event can have its own applicable configuration and version choice
+while still entering the same Flow.
+
+It also creates a clean release boundary. An author can continue editing the latest Flow while
+a production-facing Event remains pinned to an immutable version. “What logic are we
+building?” and “What entry point is currently live?” become related questions rather than the
+same setting.
+
+When this book says **event node**, look inside the Flow. When it says **App Event**, look at
+the configured bridge between that Flow and its caller.
+
+## 3.5 Apps, people, permissions, and collaboration
+
+The App is also where a private experiment becomes shared software.
+
+An offline App can remain on one device and operate without platform sign-in. This is useful
+for local automation, personal experiments, device-bound capabilities, and work that should
+not be uploaded. An online App is stored through a configured Flow-Like backend and can
+participate in web access, multi-device use, team membership, remote Events, and publication.
+
+Online Apps begin Private. Prototype enables collaboration subject to a deployment-configured
+member limit. From Prototype, an owner can request either Public Request or Public; both
+transitions enter publication review. The important idea is not one permanent numerical
+limit or a rigid ladder. Personal work can begin with little ceremony, while wider
+distribution creates stronger review and ownership decisions.
+
+Within an App, roles and rights determine what members may see or do. Invitations, default
+roles, App ownership, Flow access, and publication belong to the project rather than to an
+unrelated spreadsheet or ticket system. Versions, templates, and permitted forks likewise
+retain their relationship to the application they describe.
+
+Several security boundaries meet here, and they should not be collapsed into one vague word
+such as *permission*. Platform identity answers who is signed in. App membership answers what
+that person may do in the project. Event authentication answers who may invoke an exposed
+entry point. Node and WASM capabilities answer what an operation may request during a run.
+Runtime credentials answer which external resource that operation can actually reach.
+
+Keeping those boundaries in one platform makes them easier to relate. It does not make every
+policy automatic or every published App safe. Governance can derive useful evidence from the
+program structure, packages, and executions, but people still decide what their organization
+permits and which evidence is sufficient.
+
+## 3.6 Data Studio and app-owned state
+
+Useful logic needs something to work on.
+
+Every App can own files that its Flows read and write. Shared App storage holds project assets;
+user storage provides a private per-user area within the App. Offline and online Apps persist
+those files through different configured stores, but the logical relationship remains the
+same: the data belongs to the application that uses it.
+
+**Data Studio** is the App’s workspace for structured data. Its native tables can be created
+directly or populated by Flows. Authors can inspect rows, schemas, and indexes, run SQL, retain
+reusable local queries where the current query model permits it, and view results as tables,
+charts, graphs, or JSON.
+
+On top of those tables, an ontology can describe the domain in its own vocabulary. Object
+types turn rows into concepts such as `Incident`, `Machine`, or `Customer`. Relationships
+connect those concepts. Object views decide what matters when a person inspects one object.
+Governed actions define the operations available on it.
+
+This matters because a database schema and a business model are not the same explanation. A
+column may store the right value while saying little about what that value means or which
+actions are valid. The ontology layer gives domain experts and application surfaces a shared
+semantic model without requiring the underlying data to be copied into a separate knowledge
+system.
+
+Keeping data, actions, and Flows inside one App also improves traceability. An App can connect
+a Flow that ingests a file or updates a table to a governed ontology action and an Event
+without pretending that these are unrelated projects. The platform can retain more of the
+context needed to document and govern that path.
+
+The storage backend still matters. Local files, object stores, relational data, and analytical
+workloads have different operational properties. “App-owned” describes the logical boundary;
+it is not a claim that every provider has identical latency, scale, retention, or recovery
+guarantees.
+
+## 3.7 One runtime contract, several places to run
+
+The same Flow model can participate in more than one execution environment.
+
+On Desktop, a compatible Flow can run locally through the Rust runtime. In an online App, it
+can run remotely through the API and executor path. A Flow whose execution mode is
+**Hybrid** may run locally when invoked from Desktop and remotely when invoked through the
+web or server path. Hybrid does not divide one graph between a laptop and a server; it allows
+the whole Flow to run in either suitable environment.
+
+A workflow-backed App Event is more specific. It is bound to **Local** or **Remote**, never
+Hybrid, because a configured endpoint, schedule, or interface needs an unambiguous execution
+location. A Flow locked to Local or Remote forces its Events to use the matching location; a
+Hybrid Flow permits either. A remote Event can run while the author’s Desktop is closed. A
+local Event can use capabilities attached to that device. Nodes that depend on local paths,
+installed software, hardware, or other device features can require local execution.
+
+The broad runtime path remains recognizable in either case. Flow-Like loads the selected
+Board and, where requested, its pinned version. It resolves the node catalog, payload,
+variables, caller context, credentials, and required stores. The execution context evaluates
+data dependencies and follows execution pins through the graph. During the run, it can emit
+logs, progress, state changes, interface messages, results, and stored artifacts.
+
+That is the **runtime contract**: a shared graph and execution model, surrounded by defined
+ways to obtain data, credentials, context, storage, and evidence. It is what lets an author
+reason about the same Flow before choosing its final operating environment.
+
+It does not mean every environment is interchangeable. A local device and a remote executor
+have different capabilities and trust boundaries. Offline Apps and online Apps have different
+collaboration behavior. Deployment backends can use different queues, object stores,
+databases, containers, or cloud functions. Provider-specific implementations may have
+different maturity, scaling characteristics, and operating requirements.
+
+The repository contains local and self-hosted deployment paths, including Docker Compose and
+Kubernetes, as well as ongoing provider-specific backend implementations. Their presence does
+not by itself establish equal support or production readiness. Later chapters will classify
+targets by release and distinguish supported operation from preview or architectural intent.
+For now, the reliable claim is smaller: Flow-Like aims to keep the application model and
+execution contract stable while allowing the surrounding infrastructure to vary.
+
+We now have the complete map needed for our first program.
+
+We will create an App named **Incident Triage**. Inside it, we will build one Flow. Its Board
+will contain typed nodes connected by data and execution wires. We will author that Board in
+Studio and FlowScript. An event node will define where execution begins, and an App Event will
+later decide how someone invokes it. Its data and evidence will remain attached to the App,
+and the runtime will execute the same graph we can inspect.
+
+The next chapter turns that map into something that runs.

@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::a2ui::widget::Page;
+use flow_like::a2ui::{page_targets::retarget_page_workflow_actions, widget::Page};
 use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ fn payload_revision(page: &Page) -> chrono::NaiveDateTime {
     request_body = PageUpsert,
     responses(
         (status = 200, description = "Page created or updated", body = Object),
-        (status = 400, description = "Page payload is missing board_id"),
+        (status = 400, description = "Page payload is missing board_id, or names a board that does not belong to this app"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     )
@@ -83,6 +83,21 @@ pub async fn upsert_page(
         )
         .await?;
 
+    // A page copied out of another app keeps that app's `workflow_event` targets, and the runtime
+    // prefers the action's context over the surface it renders on. Normalizing before the write is
+    // what keeps a stored page from firing a foreign app's nodes.
+    let retargeted = retarget_page_workflow_actions(&mut page, &app_id);
+    if !retargeted.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            page_id = %page_id,
+            board_id = %board_id,
+            retargeted = retargeted.len(),
+            changes = ?retargeted,
+            "page carried workflow targets from another app; rewrote them to the owning app"
+        );
+    }
+
     // Lock order is global page id, then owning board. Delete takes the same order. Holding this
     // replica-safe guard through the DB write closes the race where two different board guards
     // could both observe a missing globally unique page id and materialize conflicting files.
@@ -117,7 +132,20 @@ pub async fn upsert_page(
     let board = app
         .open_board(board_id.clone(), None, None)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("open board {}: {e}", board_id)))?;
+        .map_err(|e| {
+            // A board this app does not own is a bad request, not a server fault — but the
+            // manifest alone cannot decide that. `manifest.app` is a last-write-wins document
+            // several endpoints rewrite without a shared lock, so a board created moments ago can
+            // be missing from it while its file is perfectly readable; only a failed open plus an
+            // absent manifest entry means the board is really not here.
+            if app.boards.contains(&board_id) {
+                ApiError::internal_error(anyhow!("open board {}: {e}", board_id))
+            } else {
+                ApiError::bad_request(format!(
+                    "board '{board_id}' is not a board of app '{app_id}', so page '{page_id}' has nowhere to live"
+                ))
+            }
+        })?;
 
     if existing.is_none() {
         let new_page = page::ActiveModel {
@@ -157,14 +185,32 @@ pub async fn upsert_page(
 
     page_id_guard.release().await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "page.upsert",
-        "Page",
-        page_id,
-        "Page created or updated"
-    );
+    if retargeted.is_empty() {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "page.upsert",
+            "Page",
+            page_id,
+            "Page created or updated"
+        );
+    } else {
+        let details = serde_json::json!({
+            "app_id": &app_id,
+            "board_id": &board_id,
+            "retargeted": &retargeted,
+        });
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "page.upsert",
+            "Page",
+            page_id,
+            "Page created or updated; foreign workflow targets rewritten to the owning app",
+            details
+        );
+    }
     Ok(Json(page))
 }

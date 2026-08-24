@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::flow::{
     board::Board,
-    node::{Node, NodeLogic},
-    pin::Pin,
+    node::{Node, NodeLogic, remove_unwired_pins},
+    pin::{Pin, is_open_object_schema},
 };
 use std::sync::Arc;
 
@@ -71,6 +71,21 @@ fn can_repair_from_catalog(catalog_version: Option<u32>, placed_version: Option<
 /// Pins whose catalog schema is only a fallback and is intentionally replaced by `on_update`.
 /// Keep this list narrow: every other catalog schema is authoritative, including when a node
 /// author changes it without incrementing the node version.
+/// Whether the catalog's schema for a pin may replace the one the board already holds.
+///
+/// [`is_open_object_schema`] declares that a pin's shape is *open* — the absence of a contract,
+/// never one worth restoring. A node that resolved a concrete shape at runtime (an ontology object
+/// type, a widget contract, the struct a producer declares) would otherwise have it erased on every
+/// load, because the catalog schema and the placed schema differ. For every real schema the catalog
+/// stays authoritative; only the marker yields.
+fn catalog_schema_may_replace(catalog_schema: &str, resolved_placed: Option<&str>) -> bool {
+    if !is_open_object_schema(catalog_schema) {
+        return true;
+    }
+
+    resolved_placed.is_none_or(|placed| !is_json_schema(placed) || is_open_object_schema(placed))
+}
+
 fn is_runtime_owned_schema(node_name: &str, pin_name: &str) -> bool {
     matches!(
         (node_name, pin_name),
@@ -141,9 +156,10 @@ fn repair_catalog_pin_schemas(
             None => true,
             Some(placed_schema) => {
                 let resolved = resolve_schema_ref(placed_schema, refs);
-                !is_json_schema(resolved)
-                    || (!is_runtime_owned_schema(&node_name, &placed_pin.name)
-                        && !schemas_equal(resolved, catalog_schema))
+                catalog_schema_may_replace(catalog_schema, Some(resolved))
+                    && (!is_json_schema(resolved)
+                        || (!is_runtime_owned_schema(&node_name, &placed_pin.name)
+                            && !schemas_equal(resolved, catalog_schema)))
             }
         };
 
@@ -221,8 +237,13 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
                     }
                 }
 
-                // Update schema reference
-                placed_pin.schema = catalog_pin.schema.clone();
+                // Update schema reference. The open marker is the absence of a contract, so it
+                // must never erase a concrete schema the node resolved at runtime.
+                if catalog_pin.schema.as_deref().is_none_or(|catalog_schema| {
+                    catalog_schema_may_replace(catalog_schema, placed_pin.schema.as_deref())
+                }) {
+                    placed_pin.schema = catalog_pin.schema.clone();
+                }
             }
         } else if !crate::flow::node::mints_pins_on_update(&placed_node.name) {
             // Pin no longer exists in catalog - mark for removal
@@ -237,10 +258,12 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
         // removed there.
     }
 
-    // Remove pins that no longer exist
-    for pin_id in pins_to_remove {
-        placed_node.pins.remove(&pin_id);
-    }
+    // Drop the pins the catalog no longer declares — but never one the user still has wired.
+    // Removing a wired pin takes its half of the edge with it, and `fix_pin_connections` then
+    // prunes the surviving half on the peer, so the connection disappears from both ends with no
+    // error anywhere. `mints_pins_on_update` above spares the dynamic nodes we know about; this
+    // is the backstop for the ones nobody has listed yet.
+    remove_unwired_pins(placed_node, &pins_to_remove);
 
     // Phase 2: Add new pins from catalog that don't exist in placed node
     for (name, catalog_pin) in &catalog_pins_by_name {
@@ -487,6 +510,109 @@ mod tests {
         assert!(kept.depends_on.contains("upstream_pin"));
         assert!(placed.get_pin_by_name("params").is_some(), "new pin added");
         assert_eq!(placed.version, Some(3));
+    }
+
+    #[test]
+    fn sync_never_deletes_a_wired_pin_the_catalog_dropped() {
+        // The `mints_pins_on_update` list only covers the dynamic nodes someone remembered to
+        // register. A wire is the user's intent whatever minted the pin it hangs off, and deleting
+        // one here takes its half of the edge with it — `fix_pin_connections` then prunes the peer's
+        // surviving half, so the connection is gone from both ends with no error anywhere.
+        let mut placed = Node::new("df_register_lance", "Register", "desc", "Data");
+        placed.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        let wired = placed.add_input_pin("dropped", "Dropped", "desc", VariableType::Generic);
+        let wired_id = wired.id.clone();
+        wired.depends_on.insert("upstream_pin".to_string());
+        placed.version = Some(1);
+
+        let mut catalog = Node::new("df_register_lance", "Register", "desc", "Data");
+        catalog.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        catalog.version = Some(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        let kept = placed
+            .get_pin_by_name("dropped")
+            .expect("a wired pin survives even when the catalog no longer declares it");
+        assert_eq!(kept.id, wired_id, "the pin id is what carries its edges");
+        assert!(kept.depends_on.contains("upstream_pin"));
+        assert!(
+            placed.error.as_deref().is_some_and(|e| e.contains("dropped")),
+            "the mismatch is reported instead of silently repaired, got {:?}",
+            placed.error
+        );
+    }
+
+    #[test]
+    fn an_open_catalog_schema_never_erases_a_resolved_one() {
+        // Since ~100 catalog pins were given the open marker, a version bump would otherwise stamp
+        // "no declared shape" over whatever the node resolved at runtime — an ontology object type,
+        // a widget contract, the struct a producer declares.
+        const RESOLVED: &str = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
+
+        let mut placed = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        placed
+            .add_output_pin("objects", "Objects", "desc", VariableType::Struct)
+            .schema = Some(RESOLVED.to_string());
+        placed.version = Some(1);
+
+        let mut catalog = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        catalog
+            .add_output_pin("objects", "Objects", "desc", VariableType::Struct)
+            .set_open_schema();
+        catalog.version = Some(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        assert_eq!(
+            placed.get_pin_by_name("objects").unwrap().schema.as_deref(),
+            Some(RESOLVED)
+        );
+    }
+
+    #[test]
+    fn repair_never_puts_the_open_marker_over_a_resolved_schema() {
+        const RESOLVED: &str = r#"{"type":"object","properties":{"id":{"type":"string"}}}"#;
+
+        let mut placed = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        placed
+            .add_output_pin("objects", "Objects", "desc", VariableType::Struct)
+            .schema = Some(RESOLVED.to_string());
+
+        let mut catalog = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        catalog
+            .add_output_pin("objects", "Objects", "desc", VariableType::Struct)
+            .set_open_schema();
+
+        repair_catalog_pin_schemas(&mut placed, &catalog, &HashMap::new());
+
+        assert_eq!(
+            placed.get_pin_by_name("objects").unwrap().schema.as_deref(),
+            Some(RESOLVED),
+            "the marker declares nothing, so it is never a contract worth restoring"
+        );
+    }
+
+    #[test]
+    fn repair_still_restores_a_pin_that_has_no_shape_of_its_own() {
+        let mut placed = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        placed.add_output_pin("objects", "Objects", "desc", VariableType::Struct);
+
+        let mut catalog = Node::new("ontology_query_objects", "Query", "desc", "Data");
+        catalog
+            .add_output_pin("objects", "Objects", "desc", VariableType::Struct)
+            .set_open_schema();
+
+        repair_catalog_pin_schemas(&mut placed, &catalog, &HashMap::new());
+
+        assert!(
+            placed
+                .get_pin_by_name("objects")
+                .unwrap()
+                .schema
+                .as_deref()
+                .is_some_and(is_open_object_schema)
+        );
     }
 
     #[test]

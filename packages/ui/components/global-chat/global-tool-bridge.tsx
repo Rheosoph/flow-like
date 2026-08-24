@@ -2320,8 +2320,11 @@ export function GlobalToolBridge() {
 							// through this map. Node/pin maps are omitted deliberately.
 							board_id_map: response.report?.id_map?.boards ?? {},
 							event_id_map: response.report?.id_map?.events ?? {},
-							skipped: response.report?.skipped ?? [],
-							warnings: response.report?.warnings ?? [],
+							// A damaged source app can produce one skip per component, and
+							// the whole list would otherwise land in the model's context.
+							skipped: (response.report?.skipped ?? []).slice(0, 20),
+							skipped_total: response.report?.skipped?.length ?? 0,
+							warnings: (response.report?.warnings ?? []).slice(0, 10),
 						};
 					} catch (error) {
 						return {

@@ -13,7 +13,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::ast::{RenderOptions, board_to_flowscript};
+use flow_like::flow::ast::{RenderOptions, board_to_flowscript, board_to_flowscript_scoped};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -21,11 +21,20 @@ use utoipa::ToSchema;
 pub struct FlowScriptQuery {
     pub version: Option<String>,
     pub anchors: Option<bool>,
+    /// Comma-separated node ids to scope the render to. When set, only the events/functions
+    /// containing those nodes (plus the functions they reference and all variables/interfaces)
+    /// are rendered, and the response carries `scope_anchors` for the matching scoped apply.
+    pub node_ids: Option<String>,
 }
 
 #[derive(Clone, Serialize, ToSchema)]
 pub struct FlowScriptResponse {
     pub flowscript: String,
+    /// Present only for a scoped render (`node_ids` set): the anchors (event entry node id /
+    /// function layer id) of the rendered sections. Pass them back as `scope_anchors` on
+    /// `flowscript/apply` so the unrendered rest of the board is never treated as deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_anchors: Option<Vec<String>>,
 }
 
 #[utoipa::path(
@@ -36,7 +45,8 @@ pub struct FlowScriptResponse {
         ("app_id" = String, Path, description = "Application ID"),
         ("board_id" = String, Path, description = "Board ID"),
         ("version" = Option<String>, Query, description = "Version in MAJOR_MINOR_PATCH format (e.g., 1_0_3)"),
-        ("anchors" = Option<bool>, Query, description = "Include `//@n:<id>` anchor comments for stable round-trip editing (default: true)")
+        ("anchors" = Option<bool>, Query, description = "Include `//@n:<id>` anchor comments for stable round-trip editing (default: true)"),
+        ("node_ids" = Option<String>, Query, description = "Comma-separated node ids: render only the events/functions containing them (selection-scoped editing) and return their `scope_anchors`")
     ),
     responses(
         (status = 200, description = "The board rendered as FlowScript source text", body = FlowScriptResponse),
@@ -92,7 +102,27 @@ pub async fn get_flowscript(
         ..RenderOptions::default()
     };
 
+    let node_ids: Vec<String> = params
+        .node_ids
+        .as_deref()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if params.node_ids.is_some() {
+        let scoped = board_to_flowscript_scoped(&board, &node_ids, &render_options);
+        return Ok(Json(FlowScriptResponse {
+            flowscript: scoped.text,
+            scope_anchors: Some(scoped.scope_anchors),
+        }));
+    }
+
     Ok(Json(FlowScriptResponse {
         flowscript: board_to_flowscript(&board, &render_options),
+        scope_anchors: None,
     }))
 }

@@ -1,0 +1,414 @@
+---
+title: "4. First Flow: Incident Triage in Two Views"
+description: Build one deterministic incident classifier, read its six-node graph as FlowScript, edit it in both directions, and preserve a tested version.
+sidebar:
+  order: 4
+  badge:
+    text: Draft
+    variant: caution
+---
+
+It is time to build something.
+
+Our first Flow will not call an API, open a database, or ask an AI model to make a judgment. It
+will accept one incident report, normalize the text, classify it with a deterministic rule,
+and record the decision at the appropriate log level.
+
+That narrow scope is intentional. We want to see the relationship between FlowScript and the
+Board without credentials, network failures, or probabilistic behavior getting in the way.
+When the Flow behaves differently, we should be able to explain the difference from its input
+and six visible nodes.
+
+By the end of the chapter, we will have changed the same program from both authoring surfaces,
+inspected its run evidence, and saved a known-good version.
+
+> **Release check:** The source follows the current renderer's canonical event-parameter and
+> import conventions and round-trips through the parser and renderer. Its six mappings have
+> been checked against generated node declarations and direct tests of the constituent
+> reconciliation behavior. Exact canvas gestures, a combined end-to-end run, screenshots, and
+> the malformed-input trace must be captured against one named Flow-Like release before
+> publication. This draft does not invent release-specific interface behavior.
+
+## 4.1 The contract: accept, classify, respond
+
+The smallest useful incident record for this exercise has one field:
+
+```ts
+report: string
+```
+
+The Generic Event also exposes its built-in `payload: Struct`. That payload is the original
+event object or envelope. We will leave it unused and work through the named, typed `report`
+output so the contract stays obvious.
+
+The Flow applies one rule:
+
+1. Remove whitespace from the beginning and end of the report.
+2. Look for the phrase `production is on hold`, without regard to letter case.
+3. If the phrase occurs, write the normalized report as an Error log.
+4. Otherwise, write it as an Info log.
+
+“Respond” means writing evidence to the run log in this first example. The Flow does not yet
+return a value to an API caller, send a notification, or create an incident record in Data
+Studio. Those would be reasonable next steps, but each would add concepts that are not needed
+to understand the dual-view loop.
+
+The rule is deliberately literal. It is not a complete severity model, and it does not pretend
+to understand language. Given the same string, it produces the same branch decision every
+time. That makes it a good first program and a useful test fixture.
+
+Three inputs will matter later:
+
+| Case | Input |
+| --- | --- |
+| Normal | `Database latency is elevated, but production continues.` |
+| Urgent | `  PRODUCTION IS ON HOLD after an interface timeout.  ` |
+| Malformed | A payload in which `report` is not a string, such as `{"report": 42}` |
+
+We can already predict the domain behavior of the first two cases. The normal report does not
+contain the phrase and follows the Info path. The urgent report loses its surrounding spaces,
+matches despite its capitalization, and follows the Error path.
+
+The malformed case is different. Its correct boundary depends on the release and invocation
+surface. A typed form may prevent the value from being submitted. An API adapter may reject
+the payload before the Board starts. If the value reaches the graph, the string operation may
+reject it there. We will observe that boundary rather than writing the desired outcome as if
+it had already happened.
+
+One more distinction matters: the `log::error` operation records an Error-level message. Its
+node completes successfully; it does not throw an exception by itself. Some run lists may
+still classify or color the run from its highest log severity. The urgent path is a successful
+classification whose result happens to be serious. A true node failure is a different event,
+and its evidence should be read differently.
+
+## 4.2 Build it visually
+
+Create an App named **Incident Triage**, then create one Flow inside it. The initial Board
+contains six operations:
+
+| Node | Catalog identity | Responsibility |
+| --- | --- | --- |
+| Generic Event | `events_generic` | Starts the Flow and exposes `report: string` |
+| Trim String | `string_trim` | Removes leading and trailing whitespace |
+| Contains | `string_contains` | Checks the normalized report for the incident phrase |
+| Branch | `control_branch` | Selects the urgent or normal execution path |
+| Log Error | `log_error` | Records an urgent report |
+| Print Info | `log_info` | Records a normal report |
+
+The displayed names can evolve. The catalog identities are the version-matched implementation
+references used to verify the source mappings.
+
+Begin with the Generic Event. Rename it **Triage Incident**, which gives the entry its
+`triageIncident` source alias, and add a string output named `report`. A Generic Event already
+provides its execution output and `payload`; FlowScript can additionally define named, typed
+outputs such as this one.
+
+Connect the `report` value to the String input of Trim String. Connect Trimmed String to the
+String input of Contains. Configure Contains with the substring
+`production is on hold`, and enable its case-insensitive comparison.
+
+The data side of the graph is now:
+
+```text
+Generic Event.report
+        │
+        ▼
+    Trim String
+        │ trimmed string
+        ▼
+      Contains ─── contains? ───▶ Branch.condition
+```
+
+The execution side is shorter. Connect the Generic Event execution output to the Branch input.
+Connect the Branch’s True output to Log Error and its False output to the Info log node.
+
+Finally, connect the normalized string from Trim String to the Message input of both log nodes.
+Set the on-screen notification option to false for each. We want recorded run evidence, not a
+temporary toast.
+
+The completed graph therefore has two kinds of wires:
+
+```text
+Execution: Generic Event ─▶ Branch ─┬─ True  ─▶ Log Error
+                                    └─ False ─▶ Info log
+
+Data:      report ─▶ Trim String ─▶ Contains ─▶ Branch condition
+                         └─────────────────────▶ both log messages
+```
+
+Notice what is absent: Trim String and Contains do not need execution wires. They are pure
+operations. When Branch needs its condition, the runtime evaluates the data dependencies that
+produce it. The Branch and log nodes are impure because their position in the execution path
+matters.
+
+This separation answers two different questions. Data wires answer, “Where does this value
+come from?” Execution wires answer, “When does this work happen?” A graph that mixes those
+questions into one kind of connection becomes difficult to reason about as soon as side
+effects appear.
+
+At this point, pause before opening the text view. Read the graph from left to right and say
+the rule aloud:
+
+> When an incident arrives, trim its report. If the normalized report contains “production is
+> on hold,” log an error. Otherwise, log information.
+
+If the visible graph does not communicate that sentence, improve its placement before moving
+on. Correct wiring is necessary; readable organization is part of the result.
+
+## 4.3 Read the same Flow as source
+
+Open the FlowScript view of the Board. Ignoring the identity anchors that the editor may append,
+the program is:
+
+```ts
+use log::*
+
+eventsGeneric triageIncident(payload: Struct, report: string) {
+    const normalized = report.trim()
+    if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
+        error({ message: normalized, toast: false })
+    } else {
+        info({ message: normalized, toast: false })
+    }
+}
+```
+
+This is not a handwritten reimplementation of the graph. It is the textual representation of
+that Board.
+
+The import at the top tells FlowScript that unqualified logging calls come from the `log`
+namespace:
+
+```ts
+use log::*
+```
+
+The renderer derives this glob import because the Flow uses multiple static calls from the
+same namespace. Fully qualified calls such as `log::error(...)` remain valid source, but the
+Board's canonical rendering uses the import and the shorter aliases here.
+
+The event declaration describes the entry node:
+
+```ts
+eventsGeneric triageIncident(payload: Struct, report: string) {
+```
+
+`eventsGeneric` identifies the Generic Event kind. `triageIncident` is the name we give this
+entry. `payload: Struct` is the event node's built-in payload output. The additional parameter
+`report: string` is the typed output we defined for this Flow.
+
+The next line contains one binding and one method-shaped node call:
+
+```ts
+const normalized = report.trim()
+```
+
+`report.trim()` represents the Trim String node. FlowScript lets nodes with a receiver pin use
+method syntax, so the value on the left of the dot supplies the node’s String input. The
+default output becomes `normalized`.
+
+This does not create a hidden JavaScript string operation. It still names a catalog node, and
+that node remains visible on the Board.
+
+The condition contains two more operations:
+
+```ts
+if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
+```
+
+`normalized.contains(...)` is the Contains node. The receiver supplies its String input. The
+object supplies the remaining pins: the substring and the case-comparison option. Its boolean
+output supplies the Branch condition.
+
+The `if` block is the Branch node rendered as familiar control flow. The first block corresponds
+to its True execution output; the `else` block corresponds to False.
+
+Finally, each statement inside those blocks is an impure logging node:
+
+```ts
+error({ message: normalized, toast: false })
+info({ message: normalized, toast: false })
+```
+
+The preceding `use log::*` makes these aliases available without a prefix. In the fully
+qualified spelling, `::` separates the `log` namespace from the node alias. A dot means field
+or method access on a value; `::` addresses an operation through its namespace. The object
+keys are the node’s input pins.
+
+Count the graph behind the source: one event, one trim, one contains check, one branch, and two
+logs. Six nodes.
+
+The editable view may include trailing comments such as `//@n:...`. Those are identity anchors.
+They let reconciliation associate a statement with the node already on the Board. The book
+omits them for readability, but an author should preserve them while editing unless a deletion
+is intentional.
+
+FlowScript accepts semicolons but does not require them. Canonical rendering omits them. That
+formatting choice does not change the Board.
+
+## 4.4 Change text, watch the graph
+
+Change the urgent phrase in the Contains call:
+
+```ts
+substring: "customer orders are blocked"
+```
+
+Do not apply the edit immediately. First inspect the pending reconciliation preview. The editor
+checks the source against the current Board and produces a command plan without mutating the
+persisted graph.
+
+For this change, the important question is not the exact number of internal commands. That can
+vary as reconciliation and formatting evolve. The important shape is that an existing node is
+updated. The preview should not propose deleting the Flow or replacing all six nodes. If it
+does, stop and inspect the source and its anchors.
+
+Apply the edit to the Board. Then locate the Contains node and inspect its configured substring.
+The graph should now express the new rule while its structure and node identities remain
+intact.
+
+This is a small edit, but it demonstrates the essential contract. You changed code, yet the
+result was not a separate textual program. FlowScript was parsed and reconciled into a Board
+change.
+
+Use the editor’s source-to-node navigation affordance where it is available in your release.
+The release verification pass for this chapter should capture both the pending command plan
+and the changed node on the canvas.
+
+Once you have seen the round trip, restore the original phrase and apply it again. The
+remaining examples use `production is on hold`.
+
+## 4.5 Change the graph, watch the text
+
+Now travel in the other direction.
+
+On the urgent execution path, insert a Log Warning node before Log Error. Give it the normalized
+report as its message and keep its on-screen notification disabled. The True path should enter
+Log Warning and then continue to Log Error.
+
+After the Board change has been saved, re-render FlowScript from the Board. The urgent branch
+should be semantically equivalent to:
+
+```ts
+if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
+    warn({ message: normalized, toast: false })
+    error({ message: normalized, toast: false })
+} else {
+    info({ message: normalized, toast: false })
+}
+```
+
+The final rendered text may include anchors and release-specific canonical formatting. Verify
+the actual output rather than copying those details from this draft.
+
+This direction of the loop is just as important as the first. The visual edit did not create
+an annotation beside the source. It changed the Board, and the source now describes that
+change.
+
+Avoid editing stale text while changing the canvas. The current editor guards against applying
+a draft when the Board has changed behind it; nevertheless, the simplest working habit is to
+finish or reset a text edit before switching surfaces, then re-render from the Board after a
+visual change.
+
+For the chapter fixture, remove the temporary warning again and confirm that the source has
+returned to the six-node baseline. The warning was useful for proving the reverse trip. It is
+not part of our classification contract.
+
+## 4.6 Break it on purpose
+
+Run the Flow first with the normal report:
+
+```json
+{
+  "report": "Database latency is elevated, but production continues."
+}
+```
+
+Select the resulting run and inspect its logs. The rule predicts an Info message containing
+the normalized report. The Error log node should not execute.
+
+Next, run the urgent case:
+
+```json
+{
+  "report": "  PRODUCTION IS ON HOLD after an interface timeout.  "
+}
+```
+
+The rule predicts that Trim String removes the surrounding spaces, Contains returns true
+despite the capitalization, and the Branch follows its True output. The resulting message
+should be recorded at Error level without an on-screen toast.
+
+Again, this is not a thrown failure. The Log Error node completed the action we asked it to
+perform. Some run lists classify or color a run from its highest log level, while remote
+execution keeps completion status and log severity as separate fields. An intentional Error
+log can therefore look similar to a failed run at a glance. Read the node-attributed evidence
+before deciding what happened.
+
+Now try the malformed payload:
+
+```json
+{
+  "report": 42
+}
+```
+
+This is where the chapter must follow evidence instead of aspiration.
+
+Before final publication, run this case through the same invocation surface used in the
+screenshots and record the actual boundary:
+
+- If the interface refuses the payload, document the typed input rejection.
+- If an App Event adapter rejects it, document that the Board did not start.
+- If it reaches the Board and a string operation fails, record the failing node and its error.
+- If the value is coerced or defaulted, document that behavior and decide whether the fixture
+  needs a different deliberately failing input.
+
+Do not claim that Trim String failed merely because it is the first string node. A platform
+boundary that rejects the wrong type earlier may be the safer and more accurate result.
+
+When a true node failure is available, open its run, find the relevant log entry, and use the
+node-navigation action to return to the responsible block. Capture the input, Flow version,
+run identifier, log level, message, and focused node. Those details turn “it failed somewhere”
+into reproducible evidence.
+
+This is the flight-recorder role of the run log. A useful trace preserves more than a sentence
+saying that execution stopped. It relates the evidence to a run, a version, and a node identity.
+An unfamiliar responder can start at the operation involved and trace its incoming values and
+surrounding execution path.
+
+Our six-node Flow is too small to make that navigation feel necessary. That is precisely why
+it is worth learning here. In a Board with hundreds of nodes, beginning at the responsible
+operation rather than at the application boundary can save the first hour of an investigation.
+
+## 4.7 Save the first known-good version
+
+Return the Board to the six-node baseline and rerun the verified test matrix for the release
+you are using. At minimum, preserve the normal and urgent runs. Add the malformed-input case
+once its expected boundary has been established and documented.
+
+Then create an immutable Flow version. Use the semantic increment that matches your release
+policy; for a compatible correction to an existing Flow, that would normally be a Patch
+version. The current draft remains editable, while the numbered version becomes a read-only
+snapshot.
+
+Record four things with the snapshot:
+
+- the canonical FlowScript rendered from the Board;
+- the test inputs and their expected log levels;
+- the Flow-Like release against which they were run; and
+- the observed malformed-input boundary.
+
+A production-facing App Event can later target that numbered version instead of Latest. New
+work can continue on the draft without silently changing the entry point used by callers. When
+the next version is ready, test it and deliberately move the Event.
+
+We have now completed the full loop.
+
+We built a graph and read it as source. We changed the source and updated an existing node. We
+changed the graph and recovered the corresponding source. We ran deterministic cases, kept
+application-level severity distinct from runtime failure, and preserved a tested snapshot.
+
+Most importantly, there was never a visual workflow and a separate codebase to keep in sync.
+
+There was one Flow, seen from two sides.

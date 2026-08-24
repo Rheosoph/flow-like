@@ -274,6 +274,320 @@ pub fn lower_board(board: &Board) -> BoardAst {
     apply_uses(ast, opened)
 }
 
+/// A board slice lowered for selection-scoped editing (see [`lower_board_scoped`]).
+pub struct ScopedBoardAst {
+    pub ast: BoardAst,
+    /// Anchors (event entry node id / function layer id) of the kept top-level sections. These are
+    /// the scope a later `apply`/`reconcile` of the rendered text must be limited to.
+    pub scope_anchors: Vec<String>,
+}
+
+/// Lower a board and keep only the top-level events/functions whose body (nested handlers
+/// included) contains any of `node_ids`, plus — transitively — every function a kept section
+/// references (calls resolve through the document's own `function` declarations, so a referenced
+/// function must stay declared). Variables and interfaces are cheap shared context and are always
+/// kept in full, which also keeps variable reconciliation full-fidelity on a scoped apply. The
+/// derived `use` lines are recomputed over the filtered sections only.
+pub fn lower_board_scoped(board: &Board, node_ids: &[String]) -> ScopedBoardAst {
+    let selection = expand_selection(board, node_ids);
+    let reserved = declared_names(board);
+    let mut lowering = Lowering::new(board, reserved.clone());
+    let scoped = filter_ast_to_selection(lowering.run(), &selection);
+    let opened = derive_uses(&scoped.ast, board);
+    let minted = lowering.minted_names();
+    if opened.reserved.is_disjoint(&minted) {
+        return ScopedBoardAst {
+            ast: apply_uses(scoped.ast, opened),
+            scope_anchors: scoped.scope_anchors,
+        };
+    }
+    let mut reserved = reserved;
+    reserved.extend(opened.reserved);
+    let mut lowering = Lowering::new(board, reserved);
+    let scoped = filter_ast_to_selection(lowering.run(), &selection);
+    let opened = derive_uses(&scoped.ast, board);
+    ScopedBoardAst {
+        ast: apply_uses(scoped.ast, opened),
+        scope_anchors: scoped.scope_anchors,
+    }
+}
+
+/// The selected node ids plus, for every id living inside a layer (or naming a layer directly),
+/// the layer ancestry — so selecting a node nested in a presentational sub-layer of a function
+/// still matches that function's anchor (its layer id).
+fn expand_selection(board: &Board, node_ids: &[String]) -> HashSet<String> {
+    let mut selected: HashSet<String> = node_ids.iter().cloned().collect();
+    for id in node_ids {
+        let mut layer = board
+            .nodes
+            .get(id)
+            .and_then(|node| node.layer.clone())
+            .filter(|layer_id| !layer_id.is_empty());
+        if layer.is_none() && board.layers.contains_key(id) {
+            layer = Some(id.clone());
+        }
+        if layer.is_none() {
+            layer = board
+                .layers
+                .values()
+                .find(|candidate| candidate.nodes.contains_key(id))
+                .map(|candidate| candidate.id.clone());
+        }
+        let mut seen = HashSet::new();
+        while let Some(layer_id) = layer {
+            if !seen.insert(layer_id.clone()) {
+                break;
+            }
+            selected.insert(layer_id.clone());
+            layer = board
+                .layers
+                .get(&layer_id)
+                .and_then(|parent| parent.parent_id.clone());
+        }
+    }
+    selected
+}
+
+fn filter_ast_to_selection(mut ast: BoardAst, selection: &HashSet<String>) -> ScopedBoardAst {
+    let keep_event: Vec<bool> = ast
+        .events
+        .iter()
+        .map(|event| section_matches_selection(event.anchor.as_deref(), &event.body, selection))
+        .collect();
+    let mut keep_function: Vec<bool> = ast
+        .functions
+        .iter()
+        .map(|function| {
+            section_matches_selection(function.anchor.as_deref(), &function.body, selection)
+        })
+        .collect();
+
+    // Transitive closure over function references from kept sections.
+    let function_index: HashMap<String, usize> = ast
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(index, function)| (function.name.to_lowercase(), index))
+        .collect();
+    loop {
+        let mut referenced: HashSet<String> = HashSet::new();
+        for (event, keep) in ast.events.iter().zip(&keep_event) {
+            if *keep {
+                collect_referenced_function_names(&event.body, &mut referenced);
+            }
+        }
+        for (function, keep) in ast.functions.iter().zip(&keep_function) {
+            if *keep {
+                collect_referenced_function_names(&function.body, &mut referenced);
+            }
+        }
+        let mut changed = false;
+        for name in &referenced {
+            if let Some(&index) = function_index.get(name)
+                && !keep_function[index]
+            {
+                keep_function[index] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut scope_anchors: Vec<String> = Vec::new();
+    let mut keep = keep_function.iter();
+    ast.functions.retain(|function| {
+        let kept = *keep.next().unwrap_or(&false);
+        if kept && let Some(anchor) = function.anchor.as_deref() {
+            scope_anchors.push(anchor.to_string());
+        }
+        kept
+    });
+    let mut keep = keep_event.iter();
+    ast.events.retain(|event| {
+        let kept = *keep.next().unwrap_or(&false);
+        if kept && let Some(anchor) = event.anchor.as_deref() {
+            scope_anchors.push(anchor.to_string());
+        }
+        kept
+    });
+
+    ScopedBoardAst { ast, scope_anchors }
+}
+
+/// Whether a top-level section is part of the selection: its own anchor is selected, or any
+/// anchor inside its body (statements, nested calls at any depth, and nested handlers) is.
+fn section_matches_selection(
+    anchor: Option<&str>,
+    body: &Block,
+    selection: &HashSet<String>,
+) -> bool {
+    if anchor.is_some_and(|anchor| selection.contains(anchor)) {
+        return true;
+    }
+    let mut anchors: Vec<&str> = Vec::new();
+    block_node_anchors(body, &mut anchors);
+    anchors.iter().any(|anchor| selection.contains(*anchor))
+}
+
+fn push_anchor<'b>(anchor: &'b Option<String>, out: &mut Vec<&'b str>) {
+    if let Some(anchor) = anchor.as_deref() {
+        out.push(anchor);
+    }
+}
+
+/// Every node anchor a block carries: statement anchors, call anchors at any expression depth,
+/// and nested handler entries. `Stmt::Local` anchors are variable ids, not node ids, and are
+/// intentionally skipped.
+fn block_node_anchors<'b>(block: &'b Block, out: &mut Vec<&'b str>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { call, anchor, .. }
+            | Stmt::Destructure { call, anchor, .. }
+            | Stmt::Call { call, anchor } => {
+                push_anchor(anchor, out);
+                call_node_anchors(call, out);
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                anchor,
+                ..
+            } => {
+                push_anchor(anchor, out);
+                call_node_anchors(call, out);
+                if let Some(condition) = condition {
+                    expr_node_anchors(condition, out);
+                }
+                for arm in arms {
+                    block_node_anchors(&arm.body, out);
+                }
+            }
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                anchor,
+                ..
+            } => {
+                push_anchor(anchor, out);
+                call_node_anchors(call, out);
+                if let Some(iterable) = iterable {
+                    expr_node_anchors(iterable, out);
+                }
+                block_node_anchors(body, out);
+            }
+            Stmt::Assign { value, anchor, .. }
+            | Stmt::FieldAssign { value, anchor, .. }
+            | Stmt::LocalAlias { value, anchor, .. } => {
+                push_anchor(anchor, out);
+                expr_node_anchors(value, out);
+            }
+            Stmt::Return { values, anchor } => {
+                push_anchor(anchor, out);
+                for value in values {
+                    expr_node_anchors(value, out);
+                }
+            }
+            Stmt::Handler(event) => {
+                push_anchor(&event.anchor, out);
+                block_node_anchors(&event.body, out);
+            }
+            Stmt::Local(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
+fn call_node_anchors<'b>(call: &'b Call, out: &mut Vec<&'b str>) {
+    push_anchor(&call.anchor, out);
+    if let Some(receiver) = &call.receiver {
+        expr_node_anchors(receiver, out);
+    }
+    for value in &call.positional {
+        expr_node_anchors(value, out);
+    }
+    for arg in &call.args {
+        expr_node_anchors(&arg.value, out);
+    }
+}
+
+fn expr_node_anchors<'b>(expr: &'b Expr, out: &mut Vec<&'b str>) {
+    match expr {
+        Expr::Call(call) => call_node_anchors(call, out),
+        Expr::Field { base, .. } | Expr::Member { base, .. } => expr_node_anchors(base, out),
+        Expr::Object(fields) => {
+            for field in fields {
+                expr_node_anchors(&field.value, out);
+            }
+        }
+        Expr::Array(values) => {
+            for value in values {
+                expr_node_anchors(value, out);
+            }
+        }
+        Expr::Index { base, index } => {
+            expr_node_anchors(base, out);
+            expr_node_anchors(index, out);
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_node_anchors(cond, out);
+            expr_node_anchors(then, out);
+            expr_node_anchors(otherwise, out);
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_node_anchors(lhs, out);
+            expr_node_anchors(rhs, out);
+        }
+        Expr::Template { parts } => {
+            for part in parts {
+                if let TemplatePart::Expr(expr) = part {
+                    expr_node_anchors(expr, out);
+                }
+            }
+        }
+        Expr::Ref(_) | Expr::Literal(_) => {}
+    }
+}
+
+/// Lowercased names of the FlowScript functions a block references: direct calls (a function
+/// call keeps its function name as `display` with no path/receiver) and `tools:`/`fnRefs:`
+/// reference arguments.
+fn collect_referenced_function_names(body: &Block, out: &mut HashSet<String>) {
+    let mut calls = Vec::new();
+    collect_calls_in_block_with(body, &mut calls, true);
+    for call in calls {
+        if call.receiver.is_none() && call.path.is_empty() && !call.display.is_empty() {
+            out.insert(call.display.to_lowercase());
+        }
+        for arg in &call.args {
+            if arg.name != TOOLS_ARG && arg.name != FN_REFS_ARG {
+                continue;
+            }
+            collect_ref_names(&arg.value, out);
+        }
+    }
+}
+
+fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Ref(name) => {
+            out.insert(name.to_lowercase());
+        }
+        Expr::Array(values) => {
+            for value in values {
+                collect_ref_names(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Names that are never minted for a binding: FlowScript keywords plus every user-declared name
 /// a binding could shadow in the text (variables, functions, and the parameters of entries).
 fn declared_names(board: &Board) -> HashSet<String> {

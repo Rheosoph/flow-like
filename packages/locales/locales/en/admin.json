@@ -745,7 +745,6 @@
 	"topRemoteModels": "Top Remote Models",
 	"topSource": "Top source",
 	"topUsers": "Top Users",
-	"total": "Total",
 	"totalApps": "Total Apps",
 	"totalDownloads": "Total Downloads",
 	"totalDuration": "Total duration",
@@ -840,6 +839,5 @@
 	"worstErrorRate": "Worst error rate",
 	"worstFirst": ", worst first.",
 	"worstScore": "Worst score",
-	"yes": "Yes",
-	"youNeedTheAdminPermissionToViewCapturedFlowscriptApplies": "You need the <1>Admin</1> permission to view captured FlowScript applies."
+	"yes": "Yes"
 }

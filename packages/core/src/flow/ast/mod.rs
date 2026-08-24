@@ -16,7 +16,8 @@ mod types;
 
 pub use apply::{
     ApplyFlowScriptResult, apply_board_commands_to_board, apply_flowscript_to_board,
-    blocked_destructive_flowscript_message, destructive_flowscript_command_summaries,
+    apply_flowscript_to_board_scoped, blocked_destructive_flowscript_message,
+    destructive_flowscript_command_summaries,
 };
 pub use diagnostics::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
@@ -29,11 +30,15 @@ pub use flow_like_ast::{
     declarations_by_category, declarations_by_package, is_signature_line, parse, redact_flowscript,
     render, schema_sidecar,
 };
-pub use lower::{binary_operator_node_types, lower_board, pin_is_untouched_default};
+pub use lower::{
+    ScopedBoardAst, binary_operator_node_types, lower_board, lower_board_scoped,
+    pin_is_untouched_default,
+};
 pub use reconcile::{
     MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileResult, reconcile,
     reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
-    reconcile_with_catalog, reconcile_with_catalog_mode,
+    reconcile_text_with_catalog_enriched_scoped, reconcile_text_with_catalog_scoped,
+    reconcile_with_catalog, reconcile_with_catalog_mode, reconcile_with_catalog_scoped,
 };
 pub(crate) use reconcile::{catalog_names, parse_pin_occurrence_ref, pin_occurrence_ref};
 pub(crate) use reconcile::{
@@ -52,6 +57,46 @@ pub fn lower_to_ast(board: &Board) -> BoardAst {
 /// Lower a board and render it to FlowScript text in one step.
 pub fn board_to_flowscript(board: &Board, opts: &RenderOptions) -> String {
     render(&lower::lower_board(board), opts)
+}
+
+/// A selection-scoped FlowScript render: the text of the kept sections plus the anchors a later
+/// scoped apply/reconcile of that text must be limited to.
+#[derive(Clone, serde::Serialize)]
+pub struct ScopedFlowScript {
+    pub text: String,
+    /// Anchors (event entry node id / function layer id) of the rendered events/functions.
+    pub scope_anchors: Vec<String>,
+}
+
+/// Render only the slice of `board` containing `node_ids`: every top-level event/function whose
+/// body (nested handlers included) contains a selected node, every function such a section
+/// references (transitively), and the full variable/interface context. Apply the edited text back
+/// with `scope_anchors` so the reconciler never treats the unrendered rest as deleted.
+pub fn board_to_flowscript_scoped(
+    board: &Board,
+    node_ids: &[String],
+    opts: &RenderOptions,
+) -> ScopedFlowScript {
+    let scoped = lower::lower_board_scoped(board, node_ids);
+    ScopedFlowScript {
+        text: render(&scoped.ast, opts),
+        scope_anchors: scoped.scope_anchors,
+    }
+}
+
+/// Canonically format FlowScript text: parse it, then re-render the AST. Pure text-domain — no
+/// board or catalog involved — and stable because render(parse(render(x))) == render(x) (the
+/// round-trip invariant). Anchors present in `text` survive the parse; `anchors: true` re-emits
+/// them, `false` strips them from the output.
+pub fn format_flowscript(text: &str, anchors: bool) -> Result<String, ParseError> {
+    let ast = parse(text)?;
+    Ok(render(
+        &ast,
+        &RenderOptions {
+            anchors,
+            ..RenderOptions::default()
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -85,7 +130,7 @@ mod generate_flowscript {
     /// on every load — but the catalog is not available in this crate, so stamp its committed
     /// snapshot (`flow.d/names.json`) the same way and the fixtures lower exactly as a loaded
     /// board does.
-    fn fixture_board(proto: flow_like_types::proto::Board) -> Board {
+    pub(super) fn fixture_board(proto: flow_like_types::proto::Board) -> Board {
         use std::{collections::BTreeMap, sync::OnceLock};
         static NAMES: OnceLock<BTreeMap<String, NodeNames>> = OnceLock::new();
         let names = NAMES.get_or_init(|| {
@@ -1639,5 +1684,475 @@ mod lower_tests {
         assert_eq!(ast.events.len(), 1);
         assert_eq!(ast.events[0].anchor.as_deref(), Some("cycle-event"));
         assert!(ast.functions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod format_flowscript_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn format_canonicalizes_sugar_and_preserves_comments_and_anchors() {
+        let source = "eventsGeneric run(name: string) {   //@n:entry\n    // keep this comment\n    let x: int = 1\n    x += 1\n    log({ message: 'a' })   //@n:log-node\n    log({ message: `Hello ${name}` })   //@n:tpl-node\n}\n";
+        let formatted = format_flowscript(source, true).expect("format");
+        assert!(
+            formatted.contains("log({ message: \"a\" })"),
+            "single quotes must canonicalize to double quotes:\n{formatted}"
+        );
+        assert!(
+            formatted.contains("x = x + 1"),
+            "compound assignment must canonicalize:\n{formatted}"
+        );
+        assert!(
+            formatted.contains("// keep this comment"),
+            "comments must survive:\n{formatted}"
+        );
+        assert!(
+            formatted.contains("`Hello ${name}`"),
+            "template literals must survive:\n{formatted}"
+        );
+        assert!(
+            formatted.contains("//@n:log-node") && formatted.contains("//@n:entry"),
+            "anchors must be preserved and re-emitted:\n{formatted}"
+        );
+
+        let stripped = format_flowscript(source, false).expect("format without anchors");
+        assert!(
+            !stripped.contains("//@n:"),
+            "anchors: false must strip anchor comments:\n{stripped}"
+        );
+    }
+
+    /// Formatting already-canonical text is the identity — checked against a committed fixture
+    /// snapshot in both the anchored and plain forms.
+    #[test]
+    fn format_is_identity_on_canonical_fixture_text() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/ast");
+        for (file, anchors) in [
+            ("ttwctnp08u18sg2z6nmcqqak.anchored.flow", true),
+            ("ttwctnp08u18sg2z6nmcqqak.flow", false),
+            ("bypaw6n2ksuvrw0kcaj14omz.anchored.flow", true),
+            ("bypaw6n2ksuvrw0kcaj14omz.flow", false),
+        ] {
+            let path = dir.join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let formatted = format_flowscript(&text, anchors)
+                .unwrap_or_else(|e| panic!("{file} must parse: {e:?}"));
+            assert_eq!(
+                formatted, text,
+                "{file}: formatting canonical text must be identity"
+            );
+        }
+    }
+
+    #[test]
+    fn format_surfaces_parse_errors() {
+        let error = format_flowscript("eventsSimple run() {", true).expect_err("unclosed block");
+        assert!(error.line >= 1);
+    }
+}
+
+#[cfg(test)]
+mod scoped_flowscript {
+    use super::*;
+    use crate::flow::copilot::{BoardCommand, NodeMetadata, node_to_metadata};
+    use flow_like_types::tokio;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    const LOAD_VARIABLES_EVENT: &str = "slde8unylsfksbdl72a0bfce";
+    const OPEN_MEMORY_NODE: &str = "o20ngu02bpt0hlm16ckg6cd0";
+    const FETCH_PAGE_EVENT: &str = "jifmm59liln9cnwc7ec83rf5";
+    const PUSH_STEP_NODE: &str = "oyomq4tgddsswio67wqomq25";
+    const CALL_LIBRARIAN_EVENT: &str = "v36kd2hgbjdmg5m9xy0b2xg6";
+    const CONSTRUCT_PROMPT_CALL_NODE: &str = "o336xwkn4lhf9s70qdyzzqk4";
+    const CONSTRUCT_PROMPT_FUNCTION: &str = "olhizg2b8s6seeuntnn1ni4o";
+
+    async fn load_fixture(file_name: &str) -> Board {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/ast")
+            .canonicalize()
+            .expect("tests/ast directory should exist");
+        let store: Arc<dyn flow_like_storage::object_store::ObjectStore> = Arc::new(
+            flow_like_storage::object_store::local::LocalFileSystem::new_with_prefix(&dir)
+                .expect("local object store"),
+        );
+        let proto: flow_like_types::proto::Board = crate::utils::compression::from_compressed(
+            store,
+            flow_like_storage::Path::from(file_name),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("decode {file_name}: {e}"));
+        super::generate_flowscript::fixture_board(proto)
+    }
+
+    fn board_catalog(board: &Board) -> Vec<NodeMetadata> {
+        board.nodes.values().map(node_to_metadata).collect()
+    }
+
+    fn anchored() -> RenderOptions {
+        RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        }
+    }
+
+    fn removal_ids(commands: &[BoardCommand]) -> Vec<String> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::RemoveNode { node_id, .. } => Some(node_id.clone()),
+                BoardCommand::RemoveVariable { variable_id, .. } => Some(variable_id.clone()),
+                BoardCommand::RemoveLayer { layer_id, .. } => Some(layer_id.clone()),
+                BoardCommand::RemoveComment { comment_id, .. } => Some(comment_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// (a) A scoped render of one event keeps that event plus all variables/interfaces and
+    /// nothing else; a section that references a function pulls that function in.
+    #[tokio::test]
+    async fn scoped_render_keeps_selection_references_and_variables() {
+        let board = load_fixture("ttwctnp08u18sg2z6nmcqqak.board").await;
+
+        let scoped =
+            board_to_flowscript_scoped(&board, &[OPEN_MEMORY_NODE.to_string()], &anchored());
+        assert_eq!(
+            scoped.scope_anchors,
+            vec![LOAD_VARIABLES_EVENT.to_string()],
+            "selecting a body node must scope to its owning event"
+        );
+        assert!(scoped.text.contains("loadVariables() {"), "{}", scoped.text);
+        assert!(
+            scoped.text.contains("const librarian"),
+            "all variables must render:\n{}",
+            &scoped.text[..500]
+        );
+        assert!(
+            scoped.text.contains("interface Bit "),
+            "interfaces must render"
+        );
+        assert!(
+            !scoped.text.contains("function constructPrompt"),
+            "unreferenced functions must not render"
+        );
+        assert!(
+            !scoped.text.contains("upsertDatabaseItem") && !scoped.text.contains("callLibrarian"),
+            "other events must not render:\n{}",
+            scoped.text
+        );
+
+        let scoped = board_to_flowscript_scoped(
+            &board,
+            &[CONSTRUCT_PROMPT_CALL_NODE.to_string()],
+            &anchored(),
+        );
+        assert!(
+            scoped.text.contains("function constructPrompt"),
+            "a function referenced by the kept event must be declared:\n{}",
+            scoped.text
+        );
+        assert!(scoped.text.contains("callLibrarian("), "{}", scoped.text);
+        assert!(
+            scoped
+                .scope_anchors
+                .contains(&CONSTRUCT_PROMPT_FUNCTION.to_string())
+                && scoped
+                    .scope_anchors
+                    .contains(&CALL_LIBRARIAN_EVENT.to_string()),
+            "scope anchors must list the kept event and the referenced function: {:?}",
+            scoped.scope_anchors
+        );
+    }
+
+    /// (b) Reconciling a scoped render back with its scope anchors never plans a removal of
+    /// anything (the slice is unchanged), and any residual command/diagnostic it produces is one
+    /// the full-document round-trip produces too — the scope can only shrink the residual class.
+    #[tokio::test]
+    async fn scoped_roundtrip_never_removes_out_of_scope_content() {
+        for file_name in [
+            "ttwctnp08u18sg2z6nmcqqak.board",
+            "bypaw6n2ksuvrw0kcaj14omz.board",
+        ] {
+            let board = load_fixture(file_name).await;
+            let catalog = board_catalog(&board);
+
+            let full_text = board_to_flowscript(&board, &anchored());
+            let full = reconcile_text_with_catalog(&board, &full_text, &catalog);
+            let full_commands: Vec<String> = full
+                .commands
+                .iter()
+                .map(|command| format!("{command:?}"))
+                .collect();
+
+            let ast = lower_to_ast(&board);
+            let section_anchors: Vec<String> = ast
+                .events
+                .iter()
+                .filter_map(|event| event.anchor.clone())
+                .chain(ast.functions.iter().filter_map(|f| f.anchor.clone()))
+                .collect();
+            assert!(!section_anchors.is_empty(), "{file_name}: no sections");
+
+            for anchor in section_anchors {
+                let scoped = board_to_flowscript_scoped(&board, &[anchor.clone()], &anchored());
+                assert!(
+                    scoped.scope_anchors.contains(&anchor),
+                    "{file_name}: {anchor} missing from its own scope"
+                );
+                let result = reconcile_text_with_catalog_scoped(
+                    &board,
+                    &scoped.text,
+                    &catalog,
+                    Some(&scoped.scope_anchors),
+                );
+                let removals = removal_ids(&result.commands);
+                assert!(
+                    removals.is_empty(),
+                    "{file_name}: scoped no-op for `{anchor}` planned removals {removals:?}\n{}",
+                    scoped.text
+                );
+                for command in &result.commands {
+                    let rendered = format!("{command:?}");
+                    assert!(
+                        full_commands.contains(&rendered),
+                        "{file_name}: scoped residual for `{anchor}` exceeds the full round-trip residual: {rendered}"
+                    );
+                }
+                for diagnostic in &result.diagnostics {
+                    assert!(
+                        full.diagnostics.contains(diagnostic),
+                        "{file_name}: scoped diagnostic for `{anchor}` exceeds the full round-trip: {diagnostic}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// (c) A literal edit inside the slice reconciles to exactly that pin update.
+    #[tokio::test]
+    async fn scoped_literal_edit_yields_exactly_one_pin_update() {
+        let board = load_fixture("ttwctnp08u18sg2z6nmcqqak.board").await;
+        let catalog = board_catalog(&board);
+
+        let scoped =
+            board_to_flowscript_scoped(&board, &[LOAD_VARIABLES_EVENT.to_string()], &anchored());
+        let baseline = reconcile_text_with_catalog_scoped(
+            &board,
+            &scoped.text,
+            &catalog,
+            Some(&scoped.scope_anchors),
+        );
+        assert!(
+            baseline.commands.is_empty() && baseline.diagnostics.is_empty(),
+            "the unchanged slice must be a clean no-op: {:?} {:?}",
+            baseline.commands,
+            baseline.diagnostics
+        );
+
+        let needle = "name: \"memory\", userScoped: true, batchSize: 1000";
+        let edited = scoped
+            .text
+            .replace(needle, "name: \"memory\", userScoped: true, batchSize: 500");
+        assert_ne!(
+            edited, scoped.text,
+            "literal edit must apply:\n{}",
+            scoped.text
+        );
+
+        let result = reconcile_text_with_catalog_scoped(
+            &board,
+            &edited,
+            &catalog,
+            Some(&scoped.scope_anchors),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        match result.commands.as_slice() {
+            [BoardCommand::UpdateNodePin { node_id, value, .. }] => {
+                assert_eq!(node_id, OPEN_MEMORY_NODE);
+                assert_eq!(value, &flow_like_types::Value::from(500));
+            }
+            other => panic!("expected exactly one UpdateNodePin, got {other:?}"),
+        }
+    }
+
+    /// (d) Omitting a rendered statement from the slice still deletes it — deletion works INSIDE
+    /// the scope; only out-of-scope content is invisible.
+    #[tokio::test]
+    async fn scoped_apply_still_deletes_within_scope() {
+        let board = load_fixture("ttwctnp08u18sg2z6nmcqqak.board").await;
+        let catalog = board_catalog(&board);
+
+        let scoped =
+            board_to_flowscript_scoped(&board, &[FETCH_PAGE_EVENT.to_string()], &anchored());
+        let edited: String = scoped
+            .text
+            .lines()
+            .filter(|line| !line.contains(PUSH_STEP_NODE))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(edited, scoped.text, "the pushStep line must exist");
+
+        let result = reconcile_text_with_catalog_scoped(
+            &board,
+            &edited,
+            &catalog,
+            Some(&scoped.scope_anchors),
+        );
+        let removals = removal_ids(&result.commands);
+        assert!(
+            removals.contains(&PUSH_STEP_NODE.to_string()),
+            "the omitted in-scope statement must be removed: {removals:?}\ndiagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            removals.iter().all(|node_id| node_id == PUSH_STEP_NODE),
+            "nothing outside the omitted statement may be removed: {removals:?}"
+        );
+    }
+
+    /// (e) Deletion gating is unchanged for full applies: an unscoped apply of a partial document
+    /// still blocks with `blocked_destructive_flowscript_message`, while the SAME partial text
+    /// applied with its scope anchors is a clean no-op — the scope flag alone flips the semantics.
+    #[test]
+    fn full_apply_deletion_gate_unchanged_and_scoped_apply_bypasses_nothing_in_scope() {
+        use crate::flow::node::Node;
+        use crate::flow::variable::VariableType;
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+
+        fn empty_board() -> Board {
+            use crate::flow::board::{Board, ExecutionMode, ExecutionStage};
+            use crate::flow::execution::LogLevel;
+            use std::collections::HashMap;
+            use std::time::SystemTime;
+            Board {
+                id: "board".to_string(),
+                name: "Board".to_string(),
+                description: String::new(),
+                nodes: HashMap::new(),
+                variables: HashMap::new(),
+                comments: HashMap::new(),
+                viewport: (0.0, 0.0, 1.0),
+                version: (0, 0, 1),
+                stage: ExecutionStage::Dev,
+                log_level: LogLevel::Info,
+                execution_mode: ExecutionMode::Hybrid,
+                refs: HashMap::new(),
+                internal_refs: HashMap::new(),
+                layers: HashMap::new(),
+                page_ids: Vec::new(),
+                hash: None,
+                created_at: SystemTime::now(),
+                updated_at: SystemTime::now(),
+                parent: None,
+                board_dir: flow_like_storage::Path::from("/test"),
+                logic_nodes: HashMap::new(),
+                app_state: None,
+                pin_index: None,
+            }
+        }
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let catalog_nodes = vec![event, log];
+
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let mut board = empty_board();
+        let source = "onMessage() {\n    log({ message: \"one\" })\n}\n\nonTick() {\n    log({ message: \"two\" })\n}\n";
+        let applied = runtime
+            .block_on(apply_flowscript_to_board(
+                &mut board,
+                source,
+                &catalog_nodes,
+                state.clone(),
+                None,
+                false,
+            ))
+            .expect("seed apply");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let ast = lower_to_ast(&board);
+        assert_eq!(ast.events.len(), 2, "two events seeded");
+        let on_message = ast
+            .events
+            .iter()
+            .find(|event| event.event_name.as_deref() == Some("onMessage"))
+            .and_then(|event| event.anchor.clone())
+            .expect("onMessage anchor");
+
+        let scoped = board_to_flowscript_scoped(&board, &[on_message.clone()], &anchored());
+        assert!(
+            scoped.text.contains("one") && !scoped.text.contains("two"),
+            "scoped render must keep only onMessage:\n{}",
+            scoped.text
+        );
+        assert_eq!(scoped.scope_anchors, vec![on_message]);
+
+        // Unscoped apply of the partial document: the omitted event's body reads as a deletion
+        // and the gate must block it with the canonical message.
+        let mut unscoped_board = board.clone();
+        let blocked = runtime
+            .block_on(apply_flowscript_to_board(
+                &mut unscoped_board,
+                &scoped.text,
+                &catalog_nodes,
+                state.clone(),
+                None,
+                false,
+            ))
+            .expect("unscoped apply");
+        assert!(
+            blocked.commands.is_empty(),
+            "blocked apply must execute nothing"
+        );
+        let first = blocked
+            .diagnostics
+            .first()
+            .expect("unscoped partial apply must be blocked");
+        assert!(
+            first.starts_with("FlowScript edit would delete"),
+            "blocked message must be unchanged: {first}"
+        );
+        let summaries = destructive_flowscript_command_summaries(&blocked.board_commands);
+        assert_eq!(first, &blocked_destructive_flowscript_message(&summaries));
+
+        // The same text with its scope anchors is a clean no-op: nothing deleted, nothing blocked.
+        let mut scoped_board = board.clone();
+        let scoped_apply = runtime
+            .block_on(apply_flowscript_to_board_scoped(
+                &mut scoped_board,
+                &scoped.text,
+                &catalog_nodes,
+                state,
+                None,
+                false,
+                Some(&scoped.scope_anchors),
+            ))
+            .expect("scoped apply");
+        assert!(
+            scoped_apply.commands.is_empty()
+                && scoped_apply.board_commands.is_empty()
+                && scoped_apply.diagnostics.is_empty(),
+            "scoped apply must be a clean no-op: {:?} {:?}",
+            scoped_apply.board_commands,
+            scoped_apply.diagnostics
+        );
     }
 }

@@ -1,0 +1,207 @@
+:root {
+	--flowbook-ink: #211d19;
+	--flowbook-paper: #fbf8f2;
+	--flowbook-paper-deep: #f1e9dc;
+	--flowbook-orange: #e6532f;
+	--flowbook-orange-dark: #a9381f;
+	--flowbook-muted: #756c62;
+	--flowbook-rule: #d9ccba;
+
+	--sl-color-accent-low: #f8ddd2;
+	--sl-color-accent: var(--flowbook-orange);
+	--sl-color-accent-high: #7d2818;
+	--sl-color-white: #2a2520;
+	--sl-color-gray-1: #39332d;
+	--sl-color-gray-2: #5c544c;
+	--sl-color-gray-3: #756c62;
+	--sl-color-gray-4: #a79b8d;
+	--sl-color-gray-5: #d9ccba;
+	--sl-color-gray-6: #eee7dc;
+	--sl-color-gray-7: #f7f2e9;
+	--sl-color-black: var(--flowbook-paper);
+	--sl-color-bg-nav: color-mix(in srgb, var(--flowbook-paper) 92%, transparent);
+	--sl-color-bg-sidebar: #f7f2e9;
+	--sl-content-width: 49rem;
+	--sl-text-5xl: clamp(2.9rem, 7vw, 5.8rem);
+}
+
+:root[data-theme="dark"] {
+	--flowbook-ink: #f3ece2;
+	--flowbook-paper: #171513;
+	--flowbook-paper-deep: #211e1a;
+	--flowbook-orange: #ff714e;
+	--flowbook-orange-dark: #ff9b82;
+	--flowbook-muted: #b9aea1;
+	--flowbook-rule: #403a33;
+
+	--sl-color-accent-low: #3b211a;
+	--sl-color-accent: var(--flowbook-orange);
+	--sl-color-accent-high: #ffc0af;
+	--sl-color-white: #f3ece2;
+	--sl-color-gray-1: #e6ded4;
+	--sl-color-gray-2: #c8bdb0;
+	--sl-color-gray-3: #a89d91;
+	--sl-color-gray-4: #776f67;
+	--sl-color-gray-5: #4b453f;
+	--sl-color-gray-6: #2b2824;
+	--sl-color-gray-7: #211e1a;
+	--sl-color-black: var(--flowbook-paper);
+	--sl-color-bg-nav: color-mix(in srgb, var(--flowbook-paper) 91%, transparent);
+	--sl-color-bg-sidebar: #1b1916;
+}
+
+html {
+	background: var(--flowbook-paper);
+}
+
+body {
+	background: radial-gradient(
+			circle at 12% -8%,
+			color-mix(in srgb, var(--flowbook-orange) 9%, transparent),
+			transparent 30rem
+		), var(--flowbook-paper);
+	color: var(--flowbook-ink);
+}
+
+.header {
+	border-bottom: 1px solid
+		color-mix(in srgb, var(--flowbook-rule) 74%, transparent);
+	background: var(--sl-color-bg-nav);
+	backdrop-filter: blur(18px);
+}
+
+.site-title,
+.sidebar-content,
+.right-sidebar,
+.pagination-links,
+.sl-link-button,
+.card {
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.site-title {
+	font-weight: 750;
+	letter-spacing: -0.035em;
+}
+
+.sidebar-pane {
+	border-inline-end: 1px solid
+		color-mix(in srgb, var(--flowbook-rule) 70%, transparent);
+}
+
+.right-sidebar {
+	border-inline-start: 1px solid
+		color-mix(in srgb, var(--flowbook-rule) 60%, transparent);
+}
+
+.sl-markdown-content {
+	font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia,
+		serif;
+	font-size: 1.075rem;
+	line-height: 1.82;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4) {
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
+	letter-spacing: -0.035em;
+}
+
+.sl-markdown-content h1 {
+	font-size: clamp(2.35rem, 6vw, 4rem);
+	line-height: 1.02;
+}
+
+.sl-markdown-content h2 {
+	margin-block-start: 3.6rem;
+	font-size: clamp(1.75rem, 4vw, 2.35rem);
+	line-height: 1.15;
+}
+
+.sl-markdown-content h3 {
+	margin-block-start: 2.6rem;
+	font-size: 1.3rem;
+}
+
+.sl-markdown-content > p:first-of-type {
+	font-size: 1.22rem;
+	line-height: 1.72;
+}
+
+.sl-markdown-content blockquote {
+	margin-block: 2.4rem;
+	border-inline-start: 0.24rem solid var(--flowbook-orange);
+	background: color-mix(in srgb, var(--flowbook-orange) 6%, transparent);
+	color: var(--flowbook-ink);
+	font-size: 1.18rem;
+	font-style: italic;
+}
+
+.sl-markdown-content :not(pre) > code {
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.3rem;
+	background: var(--flowbook-paper-deep);
+	font-size: 0.88em;
+}
+
+.sl-markdown-content hr {
+	margin-block: 3.5rem;
+	border-color: var(--flowbook-rule);
+}
+
+.hero {
+	padding-block: clamp(4rem, 10vw, 8rem);
+}
+
+.hero h1 {
+	max-width: 11ch;
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
+	font-weight: 800;
+	letter-spacing: -0.065em;
+	line-height: 0.92;
+}
+
+.hero .tagline {
+	max-width: 38rem;
+	font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia,
+		serif;
+	font-size: clamp(1.25rem, 3vw, 1.7rem);
+	line-height: 1.55;
+}
+
+.sl-link-button {
+	border-radius: 999px;
+}
+
+.sl-link-button.primary {
+	background: var(--flowbook-orange);
+	color: white;
+}
+
+.card,
+.pagination-links a {
+	border-color: var(--flowbook-rule);
+	border-radius: 0.8rem;
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 52%, transparent);
+	box-shadow: none;
+}
+
+.flowbook-kicker {
+	margin-block-end: 0.7rem;
+	color: var(--flowbook-orange-dark);
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
+	font-size: 0.76rem;
+	font-weight: 760;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+}
+
+@media (max-width: 50rem) {
+	.sl-markdown-content {
+		font-size: 1rem;
+		line-height: 1.75;
+	}
+}

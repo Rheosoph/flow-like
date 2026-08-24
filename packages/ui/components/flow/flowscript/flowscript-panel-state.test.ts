@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	canApplyFlowScript,
+	resolveFlowScriptScope,
 	shouldReloadFlowScriptAfterApply,
 } from "./flowscript-panel-state";
 
@@ -69,5 +70,41 @@ describe("FlowScript canonical reload", () => {
 				diagnosticCount: 0,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("FlowScript editing scope", () => {
+	test("a selection with backend support becomes a scoped mode", () => {
+		const mode = resolveFlowScriptScope(["node-a", "node-b"], true);
+		expect(mode).toEqual({ kind: "scoped", nodeIds: ["node-a", "node-b"] });
+	});
+
+	test("copies the requested ids so later selection changes cannot mutate the scope", () => {
+		const requested = ["node-a"];
+		const mode = resolveFlowScriptScope(requested, true);
+		requested.push("node-b");
+		expect(mode).toEqual({ kind: "scoped", nodeIds: ["node-a"] });
+	});
+
+	test("degrades to the full render without backend support", () => {
+		expect(resolveFlowScriptScope(["node-a"], false)).toEqual({
+			kind: "full",
+		});
+	});
+
+	test("no requested nodes means the full render", () => {
+		expect(resolveFlowScriptScope(undefined, true)).toEqual({ kind: "full" });
+		expect(resolveFlowScriptScope([], true)).toEqual({ kind: "full" });
+	});
+});
+
+describe("FlowScript apply state with merge conflicts", () => {
+	test("unresolved statement-merge conflicts block apply", () => {
+		expect(
+			canApplyFlowScript({ ...editableDirtyState, unresolvedConflicts: true }),
+		).toBe(false);
+		expect(
+			canApplyFlowScript({ ...editableDirtyState, unresolvedConflicts: false }),
+		).toBe(true);
 	});
 });

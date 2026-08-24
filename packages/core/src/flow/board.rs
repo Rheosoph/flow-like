@@ -5,7 +5,11 @@ use super::{
     variable::{Variable, VariableType},
 };
 use crate::{
-    a2ui::widget::Page,
+    a2ui::{
+        id_refs::IdRef,
+        page_remap::{IdTranslators, remap_page_refs},
+        widget::Page,
+    },
     app::App,
     state::{FlowLikeState, FlowNodeRegistry},
     utils::compression::{
@@ -2033,8 +2037,17 @@ impl Board {
 
     // PAGE FUNCTIONS
 
+    /// Where the pages of an arbitrary board on this app's store live.
+    ///
+    /// Template writers need this: by the time a board has been cloned into a template its `id` is
+    /// already the template id, so the pages it is copying from can only be addressed by the id of
+    /// the board they came from.
+    fn board_pages_dir(&self, board_id: &str) -> Path {
+        self.board_dir.child(format!("_{}", board_id))
+    }
+
     fn pages_dir(&self) -> Path {
-        self.board_dir.child(format!("_{}", self.id))
+        self.board_pages_dir(&self.id)
     }
 
     fn page_path(&self, page_id: &str) -> Path {
@@ -2053,20 +2066,39 @@ impl Board {
             .child(format!("{}.page", page_id))
     }
 
-    fn template_pages_dir(&self, template_id: &str) -> Path {
-        self.board_dir.child(format!("_template_{}", template_id))
+    /// `apps/{app_id}/_template_{template_id}` — where a template's page payloads live. Taken as
+    /// a free-standing path so callers that never open the template board (`App::delete_template`,
+    /// the fork's storage sweep) still get the layout from one place.
+    pub fn template_pages_dir(board_dir: &Path, template_id: &str) -> Path {
+        board_dir.child(format!("_template_{}", template_id))
     }
 
     fn template_page_path(&self, template_id: &str, page_id: &str) -> Path {
-        self.template_pages_dir(template_id)
-            .child(format!("{}.page", page_id))
+        Self::template_pages_dir(&self.board_dir, template_id).child(format!("{}.page", page_id))
     }
 
-    fn versioned_template_pages_dir(&self, template_id: &str, version: (u32, u32, u32)) -> Path {
-        self.board_dir
+    /// Root of a template's version archive. Keyed on the **template** id, never the board the
+    /// template was cut from: listing, versioned reads and template deletion all look here.
+    fn versioned_template_dir(board_dir: &Path, template_id: &str) -> Path {
+        board_dir
             .child("templates")
             .child("versions")
             .child(template_id)
+    }
+
+    fn versioned_template_path(
+        board_dir: &Path,
+        template_id: &str,
+        version: (u32, u32, u32),
+    ) -> Path {
+        Self::versioned_template_dir(board_dir, template_id).child(format!(
+            "{}_{}_{}.template",
+            version.0, version.1, version.2
+        ))
+    }
+
+    fn versioned_template_pages_dir(&self, template_id: &str, version: (u32, u32, u32)) -> Path {
+        Self::versioned_template_dir(&self.board_dir, template_id)
             .child(format!("{}_{}_{}", version.0, version.1, version.2))
     }
 
@@ -2326,8 +2358,51 @@ impl Board {
 
     // TEMPLATE FUNCTIONS
 
+    /// Copy the listed pages verbatim from one page directory to another.
+    ///
+    /// A page a board lists can legitimately have no file behind it — a board synced from a remote
+    /// arrives before its payloads do, and a template that only ever existed as a record has none
+    /// at all. The record these pages belong to has already been written by the time this runs, so
+    /// aborting on the first miss would throw away a template save the user believes happened for
+    /// the sake of one page. Misses are logged and skipped, the same trade `load_all_pages` makes.
+    /// A failed *write* still propagates: that is the destination store breaking, not missing data.
+    async fn copy_pages_between(
+        store: &Arc<dyn ObjectStore>,
+        page_ids: &[String],
+        src_dir: &Path,
+        dst_dir: &Path,
+    ) -> flow_like_types::Result<()> {
+        for page_id in page_ids {
+            let src_path = src_dir.child(format!("{}.page", page_id));
+            let page_proto: proto::Page =
+                match from_compressed(store.clone(), src_path.clone()).await {
+                    Ok(page) => page,
+                    Err(error) => {
+                        tracing::warn!(
+                            "skipping page {}: reading {} failed: {}",
+                            page_id,
+                            src_path,
+                            error
+                        );
+                        continue;
+                    }
+                };
+            let dst_path = dst_dir.child(format!("{}.page", page_id));
+            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        }
+        Ok(())
+    }
+
+    /// Persist this board as the template `self.id`.
+    ///
+    /// `source_board_id` names the board whose page files back `self.page_ids`. It has to be
+    /// passed in because `self.id` is already the *template* id by the time a caller gets here,
+    /// so the pages are no longer reachable from this board's own paths. `None` marks a
+    /// record-only write: a template cached from a remote carries page ids but no payloads on
+    /// this store, and there is nothing to copy.
     pub async fn save_as_template(
         &self,
+        source_board_id: Option<&str>,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let to = self.board_dir.child(format!("{}.template", self.id));
@@ -2338,43 +2413,36 @@ impl Board {
         let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
-        for page_id in &self.page_ids {
-            let src_path = self.page_path(page_id);
-            let dst_path = self.template_page_path(&self.id, page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        if let Some(source_board_id) = source_board_id {
+            let src_dir = self.board_pages_dir(source_board_id);
+            let dst_dir = Self::template_pages_dir(&self.board_dir, &self.id);
+            Self::copy_pages_between(&store, &self.page_ids, &src_dir, &dst_dir).await?;
         }
 
         Ok(())
     }
 
+    /// Overwrite an already-published template version in place. `source_board_id` carries the
+    /// same meaning as in [`Self::save_as_template`].
     pub async fn overwrite_template_version(
         &mut self,
         version: (u32, u32, u32),
+        source_board_id: Option<&str>,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
 
-        let to = self
-            .board_dir
-            .child("templates")
-            .child("versions")
-            .child(self.id.clone())
-            .child(format!(
-                "{}_{}_{}.template",
-                version.0, version.1, version.2
-            ));
+        let to = Self::versioned_template_path(&self.board_dir, &self.id, version);
 
         let mut template = self.clone();
         template.clear_internal_refs();
         let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
-        for page_id in &self.page_ids {
-            let src_path = self.page_path(page_id);
-            let dst_path = self.versioned_template_page_path(&self.id, version, page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        if let Some(source_board_id) = source_board_id {
+            let src_dir = self.board_pages_dir(source_board_id);
+            let dst_dir = self.versioned_template_pages_dir(&self.id, version);
+            Self::copy_pages_between(&store, &self.page_ids, &src_dir, &dst_dir).await?;
         }
 
         Ok(())
@@ -2396,26 +2464,19 @@ impl Board {
 
         let mut new_version = (0, 0, 0);
 
+        // The archive of the outgoing version is keyed on the template id, matching every reader:
+        // `load_template`, `get_template_versions` and `App::delete_template`. Archives written
+        // before this fix live under the source board's id instead and are unreachable — they were
+        // already invisible to all three, so there is nothing to migrate, only orphans to ignore.
         if let Some(old_template) = &old_template {
-            let to = self
-                .board_dir
-                .child("templates")
-                .child("versions")
-                .child(self.id.clone())
-                .child(format!(
-                    "{}_{}_{}.template",
-                    version.0, version.1, version.2
-                ));
+            let to = Self::versioned_template_path(&self.board_dir, &template_id, version);
             let mut old_template = old_template.clone();
             old_template.clear_internal_refs();
             compress_to_file(store.clone(), to, &old_template.to_proto()).await?;
 
-            for page_id in &old_template.page_ids {
-                let src_path = old_template.template_page_path(&old_template.id, page_id);
-                let dst_path = self.versioned_template_page_path(&self.id, version, page_id);
-                let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-                compress_to_file(store.clone(), dst_path, &page_proto).await?;
-            }
+            let src_dir = Self::template_pages_dir(&old_template.board_dir, &old_template.id);
+            let dst_dir = self.versioned_template_pages_dir(&template_id, version);
+            Self::copy_pages_between(&store, &old_template.page_ids, &src_dir, &dst_dir).await?;
 
             new_version = match version_type {
                 VersionType::Major => (version.0 + 1, 0, 0),
@@ -2424,6 +2485,7 @@ impl Board {
             }
         }
 
+        let source_board_id = self.id.clone();
         let mut template = self.clone();
         template.id = template_id;
         template.version = new_version;
@@ -2435,7 +2497,9 @@ impl Board {
         }
 
         template.mark_changed();
-        template.save_as_template(Some(store)).await?;
+        template
+            .save_as_template(Some(source_board_id.as_str()), Some(store))
+            .await?;
         Ok(new_version)
     }
 
@@ -2456,16 +2520,9 @@ impl Board {
             .as_generic();
 
         let board_dir = path.clone();
-        let path = if let Some(version) = version {
-            path.child("templates")
-                .child("versions")
-                .child(template_id)
-                .child(format!(
-                    "{}_{}_{}.template",
-                    version.0, version.1, version.2
-                ))
-        } else {
-            path.child(format!("{}.template", template_id))
+        let path = match version {
+            Some(version) => Self::versioned_template_path(&board_dir, template_id, version),
+            None => path.child(format!("{}.template", template_id)),
         };
 
         let board: flow_like_types::proto::Board = from_compressed(store, path).await?;
@@ -2481,6 +2538,29 @@ impl Board {
         Ok(board)
     }
 
+    fn template_page_source(
+        &self,
+        template_id: &str,
+        version: Option<(u32, u32, u32)>,
+        page_id: &str,
+    ) -> Path {
+        match version {
+            Some(version) => self.versioned_template_page_path(template_id, version, page_id),
+            None => self.template_page_path(template_id, page_id),
+        }
+    }
+
+    async fn load_template_page_proto(
+        &self,
+        template_id: &str,
+        page_id: &str,
+        version: Option<(u32, u32, u32)>,
+        store: &Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<proto::Page> {
+        let path = self.template_page_source(template_id, version, page_id);
+        from_compressed(store.clone(), path).await
+    }
+
     pub async fn load_template_page(
         &self,
         template_id: &str,
@@ -2489,17 +2569,15 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Page> {
         let store = self.get_store(store).await?;
-
-        let path = if let Some(v) = version {
-            self.versioned_template_page_path(template_id, v, page_id)
-        } else {
-            self.template_page_path(template_id, page_id)
-        };
-
-        let page_proto: proto::Page = from_compressed(store, path).await?;
-        Ok(page_proto.into())
+        Ok(self
+            .load_template_page_proto(template_id, page_id, version, &store)
+            .await?
+            .into())
     }
 
+    /// Read every page this template lists. A page whose payload is missing is skipped with a
+    /// warning rather than failing the read, so one absent file never hides the rest of the
+    /// template — the same contract [`Self::load_all_pages`] holds for a board.
     pub async fn load_all_template_pages(
         &self,
         template_id: &str,
@@ -2508,50 +2586,181 @@ impl Board {
     ) -> flow_like_types::Result<HashMap<String, Page>> {
         let store = self.get_store(store).await?;
 
-        let mut pages = HashMap::new();
+        let mut pages = HashMap::with_capacity(self.page_ids.len());
         for page_id in &self.page_ids {
-            let path = if let Some(v) = version {
-                self.versioned_template_page_path(template_id, v, page_id)
-            } else {
-                self.template_page_path(template_id, page_id)
-            };
-            let page_proto: proto::Page = from_compressed(store.clone(), path).await?;
-            pages.insert(page_id.clone(), page_proto.into());
+            match self
+                .load_template_page_proto(template_id, page_id, version, &store)
+                .await
+            {
+                Ok(page) => {
+                    pages.insert(page_id.clone(), page.into());
+                }
+                Err(error) => tracing::warn!(
+                    "skipping page {} of template {}: {}",
+                    page_id,
+                    template_id,
+                    error
+                ),
+            }
         }
         Ok(pages)
     }
 
-    pub async fn copy_template_pages_to_board(
-        &self,
-        template_id: &str,
-        version: Option<(u32, u32, u32)>,
+    /// Copy `template`'s pages onto this board under freshly minted ids.
+    ///
+    /// `Page.id` is a global primary key, so an instantiated page can never keep the template's
+    /// id — the copy would collide with the original the moment either is persisted. Once the ids
+    /// move, everything naming them has to move too: `node_translation` is the source→minted map
+    /// the accompanying [`commands::nodes::copy_paste::CopyPasteCommand`] produced for the graph,
+    /// and `app_translation` names the source and destination apps when the template came from a
+    /// different one.
+    ///
+    /// A page the template lists but has no payload for is skipped with a warning: a template that
+    /// crossed a serialization boundary carries ids without files, and one missing page must not
+    /// cost the caller the whole board.
+    pub async fn instantiate_template_pages(
+        &mut self,
+        template: &Board,
+        node_translation: &HashMap<String, String>,
+        app_translation: Option<(&str, &str)>,
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<()> {
-        let store = self.get_store(store).await?;
-
-        for page_id in &self.page_ids {
-            let src_path = if let Some(v) = version {
-                self.versioned_template_page_path(template_id, v, page_id)
-            } else {
-                self.template_page_path(template_id, page_id)
-            };
-            let dst_path = self.page_path(page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+    ) -> flow_like_types::Result<Vec<Page>> {
+        if template.page_ids.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(())
+
+        let store = self.get_store(store).await?;
+        let page_translation = template
+            .page_ids
+            .iter()
+            .map(|page_id| (page_id.clone(), create_id()))
+            .collect::<HashMap<String, String>>();
+
+        let board_id = self.id.clone();
+        let template_id = template.id.clone();
+        let mut instantiated = Vec::with_capacity(template.page_ids.len());
+
+        for page_id in &template.page_ids {
+            let mut page_proto = match template
+                .load_template_page_proto(&template_id, page_id, None, &store)
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    tracing::warn!(
+                        "skipping page {} of template {}: {}",
+                        page_id,
+                        template_id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            let Some(new_page_id) = page_translation.get(page_id) else {
+                continue;
+            };
+
+            let mut translate = |kind: IdRef, id: &str| match kind {
+                IdRef::Node => node_translation.get(id).cloned(),
+                IdRef::Page => page_translation.get(id).cloned(),
+                IdRef::Board => (id == template_id.as_str()).then(|| board_id.clone()),
+                IdRef::App => {
+                    app_translation.and_then(|(from, to)| (id == from).then(|| to.to_string()))
+                }
+                IdRef::Widget | IdRef::Event => None,
+            };
+            // Payloads that decode to a bare literal — a prop default, a customization value —
+            // carry no field name to key off, so every id this instantiation minted is matched
+            // directly instead.
+            let mut translate_literal = |id: &str| {
+                node_translation
+                    .get(id)
+                    .or_else(|| page_translation.get(id))
+                    .cloned()
+                    .or_else(|| (id == template_id.as_str()).then(|| board_id.clone()))
+                    .or_else(|| {
+                        app_translation.and_then(|(from, to)| (id == from).then(|| to.to_string()))
+                    })
+                    // An element reference is composite — `{page_id}/{component_id}` — so
+                    // whole-string matching never sees it. The fork translates these the same
+                    // way; the two passes have to agree or a copy behaves differently
+                    // depending on which one made it.
+                    .or_else(|| {
+                        let (page_id, component_id) = id.split_once('/')?;
+                        if component_id.is_empty() {
+                            return None;
+                        }
+                        Some(format!(
+                            "{}/{}",
+                            page_translation.get(page_id)?,
+                            component_id
+                        ))
+                    })
+            };
+
+            Self::remap_instantiated_page(
+                &mut page_proto,
+                new_page_id,
+                &board_id,
+                &mut translate,
+                &mut translate_literal,
+            );
+
+            // Written as a proto instead of through `save_page`: the round trip through the
+            // in-memory `Page` drops `PageContent`'s grid placement and region and
+            // `SurfaceComponent::event_relevant`, and a copy has no business losing them.
+            let dst_path = self.page_path(new_page_id);
+            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+
+            if !self.page_ids.contains(new_page_id) {
+                self.page_ids.push(new_page_id.clone());
+            }
+            instantiated.push(Page::from(page_proto));
+        }
+
+        self.mark_changed();
+        Ok(instantiated)
+    }
+
+    /// Move one page payload into this board's id space.
+    ///
+    /// Coverage lives in [`crate::a2ui::page_remap`], shared with the fork: both operations move a
+    /// page across an id boundary and have to rewrite the same references, and keeping two
+    /// inventories in step is what failed last time. This function owns only the policy — the
+    /// page's new identity and which id maps to what.
+    fn remap_instantiated_page(
+        page: &mut proto::Page,
+        new_page_id: &str,
+        board_id: &str,
+        translate: &mut dyn FnMut(IdRef, &str) -> Option<String>,
+        translate_literal: &mut dyn FnMut(&str) -> Option<String>,
+    ) {
+        page.id = new_page_id.to_string();
+        page.board_id = Some(board_id.to_string());
+
+        let mut translators = IdTranslators {
+            by_field: translate,
+            by_literal: translate_literal,
+        };
+        let unrewritten = remap_page_refs(page, &mut translators);
+        if !unrewritten.is_empty() {
+            // The page is still written: a component whose JSON will not parse is already broken,
+            // and dropping the whole page would take the working ones with it.
+            tracing::warn!(
+                page_id = %new_page_id,
+                board_id = %board_id,
+                "instantiated page kept {} payload(s) the template copy could not rewrite: {}",
+                unrewritten.len(),
+                unrewritten.join("; ")
+            );
+        }
     }
 
     pub async fn get_template_versions(
         &self,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Vec<(u32, u32, u32)>> {
-        let versions_dir = self
-            .board_dir
-            .clone()
-            .child("templates")
-            .child("versions")
-            .child(self.id.clone());
+        let versions_dir = Self::versioned_template_dir(&self.board_dir, &self.id);
 
         let store = self.get_store(store).await?;
 
@@ -2611,6 +2820,11 @@ pub struct Comment {
     pub z_index: Option<i32>,
     pub hash: Option<u64>,
     pub is_locked: Option<bool>,
+    /// Soft reference to a board node this comment is attached to (e.g. the statement a
+    /// FlowScript thread anchors on). Presentation metadata only — dangling references are
+    /// legal (the node may be deleted later); consumers must treat a missing node as unanchored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 impl Comment {
@@ -2656,6 +2870,10 @@ impl Comment {
 
         if let Some(is_locked) = self.is_locked {
             hasher.append(&[is_locked as u8]);
+        }
+
+        if let Some(node_id) = &self.node_id {
+            hasher.append(node_id.as_bytes());
         }
 
         self.hash = Some(hasher.finalize64());
@@ -3466,6 +3684,7 @@ mod tests {
             z_index: None,
             hash: None,
             is_locked: None,
+            node_id: None,
         };
 
         let commands = vec![
@@ -3495,5 +3714,98 @@ mod tests {
             board.comments.contains_key("comment-1"),
             "commands undone before the failure must be re-applied so the board is not left partially rolled back"
         );
+    }
+
+    #[test]
+    fn comment_node_id_roundtrips_serde_and_proto_and_changes_hash() {
+        use super::{Comment, CommentType};
+        use std::time::SystemTime;
+
+        let mut comment = Comment {
+            id: "comment-1".to_string(),
+            author: None,
+            content: "anchored".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::UNIX_EPOCH,
+            coordinates: (1.0, 2.0, 3.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+            node_id: Some("node-abc".to_string()),
+        };
+
+        let json = flow_like_types::json::to_string(&comment).unwrap();
+        let deser: Comment = flow_like_types::json::from_str(&json).unwrap();
+        assert_eq!(deser.node_id.as_deref(), Some("node-abc"));
+
+        let mut buf = Vec::new();
+        comment.to_proto().encode(&mut buf).unwrap();
+        let from_proto =
+            Comment::from_proto(flow_like_types::proto::Comment::decode(&buf[..]).unwrap());
+        assert_eq!(from_proto.node_id.as_deref(), Some("node-abc"));
+
+        comment.hash();
+        let anchored_hash = comment.hash;
+        comment.node_id = None;
+        comment.hash();
+        assert_ne!(
+            anchored_hash, comment.hash,
+            "hash must change when node_id changes so edits sync"
+        );
+
+        let unanchored_json = flow_like_types::json::to_string(&comment).unwrap();
+        assert!(
+            !unanchored_json.contains("node_id"),
+            "None node_id must be skipped so old payloads stay byte-identical"
+        );
+        let legacy: Comment = flow_like_types::json::from_str(&unanchored_json).unwrap();
+        assert_eq!(legacy.node_id, None);
+    }
+
+    #[tokio::test]
+    async fn upsert_comment_preserves_node_id_on_board() {
+        use crate::flow::board::{
+            Comment, CommentType,
+            commands::{GenericCommand, comments::upsert_comment::UpsertCommentCommand},
+        };
+        use std::time::SystemTime;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+
+        let comment = Comment {
+            id: "comment-anchored".to_string(),
+            author: None,
+            content: "bound to a statement".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::now(),
+            coordinates: (0.0, 0.0, 0.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+            node_id: Some("node-xyz".to_string()),
+        };
+
+        board
+            .execute_commands(
+                vec![GenericCommand::UpsertComment(UpsertCommentCommand::new(
+                    comment,
+                ))],
+                state,
+            )
+            .await
+            .unwrap();
+
+        let stored = board.comments.get("comment-anchored").unwrap();
+        assert_eq!(stored.node_id.as_deref(), Some("node-xyz"));
+        assert!(stored.hash.is_some());
     }
 }

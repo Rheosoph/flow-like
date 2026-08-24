@@ -1,0 +1,12 @@
+use log::{ info, warn }
+use string as text
+
+eventsGeneric catalogIncident(payload: Struct, report: string) {
+    const normalized = text::trim({ string: report })
+    const { before: system, after: detail, found } = normalized.splitOnce({ separator: ":", fromEnd: false })
+    if (found) {
+        info({ message: detail, toast: false })
+    } else {
+        warn({ message: normalized, toast: false })
+    }
+}

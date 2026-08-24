@@ -168,6 +168,16 @@ const catalog: INode[] = [
 		[{ name: "value", type: IVariableType.String }],
 		{ namespace: "acme.lookup", alias: "find", receiver: "" },
 	),
+	// A node with several execution outputs, the shape behind `bind { arm: { … } }` blocks.
+	node(
+		"stream_call",
+		[{ name: "prompt", type: IVariableType.String }],
+		[
+			{ name: "exec_success", type: IVariableType.Execution },
+			{ name: "exec_error", type: IVariableType.Execution },
+			{ name: "response", type: IVariableType.String },
+		],
+	),
 ];
 
 const diagnosticMonaco = {
@@ -180,6 +190,7 @@ interface TestPosition {
 }
 
 interface TestModel {
+	uri: unknown;
 	getValue: () => string;
 	getOffsetAt: (position: TestPosition) => number;
 	getWordUntilPosition: (position: TestPosition) => {
@@ -194,7 +205,81 @@ interface TestCompletionItem {
 	insertText?: string;
 	filterText?: string;
 	detail?: string;
+	sortText?: string;
+	additionalTextEdits?: TestTextEdit[];
 	documentation?: { value: string };
+}
+
+interface TestRange {
+	startLineNumber: number;
+	startColumn: number;
+	endLineNumber: number;
+	endColumn: number;
+}
+
+interface TestTextEdit {
+	range: TestRange;
+	text: string;
+}
+
+interface TestMarker extends TestRange {
+	message: string;
+}
+
+interface TestWorkspaceEdit {
+	edits: { resource: unknown; textEdit: TestTextEdit; versionId?: number }[];
+}
+
+interface TestCodeAction {
+	title: string;
+	kind: string;
+	edit: TestWorkspaceEdit;
+}
+
+interface TestSymbol {
+	name: string;
+	detail: string;
+	kind: unknown;
+	range: TestRange;
+	selectionRange: TestRange;
+	children: TestSymbol[];
+}
+
+type CodeActionCallback = (
+	model: TestModel,
+	range: TestRange,
+) => { actions: TestCodeAction[] };
+type SymbolsCallback = (model: TestModel) => TestSymbol[];
+type FoldingCallback = (
+	model: TestModel,
+) => { start: number; end: number; kind?: unknown }[];
+type InlayCallback = (
+	model: TestModel,
+	range?: TestRange,
+) => { hints: { position: TestPosition; label: string; kind: unknown }[] };
+type DefinitionCallback = (
+	model: TestModel,
+	position: TestPosition,
+) => { uri: unknown; range: TestRange } | null;
+type ReferencesCallback = (
+	model: TestModel,
+	position: TestPosition,
+	context?: { includeDeclaration?: boolean },
+) => { uri: unknown; range: TestRange }[];
+interface TestSemanticProvider {
+	getLegend: () => { tokenTypes: string[]; tokenModifiers: string[] };
+	provideDocumentSemanticTokens: (model: TestModel) => { data: Uint32Array };
+}
+interface TestRenameProvider {
+	resolveRenameLocation: (
+		model: TestModel,
+		position: TestPosition,
+	) => { range: TestRange; text: string };
+	provideRenameEdits: (
+		model: TestModel,
+		position: TestPosition,
+		newName: string,
+	) => TestWorkspaceEdit;
 }
 
 type CompletionCallback = (
@@ -247,11 +332,23 @@ function offsetAt(text: string, position: TestPosition): number {
 }
 
 function registerTestProviders() {
-	let complete: CompletionCallback | undefined;
+	const completions: CompletionCallback[] = [];
 	let hover: HoverCallback | undefined;
 	let signature: SignatureCallback | undefined;
+	let codeAction: CodeActionCallback | undefined;
+	let symbols: SymbolsCallback | undefined;
+	let folding: FoldingCallback | undefined;
+	let inlay: InlayCallback | undefined;
+	let definition: DefinitionCallback | undefined;
+	let references: ReferencesCallback | undefined;
+	let semantic: TestSemanticProvider | undefined;
+	let rename: TestRenameProvider | undefined;
+	let markers: TestMarker[] = [];
 	const disposable = { dispose: () => undefined };
 	const monaco = {
+		editor: {
+			getModelMarkers: () => markers,
+		},
 		languages: {
 			CompletionItemKind: {
 				Property: 1,
@@ -265,13 +362,23 @@ function registerTestProviders() {
 				Constant: 9,
 				Method: 10,
 				Module: 11,
+				Snippet: 12,
 			},
 			CompletionItemInsertTextRule: { InsertAsSnippet: 1 },
+			SymbolKind: {
+				Namespace: "namespace",
+				Interface: "interface",
+				Function: "function",
+				Variable: "variable",
+				Event: "event",
+			},
+			FoldingRangeKind: { Imports: "imports" },
+			InlayHintKind: { Type: 1, Parameter: 2 },
 			registerCompletionItemProvider: (
 				_languageId: string,
 				provider: { provideCompletionItems: CompletionCallback },
 			) => {
-				complete = provider.provideCompletionItems;
+				completions.push(provider.provideCompletionItems);
 				return disposable;
 			},
 			registerHoverProvider: (
@@ -288,22 +395,85 @@ function registerTestProviders() {
 				signature = provider.provideSignatureHelp;
 				return disposable;
 			},
+			registerCodeActionProvider: (
+				_languageId: string,
+				provider: { provideCodeActions: CodeActionCallback },
+			) => {
+				codeAction = provider.provideCodeActions;
+				return disposable;
+			},
+			registerDocumentSymbolProvider: (
+				_languageId: string,
+				provider: { provideDocumentSymbols: SymbolsCallback },
+			) => {
+				symbols = provider.provideDocumentSymbols;
+				return disposable;
+			},
+			registerFoldingRangeProvider: (
+				_languageId: string,
+				provider: { provideFoldingRanges: FoldingCallback },
+			) => {
+				folding = provider.provideFoldingRanges;
+				return disposable;
+			},
+			registerInlayHintsProvider: (
+				_languageId: string,
+				provider: { provideInlayHints: InlayCallback },
+			) => {
+				inlay = provider.provideInlayHints;
+				return disposable;
+			},
+			registerDefinitionProvider: (
+				_languageId: string,
+				provider: { provideDefinition: DefinitionCallback },
+			) => {
+				definition = provider.provideDefinition;
+				return disposable;
+			},
+			registerReferenceProvider: (
+				_languageId: string,
+				provider: { provideReferences: ReferencesCallback },
+			) => {
+				references = provider.provideReferences;
+				return disposable;
+			},
+			registerDocumentSemanticTokensProvider: (
+				_languageId: string,
+				provider: TestSemanticProvider,
+			) => {
+				semantic = provider;
+				return disposable;
+			},
+			registerRenameProvider: (
+				_languageId: string,
+				provider: TestRenameProvider,
+			) => {
+				rename = provider;
+				return disposable;
+			},
 		},
 	} as unknown as Monaco;
 
 	const providers = registerFlowScriptProviders(monaco, () => catalog);
+	const required = <T>(value: T | undefined, name: string): T => {
+		if (!value) throw new Error(`${name} provider was not registered`);
+		return value;
+	};
 	return {
-		complete: () => {
-			if (!complete) throw new Error("Completion provider was not registered");
-			return complete;
-		},
-		hover: () => {
-			if (!hover) throw new Error("Hover provider was not registered");
-			return hover;
-		},
-		signature: () => {
-			if (!signature) throw new Error("Signature provider was not registered");
-			return signature;
+		complete: () => required(completions[0], "Completion"),
+		completeExtra: () => required(completions[1], "Snippet/auto-import"),
+		hover: () => required(hover, "Hover"),
+		signature: () => required(signature, "Signature"),
+		codeAction: () => required(codeAction, "Code action"),
+		symbols: () => required(symbols, "Document symbol"),
+		folding: () => required(folding, "Folding"),
+		inlay: () => required(inlay, "Inlay hint"),
+		definition: () => required(definition, "Definition"),
+		references: () => required(references, "Reference"),
+		semantic: () => required(semantic, "Semantic tokens"),
+		rename: () => required(rename, "Rename"),
+		setMarkers: (next: TestMarker[]) => {
+			markers = next;
 		},
 		dispose: providers.dispose,
 	};
@@ -311,6 +481,7 @@ function registerTestProviders() {
 
 function testModel(text: string, position: TestPosition): TestModel {
 	return {
+		uri: {},
 		getValue: () => text,
 		getOffsetAt: (at) => offsetAt(text, at),
 		getWordUntilPosition: () => ({
@@ -849,5 +1020,619 @@ function calculatePricing(): void {
 		);
 		expect(item).toBeDefined();
 		expect(item?.filterText).toContain("eventsGeneric");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Feature-provider helpers
+// ---------------------------------------------------------------------------
+
+function positionAt(text: string, offset: number): TestPosition {
+	const before = text.slice(0, offset);
+	const lines = before.split("\n");
+	return { lineNumber: lines.length, column: (lines.at(-1) ?? "").length + 1 };
+}
+
+/** Position of the first occurrence of `target`, offset by `skip` occurrences. */
+function positionOfWord(text: string, target: string, skip = 0): TestPosition {
+	let offset = -1;
+	for (let i = 0; i <= skip; i++) {
+		offset = text.indexOf(target, offset + 1);
+		if (offset < 0) throw new Error(`'${target}' not found in text`);
+	}
+	return positionAt(text, offset + 1);
+}
+
+function applyTestEdit(text: string, edit: TestTextEdit): string {
+	const start = offsetAt(text, {
+		lineNumber: edit.range.startLineNumber,
+		column: edit.range.startColumn,
+	});
+	const end = offsetAt(text, {
+		lineNumber: edit.range.endLineNumber,
+		column: edit.range.endColumn,
+	});
+	return text.slice(0, start) + edit.text + text.slice(end);
+}
+
+function singleEdit(action: TestCodeAction): TestTextEdit {
+	expect(action.edit.edits).toHaveLength(1);
+	return action.edit.edits[0].textEdit;
+}
+
+function codeActionsFor(
+	text: string,
+	target: string,
+	message: string,
+): TestCodeAction[] {
+	const providers = registerTestProviders();
+	const offset = text.indexOf(target);
+	if (offset < 0) throw new Error(`'${target}' not found in text`);
+	const start = positionAt(text, offset);
+	const end = positionAt(text, offset + target.length);
+	providers.setMarkers([
+		{
+			message,
+			startLineNumber: start.lineNumber,
+			startColumn: start.column,
+			endLineNumber: end.lineNumber,
+			endColumn: end.column,
+		},
+	]);
+	const result = providers.codeAction()(testModel(text, end), {
+		startLineNumber: 1,
+		startColumn: 1,
+		endLineNumber: text.split("\n").length,
+		endColumn: 10_000,
+	});
+	providers.dispose();
+	return result.actions;
+}
+
+function extraCompletionItems(text: string): TestCompletionItem[] {
+	const providers = registerTestProviders();
+	const position = editorPosition(text);
+	const result = providers.completeExtra()(testModel(text, position), position);
+	providers.dispose();
+	return result.suggestions;
+}
+
+function extraCompletionItem(
+	text: string,
+	label: string,
+): TestCompletionItem | undefined {
+	return extraCompletionItems(text).find((item) => labelOf(item) === label);
+}
+
+function documentSymbols(text: string): TestSymbol[] {
+	const providers = registerTestProviders();
+	const result = providers.symbols()(testModel(text, editorPosition(text)));
+	providers.dispose();
+	return result;
+}
+
+function decodeSemanticTokens(
+	text: string,
+): { word: string; type: string; line: number; declaration: boolean }[] {
+	const providers = registerTestProviders();
+	const provider = providers.semantic();
+	const legend = provider.getLegend();
+	const result = provider.provideDocumentSemanticTokens(
+		testModel(text, { lineNumber: 1, column: 1 }),
+	);
+	providers.dispose();
+	const lines = text.split("\n");
+	const tokens: {
+		word: string;
+		type: string;
+		line: number;
+		declaration: boolean;
+	}[] = [];
+	let line = 0;
+	let char = 0;
+	for (let i = 0; i < result.data.length; i += 5) {
+		line += result.data[i];
+		char =
+			result.data[i] === 0 ? char + result.data[i + 1] : result.data[i + 1];
+		tokens.push({
+			word: (lines[line] ?? "").slice(char, char + result.data[i + 2]),
+			type: legend.tokenTypes[result.data[i + 3]],
+			line: line + 1,
+			declaration: (result.data[i + 4] & 1) === 1,
+		});
+	}
+	return tokens;
+}
+
+describe("FlowScript quick fixes", () => {
+	test("offers did-you-mean replacements from backtick candidates", () => {
+		const actions = codeActionsFor(
+			'trm({ string: "x" })',
+			"trm",
+			"Unknown function 'trm'. It is not a catalog node or a declared function. Did you mean `string::trim(…)`?",
+		);
+		const replace = actions.find(
+			(action) => action.title === "Replace with 'string::trim'",
+		);
+		expect(replace).toBeDefined();
+		const edit = singleEdit(replace as TestCodeAction);
+		expect(edit.text).toBe("string::trim");
+		expect(applyTestEdit('trm({ string: "x" })', edit)).toBe(
+			'string::trim({ string: "x" })',
+		);
+	});
+
+	test("offers one rewrite per ambiguity candidate", () => {
+		const text = "length({ string: s })";
+		const actions = codeActionsFor(
+			text,
+			"length",
+			"'length' is ambiguous: `string::length`, `array::length`. Write the qualified name.",
+		);
+		expect(actions.map((action) => action.title)).toEqual([
+			"Replace with 'string::length'",
+			"Replace with 'array::length'",
+		]);
+		expect(applyTestEdit(text, singleEdit(actions[0]))).toBe(
+			"string::length({ string: s })",
+		);
+	});
+
+	test("inserts the use line a backend diagnostic names", () => {
+		const text = 'trim({ string: "x" })';
+		const actions = codeActionsFor(
+			text,
+			"trim",
+			"FlowScript call `trim` does not match a catalog declaration; did you mean `string::trim` (or add `use string::*` to call it bare)?",
+		);
+		const addUse = actions.find(
+			(action) => action.title === "Add 'use string::*'",
+		);
+		expect(addUse).toBeDefined();
+		expect(applyTestEdit(text, singleEdit(addUse as TestCodeAction))).toBe(
+			'use string::*\n\ntrim({ string: "x" })',
+		);
+		expect(
+			actions.some((action) => action.title === "Replace with 'string::trim'"),
+		).toBe(true);
+	});
+
+	test("stubs missing required inputs with typed placeholders", () => {
+		const text = "logInfo({})";
+		const actions = codeActionsFor(
+			text,
+			"logInfo",
+			"node `logInfo` is missing required inputs: message",
+		);
+		const fix = actions.find(
+			(action) => action.title === "Add missing input: message",
+		);
+		expect(fix).toBeDefined();
+		expect(applyTestEdit(text, singleEdit(fix as TestCodeAction))).toBe(
+			'logInfo({ message: "" })',
+		);
+	});
+
+	test("removes an argument that duplicates the bound receiver", () => {
+		const text = 'const s = "x"\nconst t = s.trim({ string: s })';
+		const actions = codeActionsFor(
+			text,
+			"string: s",
+			"Argument 'string' is already bound by the receiver of '.trim()'.",
+		);
+		const fix = actions.find(
+			(action) => action.title === "Remove duplicate argument 'string'",
+		);
+		expect(fix).toBeDefined();
+		expect(applyTestEdit(text, singleEdit(fix as TestCodeAction))).toBe(
+			'const s = "x"\nconst t = s.trim({  })',
+		);
+	});
+
+	test("never rewrites a method member into a qualified path", () => {
+		const actions = codeActionsFor(
+			'const s = "x"\nconst n = s.abs()',
+			"abs",
+			"Unknown method 'abs' on string. Did you mean `int::abs(…)`?",
+		);
+		expect(
+			actions.some((action) => action.title.startsWith("Replace with")),
+		).toBe(false);
+	});
+});
+
+describe("FlowScript auto-import completions", () => {
+	test("offers members of unopened namespaces with a use-line edit", () => {
+		const text = "eventsSimple onLoad() {\n\t";
+		const item = extraCompletionItem(text, "trim");
+		expect(item).toBeDefined();
+		expect(item?.detail).toContain("use string::*");
+		expect(item?.insertText).toBe("trim({ string: ${1:string} })");
+		expect(item?.sortText?.startsWith("8_")).toBe(true);
+		const edits = item?.additionalTextEdits;
+		expect(edits).toHaveLength(1);
+		expect(applyTestEdit(text, (edits as TestTextEdit[])[0])).toBe(
+			"use string::*\n\neventsSimple onLoad() {\n\t",
+		);
+	});
+
+	test("keeps the use block alphabetical and extends member lists", () => {
+		const sorted = "use array::*\nuse int::*\n\neventsSimple onLoad() {\n\t";
+		const item = extraCompletionItem(sorted, "trim");
+		expect(
+			applyTestEdit(sorted, (item?.additionalTextEdits as TestTextEdit[])[0]),
+		).toBe(
+			"use array::*\nuse int::*\nuse string::*\n\neventsSimple onLoad() {\n\t",
+		);
+
+		const members = "use string::{ contains }\n\neventsSimple onLoad() {\n\t";
+		const trim = extraCompletionItem(members, "trim");
+		expect(
+			applyTestEdit(members, (trim?.additionalTextEdits as TestTextEdit[])[0]),
+		).toBe("use string::{ contains, trim }\n\neventsSimple onLoad() {\n\t");
+	});
+
+	test("does not re-offer members that are already callable bare", () => {
+		const text = "use string::*\n\neventsSimple onLoad() {\n\t";
+		expect(extraCompletionItem(text, "trim")).toBeUndefined();
+		expect(extraCompletionItem(text, "md5")).toBeDefined();
+	});
+});
+
+describe("FlowScript document symbols", () => {
+	test("outlines uses, interfaces, categorised variables, functions and handlers", () => {
+		const text = `use string::*
+use int::*
+
+interface Report {
+	title: string;
+}
+
+@category("Report")
+const reportID = ""
+const other = 1
+
+function shout(s: string) {
+	logInfo({ message: s })
+}
+
+eventsGeneric onLoad(payload: Struct) {
+	eventsGeneric nested(payload: Struct) {
+	}
+}`;
+		const symbols = documentSymbols(text);
+		const names = symbols.map((symbol) => symbol.name);
+		expect(names).toContain("use");
+		expect(names).toContain("Report");
+		expect(names).toContain("other");
+		expect(names).toContain("shout");
+		expect(names).toContain("onLoad");
+		expect(names).not.toContain("reportID");
+
+		const use = symbols.find((symbol) => symbol.name === "use");
+		expect(use?.detail).toBe("2 namespaces");
+		expect(use?.range.startLineNumber).toBe(1);
+		expect(use?.range.endLineNumber).toBe(2);
+
+		const iface = symbols.find(
+			(symbol) => symbol.name === "Report" && symbol.kind === "interface",
+		);
+		expect(iface).toBeDefined();
+
+		const category = symbols.find(
+			(symbol) => symbol.name === "Report" && symbol.kind === "namespace",
+		);
+		expect(category?.children.map((child) => child.name)).toEqual(["reportID"]);
+
+		const shout = symbols.find((symbol) => symbol.name === "shout");
+		expect(shout?.kind).toBe("function");
+		expect(shout?.detail).toBe("(s: string)");
+
+		const onLoad = symbols.find((symbol) => symbol.name === "onLoad");
+		expect(onLoad?.kind).toBe("event");
+		expect(onLoad?.detail).toBe("eventsGeneric (payload: Struct)");
+		expect(onLoad?.children.map((child) => child.name)).toEqual(["nested"]);
+		expect(onLoad?.selectionRange.startLineNumber).toBe(16);
+		expect(onLoad?.range.endLineNumber).toBe(19);
+	});
+});
+
+describe("FlowScript folding", () => {
+	test("folds the use block as imports and multi-line templates", () => {
+		const text =
+			"use string::*\nuse int::*\n\neventsSimple onLoad() {\n\tconst t = `a\nb\nc`\n}";
+		const providers = registerTestProviders();
+		const ranges = providers.folding()(testModel(text, editorPosition(text)));
+		providers.dispose();
+		expect(ranges).toContainEqual({ start: 1, end: 2, kind: "imports" });
+		// Template literal opens on line 5 and closes on line 7; the closing line stays visible.
+		expect(ranges.some((range) => range.start === 5 && range.end === 6)).toBe(
+			true,
+		);
+		// The event body block still folds (the provider replaces indentation folding).
+		expect(ranges.some((range) => range.start === 4 && range.end === 7)).toBe(
+			true,
+		);
+	});
+});
+
+describe("FlowScript statement snippets", () => {
+	test("scaffolds execution arms with the node's real exec output names", () => {
+		const text =
+			'eventsSimple onLoad() {\n\tconst r = streamCall({ prompt: "x" })\n\t';
+		const item = extraCompletionItems(text).find((candidate) =>
+			labelOf(candidate).startsWith("r {"),
+		);
+		expect(item).toBeDefined();
+		expect(item?.insertText).toBe(
+			"r {\n\texecSuccess: {\n\t\t$1\n\t}\n\texecError: {\n\t\t$2\n\t}\n}",
+		);
+		expect(labelOf(item as TestCompletionItem)).toBe(
+			"r { execSuccess · execError }",
+		);
+	});
+
+	test("offers for/function/event scaffolds only at statement position", () => {
+		const statement = extraCompletionItems("eventsSimple onLoad() {\n\t");
+		const labels = statement.map(labelOf);
+		expect(labels).toContain("for … of");
+		expect(labels).toContain("function …");
+		expect(labels).toContain("@cache");
+		const scaffold = statement.find(
+			(item) => labelOf(item) === "eventsGeneric …",
+		);
+		expect(scaffold?.insertText).toBe(
+			"eventsGeneric ${1:onEvent}() {\n\t$0\n}",
+		);
+
+		const expression = extraCompletionItems("const x = ");
+		expect(expression.map(labelOf)).not.toContain("for … of");
+	});
+
+	test("stays quiet in key, enum and use-line positions", () => {
+		expect(extraCompletionItems('const s = "a"\ns.contains({ ')).toEqual([]);
+		expect(extraCompletionItems('acme::lookup::find("k", ')).toEqual([]);
+		expect(extraCompletionItems("use str")).toEqual([]);
+	});
+});
+
+describe("FlowScript inlay hints", () => {
+	function hintsFor(text: string): { label: string; position: TestPosition }[] {
+		const providers = registerTestProviders();
+		const result = providers.inlay()(testModel(text, editorPosition(text)), {
+			startLineNumber: 1,
+			startColumn: 1,
+			endLineNumber: text.split("\n").length,
+			endColumn: 10_000,
+		});
+		providers.dispose();
+		return result.hints.map((hint) => ({
+			label: hint.label,
+			position: hint.position,
+		}));
+	}
+
+	test("names positional arguments and infers const binding types", () => {
+		const text =
+			'eventsSimple onLoad() {\n\tconst s = "  x "\n\tconst t = s.trim()\n\ts.contains("?")\n}';
+		const hints = hintsFor(text);
+		const labels = hints.map((hint) => hint.label);
+		expect(labels).toContain("substring:");
+		expect(labels).toContain(": string");
+		const typeHint = hints.find((hint) => hint.label === ": string");
+		expect(typeHint?.position).toEqual({ lineNumber: 3, column: 9 });
+		// Literal initializers stay unannotated.
+		expect(
+			hints.some(
+				(hint) => hint.label === ": string" && hint.position.lineNumber === 2,
+			),
+		).toBe(false);
+	});
+
+	test("marks impure calls buried in expression position", () => {
+		const text =
+			'eventsSimple onLoad() {\n\tconst s = "u"\n\tconst t = s.contains(http::fetch({ url: s }).response.body)\n}';
+		const labels = hintsFor(text).map((hint) => hint.label);
+		expect(labels).toContain("impure");
+
+		const statementLevel =
+			'eventsSimple onLoad() {\n\tconst r = http::fetch({ url: "u" })\n}';
+		expect(hintsFor(statementLevel).map((hint) => hint.label)).not.toContain(
+			"impure",
+		);
+	});
+});
+
+describe("FlowScript definition and references", () => {
+	const text = `eventsSimple onLoad() {
+	const item = "a"
+	logInfo({ message: item })
+	for (const item of rows) {
+		logInfo({ message: item })
+	}
+	logInfo({ message: item })
+}`;
+
+	test("resolves shadowed bindings to the correct declaration", () => {
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		const outer = providers.definition()(
+			model,
+			positionOfWord(text, "item", 4),
+		);
+		expect(outer?.range.startLineNumber).toBe(2);
+		const inner = providers.definition()(
+			model,
+			positionOfWord(text, "item", 3),
+		);
+		expect(inner?.range.startLineNumber).toBe(4);
+		providers.dispose();
+	});
+
+	test("collects references without crossing shadow boundaries", () => {
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		const refs = providers.references()(
+			model,
+			positionOfWord(text, "item", 0),
+			{
+				includeDeclaration: true,
+			},
+		);
+		expect(refs.map((ref) => ref.range.startLineNumber)).toEqual([2, 3, 7]);
+		const loopRefs = providers.references()(
+			model,
+			positionOfWord(text, "item", 2),
+			{ includeDeclaration: true },
+		);
+		expect(loopRefs.map((ref) => ref.range.startLineNumber)).toEqual([4, 5]);
+		providers.dispose();
+	});
+
+	test("resolves use-alias names to their introducing use line", () => {
+		const source = 'use acme::lookup as lk\nconst v = lk::find("k", "fast")';
+		const providers = registerTestProviders();
+		const model = testModel(source, { lineNumber: 1, column: 1 });
+		const definition = providers.definition()(
+			model,
+			positionOfWord(source, "lk", 1),
+		);
+		expect(definition?.range.startLineNumber).toBe(1);
+		expect(definition?.range.startColumn).toBe(21);
+		const refs = providers.references()(
+			model,
+			positionOfWord(source, "lk", 1),
+			{ includeDeclaration: true },
+		);
+		expect(refs).toHaveLength(2);
+		providers.dispose();
+	});
+
+	test("definition on a catalog call returns nothing", () => {
+		const providers = registerTestProviders();
+		const source = 'const s = "x"\nconst t = s.trim()';
+		const model = testModel(source, { lineNumber: 1, column: 1 });
+		expect(
+			providers.definition()(model, positionOfWord(source, "trim")),
+		).toBeNull();
+		providers.dispose();
+	});
+});
+
+describe("FlowScript semantic tokens", () => {
+	test("classifies namespaces, methods, functions, variables and locals", () => {
+		const text = `use string::*
+const label = ""
+function myFn(p: string) {
+	const local = string::trim({ string: p })
+	myFn(local)
+	label = local
+}`;
+		const tokens = decodeSemanticTokens(text);
+		const at = (word: string, line: number) =>
+			tokens.find((token) => token.word === word && token.line === line);
+
+		expect(at("string", 1)?.type).toBe("namespace");
+		expect(at("label", 2)).toMatchObject({
+			type: "variable",
+			declaration: true,
+		});
+		expect(at("myFn", 3)).toMatchObject({
+			type: "function",
+			declaration: true,
+		});
+		expect(at("p", 3)?.type).toBe("parameter");
+		expect(at("local", 4)).toMatchObject({ type: "local", declaration: true });
+		expect(at("string", 4)?.type).toBe("namespace");
+		expect(at("trim", 4)?.type).toBe("method");
+		expect(at("p", 4)?.type).toBe("parameter");
+		expect(at("myFn", 5)).toMatchObject({
+			type: "function",
+			declaration: false,
+		});
+		expect(at("label", 6)?.type).toBe("variable");
+		expect(at("local", 6)?.type).toBe("local");
+	});
+});
+
+describe("FlowScript rename", () => {
+	test("renames a binding across its occurrences", () => {
+		const text =
+			"eventsSimple onLoad() {\n\tconst count = 1\n\tlogInfo({ message: count })\n}";
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		const location = providers
+			.rename()
+			.resolveRenameLocation(model, positionOfWord(text, "count"));
+		expect(location.text).toBe("count");
+		const edit = providers
+			.rename()
+			.provideRenameEdits(model, positionOfWord(text, "count"), "total");
+		providers.dispose();
+		expect(edit.edits).toHaveLength(2);
+		let result = text;
+		for (const change of [...edit.edits].reverse()) {
+			result = applyTestEdit(result, change.textEdit);
+		}
+		expect(result).toBe(
+			"eventsSimple onLoad() {\n\tconst total = 1\n\tlogInfo({ message: total })\n}",
+		);
+	});
+
+	test("renames a board variable model-wide but never its anchor comment", () => {
+		const text =
+			'const reportID = ""   //@v:abc123\n\neventsSimple onLoad() {\n\tlogInfo({ message: reportID })\n}';
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		const edit = providers
+			.rename()
+			.provideRenameEdits(model, positionOfWord(text, "reportID"), "reportKey");
+		providers.dispose();
+		expect(edit.edits).toHaveLength(2);
+		let result = text;
+		for (const change of [...edit.edits].reverse()) {
+			result = applyTestEdit(result, change.textEdit);
+		}
+		expect(result).toContain('const reportKey = ""   //@v:abc123');
+		expect(result).toContain("message: reportKey");
+	});
+
+	test("refuses renames that an inner shadow would capture", () => {
+		const text = `eventsSimple onLoad() {
+	const value = "a"
+	for (const item of rows) {
+		logInfo({ message: value })
+	}
+}`;
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		expect(() =>
+			providers
+				.rename()
+				.provideRenameEdits(model, positionOfWord(text, "value"), "item"),
+		).toThrow(/captured|collides/);
+		providers.dispose();
+	});
+
+	test("refuses invalid names, keywords and catalog targets", () => {
+		const text = 'const s = "x"\nconst t = s.trim()';
+		const providers = registerTestProviders();
+		const model = testModel(text, { lineNumber: 1, column: 1 });
+		expect(() =>
+			providers
+				.rename()
+				.provideRenameEdits(model, positionOfWord(text, "t = s"), "1abc"),
+		).toThrow(/not a valid FlowScript identifier/);
+		expect(() =>
+			providers
+				.rename()
+				.provideRenameEdits(model, positionOfWord(text, "t = s"), "for"),
+		).toThrow(/reserved word/);
+		expect(() =>
+			providers
+				.rename()
+				.resolveRenameLocation(model, positionOfWord(text, "trim")),
+		).toThrow(/catalog/);
+		providers.dispose();
 	});
 });

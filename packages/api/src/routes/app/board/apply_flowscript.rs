@@ -36,6 +36,11 @@ pub struct ApplyFlowScriptBody {
     /// endpoint, and the captured-failure view is only readable if the two can be told apart.
     #[serde(default)]
     pub origin: Option<String>,
+    /// Anchors of the sections a selection-scoped render covered (from `GET .../flowscript` with
+    /// `node_ids`). When set, board events/functions outside these anchors are invisible to the
+    /// reconcile diff — omitted from the document without being treated as deletions.
+    #[serde(default)]
+    pub scope_anchors: Option<Vec<String>>,
 }
 
 #[utoipa::path(
@@ -123,13 +128,14 @@ pub async fn apply_flowscript(
         );
     };
 
-    let result = flow_like::flow::ast::apply_flowscript_to_board(
+    let result = flow_like::flow::ast::apply_flowscript_to_board_scoped(
         &mut board,
         &params.flowscript,
         &catalog_nodes,
         flow_state,
         params.current_layer.clone(),
         params.allow_deletions,
+        params.scope_anchors.as_deref(),
     )
     .await;
 

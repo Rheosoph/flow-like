@@ -103,6 +103,33 @@ pub async fn apply_flowscript_to_board(
     current_layer: Option<String>,
     allow_deletions: bool,
 ) -> flow_like_types::Result<ApplyFlowScriptResult> {
+    apply_flowscript_to_board_scoped(
+        board,
+        flowscript,
+        catalog_nodes,
+        state,
+        current_layer,
+        allow_deletions,
+        None,
+    )
+    .await
+}
+
+/// Like [`apply_flowscript_to_board`] with an editing scope: when `scope_anchors` is `Some`, the
+/// document is a selection-scoped render (see `board_to_flowscript_scoped`) and board
+/// events/functions whose anchor is not listed are invisible to the deletion diff — an omitted
+/// out-of-scope section is never treated as a removal. In-scope deletions still work and stay
+/// behind the `allow_deletions` gate.
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_flowscript_to_board_scoped(
+    board: &mut Board,
+    flowscript: &str,
+    catalog_nodes: &[Node],
+    state: Arc<FlowLikeState>,
+    current_layer: Option<String>,
+    allow_deletions: bool,
+    scope_anchors: Option<&[String]>,
+) -> flow_like_types::Result<ApplyFlowScriptResult> {
     let catalog_metadata = catalog_nodes
         .iter()
         .map(node_to_metadata)
@@ -184,13 +211,19 @@ pub async fn apply_flowscript_to_board(
     };
 
     let mut reconcile = match &enricher {
-        Some(enricher) => super::reconcile_text_with_catalog_enriched(
+        Some(enricher) => super::reconcile_text_with_catalog_enriched_scoped(
             board,
             flowscript,
             &catalog_metadata,
             enricher,
+            scope_anchors,
         ),
-        None => super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata),
+        None => super::reconcile_text_with_catalog_scoped(
+            board,
+            flowscript,
+            &catalog_metadata,
+            scope_anchors,
+        ),
     };
 
     let corrections = std::mem::take(&mut reconcile.corrections);
@@ -911,6 +944,7 @@ impl FlowScriptApplyPlanner {
                         z_index: None,
                         hash: None,
                         is_locked: None,
+                        node_id: None,
                     };
                     let mut command = UpsertCommentCommand::new(comment);
                     command.current_layer =

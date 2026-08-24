@@ -19,6 +19,7 @@ import {
 	CloudCog,
 	DatabaseIcon,
 	MonitorIcon,
+	PencilLineIcon,
 	PlayCircleIcon,
 	ScrollTextIcon,
 	SquareCheckIcon,
@@ -44,7 +45,7 @@ import {
 	useRunActivity,
 } from "../../hooks/use-run-activity";
 import {
-	IExecutionMode,
+	type IExecutionMode,
 	type IGenericCommand,
 	ILogLevel,
 	IPinType,
@@ -84,6 +85,7 @@ import { DynamicImage } from "../ui";
 import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
+import { deriveRunCapabilities } from "./flow-run-capabilities";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
 import {
 	FlowNodeEditMenu,
@@ -95,6 +97,7 @@ import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
+import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
@@ -134,6 +137,8 @@ export type FlowNode = Node<
 		isOffline?: boolean;
 		onCopy: () => Promise<void>;
 		remoteSelections?: RemoteSelectionParticipant[];
+		/** Peers whose FlowScript editor cursor/claims sit on this node. */
+		remoteEditors?: RemoteEditorParticipant[];
 		peerUsers?: Map<string, PeerUserInfo>;
 		onOpenInfo?: (node: INode) => void;
 		onExplain?: (nodeIds: string[]) => void;
@@ -787,17 +792,14 @@ const FlowNodeInner = memo(
 		const playNode = useMemo(() => {
 			if (!props.data.node.start) return null;
 
-			const executionMode = props.data.executionMode ?? IExecutionMode.Hybrid;
-			const canRemoteExecuteBase =
-				!props.data.isOffline && props.data.onRemoteExecute !== undefined;
-
-			// Apply execution mode restrictions
-			// only_offline nodes can never run remotely
-			const canLocalExecute = executionMode !== IExecutionMode.Remote;
-			const canRemoteExecute =
-				canRemoteExecuteBase &&
-				executionMode !== IExecutionMode.Local &&
-				!props.data.node.only_offline;
+			// Execution mode restrictions; only_offline nodes can never run remotely.
+			// Shared with the FlowScript run lenses — see flow-run-capabilities.ts.
+			const { canLocalExecute, canRemoteExecute } = deriveRunCapabilities({
+				executionMode: props.data.executionMode,
+				isOffline: props.data.isOffline,
+				hasRemoteExecute: props.data.onRemoteExecute !== undefined,
+				onlyOffline: props.data.node.only_offline,
+			});
 
 			if (executionStatus === "done" || executing)
 				return (
@@ -992,6 +994,39 @@ const FlowNodeInner = memo(
 				)}
 				{props.data.remoteExecuting && (
 					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
+				)}
+				{(props.data.remoteEditors?.length ?? 0) > 0 && (
+					<div className="pointer-events-none absolute -bottom-5 left-0 z-10 flex items-center gap-0.5">
+						{props.data.remoteEditors?.slice(0, 2).map((editor) => {
+							const color = colorFromSub(editor.sub);
+							const name =
+								(editor.sub
+									? props.data.peerUsers?.get(editor.sub)?.truncatedName
+									: undefined) ?? "User";
+							return (
+								<div
+									key={`${editor.clientId}-${editor.sub ?? "unknown"}`}
+									className={`flex items-center gap-1 rounded-full border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] leading-none shadow-md backdrop-blur-sm ${editor.active ? "border-2" : ""}`}
+									style={{ borderColor: color }}
+									title={i18next.t("flow:flowscriptBeingEditedBy", {
+										defaultValue: "Being edited by {{name}}",
+										name,
+									})}
+								>
+									<PencilLineIcon className="h-2.5 w-2.5" style={{ color }} />
+									<span
+										className="font-semibold max-w-14 truncate"
+										style={{ color }}
+									>
+										{name}
+									</span>
+								</div>
+							);
+						})}
+						{(props.data.remoteEditors?.length ?? 0) > 2 && (
+							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${(props.data.remoteEditors?.length ?? 0) - 2}`}</div>
+						)}
+					</div>
 				)}
 				{playNode}
 				{props.data.node.long_running && (
@@ -1189,6 +1224,7 @@ const FlowNodeInner = memo(
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
 		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
+		prev.props.data.remoteEditors === next.props.data.remoteEditors &&
 		prev.props.data.peerUsers === next.props.data.peerUsers &&
 		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
@@ -1683,6 +1719,7 @@ function flowNodeAreEqual(
 		sameFunctionCache(prev.data.functionCache, next.data.functionCache) &&
 		prev.data.isUnavailable === next.data.isUnavailable &&
 		prev.data.remoteSelections === next.data.remoteSelections &&
+		prev.data.remoteEditors === next.data.remoteEditors &&
 		prev.data.peerUsers === next.data.peerUsers &&
 		prev.data.remoteExecuting === next.data.remoteExecuting &&
 		prev.data.currentLayerId === next.data.currentLayerId &&

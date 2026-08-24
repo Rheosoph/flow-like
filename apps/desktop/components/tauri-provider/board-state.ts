@@ -36,6 +36,7 @@ import {
 	type IPrerunBoardResponse,
 	type IRunContext,
 	type IRunPayload,
+	type IScopedFlowScriptResponse,
 	type ISettingsProfile,
 	type IVersionType,
 	type ProgressToastData,
@@ -3099,6 +3100,7 @@ export class BoardState implements IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions = false,
 		origin: FlowScriptApplyOrigin = "editor",
+		scopeAnchors?: string[],
 	): Promise<IApplyFlowScriptResponse> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
@@ -3114,6 +3116,7 @@ export class BoardState implements IBoardState {
 					currentLayer,
 					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
 					allowDeletions,
+					scopeAnchors,
 				});
 			} catch (error) {
 				void this.reportFlowScriptApplyFailure({
@@ -3267,6 +3270,55 @@ export class BoardState implements IBoardState {
 		}
 	}
 
+	async getFlowScriptScoped(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_scoped", {
+				appId,
+				boardId,
+				nodeIds,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("node_ids", nodeIds.join(","));
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
+	async formatFlowScript(
+		_appId: string,
+		_boardId: string,
+		flowscript: string,
+		anchors = true,
+	): Promise<string> {
+		return await invoke<string>("format_flowscript", {
+			flowscript,
+			anchors,
+		});
+	}
+
 	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
 		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
 			flowscript,
@@ -3277,10 +3329,11 @@ export class BoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		flowscript: string,
+		scopeAnchors?: string[],
 	): Promise<ICheckFlowScriptReconcileResponse> {
 		return await invoke<ICheckFlowScriptReconcileResponse>(
 			"check_flowscript_reconcile",
-			{ appId, boardId, flowscript },
+			{ appId, boardId, flowscript, scopeAnchors },
 		);
 	}
 

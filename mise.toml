@@ -108,6 +108,10 @@ run = "bun run --cwd ./apps/website dev"
 description = "Start docs dev server"
 run = "bun run --cwd ./apps/docs dev"
 
+[tasks."dev:book"]
+description = "Start FlowBook dev server"
+run = "bun run --cwd ./apps/book dev"
+
 # ── Build ────────────────────────────────────
 
 [tasks."build:desktop"]
@@ -153,6 +157,10 @@ run = "bun run --cwd ./apps/website build"
 description = "Build documentation site"
 run = "bun run --cwd ./apps/docs build"
 
+[tasks."build:book"]
+description = "Build FlowBook"
+run = "bun run --cwd ./apps/book build"
+
 [tasks."build:embedded"]
 description = "Build embedded app"
 run = "bun run --cwd ./apps/embedded build"
@@ -190,6 +198,14 @@ run = "bun run --cwd ./apps/docs deploy"
 [tasks."deploy:docs:force"]
 description = "Deploy docs (force)"
 run = "bun run --cwd ./apps/docs deploy:force"
+
+[tasks."deploy:book"]
+description = "Deploy FlowBook"
+run = "bun run --cwd ./apps/book deploy"
+
+[tasks."deploy:book:force"]
+description = "Deploy FlowBook (force)"
+run = "bun run --cwd ./apps/book deploy:force"
 
 [tasks."deploy:embedded"]
 description = "Deploy embedded app"

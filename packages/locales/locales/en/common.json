@@ -2682,6 +2682,7 @@
 	"youCanReviewPublicAndDraftCoursesCreatingOrEditingCoursesRequiresWritecoursesOrAdmin": "You can review public and draft courses. Creating or editing courses requires WriteCourses or Admin.",
 	"youHaveAPreviouslyCreatedTokenStoredYouCanUseItOrCreateANewOne": "You have a previously created token stored. You can use it or create a new one.",
 	"youHaveSuccessfullyCompletedTheOnboardingProcess": "You have successfully completed the onboarding process.",
+	"youNeedTheAdminPermissionToViewCapturedFlowscriptApplies": "You need the <1>Admin</1> permission to view captured FlowScript applies.",
 	"youNeedTheAdminPermissionToViewPromptFeedback": "You need the <1>Admin</1> permission to view prompt feedback.",
 	"youNeedTheBadminbPermissionToManageTelemetryAlerts": "You need the <1>Admin</1> permission to manage telemetry alerts.",
 	"youNeedTheBadminbPermissionToManageTelemetryDashboards": "You need the <1>Admin</1> permission to manage telemetry dashboards.",

@@ -48,6 +48,8 @@ export interface FlowScriptApplyOptions {
 	suppressBlockedToast?: boolean;
 	/** Who authored the source. Defaults to the editor; FlowPilot's own applies pass "agent". */
 	origin?: FlowScriptApplyOrigin;
+	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
+	scopeAnchors?: string[];
 }
 
 export interface FlowCopilotProps {

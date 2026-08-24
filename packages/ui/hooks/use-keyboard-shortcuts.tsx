@@ -26,6 +26,12 @@ interface UseKeyboardShortcutsProps {
 	rollbackUndo: (commands: IGenericCommand[]) => Promise<void>;
 	rollbackRedo: (commands: IGenericCommand[]) => Promise<void>;
 	stampHistory: (stamp?: string) => Promise<void>;
+	/**
+	 * Advisory hook fired with the batch about to be undone/redone BEFORE it
+	 * executes — the board surfaces a toast when the batch touches statements
+	 * a peer is editing (FlowScript claims). Never blocks the operation.
+	 */
+	onHistoryBatch?: (commands: IGenericCommand[]) => void;
 }
 
 export function useKeyboardShortcuts({
@@ -42,6 +48,7 @@ export function useKeyboardShortcuts({
 	rollbackUndo,
 	rollbackRedo,
 	stampHistory,
+	onHistoryBatch,
 }: UseKeyboardShortcutsProps) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -110,6 +117,7 @@ export function useKeyboardShortcuts({
 				}
 				const stack = await undo(boardFingerprint(board.data));
 				if (stack) {
+					onHistoryBatch?.(stack);
 					try {
 						await backend.boardState.undoBoard(appId, boardId, stack);
 						const refreshed = await invalidateBoard();
@@ -139,6 +147,7 @@ export function useKeyboardShortcuts({
 				}
 				const stack = await redo(boardFingerprint(board.data));
 				if (stack) {
+					onHistoryBatch?.(stack);
 					try {
 						await backend.boardState.redoBoard(appId, boardId, stack);
 						const refreshed = await invalidateBoard();
@@ -248,6 +257,7 @@ export function useKeyboardShortcuts({
 			appId,
 			invalidateBoard,
 			onDeleteSelection,
+			onHistoryBatch,
 		],
 	);
 

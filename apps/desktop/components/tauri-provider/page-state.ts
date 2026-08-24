@@ -142,8 +142,12 @@ export class PageState implements IPageState {
 		const page = remotePage.boardId
 			? remotePage
 			: { ...remotePage, boardId: boardId };
-		await invoke("update_page", { appId, page }).catch(() => {});
-		return page;
+		// `update_page` returns the page as stored — it rewrites workflow targets that name
+		// another app — so the caller renders what is on disk rather than what arrived.
+		const stored = await invoke<IPage>("update_page", { appId, page }).catch(
+			() => undefined,
+		);
+		return stored ?? page;
 	}
 
 	private async pushPageToServer(appId: string, page: IPage): Promise<void> {
@@ -263,8 +267,11 @@ export class PageState implements IPageState {
 			...remotePage,
 			boardId: remotePage.boardId || localPage.boardId,
 		};
-		await invoke("update_page", { appId, page: merged }).catch(() => {});
-		return merged;
+		const stored = await invoke<IPage>("update_page", {
+			appId,
+			page: merged,
+		}).catch(() => undefined);
+		return stored ?? merged;
 	}
 
 	async getPages(appId: string, boardId?: string): Promise<PageListItem[]> {
@@ -495,10 +502,15 @@ export class PageState implements IPageState {
 
 	async updatePage(appId: string, page: IPage): Promise<void> {
 		const normalizedPage = normalizePageForPersistence(page);
-		await invoke("update_page", { appId, page: normalizedPage });
+		// The server is sent what was actually stored locally, so a page whose workflow targets
+		// were rewritten does not re-send the foreign ids on every save.
+		const stored = await invoke<IPage>("update_page", {
+			appId,
+			page: normalizedPage,
+		});
 
 		try {
-			await this.pushPageToServer(appId, normalizedPage);
+			await this.pushPageToServer(appId, stored ?? normalizedPage);
 		} catch (error) {
 			console.error("Failed to sync page update to server:", error);
 			throw error;

@@ -227,7 +227,9 @@ pub async fn upsert_board(
             .create_board(Some(board_data.id.clone()), template)
             .await?;
         app.save().await?;
-        let board = app.open_board(new_board, Some(false), None).await?;
+        let board = app
+            .open_board(new_board.board_id, Some(false), None)
+            .await?;
         drop(app);
         let mut board = board.lock().await;
         board.name = name;
@@ -251,8 +253,8 @@ pub async fn upsert_board(
         return Ok(());
     }
 
-    let board_id = app.create_board(Some(board_id), template).await?;
-    let board = app.open_board(board_id, Some(false), None).await?;
+    let created = app.create_board(Some(board_id), template).await?;
+    let board = app.open_board(created.board_id, Some(false), None).await?;
     app.save().await?;
 
     let mut board = board.lock().await;
