@@ -50,6 +50,7 @@ impl NodeLogic for FitElasticNetNode {
             "Fit/Train a penalized linear regression model. Ridge shrinks all coefficients, Lasso drives irrelevant ones to exactly zero (feature selection), Elastic Net mixes both.",
             "AI/ML/Regression",
         );
+        node.set_flowscript_name("ml", "fitElasticNet");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

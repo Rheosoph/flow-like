@@ -20,12 +20,15 @@ impl FloatToDegreesNode {
 #[async_trait]
 impl NodeLogic for FloatToDegreesNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_to_degrees",
             "To Degrees",
             "Converts radians into degrees",
             "Math/Float/Trigonometry",
-        )
+        );
+        node.set_flowscript_name("float", "toDegrees");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -46,12 +49,15 @@ impl FloatToRadiansNode {
 #[async_trait]
 impl NodeLogic for FloatToRadiansNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_to_radians",
             "To Radians",
             "Converts degrees into radians",
             "Math/Float/Trigonometry",
-        )
+        );
+        node.set_flowscript_name("float", "toRadians");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -72,12 +78,15 @@ impl FloatRecipNode {
 #[async_trait]
 impl NodeLogic for FloatRecipNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_recip",
             "Reciprocal",
             "One divided by a float",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "recip");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -98,12 +107,15 @@ impl FloatHypotNode {
 #[async_trait]
 impl NodeLogic for FloatHypotNode {
     fn get_node(&self) -> Node {
-        binary_node(
+        let mut node = binary_node(
             "float_hypot",
             "Hypotenuse",
             "Length of the hypotenuse of a right-angled triangle",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "hypot");
+        node.set_receiver("float1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -124,12 +136,15 @@ impl FloatCopySignNode {
 #[async_trait]
 impl NodeLogic for FloatCopySignNode {
     fn get_node(&self) -> Node {
-        binary_node(
+        let mut node = binary_node(
             "float_copysign",
             "Copy Sign",
             "Takes the magnitude of the first float and the sign of the second",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "copysign");
+        node.set_receiver("float1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -156,6 +171,8 @@ impl NodeLogic for FloatMulAddNode {
             "Multiplies two floats and adds a third in one rounding step",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "mulAdd");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 
@@ -216,6 +233,8 @@ impl NodeLogic for FloatLerpNode {
             "Interpolates linearly between two floats",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "lerp");
+        node.set_receiver("from");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

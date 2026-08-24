@@ -51,6 +51,7 @@ impl NodeLogic for FitNaiveBayesNode {
             "Fit/Train a Gaussian Naive Bayes classifier. Native multi-class support - no need for One-vs-All.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitNaiveBayes");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -32,6 +32,8 @@ impl NodeLogic for FetchMailNode {
             "Fetches the full email content",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "fetchMail");
+        node.set_receiver("email_ref");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(1);
 
@@ -100,6 +102,8 @@ impl NodeLogic for EmailHeadersNode {
             "Access address header fields of an Email",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "getHeaders");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(2);
 
@@ -162,6 +166,8 @@ impl NodeLogic for EmailContentNode {
             "Access subject, date, plain and HTML bodies",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "getContent");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(1);
 
@@ -210,6 +216,8 @@ impl NodeLogic for EmailAttachmentsNode {
             "Access attachments array",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "getAttachments");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(2);
 
@@ -257,6 +265,7 @@ impl NodeLogic for MailAddressFieldsNode {
             "Access name and email on a MailAddress",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "addressToFields");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin(
@@ -306,6 +315,7 @@ impl NodeLogic for AttachmentFieldsNode {
             "Access filename, content_type and data",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "attachmentToFields");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin(
@@ -366,6 +376,8 @@ impl NodeLogic for ToMailReferenceNode {
             "Transforms a Mail struct into a reference",
             "Email/Access",
         );
+        node.set_flowscript_name("email", "toReference");
+        node.set_receiver("mail");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(1);
 

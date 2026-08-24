@@ -83,6 +83,7 @@ impl NodeLogic for FitTfIdfVectorizerNode {
             "Learn a vocabulary from a text column and turn documents into numeric vectors weighted by term frequency times inverse document frequency. Feed the fitted vectorizer to Apply Transform to vectorize a column, then train a classifier such as Multinomial Naive Bayes on the result. Tokenization always uses the built-in regex tokenizer, because a custom tokenizer function cannot be persisted and would make the saved model unloadable.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "fitTfidfVectorizer");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

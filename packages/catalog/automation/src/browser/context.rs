@@ -32,6 +32,7 @@ impl NodeLogic for BrowserOpenNode {
             "Connects to a WebDriver server and opens a new browser session",
             "Automation/Browser",
         );
+        node.set_flowscript_name("browser", "open");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -263,6 +264,7 @@ impl NodeLogic for BrowserCloseNode {
             "Closes an open browser context and releases resources",
             "Automation/Browser",
         );
+        node.set_flowscript_name("browser", "close");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

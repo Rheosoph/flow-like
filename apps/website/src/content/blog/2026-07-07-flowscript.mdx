@@ -15,9 +15,12 @@ Open the FlowScript panel in the workflow view and your flow is suddenly source 
 
 ## What it looks like
 
-FlowScript reads like TypeScript, because that's the flavor your muscle memory already has. Structs are interfaces, variables are typed `const`/`let`, and node calls look like function calls with a named-argument object:
+FlowScript reads like TypeScript, because that's the flavor your muscle memory already has. Structs are interfaces, variables are `const`/`let` (typed, or inferred from a literal), and node calls look like function calls with a named-argument object:
 
 ```typescript
+use db::*
+use df::*
+
 interface NodeDBConnection {
     cache_key: string;
 }
@@ -25,30 +28,35 @@ interface NodeDBConnection {
 const embeddingModel: CachedEmbeddingModel = {"cache_key":""}
 @category("Sub-Agents/Librarian")
 const files: NodeDBConnection = {"cache_key":""}
+const reportCreated = false
 ```
 
-Logic reads like code, too. Here's a real function from a test board — a for-loop over a `controlForEach` node, registering database tables into a query session:
+Logic reads like code, too. Here's a real event from a test board — a `for…of` loop registering database tables into a query session, exactly as the board renders it:
 
 ```typescript
-queryItems(tables: string[], query: string, payload: Struct) {
-    const createDataFusionSession = dfCreateSession({ sessionName: "default", batchSize: 8192 })
-    for (const forEach of controlForEach({ array: tables })) {
-        const openDatabase = openLocalDb({ name: forEach.value, userScoped: true, batchSize: 1000 })
-        dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase.database, tableName: forEach.value })
+eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {
+    const { session } = createSession({ sessionName: "default", batchSize: 8192 })
+    for (const item of tables) {
+        const { database } = openLocalDb({ name: item, userScoped: true, batchSize: 1000 })
+        registerLance({ session: session, database: database, tableName: item })
     }
-    const sqlQuery = dfSqlQuery({ session: createDataFusionSession.session, query: query })
-    return sqlQuery.rows
+    const { rows } = sqlQuery({ session: session, query: query })
+    return rows
 }
 ```
 
-Node outputs are just field access (`forEach.value`, `sqlQuery.rows`). Branching nodes open a block per execution pin. And there's syntactic sugar for the thing everyone does constantly — building up a struct field by field:
+Node outputs are destructured by pin name (`const { session } = …`, `const { rows } = …`), or read as field access on the binding (`result.rows`). Branching nodes open a block per execution pin. And there's syntactic sugar for the thing everyone does constantly — building up a struct field by field:
 
 ```typescript
-let record = structSet({ structIn: {}, field: "files", value: listPaths.paths }).structOut
-record.folders = listFolders.folders   // desugars to another structSet on apply
+let record = struct::set({ structIn: {}, field: "files", value: paths }).structOut
+record.folders = folders   // desugars to another struct::set on apply
 ```
 
-That `record.folders = …` line is real FlowScript. On apply it expands back into a `structSet` node and rebinds the variable — so the text stays clean while the graph stays correct.
+That `record.folders = …` line is real FlowScript. On apply it expands back into a `struct::set` node and rebinds the variable — so the text stays clean while the graph stays correct.
+
+## Namespaces, methods, and `use`
+
+Every catalog node has a home: `string::trim`, `http::fetch`, `ai::ml::read`. The `::` path is the namespace, the last segment the node's alias, and the argument names are the node's pin names — so the text you read is the declaration you looked up. When a namespace is used more than once, the renderer opens it at the top of the file with `use db::*` and the calls become bare (`openLocalDb({ … })`), Rust-style; `use a::b` and `use a::b as c` are accepted too. Nodes whose first input is the namespace's own value type are also *methods* on that value: `s.trim()`, `s.contains("?")`, `xs.push(item)`, `date.format("%Y-%m-%d")`. Template literals lower to the string-format node (`` `Topic ${label}` ``), `for (const item of items)` is the for-each node, `const { text, usage } = ai::invoke({ … })` picks outputs by pin name, and the old flat camelCase spelling (`stringTrim`, `openLocalDb`) still resolves forever — every declaration carries it as `@alias`.
 
 ## How it stays honest: three invariants
 
@@ -57,8 +65,8 @@ A text ⇄ graph round-trip is easy to get subtly wrong, so FlowScript is built 
 **1. Every node has an anchor.** In the editable view, each statement carries a trailing comment that is the node's stable identity:
 
 ```typescript
-const now = utilsDatetimeNow()   //@n:j37yxnwykc08y10reikmija1
-attachedFiles = {}               //@n:xal689cwuihke7lvj801euk9
+const { date } = now()   //@n:j37yxnwykc08y10reikmija1
+attachedFiles = {}       //@n:xal689cwuihke7lvj801euk9
 ```
 
 Those `//@n:` anchors (and `//@v:` for variables, `//@l:` for layers) are how the reconciler knows an edited line is *the same node* rather than a new one. Keep the anchor, and you're editing; drop it, and you're deleting — which brings us to rule two.

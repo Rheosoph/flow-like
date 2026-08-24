@@ -28,6 +28,8 @@ impl NodeLogic for UpsertGraphNodeNode {
             "Inserts or updates a node in the graph overlay's underlying table",
             "Data/Database/Graph/Write",
         );
+        node.set_flowscript_name("db.graph", "upsertNode");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

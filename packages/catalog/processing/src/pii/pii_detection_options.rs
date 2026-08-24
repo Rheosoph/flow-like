@@ -31,6 +31,7 @@ impl NodeLogic for PiiDetectionOptionsNode {
             "Configure which PII types to detect. Connect to PII Mask nodes for fine-grained control.",
             "Processing/Privacy",
         );
+        node.set_flowscript_name("ai.processing", "piiDetectionOptions");
         node.add_icon("/flow/icons/settings.svg");
 
         node.set_scores(

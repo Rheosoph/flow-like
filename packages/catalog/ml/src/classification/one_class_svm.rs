@@ -98,6 +98,7 @@ impl NodeLogic for FitOneClassSVMNode {
             "Fit a One-Class SVM on normal observations only. Predictions flag whether a new row is an inlier (1) or an outlier (0).",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitOneClassSvm");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

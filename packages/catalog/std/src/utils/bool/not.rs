@@ -19,6 +19,8 @@ impl BoolNot {
 impl NodeLogic for BoolNot {
     fn get_node(&self) -> Node {
         let mut node = Node::new("bool_not", "! (Bool)", "Boolean NOT", "Utils/Bool");
+        node.set_flowscript_name("bool", "not");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/bool.svg");
 
         node.add_input_pin("boolean", "Boolean", "Input Boolean", VariableType::Boolean)

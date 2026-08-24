@@ -29,6 +29,7 @@ impl NodeLogic for SetGlobalState {
             "Sets a value in global state by key",
             "UI/State",
         );
+        node.set_flowscript_name("ui", "setGlobalState");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -25,6 +25,7 @@ impl NodeLogic for TryTransformNode {
             "Tries to transform cast types.",
             "Utils/Types",
         );
+        node.set_flowscript_name("types", "tryTransform");
 
         node.add_input_pin(
             "type_in",

@@ -27,6 +27,8 @@ impl NodeLogic for GetStatusNode {
             "Gets the status code from a http response",
             "Web/API/Response",
         );
+        node.set_flowscript_name("http", "status");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

@@ -45,6 +45,7 @@ impl NodeLogic for RemoteOntologyActionRequestNode {
             "Runs a governed ontology action in a connected project through an installed contract; the producer validates and executes it authoritatively",
             "Data Studio/Remote Actions",
         );
+        node.set_flowscript_name("ontology", "invokeRemoteAction");
         node.set_version(1);
         node.add_icon("/flow/icons/database.svg");
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

@@ -51,6 +51,7 @@ impl NodeLogic for FitKMeansNode {
             "Fit/Train KMeans Clustering",
             "AI/ML/Clustering",
         );
+        node.set_flowscript_name("ml", "fitKmeans");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

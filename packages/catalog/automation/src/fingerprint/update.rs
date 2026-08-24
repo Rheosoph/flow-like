@@ -26,6 +26,8 @@ impl NodeLogic for UpdateFingerprintNode {
             "Updates an existing fingerprint with new data",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "update");
+        node.set_receiver("fingerprint");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -135,6 +137,8 @@ impl NodeLogic for RecordFingerprintMatchNode {
             "Records that a fingerprint was successfully matched",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "recordMatch");
+        node.set_receiver("fingerprint");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -205,6 +209,8 @@ impl NodeLogic for FingerprintToJsonNode {
             "Serializes an element fingerprint to JSON",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "toJson");
+        node.set_receiver("fingerprint");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

@@ -107,6 +107,7 @@ impl NodeLogic for AiKeywordExtractionNode {
             "Extracts keywords from text using an LLM. The AI understands context and semantics, providing high-quality keyword extraction for complex or domain-specific content.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractKeywords");
         node.add_icon("/flow/icons/sparkles.svg");
         node.set_version(3);
 

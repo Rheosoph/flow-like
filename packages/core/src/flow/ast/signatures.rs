@@ -5,7 +5,7 @@
 //! in `flow-like-catalog` dumps every `get_node()` into a `SignatureSet`, which the parser
 //! later consumes to recover pin names from positional args without depending on the catalog.
 
-use flow_like_ast::{SigParam, Signature, to_camel_case};
+use flow_like_ast::{NameEntry, NodeNames, SigParam, Signature, to_camel_case};
 
 use super::types::type_ref;
 use crate::flow::node::Node;
@@ -97,6 +97,9 @@ pub fn node_to_signature(node: &Node) -> Signature {
         outputs: outputs.into_iter().map(sig_param).collect(),
         impure,
         doc,
+        namespace: Some(node.flowscript_namespace()),
+        alias: Some(node.flowscript_alias()),
+        receiver: node.flowscript_receiver(),
     }
 }
 
@@ -113,4 +116,24 @@ pub fn node_to_signature_in(node: &Node, package: impl Into<String>) -> Signatur
         Some(package)
     };
     sig
+}
+
+/// The effective FlowScript names of a catalog node (explicit fields or derived defaults).
+pub fn node_names(node: &Node) -> NodeNames {
+    let namespace = node.flowscript_namespace();
+    let alias = node.flowscript_alias();
+    NodeNames {
+        qualified: flow_like_ast::qualified_name(&namespace, &alias),
+        namespace,
+        alias,
+        flat: flow_like_ast::legacy_display(&node.name),
+        receiver: node.flowscript_receiver(),
+        class: node.flowscript_receiver_class(),
+        category: node.category.clone(),
+    }
+}
+
+/// The collision-checker view of a catalog node's effective names.
+pub fn node_name_entry(node: &Node) -> NameEntry {
+    node_names(node).entry(&node.name)
 }

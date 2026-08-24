@@ -28,6 +28,8 @@ impl NodeLogic for DateToTimezoneNode {
             "Reads a date in another timezone. The instant stays the same, the wall clock changes",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "toTimezone");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/clock.svg");
         node.set_scores(pure_scores());
 

@@ -24,6 +24,7 @@ impl NodeLogic for DoNNode {
             "Pass execution the first N triggers, then block; fire 'Completed' on Nth.",
             "Control/Flow",
         );
+        node.set_flowscript_name("control", "doN");
         node.add_icon("/flow/icons/workflow.svg");
 
         // Execution

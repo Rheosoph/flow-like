@@ -4111,6 +4111,9 @@ mod runtime_bridge_tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }];
         let begin = ir_tools::BeginFlowIrDraftArgs {
             draft_id: "direct-bound".to_string(),

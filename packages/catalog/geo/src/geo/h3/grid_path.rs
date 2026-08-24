@@ -24,6 +24,7 @@ impl NodeLogic for GridPathNode {
             "Finds a path of H3 cells between two cells. Returns all cells along the shortest path. Both cells must be at the same resolution.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "gridPath");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

@@ -26,6 +26,7 @@ impl NodeLogic for ComputerMouseMoveNode {
             "Moves the mouse cursor to the specified screen coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -160,6 +161,7 @@ impl NodeLogic for ComputerNaturalMouseMoveNode {
             "Moves the mouse cursor naturally using curved paths with variable speed to avoid bot detection",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "naturalMouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -597,6 +599,7 @@ impl NodeLogic for ComputerMouseClickNode {
             "Clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseClick");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -847,6 +850,7 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
             "Double-clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseDoubleClick");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -1072,6 +1076,7 @@ impl NodeLogic for ComputerMouseDragNode {
             "Drags the mouse from one position to another",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseDrag");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -1211,6 +1216,7 @@ impl NodeLogic for ComputerScrollNode {
             "Scrolls the mouse wheel",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "scroll");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

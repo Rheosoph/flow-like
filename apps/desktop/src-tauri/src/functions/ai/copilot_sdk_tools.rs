@@ -1560,8 +1560,9 @@ fn create_catalog_search_tool(provider: Option<Arc<dyn CatalogProvider>>) -> (To
             r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Use get_declarations for exact camelCase signatures, author the complete source
-with write_flowscript, repair it with patch_flowscript, then check_flowscript and commit_flowscript.
+FOR WORKFLOW EDITS: Use get_declarations for exact `ns::alias({ pin: type })` signatures (and the
+`use ns::*` idiom), author the complete source with write_flowscript, repair it with
+patch_flowscript, then check_flowscript and commit_flowscript.
 FlowScript is the model-authored language; catalog_search is not part of that code-first lifecycle.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#,
         )
@@ -5027,6 +5028,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
             NodeMetadata {
                 name: "string_format".to_string(),
@@ -5038,6 +5042,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
             NodeMetadata {
                 name: "log_info".to_string(),
@@ -5049,6 +5056,9 @@ mod tests {
                 required_inputs: vec!["message".to_string()],
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
         ]
     }

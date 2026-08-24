@@ -260,6 +260,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
             "Creates a struct from individual fields based on a connected schema",
             "Structs",
         );
+        node.set_flowscript_name("struct", "makeFromSchema");
         node.add_icon("/flow/icons/struct.svg");
 
         // Output struct pin - will get schema from connected input
@@ -349,6 +350,15 @@ impl NodeLogic for MakeStructFromSchemaNode {
             .get(&schema_ref)
             .cloned()
             .unwrap_or(schema_ref.clone());
+
+        if flow_like::flow::pin::is_open_object_schema(&schema_str) {
+            node.error = Some(
+                "Connected struct declares no fields. Make Struct needs a consumer with a concrete schema."
+                    .to_string(),
+            );
+            node.pins.retain(|_, pin| pin.pin_type == PinType::Output);
+            return;
+        }
 
         // Parse the JSON schema as a generic Value
         let schema: Value = match flow_like_types::json::from_str(&schema_str) {

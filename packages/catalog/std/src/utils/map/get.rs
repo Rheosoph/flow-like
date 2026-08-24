@@ -26,6 +26,8 @@ impl NodeLogic for GetMapNode {
             "Gets a value from a map by key",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "get");
+        node.set_receiver("map_in");
 
         node.add_icon("/flow/icons/book-key.svg");
 

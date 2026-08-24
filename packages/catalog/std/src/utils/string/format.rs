@@ -51,6 +51,8 @@ impl NodeLogic for FormatStringNode {
             "Formats a string with placeholders",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "format");
+        node.set_receiver("format_string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin(

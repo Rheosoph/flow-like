@@ -245,6 +245,8 @@ impl NodeLogic for BreakStructNode {
             "Breaks a struct into its individual fields based on the schema",
             "Structs",
         );
+        node.set_flowscript_name("struct", "break");
+        node.set_receiver("struct_in");
         node.add_icon("/flow/icons/struct.svg");
 
         // Input struct pin - accepts any struct with a schema
@@ -331,6 +333,15 @@ impl NodeLogic for BreakStructNode {
             .get(&schema_ref)
             .cloned()
             .unwrap_or(schema_ref.clone());
+
+        if flow_like::flow::pin::is_open_object_schema(&schema_str) {
+            node.error = Some(
+                "Connected struct declares no fields. Break Struct needs a producer with a concrete schema."
+                    .to_string(),
+            );
+            node.pins.retain(|_, pin| pin.pin_type == PinType::Input);
+            return;
+        }
 
         // Parse the JSON schema as a generic Value
         let schema: Value = match flow_like_types::json::from_str(&schema_str) {

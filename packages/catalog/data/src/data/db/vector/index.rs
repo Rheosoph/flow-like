@@ -28,6 +28,8 @@ impl NodeLogic for IndexLocalDatabaseNode {
             "Build Index",
             "Data/Database/Optimization",
         );
+        node.set_flowscript_name("db", "buildIndex");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

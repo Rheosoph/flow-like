@@ -37,6 +37,7 @@ impl NodeLogic for FloatConstantNode {
             "Provides a mathematical constant such as Pi or E",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "constant");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

@@ -133,6 +133,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
             "Uses vision LLM to extract structured data from a screenshot",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "extractFromScreen");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

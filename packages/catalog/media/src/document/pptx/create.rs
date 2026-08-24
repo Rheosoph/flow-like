@@ -29,6 +29,7 @@ impl NodeLogic for PptxCreateNode {
             "Create a blank PPTX presentation with Flow Like brand theme (16:9, Calibri, #FF4343 accent).",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "create");
         node.add_icon("/flow/icons/file.svg");
         node.set_scores(
             NodeScores::new()

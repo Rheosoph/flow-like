@@ -154,6 +154,8 @@ fn base_node() -> Node {
         "Adds Model Context Protocol (MCP) server tools to an Agent",
         "AI/Agents/Builder",
     );
+    node.set_flowscript_name("agent", "registerMcpTools");
+    node.set_receiver("agent_in");
     node.add_icon("/flow/icons/bot-invoke.svg");
     node.set_scores(
         NodeScores::new()

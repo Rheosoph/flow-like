@@ -29,6 +29,7 @@ impl NodeLogic for PdfReplaceTextNode {
             "Attempts to find and replace text in a PDF. Best-effort: PDF text replacement may not work for all documents due to complex text encoding and fragmented content streams.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "replaceText");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

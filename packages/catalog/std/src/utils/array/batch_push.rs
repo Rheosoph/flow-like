@@ -26,6 +26,8 @@ impl NodeLogic for BatchPushArrayNode {
             "Push multiple items into an array in one operation. More efficient than multiple single pushes.",
             "Utils/Array/Batch",
         );
+        node.set_flowscript_name("array", "batchPush");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

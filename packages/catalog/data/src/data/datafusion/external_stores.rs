@@ -45,6 +45,7 @@ impl NodeLogic for S3StoreNode {
             "Turn an S3 bucket (or any S3-compatible endpoint) into a FlowPath. Takes an AwsProvider for authentication. Use a CloudflareProvider + R2 node for Cloudflare R2 — it's specialised.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "s3");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -161,6 +162,7 @@ impl NodeLogic for S3ExpressStoreNode {
             "Turn an S3 Express One Zone bucket into a FlowPath. Ultra-low latency single-AZ storage. Takes an AwsProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "s3Express");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -271,6 +273,7 @@ impl NodeLogic for AzureBlobStoreNode {
             "Turn an Azure Blob Storage container into a FlowPath. Takes an AzureProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "azureBlob");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -379,6 +382,7 @@ impl NodeLogic for GcpStorageStoreNode {
             "Turn a Google Cloud Storage bucket into a FlowPath. Takes a GcpProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "gcs");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -483,6 +487,7 @@ impl NodeLogic for CloudflareR2StoreNode {
             "Turn a Cloudflare R2 bucket into a FlowPath. Takes a CloudflareProvider in 'r2' auth mode (account_id + R2 access key/secret).",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "r2");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -588,6 +593,7 @@ impl NodeLogic for SmbStoreNode {
             "Turn an SMB2/3 share into a FlowPath.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "smb");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(

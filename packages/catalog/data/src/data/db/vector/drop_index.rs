@@ -27,6 +27,8 @@ impl NodeLogic for DropIndexNode {
             "Remove an index from a database table",
             "Data/Database/Optimization",
         );
+        node.set_flowscript_name("db", "dropIndex");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

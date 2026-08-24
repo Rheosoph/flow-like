@@ -29,6 +29,7 @@ impl NodeLogic for PptxListPlaceholdersNode {
             "Scan all slides for {{...}} placeholder strings",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "listPlaceholders");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

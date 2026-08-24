@@ -28,6 +28,7 @@ impl NodeLogic for CallReferenceNode {
             "References a specific call in the flow",
             "Control/Call",
         );
+        node.set_flowscript_name("control", "callReference");
         node.add_icon("/flow/icons/workflow.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

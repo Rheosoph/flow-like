@@ -30,6 +30,8 @@ impl NodeLogic for VectorSearchLocalDatabaseNode {
             "Searches the Database based on a Vector",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "vectorSearch");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

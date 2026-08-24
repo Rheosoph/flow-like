@@ -182,6 +182,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             "Extracts structured data by replaying an entire chat history through an LLM",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "extractFromHistory");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

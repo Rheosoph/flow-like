@@ -27,6 +27,7 @@ impl NodeLogic for GetTooltipContent {
             "Gets the content text of a tooltip element",
             "UI/Elements/Get",
         );
+        node.set_flowscript_name("ui", "getTooltipContent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

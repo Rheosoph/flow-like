@@ -34,6 +34,7 @@ impl NodeLogic for WriteCellNode {
             "Write/update a single cell value in an XLSX sheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "writeCell");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Impure node → needs execution pins

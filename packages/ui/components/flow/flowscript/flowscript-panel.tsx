@@ -14,6 +14,10 @@ import {
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	getFlowScriptNamesTable,
+	onFlowScriptNamesTableLoaded,
+} from "../../../lib/flowscript/names";
 import { FLOW_KEY_OPT_OUT_CLASS } from "../../../lib/monaco-key-guard";
 import type { INode } from "../../../lib/schema/flow/node";
 import { useBackend } from "../../../state/backend-state";
@@ -123,6 +127,10 @@ export function FlowScriptPanel({
 	const [boardChangedBehindEdits, setBoardChangedBehindEdits] = useState(false);
 	const [refreshConfirmationOpen, setRefreshConfirmationOpen] = useState(false);
 	const [editorReady, setEditorReady] = useState(false);
+	const [namesReady, setNamesReady] = useState(
+		() => getFlowScriptNamesTable() !== undefined,
+	);
+	useEffect(() => onFlowScriptNamesTableLoaded(() => setNamesReady(true)), []);
 	const [destructiveMessage, setDestructiveMessage] = useState<
 		string | undefined
 	>(undefined);
@@ -298,7 +306,7 @@ export function FlowScriptPanel({
 
 	// Realtime linting: instant client-side structural markers everywhere, plus authoritative
 	// positioned diagnostics from the native parser where available (Flow-Like Studio / desktop).
-	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts
+	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts; namesReady re-lints once the names snapshot arrives
 	useEffect(() => {
 		const monaco = monacoRef.current;
 		const editor = editorRef.current;
@@ -332,7 +340,7 @@ export function FlowScriptPanel({
 			] as Parameters<typeof monaco.editor.setModelMarkers>[2]);
 		}, LINT_DEBOUNCE_MS);
 		return () => clearTimeout(handle);
-	}, [text, catalogNodes, backend, editorReady]);
+	}, [text, catalogNodes, backend, editorReady, namesReady]);
 
 	const handleCopy = useCallback(async () => {
 		await navigator.clipboard.writeText(textRef.current);

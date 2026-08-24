@@ -51,6 +51,7 @@ impl NodeLogic for FitDecisionTreeNode {
             "Fit/Train a Decision Tree classifier. Native multi-class support with interpretable rules.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitDecisionTree");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 

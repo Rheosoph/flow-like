@@ -28,6 +28,8 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
             "Adds a column using a typed SQL expression (e.g. 0, '', CAST(NULL AS STRING)). LanceDB rejects bare NULL — wrap it in CAST(... AS <type>). Supported types: int, bigint, float, double, string, binary, boolean, date, timestamp.",
             "Data/Database/Schema",
         );
+        node.set_flowscript_name("db", "addColumn");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddSlideNode {
             "Add a blank slide to a PPTX presentation.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addSlide");
         node.add_icon("/flow/icons/file.svg");
         node.set_scores(
             NodeScores::new()

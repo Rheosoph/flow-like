@@ -3,10 +3,13 @@
 //! Walks exec edges to build ordered statement blocks, inlines pure nodes as expressions,
 //! and binds impure-node outputs to `const` names. See `todo/ast.md` §6.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use flow_like_ast::model::*;
+use flow_like_ast::naming::{KEYWORDS, namespace_segments};
+use flow_like_ast::{is_valid_identifier, receiver_class_of};
 
+use super::template::{FORMAT_STRING_PIN, STRING_FORMAT_NODE_TYPE, format_template_parts};
 use crate::flow::board::{Board, Layer, LayerCacheScope, LayerType};
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
@@ -61,6 +64,34 @@ const LOOP_BODY_PIN: &str = "exec_out";
 /// Exec output pin continuing the chain once a loop finishes.
 const LOOP_DONE_PIN: &str = "done";
 
+/// Loop nodes with a sugared FlowScript form: `for (const item of array)` /
+/// `for (const [i, item] of array)` (`@parallel` for the parallel variant) and `while (cond)`.
+const FOR_EACH: &str = "control_for_each";
+const PAR_FOR_EACH: &str = "control_par_for_each";
+pub(crate) const WHILE_LOOP: &str = "control_while_loop";
+const LOOP_ARRAY_PIN: &str = "array";
+const LOOP_CONDITION_PIN: &str = "condition";
+const LOOP_VALUE_PIN: &str = "value";
+const LOOP_INDEX_PIN: &str = "index";
+
+/// Base names of the bindings a sugared `for…of` introduces (`item`, `item2`, …).
+const LOOP_ELEMENT_NAME: &str = "item";
+const LOOP_INDEX_NAME: &str = "index";
+
+/// Loop inputs the sugared forms cannot spell, with the catalog default they must still hold
+/// for the sugar to stay lossless; an edited value keeps the explicit call form.
+const LOOP_SUGAR_IMPLIED_INPUTS: &[(&str, &str, i64)] = &[
+    (PAR_FOR_EACH, "max_concurrent", 30),
+    (WHILE_LOOP, "max_iter", 15),
+];
+
+/// Binding names a sugared loop introduces for its `value`/`index` outputs.
+#[derive(Clone)]
+struct LoopSugar {
+    element: Option<String>,
+    index: Option<String>,
+}
+
 /// Node that calls another node by id (`fn_ref` holds an opaque target node id).
 const CALL_REFERENCE: &str = "control_call_reference";
 const FN_REF_PIN: &str = "fn_ref";
@@ -114,15 +145,22 @@ const BINARY_OPS: &[(&str, &str)] = &[
     ("float_multiply", "*"),
     ("float_divide", "/"),
     ("float_power", "**"),
-    // String equality.
+    // String equality + concatenation (`string_concat` has repeatable `string` inputs; only the
+    // two-input shape sugars, a third pin falls back to the call form).
     ("equal_string", "=="),
     ("not_equal_string", "!="),
+    ("string_concat", "+"),
     // Boolean logic.
     ("bool_equal", "=="),
     ("bool_and", "&&"),
     ("bool_or", "||"),
     ("bool_xor", "^"),
 ];
+
+/// Catalog node types that FlowScript renders as binary operators (`a == b`, `a + b`).
+pub fn binary_operator_node_types() -> impl Iterator<Item = &'static str> {
+    BINARY_OPS.iter().map(|(ty, _)| *ty)
+}
 
 /// If `node` is a sugarable binary-operator node, return its JS operator.
 fn binary_op(node: &Node) -> Option<&'static str> {
@@ -134,10 +172,34 @@ fn binary_op(node: &Node) -> Option<&'static str> {
 
 /// If `node` is a loop, return its FlowScript keyword.
 fn loop_keyword(node: &Node) -> Option<&'static str> {
+    loop_node_keyword(&node.name)
+}
+
+/// The FlowScript loop keyword of a loop node type, `None` for every other node.
+pub(crate) fn loop_node_keyword(node_type: &str) -> Option<&'static str> {
     LOOP_NODES
         .iter()
-        .find(|(ty, _)| *ty == node.name)
+        .find(|(ty, _)| *ty == node_type)
         .map(|(_, kw)| *kw)
+}
+
+/// The loop node a sugared head synthesizes, keyed by the statement keyword.
+pub(crate) fn sugared_loop_node_type(keyword: &str) -> Option<&'static str> {
+    match keyword {
+        "forEach" => Some(FOR_EACH),
+        "forEachParallel" => Some(PAR_FOR_EACH),
+        "while" => Some(WHILE_LOOP),
+        _ => None,
+    }
+}
+
+/// The input pin a sugared loop head feeds: the array of a `for…of`, the condition of a `while`.
+pub(crate) fn sugared_loop_head_pin(node_type: &str) -> &'static str {
+    if node_type == WHILE_LOOP {
+        LOOP_CONDITION_PIN
+    } else {
+        LOOP_ARRAY_PIN
+    }
 }
 
 /// Board-side mapping helpers (depend on core's `VariableType`/`ValueType`).
@@ -190,9 +252,175 @@ mod util {
 }
 
 /// Lower a whole board into the FlowScript AST.
+///
+/// Every catalog call is first rendered fully qualified (`ns::alias`); the `use` lines are then
+/// derived from the call sites that actually appear (§B.10) and those calls are rendered bare.
+/// Names lower mints must not collide with the namespace roots and members the text opens, so
+/// when a minted name does, the board is lowered once more with those names reserved.
 pub fn lower_board(board: &Board) -> BoardAst {
-    let mut lowering = Lowering::new(board);
-    lowering.run()
+    let reserved = declared_names(board);
+    let mut lowering = Lowering::new(board, reserved.clone());
+    let ast = lowering.run();
+    let opened = derive_uses(&ast, board);
+    let minted = lowering.minted_names();
+    if opened.reserved.is_disjoint(&minted) {
+        return apply_uses(ast, opened);
+    }
+    let mut reserved = reserved;
+    reserved.extend(opened.reserved);
+    let mut lowering = Lowering::new(board, reserved);
+    let ast = lowering.run();
+    let opened = derive_uses(&ast, board);
+    apply_uses(ast, opened)
+}
+
+/// Names that are never minted for a binding: FlowScript keywords plus every user-declared name
+/// a binding could shadow in the text (variables, functions, and the parameters of entries).
+fn declared_names(board: &Board) -> HashSet<String> {
+    let mut names: HashSet<String> = KEYWORDS.iter().map(|k| k.to_string()).collect();
+    names.extend(
+        board
+            .variables
+            .values()
+            .map(|v| util::to_camel_case(&v.name)),
+    );
+    for layer in board.layers.values() {
+        names.extend(
+            layer
+                .variables
+                .values()
+                .map(|v| util::to_camel_case(&v.name)),
+        );
+        if matches!(layer.r#type, LayerType::Function) {
+            names.insert(util::to_camel_case(&layer.name));
+            names.extend(
+                layer
+                    .pins
+                    .values()
+                    .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+                    .map(|pin| util::to_camel_case(&pin.name)),
+            );
+        }
+    }
+    for indexed in canonical_board_nodes(board) {
+        if is_trigger_entry(indexed.node) {
+            names.extend(
+                indexed
+                    .node
+                    .pins
+                    .values()
+                    .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
+                    .map(|pin| util::to_camel_case(&pin.name)),
+            );
+        }
+    }
+    names
+}
+
+/// Lowercase `::`-joined key of a call path (`["ai", "ML"]` → `ai::ml`).
+fn path_key(path: &[String]) -> String {
+    path.iter()
+        .map(|segment| segment.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// The `use` lines derived for one rendering and the names they make significant.
+struct OpenedNamespaces {
+    /// Lowercase `::`-joined namespace keys rendered bare, with their display path.
+    globs: BTreeMap<String, Vec<String>>,
+    /// Namespace roots appearing in any path plus every member opened bare: names a minted
+    /// binding must avoid.
+    reserved: HashSet<String>,
+}
+
+/// Decide the `use ns::*` lines for a lowered board (§B.10): every namespace with at least two
+/// static call sites opens, in alphabetical order, unless one of its used members collides with
+/// a `function` name, the flat name of a node on the board, or a member already opened for
+/// another namespace. Method-form calls are not static sites.
+fn derive_uses(ast: &BoardAst, board: &Board) -> OpenedNamespaces {
+    struct Sites {
+        path: Vec<String>,
+        /// Lowercase member -> node types called through it.
+        members: BTreeMap<String, BTreeSet<String>>,
+        count: usize,
+    }
+    let mut sites: BTreeMap<String, Sites> = BTreeMap::new();
+    let mut roots: HashSet<String> = HashSet::new();
+    for call in collect_calls_in_ast(ast) {
+        if call.receiver.is_some() || call.path.is_empty() {
+            continue;
+        }
+        roots.insert(call.path[0].to_lowercase());
+        let entry = sites.entry(path_key(&call.path)).or_insert_with(|| Sites {
+            path: call.path.clone(),
+            members: BTreeMap::new(),
+            count: 0,
+        });
+        entry
+            .members
+            .entry(call.display.to_lowercase())
+            .or_default()
+            .insert(call.node_type.clone());
+        entry.count += 1;
+    }
+
+    // A bare member must not resolve to anything else: a `function`, the flat name of a
+    // DIFFERENT node type placed on the board, or a member another namespace already opens.
+    let mut taken: HashSet<String> = ast
+        .functions
+        .iter()
+        .map(|function| function.name.to_lowercase())
+        .collect();
+    let mut flat_owners: HashMap<String, HashSet<String>> = HashMap::new();
+    for indexed in canonical_board_nodes(board) {
+        flat_owners
+            .entry(util::to_camel_case(&indexed.node.name).to_lowercase())
+            .or_default()
+            .insert(indexed.node.name.clone());
+    }
+
+    let mut globs = BTreeMap::new();
+    let mut opened_members: HashSet<String> = HashSet::new();
+    for (key, sites) in sites {
+        let collides = sites.members.iter().any(|(member, node_types)| {
+            taken.contains(member)
+                || flat_owners
+                    .get(member)
+                    .is_some_and(|owners| owners.iter().any(|owner| !node_types.contains(owner)))
+        });
+        if sites.count < 2 || collides {
+            continue;
+        }
+        taken.extend(sites.members.keys().cloned());
+        opened_members.extend(sites.members.into_keys());
+        globs.insert(key, sites.path);
+    }
+
+    let mut reserved = roots;
+    reserved.extend(opened_members);
+    OpenedNamespaces { globs, reserved }
+}
+
+/// Emit the derived `use` lines and render the calls they open bare.
+fn apply_uses(mut ast: BoardAst, opened: OpenedNamespaces) -> BoardAst {
+    if opened.globs.is_empty() {
+        return ast;
+    }
+    for_each_call_mut(&mut ast, &mut |call| {
+        if call.receiver.is_none() && opened.globs.contains_key(&path_key(&call.path)) {
+            call.path.clear();
+        }
+    });
+    ast.uses = opened
+        .globs
+        .into_values()
+        .map(|path| UseDecl {
+            path,
+            kind: UseKind::Glob,
+        })
+        .collect();
+    ast
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +492,9 @@ struct Lowering<'a> {
     nodes_by_id: HashMap<&'a str, &'a Node>,
     /// function-layer boundary input pin id -> camelCase parameter name.
     boundary_params: HashMap<&'a str, String>,
+    /// function-layer boundary pin id -> the boundary pin (the typed source a parameter
+    /// reference stands for).
+    function_boundary_pins: HashMap<&'a str, &'a Pin>,
     /// presentational (collapsed/macro) layer boundary pin id -> the boundary pin. These bridge
     /// exec/data edges across a sub-layer's frame; resolution follows them transparently so the
     /// graph reads as if the layer were inlined.
@@ -277,8 +508,22 @@ struct Lowering<'a> {
     fn_names: HashMap<&'a str, String>,
     /// node id -> stable `const` binding name (impure nodes with consumed outputs).
     bindings: HashMap<String, String>,
+    /// node id -> element/index bindings of a loop rendered in its sugared `for…of`/`while`
+    /// form (such a node has no handle binding).
+    loop_sugar: HashMap<String, LoopSugar>,
+    /// loop `value`/`index` output pin id -> the bare element/index name it resolves to.
+    loop_bindings: HashMap<&'a str, String>,
     /// node id -> readable accumulator name for `structSet(...).structOut` update chains.
     struct_accumulators: HashMap<String, String>,
+    /// node id -> the consumed outputs of a binding rendered as `const { pin, … } = call(...)`.
+    destructured: HashMap<String, Vec<DestructureField>>,
+    /// output pin id -> the bare local a destructured binding exposes it as.
+    destructure_locals: HashMap<&'a str, String>,
+    /// Lowercase names every minted binding must avoid.
+    reserved: HashSet<String>,
+    /// Lowercase names minted or reserved so far (bindings, loop element/index names,
+    /// accumulators, destructured locals).
+    used_names: HashSet<String>,
     /// node ids already emitted during the current exec walk.
     visited: HashSet<String>,
     /// guard against cycles while inlining pure expressions.
@@ -286,7 +531,7 @@ struct Lowering<'a> {
 }
 
 impl<'a> Lowering<'a> {
-    fn new(board: &'a Board) -> Self {
+    fn new(board: &'a Board, reserved: HashSet<String>) -> Self {
         let interfaces = interfaces_for_board_text_surfaces(board);
         let mut pin_owner = HashMap::new();
         let mut pins = HashMap::new();
@@ -305,11 +550,13 @@ impl<'a> Lowering<'a> {
         // Map function-layer boundary input pins to their parameter names so nodes inside the
         // function that read from the boundary render as `param` references.
         let mut boundary_params = HashMap::new();
+        let mut function_boundary_pins = HashMap::new();
         for layer in board.layers.values() {
             if !matches!(layer.r#type, LayerType::Function) {
                 continue;
             }
             for pin in layer.pins.values() {
+                function_boundary_pins.insert(pin.id.as_str(), pin);
                 if pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution {
                     boundary_params.insert(pin.id.as_str(), util::to_camel_case(&pin.name));
                 }
@@ -351,6 +598,7 @@ impl<'a> Lowering<'a> {
             }
         }
 
+        let reserved: HashSet<String> = reserved.iter().map(|name| name.to_lowercase()).collect();
         Self {
             board,
             interfaces,
@@ -358,23 +606,71 @@ impl<'a> Lowering<'a> {
             pins,
             nodes_by_id,
             boundary_params,
+            function_boundary_pins,
             boundary_pins,
             event_params: HashMap::new(),
             var_names,
             fn_names,
             bindings: HashMap::new(),
+            loop_sugar: HashMap::new(),
+            loop_bindings: HashMap::new(),
             struct_accumulators: HashMap::new(),
+            destructured: HashMap::new(),
+            destructure_locals: HashMap::new(),
+            used_names: reserved.clone(),
+            reserved,
             visited: HashSet::new(),
             inlining: HashSet::new(),
         }
     }
 
+    /// Lowercase names this lowering minted (everything in `used_names` that was not reserved).
+    fn minted_names(&self) -> HashSet<String> {
+        self.used_names
+            .difference(&self.reserved)
+            .cloned()
+            .collect()
+    }
+
     fn run(&mut self) -> BoardAst {
+        let (function_nodes, root_nodes) = self.scope_nodes();
         self.assign_bindings();
         self.assign_struct_accumulators();
+        self.assign_destructures(&function_nodes, &root_nodes);
 
         let variables = lower_variables(self.board.variables.values(), &self.board.refs);
 
+        let mut functions = Vec::new();
+        let mut function_layers: Vec<&Layer> = self
+            .board
+            .layers
+            .values()
+            .filter(|l| matches!(l.r#type, LayerType::Function))
+            .collect();
+        function_layers.sort_by(|a, b| a.id.cmp(&b.id));
+        for layer in function_layers {
+            let nodes = function_nodes
+                .get(layer.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            functions.push(self.lower_function(layer, &nodes));
+        }
+
+        let events = self.lower_events(&root_nodes);
+
+        BoardAst {
+            board_id: self.board.id.clone(),
+            uses: Vec::new(),
+            interfaces: self.interfaces.clone(),
+            variables,
+            functions,
+            events,
+        }
+    }
+
+    /// Group every node by the function layer it ultimately belongs to (or the root scope).
+    #[allow(clippy::type_complexity)]
+    fn scope_nodes(&self) -> (HashMap<&'a str, Vec<&'a Node>>, Vec<&'a Node>) {
         // Function layers become `function` declarations, scoped to their member nodes.
         let function_ids: HashSet<&str> = self
             .board
@@ -416,8 +712,8 @@ impl<'a> Lowering<'a> {
         }
 
         // Group nodes by the function they ultimately belong to (or root).
-        let mut function_nodes: HashMap<&str, Vec<&Node>> = HashMap::new();
-        let mut root_nodes: Vec<&Node> = Vec::new();
+        let mut function_nodes: HashMap<&'a str, Vec<&'a Node>> = HashMap::new();
+        let mut root_nodes: Vec<&'a Node> = Vec::new();
         for indexed in canonical_board_nodes(self.board) {
             match indexed
                 .layer
@@ -427,38 +723,13 @@ impl<'a> Lowering<'a> {
                 None => root_nodes.push(indexed.node),
             }
         }
-
-        let mut functions = Vec::new();
-        let mut function_layers: Vec<&Layer> = self
-            .board
-            .layers
-            .values()
-            .filter(|l| matches!(l.r#type, LayerType::Function))
-            .collect();
-        function_layers.sort_by(|a, b| a.id.cmp(&b.id));
-        for layer in function_layers {
-            let nodes = function_nodes
-                .get(layer.id.as_str())
-                .cloned()
-                .unwrap_or_default();
-            functions.push(self.lower_function(layer, &nodes));
-        }
-
-        let events = self.lower_events(&root_nodes);
-
-        BoardAst {
-            board_id: self.board.id.clone(),
-            interfaces: self.interfaces.clone(),
-            variables,
-            functions,
-            events,
-        }
+        (function_nodes, root_nodes)
     }
 
     /// Pre-pass: assign a stable `const` name to every impure node whose data output is
     /// consumed by another node.
     fn assign_bindings(&mut self) {
-        let mut used_names: HashSet<String> = HashSet::new();
+        let mut used_names = std::mem::take(&mut self.used_names);
         // Deterministic order for stable name suffixes.
         let mut nodes: Vec<&Node> = self.pin_owner.values().copied().collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -466,6 +737,9 @@ impl<'a> Lowering<'a> {
 
         for node in nodes {
             if !is_impure(node) {
+                continue;
+            }
+            if self.assign_loop_sugar(node, &mut used_names) {
                 continue;
             }
             let produces_consumed_output = node.pins.values().any(|p| {
@@ -478,6 +752,188 @@ impl<'a> Lowering<'a> {
             let name = unique_name(&base, &mut used_names);
             self.bindings.insert(node.id.clone(), name);
         }
+        self.used_names = used_names;
+    }
+
+    /// Pre-pass: render a binding as `const { pin, … } = call(...)` when every read of it
+    /// selects an output (`b.pin`) and nothing needs the binding as a whole value — it is not a
+    /// branch handle (`b { execSuccess: … }`), not a loop handle, not referenced by `tools:` /
+    /// `fnRef`, and not one of the statement sugars (`structSet` accumulators, assignments,
+    /// returns) or an event/handler header. Each consumed output becomes a bare local named
+    /// after the pin; the `pin: local` form renames it when the pin name is already taken.
+    fn assign_destructures(
+        &mut self,
+        function_nodes: &HashMap<&'a str, Vec<&'a Node>>,
+        root_nodes: &[&'a Node],
+    ) {
+        let mut referenced: HashSet<&str> = HashSet::new();
+        for node in self.nodes_by_id.values() {
+            if let Some(refs) = &node.fn_refs {
+                referenced.extend(refs.fn_refs.iter().map(String::as_str));
+            }
+            if node.name == CALL_REFERENCE
+                && let Some(pin) = node
+                    .pins
+                    .values()
+                    .find(|p| p.pin_type == PinType::Input && p.name == FN_REF_PIN)
+                && let Some(bytes) = &pin.default_value
+                && let Some(Literal::String(target)) = util::decode_default(bytes)
+                && let Some((id, _)) = self.nodes_by_id.get_key_value(target.as_str())
+            {
+                referenced.insert(id);
+            }
+        }
+
+        let mut headers: HashSet<&str> = HashSet::new();
+        let root_ids: HashSet<&str> = root_nodes.iter().map(|n| n.id.as_str()).collect();
+        for node in root_nodes {
+            if is_impure(node) && self.is_scope_entry(node, &root_ids) {
+                headers.insert(node.id.as_str());
+            }
+        }
+        for nodes in function_nodes.values() {
+            headers.extend(
+                nodes
+                    .iter()
+                    .filter(|node| is_trigger_entry(node))
+                    .map(|node| node.id.as_str()),
+            );
+        }
+
+        let mut bound: Vec<&'a Node> = self
+            .bindings
+            .keys()
+            .filter_map(|id| self.nodes_by_id.get(id.as_str()).copied())
+            .collect();
+        bound.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut candidates: Vec<(&'a Node, Vec<&'a Pin>)> = Vec::new();
+        for node in bound {
+            if headers.contains(node.id.as_str())
+                || referenced.contains(node.id.as_str())
+                || exec_output_pins(node).len() > 1
+                || loop_keyword(node).is_some()
+                || matches!(
+                    node.name.as_str(),
+                    STRUCT_SET | VARIABLE_SET | EVENT_RETURN_RESULT | CONTROL_BRANCH
+                )
+            {
+                continue;
+            }
+            let mut outputs: Vec<&'a Pin> = node
+                .pins
+                .values()
+                .filter(|p| {
+                    p.pin_type == PinType::Output
+                        && !is_exec(p)
+                        && (!p.connected_to.is_empty() || !self.downstream_pins(p).is_empty())
+                })
+                .collect();
+            outputs.sort_by_key(|p| (p.index, p.id.as_str()));
+            if outputs.is_empty()
+                || outputs
+                    .iter()
+                    .any(|pin| !is_valid_identifier(&util::to_camel_case(&pin.name)))
+            {
+                continue;
+            }
+            candidates.push((node, outputs));
+        }
+
+        // The handle name is no longer rendered: release it so a local may take it.
+        let mut used_names = std::mem::take(&mut self.used_names);
+        for (node, _) in &candidates {
+            if let Some(name) = self.bindings.remove(&node.id) {
+                used_names.remove(&name.to_lowercase());
+            }
+        }
+        for (node, outputs) in candidates {
+            let fields: Vec<DestructureField> = outputs
+                .iter()
+                .map(|pin| {
+                    let local = unique_name(&util::to_camel_case(&pin.name), &mut used_names);
+                    self.destructure_locals
+                        .insert(pin.id.as_str(), local.clone());
+                    DestructureField {
+                        pin: pin.name.clone(),
+                        name: local,
+                    }
+                })
+                .collect();
+            self.destructured.insert(node.id.clone(), fields);
+        }
+        self.used_names = used_names;
+    }
+
+    /// Register a loop node for its sugared form when the text can carry it losslessly: only
+    /// the `value`/`index` outputs are read, every input the sugar cannot spell holds its
+    /// default, and the array (or `while` condition) is present. The element/index names
+    /// replace the handle binding; `_` stands in for an unread element.
+    fn assign_loop_sugar(&mut self, node: &'a Node, used_names: &mut HashSet<String>) -> bool {
+        let is_for_each = node.name == FOR_EACH || node.name == PAR_FOR_EACH;
+        if !is_for_each && node.name != WHILE_LOOP {
+            return false;
+        }
+        let head_pin = sugared_loop_head_pin(&node.name);
+        let mut head_present = false;
+        for pin in node.pins.values() {
+            if is_exec(pin) {
+                continue;
+            }
+            match pin.pin_type {
+                PinType::Input if pin.name == head_pin => {
+                    head_present = !pin.depends_on.is_empty()
+                        || (is_for_each
+                            && pin
+                                .default_value
+                                .as_deref()
+                                .and_then(util::decode_default)
+                                .is_some());
+                }
+                PinType::Input => {
+                    if !loop_input_is_implied(node, pin) {
+                        return false;
+                    }
+                }
+                PinType::Output => {
+                    let sugared_output =
+                        is_for_each && (pin.name == LOOP_VALUE_PIN || pin.name == LOOP_INDEX_PIN);
+                    if !sugared_output && !pin.connected_to.is_empty() {
+                        return false;
+                    }
+                }
+            }
+        }
+        if !head_present {
+            return false;
+        }
+        let mut sugar = LoopSugar {
+            element: None,
+            index: None,
+        };
+        if is_for_each {
+            let mut outputs: Vec<&'a Pin> = node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
+                .collect();
+            outputs.sort_by_key(|pin| pin.index);
+            for pin in outputs {
+                if pin.connected_to.is_empty() {
+                    continue;
+                }
+                if pin.name == LOOP_VALUE_PIN {
+                    let name = unique_name(LOOP_ELEMENT_NAME, used_names);
+                    self.loop_bindings.insert(pin.id.as_str(), name.clone());
+                    sugar.element = Some(name);
+                } else {
+                    let name = unique_name(LOOP_INDEX_NAME, used_names);
+                    self.loop_bindings.insert(pin.id.as_str(), name.clone());
+                    sugar.index = Some(name);
+                }
+            }
+        }
+        self.loop_sugar.insert(node.id.clone(), sugar);
+        true
     }
 
     /// Pre-pass: assign one readable mutable alias to chains of `structSet` nodes.
@@ -487,7 +943,7 @@ impl<'a> Lowering<'a> {
     /// visible and anchored while making the data-flow shape much easier to continue editing:
     /// `row = structSet({ structIn: row, ... }).structOut`.
     fn assign_struct_accumulators(&mut self) {
-        let mut used_names: HashSet<String> = self.bindings.values().cloned().collect();
+        let mut used_names = std::mem::take(&mut self.used_names);
         let mut nodes: Vec<&Node> = self.nodes_by_id.values().copied().collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         nodes.dedup_by(|a, b| a.id == b.id);
@@ -508,6 +964,7 @@ impl<'a> Lowering<'a> {
                 current = self.next_struct_set(struct_set);
             }
         }
+        self.used_names = used_names;
     }
 
     fn struct_accumulator_base_name(&self, start: &'a Node) -> &'static str {
@@ -1195,19 +1652,46 @@ impl<'a> Lowering<'a> {
             let exec_outs = exec_output_pins(node);
 
             // Loop nodes: open a body block from `exec_out` and continue the enclosing chain
-            // from `done`, binding the loop handle (its `value`/`index`/`iter` outputs).
+            // from `done`, binding the loop handle (its `value`/`index`/`iter` outputs) — or,
+            // in the sugared form, the element/index names over the array/condition head.
             if let Some(keyword) = loop_keyword(node) {
                 let body = match self.exec_target_by_name(node, LOOP_BODY_PIN) {
                     Some(target) => self.walk_from(&target),
                     None => Block::default(),
                 };
-                block.stmts.push(Stmt::Loop {
-                    keyword: keyword.to_string(),
-                    bind: self.bindings.get(&node.id).cloned(),
-                    call,
-                    body,
-                    anchor: Some(node.id.clone()),
-                });
+                let stmt = match self.loop_sugar.get(&node.id).cloned() {
+                    Some(sugar) => {
+                        let head_pin = sugared_loop_head_pin(&node.name);
+                        let iterable = call
+                            .args
+                            .into_iter()
+                            .find(|arg| arg.name == head_pin)
+                            .map(|arg| arg.value)
+                            .unwrap_or(Expr::Literal(Literal::Null));
+                        Stmt::Loop {
+                            keyword: keyword.to_string(),
+                            bind: None,
+                            call: Call::placeholder(),
+                            iterable: Some(iterable),
+                            element: (node.name != WHILE_LOOP)
+                                .then(|| sugar.element.unwrap_or_else(|| "_".to_string())),
+                            index: sugar.index,
+                            body,
+                            anchor: Some(node.id.clone()),
+                        }
+                    }
+                    None => Stmt::Loop {
+                        keyword: keyword.to_string(),
+                        bind: self.bindings.get(&node.id).cloned(),
+                        call,
+                        iterable: None,
+                        element: None,
+                        index: None,
+                        body,
+                        anchor: Some(node.id.clone()),
+                    },
+                };
+                block.stmts.push(stmt);
                 current = self.exec_target_by_name(node, LOOP_DONE_PIN);
                 continue;
             }
@@ -1488,6 +1972,13 @@ impl<'a> Lowering<'a> {
                 anchor: Some(node.id.clone()),
             };
         }
+        if let Some(fields) = self.destructured.get(&node.id) {
+            return Stmt::Destructure {
+                fields: fields.clone(),
+                call,
+                anchor: Some(node.id.clone()),
+            };
+        }
         if let Some(name) = self.bindings.get(&node.id) {
             Stmt::Let {
                 name: name.clone(),
@@ -1503,67 +1994,210 @@ impl<'a> Lowering<'a> {
     }
 
     /// Build a call expression for a node, resolving its connected/literal data inputs.
-    fn build_call(&mut self, node: &Node) -> Call {
-        let mut data_inputs: Vec<&Pin> = node
+    ///
+    /// Catalog nodes render as `ns::alias({ … })`, or in method form `recv.alias(…)` when the
+    /// receiver pin qualifies (see [`Self::method_receiver`]); the single remaining written
+    /// input of a method call is rendered positionally when it is the data input right after
+    /// the receiver. Function calls keep their function name.
+    fn build_call(&mut self, node: &'a Node) -> Call {
+        let mut data_inputs: Vec<&'a Pin> = node
             .pins
             .values()
             .filter(|p| p.pin_type == PinType::Input && !is_exec(p))
             .collect();
-        data_inputs.sort_by_key(|p| p.index);
+        data_inputs.sort_by_key(|p| (p.index, p.id.as_str()));
 
-        let mut args = Vec::new();
-        for pin in data_inputs {
-            if let Some(source_pin_id) = pin.depends_on.iter().next()
-                && let Some(expr) = self.resolve_source(source_pin_id)
-            {
-                args.push(Arg {
+        let mut written: Vec<(&'a Pin, Expr)> = Vec::new();
+        for pin in &data_inputs {
+            if let Some(expr) = self.written_input_expr(node, pin) {
+                written.push((pin, expr));
+            }
+        }
+        let args: Vec<Arg> = written
+            .iter()
+            .map(|(pin, expr)| Arg {
+                name: pin.name.clone(),
+                value: expr.clone(),
+            })
+            .collect();
+        let tools = self.fn_ref_arg(node);
+
+        if let Some((display, mut args)) = function_call(node, args.clone()) {
+            args.extend(tools);
+            return Call {
+                node_type: node.name.clone(),
+                display,
+                path: Vec::new(),
+                receiver: None,
+                positional: Vec::new(),
+                args,
+                anchor: Some(node.id.clone()),
+            };
+        }
+
+        let alias = node.flowscript_alias();
+        if let Some(receiver_pin) = self.method_receiver(node, &data_inputs, &written, &alias) {
+            let (receiver, mut rest): (Vec<_>, Vec<_>) = written
+                .into_iter()
+                .partition(|(pin, _)| pin.id == receiver_pin.id);
+            let receiver = receiver.into_iter().next().map(|(_, expr)| expr);
+            let receiver_first =
+                data_inputs.first().map(|pin| pin.id.as_str()) == Some(receiver_pin.id.as_str());
+            let next_input = data_inputs.get(1).map(|pin| pin.id.as_str());
+            // A trailing `{ … }` is the named-argument object, so an object value is never
+            // positional; neither is a pin a node mints on update (`string_format`
+            // placeholders), whose name is the only thing that identifies it.
+            let positional = match rest.as_slice() {
+                [(pin, expr)]
+                    if tools.is_none()
+                        && receiver_first
+                        && Some(pin.id.as_str()) == next_input
+                        && !is_object_literal(expr)
+                        && !super::reconcile::accepts_dynamic_named_args(&node.name) =>
+                {
+                    rest.pop().map(|(_, expr)| expr)
+                }
+                _ => None,
+            };
+            let mut args: Vec<Arg> = rest
+                .into_iter()
+                .map(|(pin, expr)| Arg {
                     name: pin.name.clone(),
                     value: expr,
-                });
-                continue;
-            }
-            // No connection: include a configured literal default if present.
-            if let Some(bytes) = &pin.default_value {
-                // Most JSON `null` defaults mean "unset" and intentionally stay absent from
-                // FlowScript. `struct_set.value` is different: an explicit null is the required,
-                // semantic value used to clear a field, so dropping it makes the rendered call
-                // invalid and prevents a lossless round-trip.
-                let lit = if node.name == STRUCT_SET && pin.name == STRUCT_SET_VALUE_PIN {
-                    util::decode_default_preserving_null(bytes)
-                } else {
-                    util::decode_default(bytes)
-                };
-                if let Some(lit) = lit {
-                    // `controlCallReference.fnRef` holds an opaque target node id; resolve it to
-                    // that node's binding/display name instead of leaking the CUID.
-                    if node.name == CALL_REFERENCE
-                        && pin.name == FN_REF_PIN
-                        && let Some(name) = self.node_ref_name(&lit)
-                    {
-                        args.push(Arg {
-                            name: pin.name.clone(),
-                            value: Expr::Ref(name),
-                        });
-                        continue;
-                    }
-                    args.push(Arg {
-                        name: pin.name.clone(),
-                        value: self.sugar_literal(lit),
-                    });
-                }
-            }
+                })
+                .collect();
+            args.extend(tools);
+            return Call {
+                node_type: node.name.clone(),
+                display: alias,
+                path: Vec::new(),
+                receiver: receiver.map(Box::new),
+                positional: positional.into_iter().collect(),
+                args,
+                anchor: Some(node.id.clone()),
+            };
         }
 
-        let (display, mut args) = sugar_call(node, args);
-        if let Some(tools) = self.fn_ref_arg(node) {
-            args.push(tools);
-        }
+        let mut args = args;
+        args.extend(tools);
         Call {
             node_type: node.name.clone(),
-            display,
+            display: alias,
+            path: namespace_segments(&node.flowscript_namespace())
+                .map(str::to_string)
+                .collect(),
+            receiver: None,
+            positional: Vec::new(),
             args,
             anchor: Some(node.id.clone()),
         }
+    }
+
+    /// The expression a data input carries in text: its wired source, else its configured
+    /// literal default. `None` when the input is neither wired nor set.
+    fn written_input_expr(&mut self, node: &'a Node, pin: &'a Pin) -> Option<Expr> {
+        if let Some(source_pin_id) = pin.depends_on.iter().next()
+            && let Some(expr) = self.resolve_source(source_pin_id)
+        {
+            return Some(expr);
+        }
+        let bytes = pin.default_value.as_ref()?;
+        // Most JSON `null` defaults mean "unset" and intentionally stay absent from FlowScript.
+        // `struct_set.value` is different: an explicit null is the required, semantic value used
+        // to clear a field, so dropping it makes the rendered call invalid and prevents a
+        // lossless round-trip.
+        let lit = if node.name == STRUCT_SET && pin.name == STRUCT_SET_VALUE_PIN {
+            util::decode_default_preserving_null(bytes)
+        } else {
+            util::decode_default(bytes)
+        }?;
+        // `controlCallReference.fnRef` holds an opaque target node id; resolve it to that
+        // node's binding/display name instead of leaking the CUID.
+        if node.name == CALL_REFERENCE
+            && pin.name == FN_REF_PIN
+            && let Some(name) = self.node_ref_name(&lit)
+        {
+            return Some(Expr::Ref(name));
+        }
+        Some(self.sugar_literal(lit))
+    }
+
+    /// The receiver pin of a call that renders in method form (`recv.alias(…)`), or `None` for
+    /// the static `ns::alias({ … })` spelling.
+    ///
+    /// The method form is emitted only where reconcile dispatches it back to this very node:
+    /// the node has a receiver pin (`flowscript_receiver`) with a method class (a value-type
+    /// class such as `string`, or an interface title — the namespace plays no part, so
+    /// `hash::md5` with `receiver("input")` renders as `content.md5()`); the receiver is wired
+    /// to a source whose board type reconcile recovers as that same class, or holds a string
+    /// literal (numeric, boolean, null and JSON literals stay static); no user `function`
+    /// shadows the alias (UFCS); and the node is not a statement with its own sugar (loops,
+    /// `if`, `structSet` accumulators).
+    fn method_receiver(
+        &self,
+        node: &'a Node,
+        data_inputs: &[&'a Pin],
+        written: &[(&'a Pin, Expr)],
+        alias: &str,
+    ) -> Option<&'a Pin> {
+        if loop_keyword(node).is_some() || matches!(node.name.as_str(), CONTROL_BRANCH | STRUCT_SET)
+        {
+            return None;
+        }
+        if self.fn_names.values().any(|name| name == alias) {
+            return None;
+        }
+        let receiver_name = node.flowscript_receiver()?;
+        let class = node.flowscript_receiver_class()?;
+        let pin = data_inputs
+            .iter()
+            .copied()
+            .find(|pin| pin.name == receiver_name)?;
+        let (_, expr) = written.iter().find(|(written, _)| written.id == pin.id)?;
+        if !receiver_is_pin_typed(expr) {
+            return None;
+        }
+        let source_class = match pin.depends_on.iter().next() {
+            Some(source_pin_id) => self.source_pin_class(source_pin_id)?,
+            None => match expr {
+                Expr::Literal(Literal::String(_)) => "string".to_string(),
+                _ => return None,
+            },
+        };
+        (source_class == class).then_some(pin)
+    }
+
+    /// The method class of the value on an output pin as reconcile will type it back from the
+    /// rendered expression: the typed pin at the end of reroute/boundary pass-throughs, a
+    /// function parameter's boundary pin, or a variable's declared type. `None` for `Generic`
+    /// sources (loop elements, untyped struct reads), which reconcile cannot class.
+    fn source_pin_class(&self, output_pin_id: &str) -> Option<String> {
+        if let Some(upstream) = self.reroute_passthrough(output_pin_id) {
+            return self.source_pin_class(&upstream);
+        }
+        if let Some(upstream) = self.boundary_passthrough(output_pin_id) {
+            return self.source_pin_class(&upstream);
+        }
+        if let Some(pin) = self.function_boundary_pins.get(output_pin_id) {
+            return pin_class(pin);
+        }
+        let pin = *self.pins.get(output_pin_id)?;
+        let owner = *self.pin_owner.get(output_pin_id)?;
+        if owner.name == VARIABLE_GET || owner.name == VARIABLE_SET {
+            let id = self.pin_literal_string(owner, "var_ref")?;
+            let variable = self.board.variables.get(&id).or_else(|| {
+                self.board
+                    .layers
+                    .values()
+                    .find_map(|layer| layer.variables.get(&id))
+            })?;
+            return receiver_class_of(
+                &format!("{:?}", variable.data_type),
+                &format!("{:?}", variable.value_type),
+                variable.schema.as_deref(),
+            );
+        }
+        pin_class(pin)
     }
 
     /// Synthesize a `tools:`/`fnRefs:` argument from a node's `fn_refs`, surfacing the referenced
@@ -1620,6 +2254,10 @@ impl<'a> Lowering<'a> {
         if let Some(param) = self.event_params.get(output_pin_id) {
             return Some(Expr::Ref(param.clone()));
         }
+        // A sugared loop's `value`/`index` output is its bare element/index binding.
+        if let Some(name) = self.loop_bindings.get(output_pin_id) {
+            return Some(Expr::Ref(name.clone()));
+        }
         let source_pin = *self.pins.get(output_pin_id)?;
         let owner = *self.pin_owner.get(output_pin_id)?;
 
@@ -1636,8 +2274,12 @@ impl<'a> Lowering<'a> {
             return Some(expr);
         }
 
-        // Impure source -> reference its binding and select the output pin.
+        // Impure source -> the bare local a destructured binding exposes the pin as, else its
+        // binding with the output pin selected.
         if is_impure(owner) {
+            if let Some(local) = self.destructure_locals.get(output_pin_id) {
+                return Some(Expr::Ref(local.clone()));
+            }
             if let Some(name) = self.bindings.get(&owner.id) {
                 return Some(Expr::Field {
                     base: Box::new(Expr::Ref(name.clone())),
@@ -1776,8 +2418,60 @@ impl<'a> Lowering<'a> {
                     field,
                 })
             }
+            // `stringFormat` -> `` `text ${expr}` `` when the template re-synthesizes exactly
+            // this node (literal format string, every placeholder pin wired or valued, no
+            // stray inputs); anything else keeps the call form.
+            STRING_FORMAT_NODE_TYPE => self.template_literal(owner),
             _ => None,
         }
+    }
+
+    fn template_literal(&mut self, node: &'a Node) -> Option<Expr> {
+        if self.inlining.contains(&node.id) {
+            return Some(Expr::Ref(binding_base_name(node)));
+        }
+        let format_pin = node
+            .pins
+            .values()
+            .find(|p| p.pin_type == PinType::Input && p.name == FORMAT_STRING_PIN)?;
+        if !format_pin.depends_on.is_empty() {
+            return None;
+        }
+        let format_string = self.pin_literal_string(node, FORMAT_STRING_PIN)?;
+        let mut present: Vec<&str> = node
+            .pins
+            .values()
+            .filter(|p| {
+                p.pin_type == PinType::Input
+                    && !is_exec(p)
+                    && p.name != FORMAT_STRING_PIN
+                    && (!p.depends_on.is_empty()
+                        || p.default_value
+                            .as_deref()
+                            .and_then(util::decode_default)
+                            .is_some())
+            })
+            .map(|p| p.name.as_str())
+            .collect();
+        present.sort_unstable();
+        present.dedup();
+        self.inlining.insert(node.id.clone());
+        let parts = format_template_parts(&format_string, |placeholder| {
+            present
+                .binary_search(&placeholder)
+                .ok()
+                .and_then(|_| self.input_expr(node, placeholder))
+        })
+        .filter(|_| {
+            let mut placeholders = super::reconcile::format_string_placeholders(&format_string);
+            placeholders.sort_unstable();
+            placeholders
+                .iter()
+                .map(String::as_str)
+                .eq(present.iter().copied())
+        });
+        self.inlining.remove(&node.id);
+        parts.map(|parts| Expr::Template { parts })
     }
 
     /// Build a `lhs <op> rhs` binary expression from a two-input operator node. Returns `None`
@@ -1792,9 +2486,11 @@ impl<'a> Lowering<'a> {
             .filter(|p| p.pin_type == PinType::Input && !is_exec(p))
             .collect();
         inputs.sort_by_key(|p| p.index);
-        if inputs.len() != 2 {
+        let (operands, extras) = inputs.split_at_checked(2)?;
+        if !extras.iter().all(|pin| pin_is_untouched_default(pin)) {
             return None;
         }
+        let inputs = operands;
         self.inlining.insert(node.id.clone());
         let lhs = self
             .pin_expr(inputs[0])
@@ -2092,6 +2788,53 @@ where
     vars.iter().map(|v| var_decl_of(v, refs)).collect()
 }
 
+/// Whether a trailing operator-node input (`ignore_case`) can be implied by the operator form:
+/// unconnected, carrying a default (reconcile only rebuilds operators over defaulted extras) and
+/// holding its type's zero value. The operator form omits such pins, so a node with an edited
+/// flag keeps the explicit call form and stays lossless.
+pub fn pin_is_untouched_default(pin: &Pin) -> bool {
+    if !pin.depends_on.is_empty() {
+        return false;
+    }
+    let Some(bytes) = pin.default_value.as_ref() else {
+        return false;
+    };
+    match flow_like_types::json::from_slice::<flow_like_types::Value>(bytes) {
+        Ok(value) => is_zero_value(&value),
+        Err(_) => false,
+    }
+}
+
+/// Whether a loop input the sugared form leaves unspoken still holds the value the synthesized
+/// node gets: unconnected and either unset, its catalog default, or its type's zero value.
+fn loop_input_is_implied(node: &Node, pin: &Pin) -> bool {
+    if !pin.depends_on.is_empty() {
+        return false;
+    }
+    let Some(bytes) = pin.default_value.as_deref() else {
+        return true;
+    };
+    let Ok(value) = flow_like_types::json::from_slice::<flow_like_types::Value>(bytes) else {
+        return false;
+    };
+    let implied = LOOP_SUGAR_IMPLIED_INPUTS
+        .iter()
+        .find(|(node_type, name, _)| *node_type == node.name && *name == pin.name)
+        .map(|(_, _, default)| flow_like_types::Value::from(*default));
+    implied.as_ref() == Some(&value) || (implied.is_none() && is_zero_value(&value))
+}
+
+fn is_zero_value(value: &flow_like_types::Value) -> bool {
+    match value {
+        flow_like_types::Value::Null => true,
+        flow_like_types::Value::Bool(b) => !b,
+        flow_like_types::Value::Number(n) => n.as_f64() == Some(0.0),
+        flow_like_types::Value::String(s) => s.is_empty(),
+        flow_like_types::Value::Array(items) => items.is_empty(),
+        flow_like_types::Value::Object(fields) => fields.is_empty(),
+    }
+}
+
 fn is_exec(pin: &Pin) -> bool {
     pin.data_type == VariableType::Execution
 }
@@ -2131,26 +2874,51 @@ fn var_decl_of(v: &Variable, refs: &HashMap<String, String>) -> VarDecl {
     }
 }
 
-/// Resolve the display name (and pruned args) for a node call. `control_call_function` /
-/// `control_call_reference` render as a direct call to the referenced function/node, dropping
-/// the opaque id argument; all other nodes keep their camelCase type name and arguments.
-fn sugar_call(node: &Node, mut args: Vec<Arg>) -> (String, Vec<Arg>) {
-    match node.name.as_str() {
-        CALL_FUNCTION => {
-            if let Some(name) = ref_name_of_arg(&args, FUNCTION_LAYER_ID_PIN) {
-                args.retain(|a| a.name != FUNCTION_LAYER_ID_PIN);
-                return (name, args);
-            }
-        }
-        CALL_REFERENCE => {
-            if let Some(name) = ref_name_of_arg(&args, FN_REF_PIN) {
-                args.retain(|a| a.name != FN_REF_PIN);
-                return (name, args);
-            }
-        }
-        _ => {}
+/// `control_call_function` / `control_call_reference` render as a direct call to the referenced
+/// function/node, dropping the opaque id argument: the display name plus the pruned args. Every
+/// other node (and an unresolvable reference) is `None` and renders as its catalog spelling.
+fn function_call(node: &Node, mut args: Vec<Arg>) -> Option<(String, Vec<Arg>)> {
+    let pin = match node.name.as_str() {
+        CALL_FUNCTION => FUNCTION_LAYER_ID_PIN,
+        CALL_REFERENCE => FN_REF_PIN,
+        _ => return None,
+    };
+    let name = ref_name_of_arg(&args, pin)?;
+    args.retain(|a| a.name != pin);
+    Some((name, args))
+}
+
+/// Whether reconcile types a receiver expression from a pin contract — a binding, parameter,
+/// variable or loop name, an output selection on one, an inlined call, a string literal or a
+/// template — so the board pin lower checked is the type it will dispatch on. Struct member
+/// and index reads are typed by walking the base's schema instead, which can disagree with the
+/// (specialized) board pin, so they stay static.
+fn receiver_is_pin_typed(expr: &Expr) -> bool {
+    match expr {
+        Expr::Ref(_) | Expr::Call(_) | Expr::Template { .. } => true,
+        Expr::Field { base, .. } => matches!(base.as_ref(), Expr::Ref(_) | Expr::Call(_)),
+        Expr::Literal(Literal::String(_)) => true,
+        _ => false,
     }
-    (util::to_camel_case(&node.name), args)
+}
+
+/// Whether an expression renders as `{ … }` (a struct literal or a JSON object default).
+fn is_object_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Object(_) => true,
+        Expr::Literal(Literal::Json(raw)) => raw.trim_start().starts_with('{'),
+        _ => false,
+    }
+}
+
+/// The method class of a pin's value (`string`, `array`, a schema title, …), `None` for
+/// `Generic`/`Execution` pins.
+fn pin_class(pin: &Pin) -> Option<String> {
+    receiver_class_of(
+        &format!("{:?}", pin.data_type),
+        &format!("{:?}", pin.value_type),
+        pin.schema.as_deref(),
+    )
 }
 
 /// If the named argument holds a bare reference (a resolved function/node name), return it.
@@ -2167,9 +2935,29 @@ fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
 /// Nested handlers intentionally are not traversed: they are independent scopes and own their
 /// registrations themselves.
 fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
+    collect_calls_in_block_with(block, calls, false);
+}
+
+/// Every call in the document, nested handlers and function bodies included.
+fn collect_calls_in_ast(ast: &BoardAst) -> Vec<&Call> {
+    let mut calls = Vec::new();
+    for function in &ast.functions {
+        collect_calls_in_block_with(&function.body, &mut calls, true);
+    }
+    for event in &ast.events {
+        collect_calls_in_block_with(&event.body, &mut calls, true);
+    }
+    calls
+}
+
+fn collect_calls_in_block_with<'a>(
+    block: &'a Block,
+    calls: &mut Vec<&'a Call>,
+    include_handlers: bool,
+) {
     for statement in &block.stmts {
         match statement {
-            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
                 collect_calls_in_call(call, calls);
             }
             Stmt::Branch {
@@ -2183,12 +2971,20 @@ fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
                     collect_calls_in_expr(condition, calls);
                 }
                 for arm in arms {
-                    collect_calls_in_block(&arm.body, calls);
+                    collect_calls_in_block_with(&arm.body, calls, include_handlers);
                 }
             }
-            Stmt::Loop { call, body, .. } => {
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
                 collect_calls_in_call(call, calls);
-                collect_calls_in_block(body, calls);
+                if let Some(iterable) = iterable {
+                    collect_calls_in_expr(iterable, calls);
+                }
+                collect_calls_in_block_with(body, calls, include_handlers);
             }
             Stmt::Assign { value, .. }
             | Stmt::FieldAssign { value, .. }
@@ -2198,6 +2994,9 @@ fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
                     collect_calls_in_expr(value, calls);
                 }
             }
+            Stmt::Handler(event) if include_handlers => {
+                collect_calls_in_block_with(&event.body, calls, include_handlers);
+            }
             Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => {}
         }
     }
@@ -2205,6 +3004,12 @@ fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
 
 fn collect_calls_in_call<'a>(call: &'a Call, calls: &mut Vec<&'a Call>) {
     calls.push(call);
+    if let Some(receiver) = &call.receiver {
+        collect_calls_in_expr(receiver, calls);
+    }
+    for value in &call.positional {
+        collect_calls_in_expr(value, calls);
+    }
     for arg in &call.args {
         collect_calls_in_expr(&arg.value, calls);
     }
@@ -2241,7 +3046,126 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<&'a Call>) {
             collect_calls_in_expr(lhs, calls);
             collect_calls_in_expr(rhs, calls);
         }
+        Expr::Template { parts } => {
+            for part in parts {
+                if let TemplatePart::Expr(expr) = part {
+                    collect_calls_in_expr(expr, calls);
+                }
+            }
+        }
         Expr::Ref(_) | Expr::Literal(_) => {}
+    }
+}
+
+/// Visit every call in the document mutably, including calls nested in expressions, handlers
+/// and function bodies.
+fn for_each_call_mut(ast: &mut BoardAst, visit: &mut dyn FnMut(&mut Call)) {
+    fn block(block: &mut Block, visit: &mut dyn FnMut(&mut Call)) {
+        for statement in &mut block.stmts {
+            stmt(statement, visit);
+        }
+    }
+    fn stmt(statement: &mut Stmt, visit: &mut dyn FnMut(&mut Call)) {
+        match statement {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
+                call_mut(call, visit);
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                ..
+            } => {
+                call_mut(call, visit);
+                if let Some(condition) = condition {
+                    expr(condition, visit);
+                }
+                for arm in arms {
+                    block(&mut arm.body, visit);
+                }
+            }
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
+                call_mut(call, visit);
+                if let Some(iterable) = iterable {
+                    expr(iterable, visit);
+                }
+                block(body, visit);
+            }
+            Stmt::Assign { value, .. }
+            | Stmt::FieldAssign { value, .. }
+            | Stmt::LocalAlias { value, .. } => expr(value, visit),
+            Stmt::Return { values, .. } => {
+                for value in values {
+                    expr(value, visit);
+                }
+            }
+            Stmt::Handler(event) => block(&mut event.body, visit),
+            Stmt::Local(_) | Stmt::Comment(_) => {}
+        }
+    }
+    fn call_mut(call: &mut Call, visit: &mut dyn FnMut(&mut Call)) {
+        visit(call);
+        if let Some(receiver) = &mut call.receiver {
+            expr(receiver, visit);
+        }
+        for value in &mut call.positional {
+            expr(value, visit);
+        }
+        for arg in &mut call.args {
+            expr(&mut arg.value, visit);
+        }
+    }
+    fn expr(expression: &mut Expr, visit: &mut dyn FnMut(&mut Call)) {
+        match expression {
+            Expr::Call(call) => call_mut(call, visit),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => expr(base, visit),
+            Expr::Object(fields) => {
+                for field in fields {
+                    expr(&mut field.value, visit);
+                }
+            }
+            Expr::Array(values) => {
+                for value in values {
+                    expr(value, visit);
+                }
+            }
+            Expr::Index { base, index } => {
+                expr(base, visit);
+                expr(index, visit);
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                expr(cond, visit);
+                expr(then, visit);
+                expr(otherwise, visit);
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                expr(lhs, visit);
+                expr(rhs, visit);
+            }
+            Expr::Template { parts } => {
+                for part in parts {
+                    if let TemplatePart::Expr(value) = part {
+                        expr(value, visit);
+                    }
+                }
+            }
+            Expr::Ref(_) | Expr::Literal(_) => {}
+        }
+    }
+    for function in &mut ast.functions {
+        block(&mut function.body, visit);
+    }
+    for event in &mut ast.events {
+        block(&mut event.body, visit);
     }
 }
 
@@ -2336,14 +3260,16 @@ fn binding_base_name(node: &Node) -> String {
     util::to_camel_case(source)
 }
 
+/// Mint `base`, `base2`, `base3`, … — the first spelling not yet in `used` (compared
+/// case-insensitively, so a minted name never differs from a reserved one by case alone).
 fn unique_name(base: &str, used: &mut HashSet<String>) -> String {
-    if used.insert(base.to_string()) {
+    if used.insert(base.to_lowercase()) {
         return base.to_string();
     }
     let mut n = 2;
     loop {
         let candidate = format!("{base}{n}");
-        if used.insert(candidate.clone()) {
+        if used.insert(candidate.to_lowercase()) {
             return candidate;
         }
         n += 1;
@@ -2455,5 +3381,628 @@ mod cache_tests {
         let ast = lower_board(&board);
         assert_eq!(ast.functions.len(), 1);
         assert!(ast.functions[0].cache.is_none());
+    }
+}
+
+#[cfg(test)]
+mod operator_tests {
+    use super::*;
+    use flow_like_ast::RenderOptions;
+    use flow_like_storage::Path;
+    use flow_like_types::json::json;
+
+    fn wire(board: &mut Board, from: (&str, &str), to: (&str, &str)) {
+        let from_id = board.nodes[from.0]
+            .pins
+            .values()
+            .find(|pin| pin.name == from.1 && pin.pin_type == PinType::Output)
+            .expect("output pin")
+            .id
+            .clone();
+        let to_id = board.nodes[to.0]
+            .pins
+            .values()
+            .find(|pin| pin.name == to.1 && pin.pin_type == PinType::Input)
+            .expect("input pin")
+            .id
+            .clone();
+        board
+            .nodes
+            .get_mut(from.0)
+            .unwrap()
+            .pins
+            .get_mut(&from_id)
+            .unwrap()
+            .connected_to
+            .insert(to_id.clone());
+        board
+            .nodes
+            .get_mut(to.0)
+            .unwrap()
+            .pins
+            .get_mut(&to_id)
+            .unwrap()
+            .depends_on
+            .insert(from_id);
+    }
+
+    fn equality_board(ignore_case: bool) -> Board {
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from(""));
+
+        let mut start = Node::new("events_simple", "Simple Event", "", "Events");
+        start.id = "start".to_string();
+        start.start = Some(true);
+        start.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut equal = Node::new("equal_string", "Equal Strings", "", "Utils/String");
+        equal
+            .set_flowscript_name("string", "equal")
+            .set_receiver("string");
+        equal.id = "equal".to_string();
+        equal
+            .add_input_pin("string", "String", "", VariableType::String)
+            .set_default_value(Some(json!("a")));
+        equal
+            .add_input_pin("string", "String", "", VariableType::String)
+            .set_default_value(Some(json!("b")));
+        equal
+            .add_input_pin("ignore_case", "Ignore Case", "", VariableType::Boolean)
+            .set_default_value(Some(json!(ignore_case)));
+        equal.add_output_pin("equal", "Equal", "", VariableType::Boolean);
+
+        let mut log = Node::new("log_bool", "Log Bool", "", "Logging");
+        log.id = "log".to_string();
+        log.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        log.add_input_pin("value", "Value", "", VariableType::Boolean);
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        for node in [start, equal, log] {
+            board.nodes.insert(node.id.clone(), node);
+        }
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("equal", "equal"), ("log", "value"));
+        board
+    }
+
+    #[test]
+    fn defaulted_trailing_operator_input_keeps_the_operator_form() {
+        let text =
+            super::super::board_to_flowscript(&equality_board(false), &RenderOptions::default());
+        assert!(
+            text.contains("log::bool({ value: \"a\" == \"b\" })"),
+            "untouched ignore_case must render as an operator:\n{text}"
+        );
+    }
+
+    #[test]
+    fn edited_trailing_operator_input_keeps_the_explicit_call() {
+        let text =
+            super::super::board_to_flowscript(&equality_board(true), &RenderOptions::default());
+        assert!(
+            text.contains("\"a\".equal({ string: \"b\", ignoreCase: true })"),
+            "an edited ignore_case must stay an explicit call so the flag survives:\n{text}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+    use crate::flow::board::{Layer, LayerType};
+    use crate::flow::copilot::node_to_metadata;
+    use crate::flow::pin::ValueType;
+    use flow_like_ast::RenderOptions;
+    use flow_like_storage::Path;
+    use flow_like_types::json::json;
+
+    fn wire(board: &mut Board, from: (&str, &str), to: (&str, &str)) {
+        let from_id = board.nodes[from.0]
+            .pins
+            .values()
+            .find(|pin| pin.name == from.1 && pin.pin_type == PinType::Output)
+            .expect("output pin")
+            .id
+            .clone();
+        let to_id = board.nodes[to.0]
+            .pins
+            .values()
+            .find(|pin| pin.name == to.1 && pin.pin_type == PinType::Input)
+            .expect("input pin")
+            .id
+            .clone();
+        board
+            .nodes
+            .get_mut(from.0)
+            .unwrap()
+            .pins
+            .get_mut(&from_id)
+            .unwrap()
+            .connected_to
+            .insert(to_id.clone());
+        board
+            .nodes
+            .get_mut(to.0)
+            .unwrap()
+            .pins
+            .get_mut(&to_id)
+            .unwrap()
+            .depends_on
+            .insert(from_id);
+    }
+
+    fn board() -> Board {
+        Board::new_detached(Some("board".to_string()), Path::from(""))
+    }
+
+    fn add(board: &mut Board, node: Node) {
+        board.nodes.insert(node.id.clone(), node);
+    }
+
+    /// A generic event entry exposing `params` as typed outputs.
+    fn event(id: &str, params: &[(&str, VariableType)]) -> Node {
+        let mut node = Node::new("events_generic", "Generic Event", "", "Events");
+        node.id = id.to_string();
+        node.start = Some(true);
+        node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        for (name, ty) in params {
+            node.add_output_pin(name, name, "", ty.clone());
+        }
+        node
+    }
+
+    /// `log_info` — an impure sink in the `Logging` category.
+    fn log(id: &str) -> Node {
+        let mut node = Node::new("log_info", "Log Info", "", "Logging");
+        node.id = id.to_string();
+        node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        node.add_input_pin("message", "Message", "", VariableType::Generic);
+        node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        node
+    }
+
+    fn string_node(
+        id: &str,
+        node_type: &str,
+        friendly: &str,
+        extra: &[(&str, VariableType)],
+    ) -> Node {
+        let mut node = Node::new(node_type, friendly, "", "Utils/String");
+        node.id = id.to_string();
+        node.add_input_pin("string", "String", "", VariableType::String);
+        for (name, ty) in extra {
+            node.add_input_pin(name, name, "", ty.clone());
+        }
+        node.add_output_pin("result", "Result", "", VariableType::String);
+        node
+    }
+
+    fn text(board: &Board) -> String {
+        super::super::board_to_flowscript(board, &RenderOptions::default())
+    }
+
+    /// Reconcile the board's own anchored text against itself: a no-op proves every rendered
+    /// spelling resolves back to the same node with the same wiring.
+    fn assert_roundtrip(board: &Board) {
+        let anchored = super::super::board_to_flowscript(
+            board,
+            &RenderOptions {
+                anchors: true,
+                ..RenderOptions::default()
+            },
+        );
+        let catalog: Vec<_> = board.nodes.values().map(node_to_metadata).collect();
+        let result = super::super::reconcile_text_with_catalog(board, &anchored, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "round trip diagnostics {:?}\n{anchored}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "round trip commands {:?}\n{anchored}",
+            result.commands
+        );
+    }
+
+    /// event(s) → log(trim(s)); `second` adds a second string input to the trim node.
+    fn trim_board(receiver: Option<&str>) -> Board {
+        let mut board = board();
+        add(&mut board, event("start", &[("s", VariableType::String)]));
+        let mut trim = string_node("trim", "string_trim", "Trim String", &[]);
+        if let Some(literal) = receiver {
+            trim.pins
+                .values_mut()
+                .find(|pin| pin.name == "string")
+                .unwrap()
+                .set_default_value(Some(json!(literal)));
+        }
+        add(&mut board, trim);
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        if receiver.is_none() {
+            wire(&mut board, ("start", "s"), ("trim", "string"));
+        }
+        wire(&mut board, ("trim", "result"), ("log", "message"));
+        board
+    }
+
+    #[test]
+    fn wired_string_receiver_renders_the_method_form() {
+        let board = trim_board(None);
+        let text = text(&board);
+        assert!(text.contains("log::info({ message: s.trim() })"), "{text}");
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn string_literal_receiver_renders_the_method_form() {
+        let board = trim_board(Some(" x "));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info({ message: \" x \".trim() })"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn numeric_literal_receiver_stays_static() {
+        let mut board = board();
+        add(&mut board, event("start", &[]));
+        let mut abs = Node::new("int_abs", "Abs", "", "Math/Int");
+        abs.id = "abs".to_string();
+        abs.add_input_pin("value", "Value", "", VariableType::Integer)
+            .set_default_value(Some(json!(-5)));
+        abs.add_output_pin("result", "Result", "", VariableType::Integer);
+        add(&mut board, abs);
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("abs", "result"), ("log", "message"));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info({ message: int::abs({ value: -5 }) })"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn generic_receiver_source_stays_static() {
+        let mut board = board();
+        add(
+            &mut board,
+            event("start", &[("items", VariableType::Generic)]),
+        );
+        board
+            .nodes
+            .get_mut("start")
+            .unwrap()
+            .pins
+            .values_mut()
+            .for_each(|pin| {
+                if pin.name == "items" {
+                    pin.value_type = ValueType::Array;
+                }
+            });
+        let mut each = Node::new("control_for_each", "For Each", "", "Control");
+        each.id = "each".to_string();
+        each.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        each.add_input_pin("array", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        each.add_output_pin("exec_out", "Loop", "", VariableType::Execution);
+        each.add_output_pin("value", "Value", "", VariableType::Generic);
+        each.add_output_pin("index", "Index", "", VariableType::Integer);
+        each.add_output_pin("done", "Done", "", VariableType::Execution);
+        add(&mut board, each);
+        add(&mut board, string_node("trim", "string_trim", "Trim", &[]));
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("each", "exec_in"));
+        wire(&mut board, ("start", "items"), ("each", "array"));
+        wire(&mut board, ("each", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("each", "value"), ("trim", "string"));
+        wire(&mut board, ("trim", "result"), ("log", "message"));
+        let text = text(&board);
+        assert!(
+            text.contains("for (const item of items) {\n        log::info({ message: string::trim({ string: item }) })"),
+            "a Generic loop element is not a typed receiver:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    fn contains_board(ignore_case: Option<bool>) -> Board {
+        let mut board = board();
+        add(&mut board, event("start", &[("s", VariableType::String)]));
+        let mut contains = string_node(
+            "contains",
+            "string_contains",
+            "Contains",
+            &[
+                ("substring", VariableType::String),
+                ("ignore_case", VariableType::Boolean),
+            ],
+        );
+        for pin in contains.pins.values_mut() {
+            match pin.name.as_str() {
+                "substring" => {
+                    pin.set_default_value(Some(json!("?")));
+                }
+                "ignore_case" => {
+                    pin.set_default_value(ignore_case.map(|flag| json!(flag)));
+                }
+                _ => {}
+            }
+        }
+        add(&mut board, contains);
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("start", "s"), ("contains", "string"));
+        wire(&mut board, ("contains", "result"), ("log", "message"));
+        board
+    }
+
+    #[test]
+    fn single_following_input_renders_positionally() {
+        let board = contains_board(None);
+        let text = text(&board);
+        assert!(
+            text.contains("log::info({ message: s.contains(\"?\") })"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn several_written_inputs_stay_named() {
+        let board = contains_board(Some(true));
+        let text = text(&board);
+        assert!(
+            text.contains(
+                "log::info({ message: s.contains({ substring: \"?\", ignoreCase: true }) })"
+            ),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn static_calls_render_qualified_and_named() {
+        let mut board = board();
+        add(&mut board, event("start", &[("n", VariableType::Integer)]));
+        let mut from_int = Node::new("string_from_int", "From Int", "", "Utils/String");
+        from_int.id = "from_int".to_string();
+        from_int.add_input_pin("value", "Value", "", VariableType::Integer);
+        from_int.add_output_pin("result", "Result", "", VariableType::String);
+        add(&mut board, from_int);
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("start", "n"), ("from_int", "value"));
+        wire(&mut board, ("from_int", "result"), ("log", "message"));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info({ message: string::fromInt({ value: n }) })"),
+            "a string node whose first input is not a string is static:\n{text}"
+        );
+        assert!(!text.contains("use "), "{text}");
+        assert_roundtrip(&board);
+    }
+
+    /// event → log(a) → log(b): two `log` sites open the namespace.
+    fn two_logs_board() -> Board {
+        let mut board = board();
+        add(&mut board, event("start", &[("s", VariableType::String)]));
+        add(&mut board, log("a"));
+        add(&mut board, log("b"));
+        wire(&mut board, ("start", "exec_out"), ("a", "exec_in"));
+        wire(&mut board, ("a", "exec_out"), ("b", "exec_in"));
+        wire(&mut board, ("start", "s"), ("a", "message"));
+        wire(&mut board, ("start", "s"), ("b", "message"));
+        board
+    }
+
+    #[test]
+    fn two_static_sites_derive_a_glob_use() {
+        let board = two_logs_board();
+        let text = text(&board);
+        assert!(text.starts_with("use log::*\n\n"), "{text}");
+        assert!(
+            text.contains("    info({ message: s })\n    info({ message: s })\n"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn a_function_named_like_a_member_keeps_the_namespace_qualified() {
+        let mut board = two_logs_board();
+        let layer = Layer::new("fn".to_string(), "Info".to_string(), LayerType::Function);
+        board.layers.insert(layer.id.clone(), layer);
+        let text = text(&board);
+        assert!(!text.contains("use "), "{text}");
+        assert!(text.contains("log::info({ message: s })"), "{text}");
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn another_node_flat_name_keeps_the_namespace_qualified() {
+        let mut board = two_logs_board();
+        let mut clash = Node::new("info", "Info", "", "Other");
+        clash.id = "clash".to_string();
+        clash.add_output_pin("result", "Result", "", VariableType::String);
+        add(&mut board, clash);
+        add(&mut board, log("c"));
+        wire(&mut board, ("b", "exec_out"), ("c", "exec_in"));
+        wire(&mut board, ("clash", "result"), ("c", "message"));
+        let text = text(&board);
+        assert!(!text.contains("use "), "{text}");
+        assert!(
+            text.contains("log::info({ message: other::info() })"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_method_call_is_not_a_static_site() {
+        let mut board = trim_board(None);
+        add(&mut board, string_node("trim2", "string_trim", "Trim", &[]));
+        add(&mut board, log("log2"));
+        wire(&mut board, ("log", "exec_out"), ("log2", "exec_in"));
+        wire(&mut board, ("start", "s"), ("trim2", "string"));
+        wire(&mut board, ("trim2", "result"), ("log2", "message"));
+        let text = text(&board);
+        assert!(text.starts_with("use log::*\n\n"), "{text}");
+        assert!(!text.contains("use string"), "{text}");
+        assert_eq!(text.matches("s.trim()").count(), 2, "{text}");
+    }
+
+    /// event(hash) → md5(event.s) consumed twice.
+    fn hash_board(with_param: bool) -> Board {
+        let mut board = board();
+        let params: &[(&str, VariableType)] = if with_param {
+            &[("s", VariableType::String), ("hash", VariableType::String)]
+        } else {
+            &[("s", VariableType::String)]
+        };
+        add(&mut board, event("start", params));
+        let mut md5 = Node::new("string_stats", "MD5 Hash", "", "Utils/String");
+        md5.id = "md5".to_string();
+        md5.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        md5.add_input_pin("input", "Input", "", VariableType::String);
+        md5.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        md5.add_output_pin("hash", "Hash", "", VariableType::String);
+        md5.add_output_pin("length", "Length", "", VariableType::Integer);
+        add(&mut board, md5);
+        add(&mut board, log("log"));
+        add(&mut board, log("log2"));
+        wire(&mut board, ("start", "exec_out"), ("md5", "exec_in"));
+        wire(&mut board, ("start", "s"), ("md5", "input"));
+        wire(&mut board, ("md5", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("log", "exec_out"), ("log2", "exec_in"));
+        wire(&mut board, ("md5", "hash"), ("log", "message"));
+        wire(&mut board, ("md5", "length"), ("log2", "message"));
+        board
+    }
+
+    #[test]
+    fn field_reads_destructure_the_binding() {
+        let board = hash_board(false);
+        let text = text(&board);
+        assert!(
+            text.contains("    const { hash, length } = s.stats()\n    info({ message: hash })\n    info({ message: length })\n"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn destructured_pin_colliding_with_a_param_is_renamed() {
+        let board = hash_board(true);
+        let text = text(&board);
+        assert!(
+            text.contains("const { hash: hash2, length } = s.stats()"),
+            "{text}"
+        );
+        assert!(text.contains("info({ message: hash2 })"), "{text}");
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn a_binding_used_as_a_whole_value_keeps_the_let_form() {
+        let mut board = hash_board(false);
+        let mut register = Node::new(
+            "agent_register_function_tools",
+            "Register Tools",
+            "",
+            "AI/Agents",
+        );
+        register.id = "register".to_string();
+        register.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        register.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        register.fn_refs = Some(crate::flow::node::FnRefs {
+            can_be_referenced_by_fns: false,
+            can_reference_fns: true,
+            fn_refs: vec!["md5".to_string()],
+        });
+        add(&mut board, register);
+        wire(&mut board, ("log2", "exec_out"), ("register", "exec_in"));
+        let text = text(&board);
+        assert!(text.contains("const mD5Hash = s.stats()"), "{text}");
+        assert!(
+            text.contains("registerFunctionTools({ tools: [mD5Hash] })"),
+            "{text}"
+        );
+        assert!(text.contains("info({ message: mD5Hash.hash })"), "{text}");
+    }
+
+    #[test]
+    fn literal_typed_consts_drop_the_annotation() {
+        use crate::flow::variable::Variable;
+        let mut board = board();
+        let mut text_var = Variable::new("greeting", VariableType::String, ValueType::Normal);
+        text_var.default_value = Some(b"\"hi\"".to_vec());
+        let mut count = Variable::new("count", VariableType::Float, ValueType::Normal);
+        count.default_value = Some(b"1".to_vec());
+        let mut record = Variable::new("record", VariableType::Struct, ValueType::Normal);
+        record.default_value = Some(b"{}".to_vec());
+        let mut flag = Variable::new("flag", VariableType::Boolean, ValueType::Normal);
+        flag.default_value = Some(b"true".to_vec());
+        flag.exposed = true;
+        for var in [text_var, count, record, flag] {
+            board.variables.insert(var.id.clone(), var);
+        }
+        assert_eq!(
+            text(&board),
+            "const count: float = 1\nlet flag = true\nconst greeting = \"hi\"\nconst record: Struct = {}\n"
+        );
+    }
+
+    #[test]
+    fn minted_names_avoid_opened_members_and_roots() {
+        let mut board = two_logs_board();
+        let mut info = Node::new("utils_datetime_now", "Info", "", "Utils/DateTime");
+        info.id = "now".to_string();
+        info.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        info.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        info.add_output_pin("date", "Date", "", VariableType::Date);
+        info.add_output_pin("log", "Log", "", VariableType::String);
+        add(&mut board, info);
+        wire(&mut board, ("b", "exec_out"), ("now", "exec_in"));
+        add(&mut board, log("c"));
+        wire(&mut board, ("now", "exec_out"), ("c", "exec_in"));
+        wire(&mut board, ("now", "log"), ("c", "message"));
+        let rendered = text(&board);
+        assert!(
+            rendered.contains("const { log: log2 } = datetime::now()"),
+            "a local named like the `log` namespace root is renamed:\n{rendered}"
+        );
+        let mut board = two_logs_board();
+        let mut tool = Node::new("agent_register_function_tools", "Info", "", "AI/Agents");
+        tool.set_flowscript_name("agent", "registerFunctionTools")
+            .set_receiver("agent_in");
+        tool.id = "tool".to_string();
+        tool.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        tool.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        tool.add_output_pin("agent", "Agent", "", VariableType::Struct);
+        add(&mut board, tool);
+        let mut sink = Node::new("agent_invoke", "Invoke", "", "AI/Agents");
+        sink.set_flowscript_name("agent", "invoke")
+            .set_receiver("agent");
+        sink.id = "sink".to_string();
+        sink.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        sink.add_input_pin("agent", "Agent", "", VariableType::Struct);
+        sink.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        sink.fn_refs = Some(crate::flow::node::FnRefs {
+            can_be_referenced_by_fns: false,
+            can_reference_fns: true,
+            fn_refs: vec!["tool".to_string()],
+        });
+        add(&mut board, sink);
+        wire(&mut board, ("b", "exec_out"), ("tool", "exec_in"));
+        wire(&mut board, ("tool", "exec_out"), ("sink", "exec_in"));
+        wire(&mut board, ("tool", "agent"), ("sink", "agent"));
+        let text = text(&board);
+        assert!(
+            text.contains("const info2 = agent::registerFunctionTools()"),
+            "a binding named like the opened member `info` is renamed:\n{text}"
+        );
     }
 }

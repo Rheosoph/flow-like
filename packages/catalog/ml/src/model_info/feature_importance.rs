@@ -225,6 +225,8 @@ impl NodeLogic for GetFeatureImportanceNode {
             "Extract per-feature importance from a Decision Tree, Random Forest or AdaBoost model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "featureImportance");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

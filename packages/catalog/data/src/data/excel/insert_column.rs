@@ -52,6 +52,7 @@ impl NodeLogic for InsertColumnNode {
             "Insert one or more columns into a worksheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "insertColumn");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Exec

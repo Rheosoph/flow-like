@@ -25,6 +25,7 @@ impl NodeLogic for OpenDialog {
             "Opens a route/page as a modal dialog overlay",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "openDialog");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

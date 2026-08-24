@@ -29,6 +29,7 @@ impl NodeLogic for DocxAddHeaderFooterNode {
             "Set header and/or footer text in a DOCX document",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addHeaderFooter");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

@@ -24,6 +24,7 @@ impl NodeLogic for UpsertElement {
             "Updates or inserts an element value in the frontend",
             "UI/Data",
         );
+        node.set_flowscript_name("ui", "upsertElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

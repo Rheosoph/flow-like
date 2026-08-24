@@ -29,6 +29,7 @@ impl NodeLogic for PdfCompressNode {
             "Optimize and compress a PDF by deduplicating objects and compressing streams.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "compress");
         node.add_icon("/flow/icons/compress.svg");
         node.set_scores(
             NodeScores::new()

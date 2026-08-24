@@ -28,6 +28,8 @@ impl NodeLogic for Base64EncodeNode {
             "Encodes a string to Base64",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "base64Encode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "String to encode", VariableType::String);

@@ -26,6 +26,7 @@ impl NodeLogic for HasAttributeNode {
             "Checks if the executing user's role has a specific attribute (tag). Attributes are custom string tags assigned to roles for flexible authorization. Returns false if no user context is available or the user has no role.",
             "Utils/User",
         );
+        node.set_flowscript_name("user", "hasAttribute");
         node.add_icon("/flow/icons/tag.svg");
 
         node.add_input_pin(

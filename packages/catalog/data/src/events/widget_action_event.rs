@@ -43,6 +43,7 @@ impl NodeLogic for WidgetActionEvent {
             "Entry point triggered when a widget action is invoked. Provides action context data.",
             "Events",
         );
+        node.set_flowscript_name("events", "widgetAction");
         node.add_icon("/flow/icons/event.svg");
         node.set_start(true);
         node.set_can_be_referenced_by_fns(true);

@@ -30,6 +30,8 @@ impl NodeLogic for GraphSqlQueryNode {
             "Executes a read-only SQL query against graph overlay tables via DataFusion. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "sqlQuery");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

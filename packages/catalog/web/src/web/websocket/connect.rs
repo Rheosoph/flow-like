@@ -58,6 +58,7 @@ impl NodeLogic for WebSocketConnectNode {
              connection closes, then triggers on_close.",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "connect");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

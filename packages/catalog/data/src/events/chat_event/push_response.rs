@@ -28,6 +28,7 @@ impl NodeLogic for PushResponseNode {
             "Pushes a response to the chat",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushResponse");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

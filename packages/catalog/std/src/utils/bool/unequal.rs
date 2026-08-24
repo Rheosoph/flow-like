@@ -25,6 +25,8 @@ impl NodeLogic for BoolUnequalNode {
             "Checks whether two booleans differ",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "unequal");
+        node.set_receiver("boolean1");
         node.add_icon("/flow/icons/bool.svg");
         node.set_scores(pure_scores());
 

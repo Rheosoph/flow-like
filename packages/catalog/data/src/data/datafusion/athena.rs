@@ -38,6 +38,8 @@ impl NodeLogic for RegisterAthenaNode {
             "Register an AWS Athena table in DataFusion. Query S3 data via Athena's catalog. Supports explicit credentials or environment variables (including Lambda IAM roles).",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerAthena");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/aws.svg");
         node.set_version(2);
 
@@ -332,6 +334,8 @@ impl NodeLogic for MountAthenaQueryNode {
             "Mount Parquet files from an Athena query result location in S3. Supports explicit credentials or environment variables (including Lambda IAM roles).",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "mountAthenaQuery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/aws.svg");
         node.set_version(2);
 

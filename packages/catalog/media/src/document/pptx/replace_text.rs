@@ -31,6 +31,7 @@ impl NodeLogic for PptxReplaceTextNode {
             "Replaces text placeholders in a PowerPoint (PPTX) file with plain or markdown-formatted text",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "replaceText");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

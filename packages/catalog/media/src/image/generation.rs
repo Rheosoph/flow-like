@@ -1770,6 +1770,7 @@ impl NodeLogic for MakeOpenAiImageOptionsNode {
             "Creates typed image options for OpenAI and Azure OpenAI image generation.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "openai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1839,6 +1840,7 @@ impl NodeLogic for MakeGoogleImagenOptionsNode {
             "Creates typed image options for Google AI Studio and Vertex Imagen models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "googleImagen");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1891,6 +1893,7 @@ impl NodeLogic for MakeAwsBedrockImageOptionsNode {
             "Creates typed image options for AWS Bedrock image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "awsBedrock");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1977,6 +1980,7 @@ impl NodeLogic for MakeXaiImageOptionsNode {
             "Creates typed image options for xAI image generation.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "xai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2022,6 +2026,7 @@ impl NodeLogic for MakeTogetherImageOptionsNode {
             "Creates typed image options for Together text-to-image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "together");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2098,6 +2103,7 @@ impl NodeLogic for MakeHuggingFaceImageOptionsNode {
             "Creates typed image options for Hugging Face text-to-image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "huggingface");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2157,6 +2163,7 @@ impl NodeLogic for MakeOpenRouterImageOptionsNode {
             "Creates typed image options for OpenRouter image-output models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "openrouter");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2212,6 +2219,7 @@ impl NodeLogic for GenerateImageNode {
             "Generates one image with an existing provider Bit and writes it to FlowPath.",
             "AI/Generative/Image",
         );
+        node.set_flowscript_name("ai.image", "generate");
         node.add_icon("/flow/icons/image.svg");
         node.set_version(3);
         node.set_scores(media_scores());

@@ -30,6 +30,8 @@ impl NodeLogic for FTSLocalDatabaseNode {
             "Searches the Database using Full-Text Search",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "ftsSearch");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

@@ -49,6 +49,7 @@ impl NodeLogic for InsertRowNode {
             "Insert one or more rows into a worksheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "insertRow");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Exec

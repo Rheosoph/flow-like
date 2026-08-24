@@ -34,6 +34,7 @@ impl NodeLogic for CellsToMultiPolygonNode {
             "Converts a set of H3 cells to polygon boundaries. Returns the outline(s) of the cell set, merging adjacent cells.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellsToMultiPolygon");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

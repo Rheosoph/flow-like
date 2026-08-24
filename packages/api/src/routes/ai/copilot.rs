@@ -342,6 +342,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         .nth(1)
         .unwrap_or("")
         .to_string();
+    let namespace = node.flowscript_namespace();
+    let alias = node.flowscript_alias();
+    let receiver = node.flowscript_receiver();
 
     enrich_node_metadata(NodeMetadata {
         name: node.name,
@@ -363,6 +366,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(namespace),
+        alias: Some(alias),
+        receiver,
     })
 }
 

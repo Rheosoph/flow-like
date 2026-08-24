@@ -36,6 +36,7 @@ impl NodeLogic for ExtractExcelTablesNode {
             "Detects and extracts all tables from Excel worksheets, handling titles, multi-row headers, merged cells, footnotes and multiple tables per sheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "extractTables");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
         node.set_version(2);
 

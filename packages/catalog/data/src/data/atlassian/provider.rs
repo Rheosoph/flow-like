@@ -225,6 +225,7 @@ impl NodeLogic for AtlassianApiTokenProviderNode {
             "Connect to Jira and Confluence using an API Token. For cloud: create token at id.atlassian.com/manage-profile/security/api-tokens. For server: use personal access token.",
             "Data/Atlassian",
         );
+        node.set_flowscript_name("atlassian", "providerApiToken");
         node.add_icon("/flow/icons/atlassian.svg");
 
         node.add_input_pin(
@@ -352,6 +353,7 @@ impl NodeLogic for AtlassianOAuthProviderNode {
             "Connect to Jira and Confluence using OAuth 2.0. Requires OAuth provider configuration in flow-like.config.json.",
             "Data/Atlassian",
         );
+        node.set_flowscript_name("atlassian", "providerOauth");
         node.add_icon("/flow/icons/atlassian.svg");
 
         node.add_input_pin(

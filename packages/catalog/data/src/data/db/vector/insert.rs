@@ -31,6 +31,8 @@ impl NodeLogic for InsertLocalDatabaseNode {
             "Faster than Upsert, but might write duplicate items.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "insertOne");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -109,6 +111,8 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
             "Inserts multiple items at once. Faster than Upsert but might produce duplicates.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "batchInsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -190,6 +194,8 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
             "Inserts multiple items at once. Faster than Upsert but might produce duplicates.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "insertCsv");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

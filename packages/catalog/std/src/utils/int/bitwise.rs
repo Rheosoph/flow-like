@@ -86,7 +86,10 @@ impl IntBitAndNode {
 #[async_trait]
 impl NodeLogic for IntBitAndNode {
     fn get_node(&self) -> Node {
-        binary_node("int_bitand", "& (Int)", "Bitwise AND of two integers")
+        let mut node = binary_node("int_bitand", "& (Int)", "Bitwise AND of two integers");
+        node.set_flowscript_name("int", "bitand");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -107,7 +110,10 @@ impl IntBitOrNode {
 #[async_trait]
 impl NodeLogic for IntBitOrNode {
     fn get_node(&self) -> Node {
-        binary_node("int_bitor", "| (Int)", "Bitwise OR of two integers")
+        let mut node = binary_node("int_bitor", "| (Int)", "Bitwise OR of two integers");
+        node.set_flowscript_name("int", "bitor");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -128,7 +134,10 @@ impl IntBitXorNode {
 #[async_trait]
 impl NodeLogic for IntBitXorNode {
     fn get_node(&self) -> Node {
-        binary_node("int_bitxor", "^ (Int)", "Bitwise XOR of two integers")
+        let mut node = binary_node("int_bitxor", "^ (Int)", "Bitwise XOR of two integers");
+        node.set_flowscript_name("int", "bitxor");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -149,11 +158,14 @@ impl IntShiftLeftNode {
 #[async_trait]
 impl NodeLogic for IntShiftLeftNode {
     fn get_node(&self) -> Node {
-        shift_node(
+        let mut node = shift_node(
             "int_shl",
             "<< (Int)",
             "Shifts the bits of an integer to the left",
-        )
+        );
+        node.set_flowscript_name("int", "shl");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -177,11 +189,14 @@ impl IntShiftRightNode {
 #[async_trait]
 impl NodeLogic for IntShiftRightNode {
     fn get_node(&self) -> Node {
-        shift_node(
+        let mut node = shift_node(
             "int_shr",
             ">> (Int)",
             "Shifts the bits of an integer to the right",
-        )
+        );
+        node.set_flowscript_name("int", "shr");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -211,6 +226,8 @@ impl NodeLogic for IntBitNotNode {
             "Inverts every bit of an integer",
             "Math/Int/Bitwise",
         );
+        node.set_flowscript_name("int", "bitnot");
+        node.set_receiver("integer");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

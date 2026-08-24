@@ -87,6 +87,7 @@ impl NodeLogic for GetMeNode {
             "Get the current authenticated user's Atlassian account information (cross-product)",
             "Data/Atlassian",
         );
+        node.set_flowscript_name("atlassian", "getMe");
         node.add_icon("/flow/icons/atlassian.svg");
 
         node.add_input_pin(

@@ -27,6 +27,7 @@ impl NodeLogic for CreateConfluencePageNode {
             "Create a new Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "createPage");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

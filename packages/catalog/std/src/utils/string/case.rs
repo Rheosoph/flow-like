@@ -85,11 +85,14 @@ impl StringCapitalizeNode {
 #[async_trait]
 impl NodeLogic for StringCapitalizeNode {
     fn get_node(&self) -> Node {
-        case_node(
+        let mut node = case_node(
             "string_capitalize",
             "Capitalize",
             "Upper cases the first character and leaves the rest untouched",
-        )
+        );
+        node.set_flowscript_name("string", "capitalize");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -114,11 +117,14 @@ impl StringTitleCaseNode {
 #[async_trait]
 impl NodeLogic for StringTitleCaseNode {
     fn get_node(&self) -> Node {
-        case_node(
+        let mut node = case_node(
             "string_title_case",
             "Title Case",
             "Converts a string to Title Case",
-        )
+        );
+        node.set_flowscript_name("string", "titleCase");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -146,11 +152,14 @@ impl StringSnakeCaseNode {
 #[async_trait]
 impl NodeLogic for StringSnakeCaseNode {
     fn get_node(&self) -> Node {
-        case_node(
+        let mut node = case_node(
             "string_snake_case",
             "snake_case",
             "Converts a string to snake_case",
-        )
+        );
+        node.set_flowscript_name("string", "snakeCase");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -175,11 +184,14 @@ impl StringKebabCaseNode {
 #[async_trait]
 impl NodeLogic for StringKebabCaseNode {
     fn get_node(&self) -> Node {
-        case_node(
+        let mut node = case_node(
             "string_kebab_case",
             "kebab-case",
             "Converts a string to kebab-case",
-        )
+        );
+        node.set_flowscript_name("string", "kebabCase");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -209,6 +221,8 @@ impl NodeLogic for StringCamelCaseNode {
             "camelCase",
             "Converts a string to camelCase or PascalCase",
         );
+        node.set_flowscript_name("string", "camelCase");
+        node.set_receiver("string");
         node.add_input_pin(
             "pascal_case",
             "Pascal Case",
@@ -403,6 +417,8 @@ impl NodeLogic for StringConvertCaseNode {
             "Convert Case",
             "Rewrites a string in the chosen case style. The input's own style is detected automatically, so any of the supported styles can be fed in",
         );
+        node.set_flowscript_name("string", "convertCase");
+        node.set_receiver("string");
 
         node.add_input_pin(
             "target_case",
@@ -460,6 +476,8 @@ impl NodeLogic for StringDetectCaseNode {
             "Names the case style a string is written in",
             "Utils/String/Case",
         );
+        node.set_flowscript_name("string", "detectCase");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 

@@ -29,6 +29,7 @@ impl NodeLogic for PdfSplitNode {
             "Extract a page range from a PDF into a new file",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "split");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

@@ -27,6 +27,7 @@ impl NodeLogic for CopilotInfiniteSessionNode {
             "Configures infinite session with automatic context compaction",
             "AI/GitHub/Copilot/Config",
         );
+        node.set_flowscript_name("github.copilot", "infiniteSession");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -111,6 +112,7 @@ impl NodeLogic for CopilotSystemMessageNode {
             "Configures the system message for the session",
             "AI/GitHub/Copilot/Config",
         );
+        node.set_flowscript_name("github.copilot", "systemMessage");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -188,6 +190,7 @@ impl NodeLogic for CopilotCustomAgentNode {
             "Configures a custom agent",
             "AI/GitHub/Copilot/Config",
         );
+        node.set_flowscript_name("github.copilot", "customAgent");
         node.set_version(1);
         node.add_icon("/flow/icons/github.svg");
 
@@ -286,6 +289,7 @@ impl NodeLogic for CopilotProviderConfigNode {
             "Configures a custom provider (Bring Your Own Key)",
             "AI/GitHub/Copilot/Config",
         );
+        node.set_flowscript_name("github.copilot", "providerConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

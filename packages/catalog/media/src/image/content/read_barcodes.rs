@@ -1621,6 +1621,8 @@ impl NodeLogic for ReadBarcodesNode {
             "Read/Decode QR Codes and Barcodes",
             "Image/Content",
         );
+        node.set_flowscript_name("image", "readBarcodes");
+        node.set_receiver("image_in");
         node.set_version(6);
         node.add_icon("/flow/icons/barcode.svg");
 

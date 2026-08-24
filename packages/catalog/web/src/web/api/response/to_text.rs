@@ -27,6 +27,8 @@ impl NodeLogic for ToTextNode {
             "Gets the body of a http response as text",
             "Web/API/Response",
         );
+        node.set_flowscript_name("http", "toText");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin("exec_in", "", "", VariableType::Execution);

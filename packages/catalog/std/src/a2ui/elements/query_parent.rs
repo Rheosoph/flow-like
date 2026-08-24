@@ -32,6 +32,7 @@ impl NodeLogic for QueryParent {
             "Gets the parent element of an element",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryParent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

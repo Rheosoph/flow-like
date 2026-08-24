@@ -31,6 +31,8 @@ impl NodeLogic for ImapMarkSeenNode {
             "Marks a mail (by UID) as seen/read in IMAP mailbox",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "markSeen");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

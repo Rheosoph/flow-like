@@ -37,11 +37,13 @@ impl BoolAllNode {
 #[async_trait]
 impl NodeLogic for BoolAllNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "bool_all",
             "All",
             "True when every boolean in the array is true",
-        )
+        );
+        node.set_flowscript_name("bool", "all");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -71,6 +73,7 @@ impl NodeLogic for BoolAnyNode {
             "Any",
             "True when at least one boolean in the array is true",
         );
+        node.set_flowscript_name("bool", "any");
         node.add_output_pin(
             "count",
             "Count",

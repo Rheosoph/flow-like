@@ -187,6 +187,20 @@ pub struct Node {
     /// WASM metadata for external nodes. None for built-in catalog nodes.
     /// Populated automatically when placing or pasting nodes; never trust frontend-supplied values.
     pub wasm: Option<NodeWasm>,
+    /// FlowScript namespace path (`string`, `http`, `jira`, `ui`; dotted when nested).
+    /// Presentation only — never part of node identity (`name` stays the id). `None` derives
+    /// it from `category` (`flow_like_ast::naming::derive_namespace`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// FlowScript member name inside `namespace` (`trim`, `fetch`, `createIssue`).
+    /// Presentation only — never part of node identity. `None` derives it from `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Name of the data input pin that receives the value in FlowScript method form
+    /// (`s` in `s.trim()`). Presentation only. `None` applies the default rule
+    /// (`flowscript_receiver`); `Some("")` opts out: the node is callable statically only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
 }
 
 impl Node {
@@ -215,7 +229,104 @@ impl Node {
             only_offline: false,
             version: None,
             wasm: None,
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
+    }
+
+    /// Set the explicit FlowScript spelling of this node (`namespace::alias`).
+    pub fn set_flowscript_name(&mut self, namespace: &str, alias: &str) -> &mut Self {
+        self.namespace = Some(namespace.to_string());
+        self.alias = Some(alias.to_string());
+        self
+    }
+
+    /// Name the data input pin that receives the value in method form; `""` makes the node
+    /// static-only.
+    pub fn set_receiver(&mut self, pin_name: &str) -> &mut Self {
+        self.receiver = Some(pin_name.to_string());
+        self
+    }
+
+    fn name_fields(&self) -> flow_like_ast::NameFields<'_> {
+        flow_like_ast::NameFields {
+            namespace: self.namespace.as_deref(),
+            alias: self.alias.as_deref(),
+            receiver: self.receiver.as_deref(),
+        }
+    }
+
+    /// Effective FlowScript namespace: the explicit field (every first-party node sets one),
+    /// else the `NAME_OVERRIDES` residue table, else derived from `category`
+    /// (`flow_like_ast::effective_spelling`).
+    pub fn flowscript_namespace(&self) -> String {
+        flow_like_ast::effective_spelling(&self.name, &self.category, self.name_fields()).0
+    }
+
+    /// Effective FlowScript alias: the explicit field, else the override table, else derived
+    /// from `name` and `category`.
+    pub fn flowscript_alias(&self) -> String {
+        flow_like_ast::effective_spelling(&self.name, &self.category, self.name_fields()).1
+    }
+
+    /// The data input pin a method-form call binds the receiver to, or `None` when the node is
+    /// static-only.
+    ///
+    /// Without an explicit `receiver` (or an override-table entry), the first data input (by
+    /// `index`) is the receiver iff its type is the effective namespace's own value type
+    /// (`string` ↔ `String`, `array` ↔ any `Array`, …; `flow_like_ast::VALUE_TYPE_NAMESPACES`).
+    /// Nodes outside value-type namespaces are static unless they opt in with
+    /// [`Self::set_receiver`]. The rule itself lives in `flow_like_ast::effective_names` so
+    /// catalog metadata derives the same answer.
+    pub fn flowscript_receiver(&self) -> Option<String> {
+        let inputs = self
+            .data_inputs_in_order()
+            .map(|pin| {
+                (
+                    pin.name.clone(),
+                    format!("{:?}", pin.data_type),
+                    format!("{:?}", pin.value_type),
+                )
+            })
+            .collect::<Vec<_>>();
+        flow_like_ast::effective_names(
+            &self.name,
+            &self.category,
+            self.name_fields(),
+            inputs.iter().map(|(name, data_type, value_type)| {
+                (name.as_str(), data_type.as_str(), value_type.as_str())
+            }),
+        )
+        .receiver
+    }
+
+    /// The FlowScript method class of the effective receiver pin (`string`, `array`, …; the
+    /// schema title for a struct receiver with one), or `None` for static-only nodes and
+    /// receivers without a value-type class.
+    pub fn flowscript_receiver_class(&self) -> Option<String> {
+        let receiver = self.flowscript_receiver()?;
+        let pin = self
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == receiver)?;
+        flow_like_ast::receiver_class_of(
+            &format!("{:?}", pin.data_type),
+            &format!("{:?}", pin.value_type),
+            pin.schema.as_deref(),
+        )
+    }
+
+    fn data_inputs_in_order(&self) -> impl Iterator<Item = &Pin> {
+        let mut inputs = self
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution
+            })
+            .collect::<Vec<_>>();
+        inputs.sort_by(|a, b| (a.index, a.name.as_str()).cmp(&(b.index, b.name.as_str())));
+        inputs.into_iter()
     }
 
     pub fn add_comment(&mut self, comment: &str) {
@@ -848,6 +959,62 @@ mod tests {
             super::Node::from_proto(flow_like_types::proto::Node::decode(&buf[..]).unwrap());
 
         assert_eq!(node.id, deser_node.id);
+    }
+
+    #[test]
+    fn flowscript_names_derive_unless_explicit() {
+        let mut node = super::Node::new("string_trim", "Trim", "", "Utils/String");
+        node.add_input_pin("string", "String", "", super::VariableType::String);
+        assert_eq!(node.flowscript_namespace(), "string");
+        assert_eq!(node.flowscript_alias(), "trim");
+        assert_eq!(node.flowscript_receiver().as_deref(), Some("string"));
+        assert_eq!(node.flowscript_receiver_class().as_deref(), Some("string"));
+
+        node.set_flowscript_name("text", "strip").set_receiver("");
+        assert_eq!(node.flowscript_namespace(), "text");
+        assert_eq!(node.flowscript_alias(), "strip");
+        assert_eq!(node.flowscript_receiver(), None);
+        assert_eq!(node.flowscript_receiver_class(), None);
+    }
+
+    #[test]
+    fn default_receiver_requires_the_namespace_value_type() {
+        let mut from_int = super::Node::new("string_from_int", "From Int", "", "Utils/String");
+        from_int.add_input_pin("exec_in", "In", "", super::VariableType::Execution);
+        from_int.add_input_pin("value", "Value", "", super::VariableType::Integer);
+        assert_eq!(from_int.flowscript_receiver(), None);
+
+        let mut push = super::Node::new("array_push", "Push", "", "Utils/Array");
+        push.add_input_pin("array", "Array", "", super::VariableType::Generic)
+            .set_value_type(super::ValueType::Array);
+        push.add_input_pin("item", "Item", "", super::VariableType::Generic);
+        assert_eq!(push.flowscript_receiver().as_deref(), Some("array"));
+        assert_eq!(push.flowscript_receiver_class().as_deref(), Some("array"));
+
+        let mut probe = super::Node::new("http_probe", "Probe", "", "Web/API");
+        probe.add_input_pin("url", "URL", "", super::VariableType::String);
+        assert_eq!(probe.flowscript_receiver(), None);
+        probe.set_receiver("url");
+        assert_eq!(probe.flowscript_receiver().as_deref(), Some("url"));
+        assert_eq!(probe.flowscript_receiver_class().as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn explicit_fields_win_over_derivation() {
+        let mut md5 = super::Node::new("utils_hash_md5", "MD5", "", "Utils/Hash");
+        md5.add_input_pin("input", "Input", "", super::VariableType::String);
+        // The override residue is empty after the bake-in: an un-annotated node derives.
+        assert_eq!(md5.flowscript_namespace(), "hash");
+        assert_eq!(md5.flowscript_alias(), "md5");
+        assert_eq!(md5.flowscript_receiver(), None);
+
+        md5.set_flowscript_name("hash", "md5").set_receiver("input");
+        assert_eq!(md5.flowscript_receiver().as_deref(), Some("input"));
+        assert_eq!(md5.flowscript_receiver_class().as_deref(), Some("string"));
+
+        md5.set_flowscript_name("digest", "md5").set_receiver("");
+        assert_eq!(md5.flowscript_namespace(), "digest");
+        assert_eq!(md5.flowscript_receiver(), None);
     }
 
     #[test]

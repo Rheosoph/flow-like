@@ -109,6 +109,7 @@ impl NodeLogic for LLMBranchNode {
             "Routes execution based on an LLM-evaluated yes/no decision",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "branch");
         node.add_icon("/flow/icons/split.svg");
         node.set_version(3);
         node.set_scores(

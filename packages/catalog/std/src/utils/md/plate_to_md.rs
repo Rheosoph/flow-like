@@ -27,6 +27,7 @@ impl NodeLogic for PlateJsonToMarkdownNode {
             "Converts a rich text document (plate_json) into GitHub-flavoured Markdown",
             "Utils/Markdown",
         );
+        node.set_flowscript_name("md", "fromPlate");
 
         node.add_icon("/flow/icons/text.svg");
 

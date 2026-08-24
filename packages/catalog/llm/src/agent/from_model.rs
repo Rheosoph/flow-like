@@ -34,6 +34,7 @@ impl NodeLogic for AgentFromModelNode {
             "Creates an Agent object from a model Bit with configuration",
             "AI/Agents/Builder",
         );
+        node.set_flowscript_name("agent", "fromModel");
         node.set_version(5);
         node.add_icon("/flow/icons/bot-invoke.svg");
 

@@ -29,6 +29,7 @@ impl NodeLogic for PdfMergeNode {
             "Concatenate multiple PDF files into one",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "merge");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

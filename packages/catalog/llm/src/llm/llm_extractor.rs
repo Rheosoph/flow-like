@@ -181,6 +181,7 @@ impl NodeLogic for LLMExtractNode {
             "Uses an LLM plus a JSON schema to extract structured data from free-form text",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "extract");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

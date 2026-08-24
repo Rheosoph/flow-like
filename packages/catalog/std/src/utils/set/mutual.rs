@@ -27,6 +27,8 @@ impl NodeLogic for IsMutualSetNode {
             "Checks if one of the hash sets has at least one mutual element",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "isMutual");
+        node.set_receiver("set_in_1");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

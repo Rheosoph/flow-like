@@ -36,6 +36,7 @@ impl NodeLogic for NewWorksheetNode {
             "Creates a new worksheet (tab) inside an existing .xlsx file",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "newWorksheet");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

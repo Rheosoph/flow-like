@@ -460,6 +460,7 @@ impl NodeLogic for InstantiateWidget {
             "Creates a new widget instance for dynamic insertion into containers. The dropdown lists project widgets and widgets from packages added to the project; selecting one auto-generates typed input pins (exposed props and customizations for project widgets, contract inputs for package widgets).",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "instantiateWidget");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_scores(
             NodeScores::new()

@@ -79,6 +79,7 @@ impl NodeLogic for AttachmentFromPathNode {
             "Creates an attachment from a FlowPath with optional metadata",
             "Events/Chat/Attachments",
         );
+        node.set_flowscript_name("chat", "attachmentFromPath");
         node.add_icon("/flow/icons/paperclip.svg");
 
         node.add_input_pin(

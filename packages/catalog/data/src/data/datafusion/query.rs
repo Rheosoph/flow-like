@@ -33,6 +33,8 @@ impl NodeLogic for SqlQueryNode {
             "Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused, as are subqueries and multi-table forms; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "sqlQuery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(3);
 

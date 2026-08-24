@@ -19,6 +19,7 @@ impl NodeLogic for PickCodecBackendNode {
             "Choose the preferred compiled backend for a codec and operation",
             "Diagnostics",
         );
+        node.set_flowscript_name("video", "pickCodecBackend");
         node.add_icon("/flow/icons/info.svg");
         add_exec_pins(&mut node);
         node.add_input_pin(

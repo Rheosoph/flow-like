@@ -13,8 +13,10 @@
 //!    removed. A declaration without one (`const call = httpFetch({ … })`) binds a node result and
 //!    is the program itself, so it is kept.
 //! 2. **Long literals are generalized.** A string literal over [`MAX_LITERAL_CHARS`] becomes
-//!    `"<str:N>"`. Short ones — enum values, pin names, format keys, element refs — are kept
-//!    verbatim, because they are what makes the source readable.
+//!    `"<str:N>"`, a template literal `` `<tpl:N>` ``. Short ones — enum values, pin names, format
+//!    keys, element refs — are kept verbatim, because they are what makes the source readable. A
+//!    template literal spanning several lines is always generalized: multi-line templates are how
+//!    prompts are written.
 //!
 //! Line numbers are preserved so a parser diagnostic's `line:col` still points into the redacted
 //! text: a dropped multi-line initializer leaves its lines behind empty rather than closing the gap.
@@ -53,11 +55,26 @@ pub fn redact_flowscript(src: &str) -> RedactedFlowScript {
     let mut redacted_literals = 0usize;
     // Depth still owed by a dropped initializer that opened brackets and did not close them.
     let mut dropping: Option<usize> = None;
+    // A template literal opened on an earlier line and not yet closed.
+    let mut open_template = false;
 
     for (index, line) in src.split('\n').enumerate() {
         if index > 0 {
             out.push('\n');
         }
+
+        let line = if open_template {
+            match template_close_offset(line) {
+                Some(end) => {
+                    open_template = false;
+                    out.push('`');
+                    &line[end + 1..]
+                }
+                None => continue,
+            }
+        } else {
+            line
+        };
 
         let line = if let Some(depth) = dropping {
             match resume_dropped_initializer(line, depth) {
@@ -93,7 +110,8 @@ pub fn redact_flowscript(src: &str) -> RedactedFlowScript {
             }
         }
 
-        let redacted = redact_literals(code, &mut redacted_literals);
+        let (redacted, unclosed_template) = redact_literals(code, &mut redacted_literals);
+        open_template = unclosed_template;
         out.push_str(&redacted);
         if !comment.is_empty() {
             if !redacted.is_empty() && cut.is_some() {
@@ -122,25 +140,46 @@ enum Continuation<'a> {
     Closed(&'a str),
 }
 
+/// Whether `ch` opens a string or template literal whose contents are not code.
+fn is_quote(ch: char) -> bool {
+    ch == '"' || ch == '`'
+}
+
+/// Byte offset of the unescaped backtick that closes a template literal continued from an
+/// earlier line, if it closes on this one.
+fn template_close_offset(line: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (offset, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '`' {
+            return Some(offset);
+        }
+    }
+    None
+}
+
 /// Consume a continued initializer, returning what is left of the line once its brackets balance.
 fn resume_dropped_initializer(line: &str, depth: usize) -> Continuation<'_> {
     let mut depth = depth;
-    let mut in_string = false;
+    let mut in_string: Option<char> = None;
     let mut escaped = false;
 
     for (offset, ch) in line.char_indices() {
-        if in_string {
+        if let Some(quote) = in_string {
             if escaped {
                 escaped = false;
             } else if ch == '\\' {
                 escaped = true;
-            } else if ch == '"' {
-                in_string = false;
+            } else if ch == quote {
+                in_string = None;
             }
             continue;
         }
         match ch {
-            '"' => in_string = true,
+            ch if is_quote(ch) => in_string = Some(ch),
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => {
                 depth -= 1;
@@ -157,22 +196,22 @@ fn resume_dropped_initializer(line: &str, depth: usize) -> Continuation<'_> {
 /// Byte offset of the `//` that starts a comment, or the line length when there is none.
 fn comment_start(line: &str) -> usize {
     let bytes = line.as_bytes();
-    let mut in_string = false;
+    let mut in_string: Option<u8> = None;
     let mut escaped = false;
     let mut i = 0;
 
     while i < bytes.len() {
         let ch = bytes[i];
-        if in_string {
+        if let Some(quote) = in_string {
             if escaped {
                 escaped = false;
             } else if ch == b'\\' {
                 escaped = true;
-            } else if ch == b'"' {
-                in_string = false;
+            } else if ch == quote {
+                in_string = None;
             }
-        } else if ch == b'"' {
-            in_string = true;
+        } else if ch == b'"' || ch == b'`' {
+            in_string = Some(ch);
         } else if ch == b'/' && bytes.get(i + 1) == Some(&b'/') {
             return i;
         }
@@ -213,25 +252,25 @@ fn declaration_value_span(code: &str) -> Option<usize> {
 fn assignment_offset(code: &str, from: usize) -> Option<usize> {
     let bytes = code.as_bytes();
     let mut depth = 0usize;
-    let mut in_string = false;
+    let mut in_string: Option<u8> = None;
     let mut escaped = false;
     let mut i = from;
 
     while i < bytes.len() {
         let ch = bytes[i];
-        if in_string {
+        if let Some(quote) = in_string {
             if escaped {
                 escaped = false;
             } else if ch == b'\\' {
                 escaped = true;
-            } else if ch == b'"' {
-                in_string = false;
+            } else if ch == quote {
+                in_string = None;
             }
             i += 1;
             continue;
         }
         match ch {
-            b'"' => in_string = true,
+            b'"' | b'`' => in_string = Some(ch),
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth = depth.saturating_sub(1),
             b';' if depth == 0 => return None,
@@ -262,20 +301,24 @@ fn trailing_depth(text: &str) -> usize {
     }
 }
 
-/// Replace the contents of over-long string literals with a `"<str:N>"` placeholder.
-fn redact_literals(code: &str, redacted: &mut usize) -> String {
-    if !code.contains('"') {
-        return code.to_string();
+/// Replace the contents of over-long string literals with a `"<str:N>"` placeholder and of
+/// over-long template literals with `` `<tpl:N>` ``. Returns the redacted code and whether a
+/// template literal opened on this line without closing, so the caller drops the lines it
+/// continues on.
+fn redact_literals(code: &str, redacted: &mut usize) -> (String, bool) {
+    if !code.contains('"') && !code.contains('`') {
+        return (code.to_string(), false);
     }
 
     let mut out = String::with_capacity(code.len());
     let mut chars = code.char_indices();
 
     while let Some((start, ch)) = chars.next() {
-        if ch != '"' {
+        if !is_quote(ch) {
             out.push(ch);
             continue;
         }
+        let quote = ch;
 
         let mut inner = 0usize;
         let mut escaped = false;
@@ -291,7 +334,7 @@ fn redact_literals(code: &str, redacted: &mut usize) -> String {
                     escaped = true;
                     inner += 1;
                 }
-                '"' => {
+                ch if ch == quote => {
                     end = Some(offset);
                     break;
                 }
@@ -300,21 +343,30 @@ fn redact_literals(code: &str, redacted: &mut usize) -> String {
         }
 
         let Some(end) = end else {
+            *redacted += 1;
+            if quote == '`' {
+                // A template literal continues on the next lines; those are dropped whole.
+                out.push_str("`<tpl>");
+                return (out, true);
+            }
             // Unterminated literal: the source is malformed, so drop the rest of the line wholesale
             // rather than let raw text through on a technicality.
-            *redacted += 1;
             out.push_str(&format!("\"<str:{inner}>"));
-            return out;
+            return (out, false);
         };
 
         if inner > MAX_LITERAL_CHARS {
             *redacted += 1;
-            out.push_str(&format!("\"<str:{inner}>\""));
+            if quote == '`' {
+                out.push_str(&format!("`<tpl:{inner}>`"));
+            } else {
+                out.push_str(&format!("\"<str:{inner}>\""));
+            }
         } else {
             out.push_str(&code[start..=end]);
         }
     }
-    out
+    (out, false)
 }
 
 fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
@@ -445,6 +497,55 @@ mod tests {
             redacted.text.chars().count(),
             MAX_SOURCE_CHARS + TRUNCATION_MARKER.chars().count()
         );
+    }
+
+    #[test]
+    fn namespace_method_use_and_destructuring_forms_pass_through() {
+        for source in [
+            "use ai::ml::*, string::*",
+            "const t = string::trim({ string: s })",
+            "const { text, usage: u } = ai::invoke({ model: m })",
+            "    let n = s.contains(\"?\", { ignoreCase: true })",
+            "    items.push(x)   //@n:abc",
+        ] {
+            let redacted = redact_flowscript(source);
+            assert_eq!(redacted.text, source);
+            assert_eq!(redacted.dropped_values, 0);
+        }
+    }
+
+    #[test]
+    fn short_template_literals_survive_and_long_ones_generalize() {
+        let source = "call({ text: `hello ${name}` })";
+        let redacted = redact_flowscript(source);
+        assert_eq!(redacted.text, source);
+        assert_eq!(redacted.redacted_literals, 0);
+
+        let long = "p".repeat(MAX_LITERAL_CHARS + 1);
+        let redacted = redact_flowscript(&format!("call({{ text: `{long} ${{x}}` }})"));
+        assert_eq!(
+            redacted.text,
+            format!("call({{ text: `<tpl:{}>` }})", MAX_LITERAL_CHARS + 6)
+        );
+        assert_eq!(redacted.redacted_literals, 1);
+    }
+
+    #[test]
+    fn multi_line_template_literals_are_dropped_whole_and_keep_the_line_count() {
+        let source = "const m = `You are a helpful\nassistant for ${user}.\nAnswer briefly.`\ncall({ a: \"x\" })";
+        let redacted = redact_flowscript(source);
+        assert_eq!(redacted.text, "const m = `<tpl>\n\n`\ncall({ a: \"x\" })");
+        assert_eq!(redacted.redacted_literals, 1);
+        assert_eq!(redacted.text.lines().count(), source.lines().count());
+        assert_eq!(redact_flowscript(&redacted.text).text, redacted.text);
+    }
+
+    #[test]
+    fn comment_markers_and_braces_inside_template_literals_are_template_text() {
+        let source = "call({ url: `https://a.example/${id}` })";
+        assert_eq!(redact_flowscript(source).text, source);
+        let source = "const cfg: string = `{ // not a comment`";
+        assert_eq!(redact_flowscript(source).text, "const cfg: string");
     }
 
     #[test]

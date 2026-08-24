@@ -27,6 +27,7 @@ impl NodeLogic for ListWithOffsetNode {
             "Lists paths in a directory with offset and limit",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "listWithOffset");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

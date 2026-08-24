@@ -95,6 +95,7 @@ impl NodeLogic for FitSVMRegressionNode {
             "Fit/Train a Support Vector Regressor. Learns non-linear targets through a kernel, with epsilon-SVR or nu-SVR.",
             "AI/ML/Regression",
         );
+        node.set_flowscript_name("ml", "fitSvmRegression");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

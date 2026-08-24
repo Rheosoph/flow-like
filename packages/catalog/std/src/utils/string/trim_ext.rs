@@ -25,6 +25,8 @@ impl NodeLogic for StringTrimStartNode {
             "Removes leading whitespace from a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "trimStart");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -67,6 +69,8 @@ impl NodeLogic for StringTrimEndNode {
             "Removes trailing whitespace from a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "trimEnd");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -109,6 +113,8 @@ impl NodeLogic for StringTrimMatchesNode {
             "Removes the given characters from the start and/or end of a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "trimMatches");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -180,6 +186,8 @@ impl NodeLogic for StringStripPrefixNode {
             "Removes a prefix from a string if it is present",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "stripPrefix");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -236,6 +244,8 @@ impl NodeLogic for StringStripSuffixNode {
             "Removes a suffix from a string if it is present",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "stripSuffix");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 

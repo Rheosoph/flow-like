@@ -24,6 +24,7 @@ impl NodeLogic for CopilotToolConfigNode {
             "Configures an agent tool with parameters",
             "AI/GitHub/Copilot/Tools",
         );
+        node.set_flowscript_name("github.copilot", "toolConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -94,6 +95,7 @@ impl NodeLogic for CopilotToolListNode {
             "Combines multiple tools into a list for session configuration",
             "AI/GitHub/Copilot/Tools",
         );
+        node.set_flowscript_name("github.copilot", "toolList");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

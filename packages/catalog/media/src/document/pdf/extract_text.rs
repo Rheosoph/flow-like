@@ -29,6 +29,7 @@ impl NodeLogic for PdfExtractTextNode {
             "Extract all text content from a PDF document.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "extractText");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

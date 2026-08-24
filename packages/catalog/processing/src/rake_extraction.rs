@@ -2252,6 +2252,7 @@ impl NodeLogic for RakeExtractionNode {
             "Extracts keywords from text using the RAKE (Rapid Automatic Keyword Extraction) algorithm. RAKE is a domain-independent algorithm that extracts significant phrases by analyzing word frequency and co-occurrence.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractKeywordsRake");
         node.add_icon("/flow/icons/key.svg");
 
         node.set_scores(

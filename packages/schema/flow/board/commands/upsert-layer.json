@@ -299,6 +299,18 @@
 							"type": "null"
 						}
 					]
+				},
+				"namespace": {
+					"description": "FlowScript namespace path (`string`, `http`, `utils.markdown`; dotted when nested).\nPresentation only — never part of node identity (`name` stays the id).",
+					"type": ["string", "null"]
+				},
+				"alias": {
+					"description": "FlowScript member name inside `namespace` (`trim`, `fetch`, `createIssue`).\nPresentation only — never part of node identity.",
+					"type": ["string", "null"]
+				},
+				"receiver": {
+					"description": "Name of the data input pin that receives the value in FlowScript method form (`s` in `s.trim()`).\nPresentation only. Absent applies the default rule; an empty string opts out (static only).",
+					"type": ["string", "null"]
 				}
 			},
 			"required": [

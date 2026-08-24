@@ -99,6 +99,7 @@ impl NodeLogic for CloudflareProviderNode {
             "Build a Cloudflare credential struct. Supports scoped API tokens, legacy email + global API key, R2 S3-compatible access keys and Origin CA keys. Emits a CloudflareProvider that CF-aware nodes (R2 stores, DNS API, Workers, ...) can consume.",
             "Data/Providers",
         );
+        node.set_flowscript_name("data", "cloudflareProvider");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(

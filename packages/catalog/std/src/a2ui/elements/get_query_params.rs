@@ -40,6 +40,7 @@ impl NodeLogic for GetQueryParams {
             "Gets query parameters from the current URL",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "getQueryParam");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

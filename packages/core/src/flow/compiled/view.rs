@@ -217,6 +217,9 @@ fn reconstruct_node(
                 })
             })
             .transpose()?,
+        namespace: default_node.and_then(|d| d.namespace.clone()),
+        alias: default_node.and_then(|d| d.alias.clone()),
+        receiver: default_node.and_then(|d| d.receiver.clone()),
     })
 }
 

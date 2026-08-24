@@ -755,14 +755,15 @@ pub const DATABASE_WORKFLOW_GUIDANCE: &str = r#"
 Use Flow-Like's built-in database nodes as the default data architecture. Do NOT ask the user which
 external vector database to use unless they explicitly request an external service. The built-in
 database is LanceDB-backed and is opened with **Open Database** (`open_local_db`, FlowScript
-`openLocalDb`), which returns the database connection `Struct` directly.
+`db::open`), which returns the database connection `Struct` directly. Database nodes live
+in the `db` namespace: write `use db::*` once at the top and call them bare, or qualify each call.
 
 ### DATE/TIME TYPE CONTRACT
 Treat every value that represents a real instant—such as `created_at`, `updated_at`, `scheduled_at`,
 or an event time—as a FlowLike `Date` throughout the board. In FlowScript, use `Date` for the field
 in interfaces and for function/event parameters, return values, and variables. Produce current
-values with `utilsDatetimeNow`, parse external text with `utilsDatetimeParse`, and pass the resulting
-Date pin directly into `structSet`. Never format or coerce it to `string` or an epoch number before
+values with `datetime::now`, parse external text with `datetime::parse`, and pass the resulting
+Date pin directly into `struct::set`. Never format or coerce it to `string` or an epoch number before
 a database write merely because its JSON boundary representation is RFC3339.
 
 The matching Lance schema handoff is exactly `type: "timestamp:ms:UTC"`. That is a native
@@ -775,14 +776,14 @@ is intentionally not a board Date.
 An existing table's described schema remains authoritative. On writes, a legacy Utf8/LargeUtf8
 column can continue receiving the RFC3339 JSON string carried by a Date pin. On reads, treat that
 legacy column as raw text at the storage boundary: use `to_timestamp(column)` for temporal SQL
-sorting/filtering and `utilsDatetimeParse` before passing the value to a Date consumer. Keep the
+sorting/filtering and `datetime::parse` before passing the value to a Date consumer. Keep the
 workflow's semantic variables, parameters, and returns typed `Date`; only the legacy raw column is
 `string`. For a native `timestamp:ms:UTC` column, sort/filter it directly and pass its Date value
 without reparsing.
 
 Any view, list, dashboard, or lookup over persisted data MUST read the rows back through a real
-read node (`filterLocalDb`, `listLocalDb`, the fts/vector/hybrid search nodes, or a DataFusion
-`dfSqlQuery` over registered tables) in the same workflow. Opening the database alone reads
+read node (`db::filter`, `db::list`, the fts/vector/hybrid search nodes, or a DataFusion
+`df::sqlQuery` over registered tables) in the same workflow. Opening the database alone reads
 nothing, and rendering from in-memory state that was just written is a correctness bug: the flow
 must work on a fresh run where memory is empty.
 
@@ -790,13 +791,13 @@ SETUP FUNCTION — populate shared references once:
 Start the workflow with one `function setup() { ... }`, called first from the entry event, that
 resolves every long-lived reference (database connections, embedding/LLM models) and stores each
 in a top-level variable via its variable set node. Downstream functions read them with
-`variableGet` instead of re-opening or re-loading per call, and the user adjusts everything in ONE
+`variable::get` instead of re-opening or re-loading per call, and the user adjusts everything in ONE
 place.
 - Embedding models load from a Bit, never from an invented id:
-  `const bit = bitFromString({ bitId: "" })` — leave `bitId` as the empty string; the user selects
-  the concrete bit on the board later — then `const embedding = loadModel({ bit: bit.outputBit })`
-  and store `embedding.model` into a top-level variable.
-- Databases: `openLocalDb({ name: "..." })` stored into a variable the same way.
+  `const bit = ai::loadBit({ bitId: "" })` — leave `bitId` as the empty string; the user selects
+  the concrete bit on the board later — then `const { model } = ai::embedding::loadModel({ bit: bit })`
+  and store `model` into a top-level variable.
+- Databases: `db::open({ name: "..." })` stored into a variable the same way.
 
 Inspect before you design: when `database_tool` is registered for a board specialist, use only its
 read-only operations (`list_tables`, `describe_table`, and read-only `query`) to inspect schemas,
@@ -841,67 +842,68 @@ to GUESS that width, and a wrong `vector_size` produces a table every later embe
 
 Design new-table workflows around that lazy first-write bootstrap by default, so a missing schema
 endpoint costs zero extra steps:
-1. `openLocalDb({ name })` in `setup()`, stored in a variable next to the loaded embedding model.
-2. Have the WORKFLOW upsert one COMPLETE first row via `upsertLocalDb`/`batchUpsertLocalDb` — every
-   column present with a correctly typed value, embeddings produced by `embedDocument`, and a
+1. `db::open({ name })` in `setup()`, stored in a variable next to the loaded embedding model.
+2. Have the WORKFLOW upsert one COMPLETE first row via `db::upsert`/`db::batchUpsert` — every
+   column present with a correctly typed value, embeddings produced by `ai::embedding::embedDocument`, and a
    zero-filled vector for vector columns that have nothing to embed yet. The table and its schema
    then exist for every later query.
-3. Build indices IN THE FLOW with `indexLocalDb`, AFTER that first write — indexing a table that
+3. Build indices IN THE FLOW with `db::buildIndex`, AFTER that first write — indexing a table that
    does not exist yet fails, so the order is load-bearing. Put index building at the end of the
    ingest path or in a separate maintenance/reindex event, never in a read path where it would
-   rebuild on every query. `vectorSearchLocalDb` works without an index; `ftsSearchLocalDb` and
-   `hybridSearchLocalDb` need their `FULL TEXT` index built first.
-4. `optimizeLocalDb` after large writes or index updates.
+   rebuild on every query. `db::vectorSearch` works without an index; `db::ftsSearch` and
+   `db::hybridSearch` need their `FULL TEXT` index built first.
+4. `db::optimize` after large writes or index updates.
 
 Recommended patterns:
-- Persistent table / record store: `openLocalDb` -> `insertLocalDb` / `batchInsertLocalDb` for
-  fast append, or `upsertLocalDb` / `batchUpsertLocalDb` when there is a stable ID column.
-- Big-data analytics: `openLocalDb` -> `dfCreateSession` -> `dfRegisterLance` -> `dfSqlQuery`.
+- Persistent table / record store: `db::open` -> `db::insertOne` / `db::batchInsert` for
+  fast append, or `db::upsert` / `db::batchUpsert` when there is a stable ID column.
+- Big-data analytics: `db::open` -> `df::createSession` -> `df::registerLance` -> `df::sqlQuery`.
   DataFusion SQL works after sources are registered as tables in the session. For file/object data,
   use the DataFusion mount/register nodes for Parquet, CSV, JSON, data lakes, or external
-  databases (`dfRegisterPostgres`, `dfRegisterMysql`, `dfRegisterSqlite`, `dfRegisterDuckdb`,
-  `dfRegisterClickhouse`, BigQuery, Athena, Iceberg/Delta/Hudi), then query with `dfSqlQuery`.
-- Vector/RAG ingest: load an embedding Bit with `loadModel`, create vectors with `embedDocument`
-  for each document/chunk, then store rows containing text, metadata, IDs, and vector columns with
-  `batchInsertLocalDb` / `batchUpsertLocalDb`.
+  databases (`df::registerPostgres`, `df::registerMysql`, `df::registerSqlite`, `df::registerDuckdb`,
+  `df::registerClickhouse`, BigQuery, Athena, Iceberg/Delta/Hudi), then query with `df::sqlQuery`.
+- Vector/RAG ingest: load an embedding Bit with `ai::embedding::loadModel`, create vectors with
+  `ai::embedding::embedDocument` for each document/chunk, then store rows containing text, metadata,
+  IDs, and vector columns with `db::batchInsert` / `db::batchUpsert`.
 - Uploaded document ingest: a file picker or chat attachment yields a `FlowPath`; that reference is
   not extracted text. For every requested file-read or file-store path, call a real extraction
-  catalog operation such as `aiProcessingExtractDocument(file, extractImages?)` (node type
+  catalog operation such as `ai::processing::extractDocument({ file, extractImages? })` (node type
   `ai_processing_extract_document`) or its multi-document/AI variant, then consume the returned
-  page content. `a2uiGetFileInputFiles` only obtains the selected file references. Never replace
+  page content. `ui::getFileInputFiles` only obtains the selected file references. Never replace
   extraction with a filename, status message, empty string, or other placeholder literal. When
   extraction is requested, include one of these extraction nodes in the submitted FlowScript even
   if no file is available at authoring time; handle the missing-file case as a runtime branch.
-- Vector search: embed the user's query with `embedQuery`, then use `vectorSearchLocalDb` with an
-  optional SQL filter and an explicit limit.
-- Keyword search: build a `FULL TEXT` index with `indexLocalDb` on the text column, then use
-  `ftsSearchLocalDb`.
+- Vector search: embed the user's query with `ai::embedding::embedQuery`, then use `db::vectorSearch`
+  with an optional SQL filter and an explicit limit.
+- Keyword search: build a `FULL TEXT` index with `db::buildIndex` on the text column, then use
+  `db::ftsSearch`.
 - Hybrid search: build indexes for the vector column (`VECTOR` or `AUTO`) and text column
-  (`FULL TEXT`), embed the query with `embedQuery`, then call `hybridSearchLocalDb` with both the
+  (`FULL TEXT`), embed the query with `ai::embedding::embedQuery`, then call `db::hybridSearch` with both the
   search string and vector. Its `fields` input expects the vector column first and the FTS text
   column after that; keep `rerank` enabled unless the user asks otherwise.
-- Indexing/maintenance: use `indexLocalDb` ("Build Index") for `VECTOR`, `FULL TEXT`, `BTREE`,
-  `BITMAP`, `LABEL LIST`, or `AUTO`; use `listIndicesDb` to inspect indices and
-  `optimizeLocalDb` after large writes or index updates.
+- Indexing/maintenance: use `db::buildIndex` ("Build Index") for `VECTOR`, `FULL TEXT`, `BTREE`,
+  `BITMAP`, `LABEL LIST`, or `AUTO`; use `db::listIndices` to inspect indices and
+  `db::optimize` after large writes or index updates.
 
 ### DataFusion sessions (the analytics + dashboard-data path)
 DataFusion is the right tool whenever a workflow needs SQL — aggregations, joins, ordering,
 filtering, or shaping rows for a dashboard. The lifecycle is always the same:
-1. `openLocalDb({ name, userScoped, batchSize })` for each table you need.
-2. `dfCreateSession({ sessionName: "default" })` ONCE — every other pin is an optional tuning
-   default — then reuse the returned `.session` for every register/query in that path. Do not
+1. `db::open({ name, userScoped, batchSize })` for each table you need.
+2. `df::createSession({ sessionName: "default" })` ONCE — every other pin is an optional tuning
+   default — then reuse the returned `session` for every register/query in that path. Do not
    create a new session per query or per helper; pass the session to helper functions as a
    `Struct` parameter instead.
-3. `dfRegisterLance({ session, database, tableName })` (or a file/external register node) for each
+3. `df::registerLance({ session, database, tableName })` (or a file/external register node) for each
    source. The `tableName` is the SQL identifier you then `SELECT ... FROM`.
-4. `dfSqlQuery({ session, query })` returns THREE outputs from one call:
-   - `.table` — a `CSVTable` (columnar) made for analytics and charts/tables. Feed this straight
-     into `a2uiPushCsvToChart` (format `CSV`) for dashboard widgets.
-   - `.rows` — an array of row structs for `controlForEach` iteration and per-row UI (set element
-     text, instantiate widgets). Access fields as `row.value.<column>`.
-   - `.rowCount` — the integer result count, e.g. for a "{n} results" badge.
-   Build the SQL string with `stringFormat` when it depends on runtime values; never concatenate
-   untrusted text into SQL without going through query params.
+4. `df::sqlQuery({ session, query })` returns THREE outputs from one call
+   (`const { table, rows, rowCount } = sqlQuery({ … })`):
+   - `table` — a `CSVTable` (columnar) made for analytics and charts/tables. Feed this straight
+     into `ui::pushCsvToChart` (format `CSV`) for dashboard widgets.
+   - `rows` — an array of row structs for `for (const row of rows)` iteration and per-row UI (set
+     element text, instantiate widgets). Access fields as `row.<column>`.
+   - `rowCount` — the integer result count, e.g. for a `${rowCount} results` badge.
+   Build a SQL string with a template literal / `string::format` only for trusted fragments; runtime
+   values go through `$placeholder` query params, never concatenated into SQL.
 
 Look up exact FlowScript signatures with ONE bounded, focused `get_declarations` call before writing
 these calls: put the highest-leverage searches in `queries` (never blank), e.g. `{"queries": ["open database",
@@ -915,11 +917,12 @@ gap; use `catalog_search` only for read-only exploration, not to postpone the fi
 /// How a workflow drives A2UI pages/widgets (dashboards) and where to get real element references.
 pub const DASHBOARD_A2UI_GUIDANCE: &str = r#"
 ## DASHBOARDS, PAGES, AND WIDGETS (A2UI)
-A board renders interactive UI by calling `a2ui*` nodes that target elements on the app's **pages**
-and instantiate its **widgets**. A board does NOT contain those element ids — they live in separate
+A board renders interactive UI by calling `ui::*` nodes (legacy `a2ui*` names) that target elements
+on the app's **pages** and instantiate its **widgets**. Write `use ui::*` at the top of a
+dashboard board and call the members bare. A board does NOT contain those element ids — they live in separate
 page/widget definitions — so you must look them up, not guess.
 
-GROUND YOURSELF FIRST: before writing or editing ANY `a2ui*` call, call `ui_inspect` (read-only, no
+GROUND YOURSELF FIRST: before writing or editing ANY `ui::*` call, call `ui_inspect` (read-only, no
 approval). `ui_inspect` with operation `list` returns every page (with `element_refs`), every
 project widget (with `selector`), and every widget shipped by an installed package under
 `package_widgets`; `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
@@ -929,62 +932,64 @@ Reference conventions:
 - An element reference is `"<page_id>/<element_id>"`, exactly as returned by `ui_inspect`.
 - A widget selector is the widget's name (its `selector` from `ui_inspect`). A PACKAGE widget's
   selector is instead the `pkg:{package_id}/{widget_id}` string `ui_inspect` reports for it — pass
-  that verbatim to `a2uiInstantiateWidget`; its `dyn*` input pins come from the widget's contract.
+  that verbatim to `ui::instantiateWidget`; its `dyn*` input pins come from the widget's contract.
 
-Common a2ui calls (confirm exact signatures with `get_declarations`):
-- Read/write elements: `a2uiSetElementText({ elementRef, text })`,
-  `a2uiSetMarkdownContent({ elementRef, markdown })`, `a2uiSetBadgeContent`,
-  `a2uiSetElementValue`, and `a2uiGetElement({ elementRef }).element` /
-  `a2uiGetElementValue({ elementRef }).value` to read current values (e.g. form inputs).
-- Containers (grids/lists): clear with `a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef }).element })`,
-  then add children with `a2uiPushToContainer({ containerRef, elementRef, position: -1 })` or
-  `a2uiPushChild({ containerRef, childRef })`.
-- Widgets: `a2uiInstantiateWidget({ widgetSelector, instanceId, dynPath<Field>: …, dynProp<Id>: …, fnRefs: [handlerEntry] })`
-  returns `.elementRef` to push into a container. The `dynPath*`/`dynProp*` input pins for a widget
+Common `ui::*` calls (confirm exact signatures with `get_declarations`):
+- Read/write elements: `ui::setElementText({ elementRef, text })`,
+  `ui::setMarkdownContent({ elementRef, markdown })`, `ui::setBadgeContent`,
+  `ui::setElementValue`, and `ui::getElement({ elementRef }).element` /
+  `ui::getElementValue({ elementRef }).value` to read current values (e.g. form inputs).
+- Containers (grids/lists): clear with `ui::clearChildren({ containerRef: ui::getElement({ elementRef }).element })`,
+  then add children with `ui::pushToContainer({ containerRef, elementRef, position: -1 })` or
+  `ui::pushChild({ containerRef, childRef })`.
+- Widgets: `ui::instantiateWidget({ widgetSelector, instanceId, dynPath<Field>: …, dynProp<Id>: …, fnRefs: [handlerEntry] })`
+  returns `elementRef` to push into a container. The `dynPath*`/`dynProp*` input pins for a widget
   are listed by `ui_inspect` (operation `widget`). `fnRefs` entries must be `eventsWidgetAction`
   ENTRIES (not plain functions): declare one `eventsWidgetAction handlerName(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) { … }`
   per widget action and pass the bare handler names. A handler serves as catch-all for the
   widget's actions; branch on the delivered `eventName`/`actionContext` inside the handler when
   one widget declares several actions.
-- Charts (dashboard data): `a2uiPushCsvToChart({ elementRef, library: "Nivo"|"Plotly", format: "CSV", table: <dfSqlQuery>.table, chartType: "Bar"|"Line"|"Pie"|… })`.
+- Charts (dashboard data): `ui::pushCsvToChart({ elementRef, library: "Nivo"|"Plotly", format: "CSV", table: <df::sqlQuery>.table, chartType: "Bar"|"Line"|"Pie"|… })`.
   The `table` pin accepts a DataFusion query result directly — this is the primary way to drive a
   dashboard chart from SQL. Use `format: "JSON"` with a `data` array when you already shaped the
-  series yourself. Style with `a2uiSetNivoConfig` / `a2uiSetChartLayout`.
-- Tables (dashboard data — often the most useful for SQL): `a2uiWriteCsvToTable({ elementRef, table: <dfSqlQuery>.table })`
+  series yourself. Style with `ui::setNivoConfig` / `ui::setChartLayout`.
+- Tables (dashboard data — often the most useful for SQL): `ui::writeCsvToTable({ elementRef, table: <df::sqlQuery>.table })`
   pushes a DataFusion result straight into a table element (or pass `csv` text). For incremental
-  edits use `a2uiUpdateTable` (set/append/replace rows). DataFusion's `.table` output is built
+  edits use `ui::updateTable` (set/append/replace rows). DataFusion's `table` output is built
   exactly for these table/chart pins, so prefer it over hand-iterating rows when filling a grid.
-- Data-path updates: `a2uiDataUpdate({ surfaceId, path, value })` is FORBIDDEN. Writing a surface
+- Data-path updates: `ui::dataUpdate({ surfaceId, path, value })` is FORBIDDEN. Writing a surface
   data path does not change what the page renders; use the element setters and widget nodes above
   (see the a2ui page rules).
-- Screen control: end a render path with `a2uiShowScreen()`; route with `a2uiNavigateTo({ route })`;
-  read URL params with `a2uiGetQueryParams({ paramName }).value`.
+- Screen control: end a render path with `ui::showScreen()`; route with `ui::navigateTo({ route })`;
+  read URL params with `ui::getQueryParam({ paramName }).value`.
 
 ### Interaction events PULL their own inputs
 A page/widget action only INVOKES its handler — the dashboard never pushes element values into it.
 NEVER declare a Generic Event with payload parameters (`payload`, `actionId`, `targetId`, `url`,
 …) expecting the page to fill them from its inputs. Instead the handler body FETCHES the state it
-needs from the page: `a2uiGetElementValue({ elementRef }).value` for inputs/selects,
-`a2uiGetFileInputFiles` for uploads, `a2uiGetElement({ elementRef }).element` for anything else.
+needs from the page: `ui::getElementValue({ elementRef }).value` for inputs/selects,
+`ui::getFileInputFiles` for uploads, `ui::getElement({ elementRef }).element` for anything else.
 Compact correct shape — action invokes a named entry, the body reads the element, validates,
 persists, then refreshes via an element setter:
 ```ts
+use ui::*
+
 addTarget() {
-    const raw = a2uiGetElementValue({ elementRef: "<page_id>/target-url-input" })
-    const targetUrl = valToString({ value: raw.value })
+    const { value: raw } = getElementValue({ elementRef: "<page_id>/target-url-input" })
+    const targetUrl = json::stringify({ value: raw })
     if (targetUrl != "") {
-        const db = openLocalDb({ name: "targets", userScoped: false, batchSize: 1000 })
-        const id = cuid()
-        let row = structMake()
-        row = structSet({ structIn: row, field: "id", value: id.cuid })
-        row = structSet({ structIn: row, field: "url", value: targetUrl })
-        upsertLocalDb({ database: db, value: row, idRow: "id" })
-        a2uiSetElementValue({ elementRef: "<page_id>/target-url-input", value: "" })
+        const db = db::open({ name: "targets", userScoped: false, batchSize: 1000 })
+        const id = random::cuid()
+        let row = struct::make()
+        row = row.set({ field: "id", value: id })
+        row = row.set({ field: "url", value: targetUrl })
+        db.upsert({ value: row, idRow: "id" })
+        setElementValue({ elementRef: "<page_id>/target-url-input", value: "" })
         refreshTargetsTable()
     }
 }
 ```
-(`refreshTargetsTable` is a helper function that re-queries and calls `a2uiWriteCsvToTable`.)
+(`refreshTargetsTable` is a helper function that re-queries and calls `ui::writeCsvToTable`.)
 
 Keep dashboards clean with functions/layers: put each page's onLoad logic in its own
 `function pageLoad() { … }` (it becomes a Function layer), and factor repeated work — querying a
@@ -1002,51 +1007,53 @@ pub const A2UI_STATE_GUIDANCE: &str = r#"
 A board never pushes data into a page's data model. It writes to the ELEMENT with that element's
 setter, or it instantiates/updates a WIDGET with typed inputs. There is no third option:
 
-- Text/labels/status: `a2uiSetElementText` (Set Element Text), `a2uiSetMarkdownContent`,
-  `a2uiSetBadgeContent`, `a2uiSetProgress`.
-- Input values: `a2uiSetElementValue` (Set Element Value), `a2uiSetSelectValue`,
-  `a2uiSetSliderValue`.
-- Tables: `a2uiWriteCsvToTable` (Push CSV to Table) for full data, `a2uiUpdateTable` for
+- Text/labels/status: `ui::setElementText` (Set Element Text), `ui::setMarkdownContent`,
+  `ui::setBadgeContent`, `ui::setProgress`.
+- Input values: `ui::setElementValue` (Set Element Value), `ui::setSelectValue`,
+  `ui::setSliderValue`.
+- Tables: `ui::writeCsvToTable` (Push CSV to Table) for full data, `ui::updateTable` for
   incremental row edits.
-- Charts: `a2uiPushCsvToChart` (Push Data to Chart).
-- Package widgets: `a2uiInstantiateWidget` with one `dyn*` input per contract field, then
-  `a2uiPushChild` / `a2uiPushToContainer`; `a2uiWidgetUpdateInputs` to patch a live instance.
+- Charts: `ui::pushCsvToChart` (Push Data to Chart).
+- Package widgets: `ui::instantiateWidget` with one `dyn*` input per contract field, then
+  `ui::pushChild` / `ui::pushToContainer`; `ui::widgetUpdateInputs` to patch a live instance.
 Target elements with the `ui_inspect` element ref (`"<page_id>/<element_id>"`) directly or via
-`a2uiGetElement({ elementRef }).element`.
+`ui::getElement({ elementRef }).element`.
 
 ### Rendering a list of records
 Never assemble a data blob and write it at a path. Clear the container, loop the records, read each
-field with `structGet`, instantiate one widget per record with those fields on its generated `dyn*`
-input pins, and push each instance into the container:
+field with `struct::get` (or a dot-path), instantiate one widget per record with those fields on
+its generated `dyn*` input pins, and push each instance into the container:
 ```ts
+use ui::*
+
 function renderSources(rows: Struct[]) {
-    const grid = a2uiGetElement({ elementRef: "<page_id>/sources-list" }).element
-    a2uiClearChildren({ containerRef: grid })
+    const { element: grid } = getElement({ elementRef: "<page_id>/sources-list" })
+    clearChildren({ containerRef: grid })
     for (const row of rows) {
-        const instance = a2uiInstantiateWidget({
+        const { elementRef: instance } = instantiateWidget({
             widgetSelector: "Knowledge Source Card",
-            instanceId: structGet({ struct: row, field: "id" }).value,
-            dynPathDocument: structGet({ struct: row, field: "document" }).value,
-            dynPathChunkCount: structGet({ struct: row, field: "chunk_count" }).value,
+            instanceId: row.get({ field: "id" }).value,
+            dynPathDocument: row.get({ field: "document" }).value,
+            dynPathChunkCount: row.get({ field: "chunk_count" }).value,
         })
-        a2uiPushChild({ containerRef: grid, childRef: instance.elementRef })
+        pushChild({ containerRef: grid, childRef: instance })
     }
 }
 ```
 The generated input pin names differ per widget — `ui_inspect` (operation `widget`) lists the exact
 ones for the selected widget; never guess them. Re-rendering the same list repeats this loop;
-changing one field on an already mounted instance uses `a2uiWidgetUpdateInputs` against that
+changing one field on an already mounted instance uses `ui::widgetUpdateInputs` against that
 instance's element ref.
 
-- **Data Update** (`a2uiDataUpdate`) is FORBIDDEN. Writing `$.data.<path>` does not change what the
+- **Data Update** (`ui::dataUpdate`) is FORBIDDEN. Writing `$.data.<path>` does not change what the
   page renders — elements own their own state and widget instances read typed contract inputs, so
   neither observes the write. Every case it looks right for is one of the setters or widget nodes
   above. Each one left on the board returns an `FS_PROHIBITED_NODE` review note: the batch still
   commits, but the work is NOT done until you write a further revision that replaces it. Never
   report a board as finished while such a note stands.
-- **Set Page State** (`a2uiSetPageState`) does NOT touch `$.data.*` bindings and will NOT update the
+- **Set Page State** (`ui::setPageState`) does NOT touch `$.data.*` bindings and will NOT update the
   screen. Page state is a separate per-page key/value store that widgets never read; its value only
-  travels back to the board on the NEXT event, where **Get Page State** (`a2uiGetPageState`) reads
+  travels back to the board on the NEXT event, where **Get Page State** (`ui::getPageState`) reads
   it. Use it for cross-event scratch data scoped to a page. Its `key` is a plain identifier (e.g.
   `"lastQuery"`), never a `$.data...` path.
 - **Set/Get Global State** behave like page state but shared across pages — same rule, not for
@@ -1094,7 +1101,7 @@ Use the canonical object form when settings matter:
 ```ts
 @cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })
 function calculatePricing(subtotal: float): (price: float) {
-    return floatRound({ float: subtotal })
+    return subtotal.round()
 }
 ```
 A bare `@cache` enables the defaults: the `"global"` namespace, a 300-second lifetime, and app
@@ -1129,20 +1136,20 @@ unambiguous or explicitly mapped in code.
   continuation output selected by the reconciler policy table, not by model guesswork or pin order.
 - Multi-output nodes may auto-wire a following statement only from a built-in `done` / `exec_done`
   continuation or from an explicit policy/callback in `EXEC_OUTPUT_POLICIES`. For API Call /
-  `httpFetch`, the policy is `exec_success`; never continue normal work from `exec_error`.
+  `http::fetch`, the policy is `exec_success`; never continue normal work from `exec_error`.
 - If no policy exists for a multi-output node, `check_flowscript` reports a diagnostic and queues no
   unsafe execution edge. Use exact branch/control declarations and supported FlowScript branch
   blocks for explicit wiring; model-facing `emit_commands` cannot connect executable pins.
 - THE arm-block syntax for a multi-output node: bind the call, then open a block on the binding
   whose arm labels are the node's EXACT execution output names (camelCase, with a colon):
   ```ts
-  const search = vectorSearchLocalDb({ database: db, vector: queryVector })
+  const search = db.vectorSearch({ vector: queryVector })
   search {
       execOut: {
-          logInfo({ message: "results found" })
+          log::info({ message: "results found" })
       }
       empty: {
-          logInfo({ message: "no matches" })
+          log::info({ message: "no matches" })
       }
   }
   ```
@@ -1151,7 +1158,8 @@ unambiguous or explicitly mapped in code.
   plain sequential statement — that is exactly what the continuation-policy diagnostic rejects.
 - For loops, use exact loop declarations: the loop body is the `exec_out` path, and the next
   statement after the loop continues from `done` / `exec_done`. The loop input named `array` must
-  receive the array being iterated.
+  receive the array being iterated (`for (const item of items)` is the sugar for
+  `control::forEach({ array: items })`).
 "#;
 
 /// Arithmetic/conversion contract shared by board prompts. Prevents burning an LLM/agent call on
@@ -1159,20 +1167,23 @@ unambiguous or explicitly mapped in code.
 pub const NUMBERS_CONVERSIONS_GUIDANCE: &str = r#"
 ## NUMBERS & CONVERSIONS
 - Integer/float arithmetic is plain FlowScript: `a + b`, `a - b`, `a * b`, `a / b`, `a % b`, and
-  `a ** b` lower to the exact catalog operator nodes (`intAdd`, `floatMultiply`, ...); comparisons
-  (`==`, `!=`, `<`, `<=`, `>`, `>=`) and boolean `&&`/`||` lower the same way. Write
-  `let next = revision + 1` directly.
-- String -> number/bool: `utilsTypesTryTransform({ typeIn: text })` — its `typeOut` adapts to the
+  `a ** b` lower to the exact catalog operator nodes (`int::add`, `float::multiply`, ...); comparisons
+  (`==`, `!=`, `<`, `<=`, `>`, `>=`), boolean `&&`/`||`/`!` and unary `-x` lower the same way, and
+  `+=`/`-=`/`*=`/`/=` desugar to the operator. Write `let next = revision + 1` directly.
+- String -> number/bool: `types::tryTransform({ typeIn: text })` — its `typeOut` adapts to the
   connected target type and `success` reports whether the parse worked. Parse a JSON string with
-  `valFromString({ string: text })`; render any value as text with `valToString({ value })`. There
-  is no `valToInt`/`valToFloat` catalog node — never invent conversion names.
+  `json::parse({ string: text })`; render any value as text with `json::stringify({ value })`.
+  Typed parses are `string::toInt`/`string::toFloat`/`string::toBool` (`"42".toInt()`); there is no `json::toInt`/`json::toFloat` catalog node — never invent conversion names.
 - NEVER invoke an LLM/agent node for arithmetic, counting, number parsing, or ID/revision
   increments. Model calls are for semantic work only; `x + 1` is an operator, not an agent task.
-- Build strings with `stringFormat({ formatString: "{a}: {b}", a: ..., b: ... })` placeholders.
+- Build strings with a template literal: `` `${a}: ${b}` `` (or explicitly
+  `"{a}: {b}".format({ a: ..., b: ... })` / `string::format({ formatString: "{a}: {b}", a: ..., b: ... })`).
+  `"a" + "b"` concatenates via `string::concat`.
 - Each distinct `{name}` creates one dynamic input pin. Repeating `{name}` reuses that same pin and
-  value; supply the corresponding `name:` argument exactly once (typed IR: occurrence `0`).
-- No no-op identity calls: `stringFormat({ formatString: "{x}", x: value })` merely aliases
-  `value` through a useless node — reference the value directly instead.
+  value; supply the corresponding `name:` argument exactly once (typed IR: occurrence `0`). In a
+  template literal the same reference twice shares one placeholder.
+- No no-op identity calls: `` `${x}` `` / `string::format({ formatString: "{x}", x: value })` merely
+  aliases `value` through a useless node — reference the value directly instead.
 "#;
 
 /// Pins that a node's `on_update` creates from its own configuration. Nothing in
@@ -1193,12 +1204,12 @@ only the static pins, so these will never appear there — that is expected, not
   Fix the cause the diagnostic names. Deleting the argument does not repair anything: it leaves the
   node that produced the value sitting in the flow with nothing consuming it.
 
-### SQL parameters (`dfSqlQuery`, `dfSqlQueryCached`, `dfExecuteSql`, `dfWriteDelta`, `graphSqlQuery`)
+### SQL parameters (`df::sqlQuery`, `df::sqlQueryCached`, `df::executeSql`, `df::writeDelta`, `db::graph::sqlQuery`)
 - Any value from outside the query — user input, a row field, an event payload, a variable — goes in
   as a `$placeholder`, never concatenated into the SQL. Concatenating is a SQL injection and is
   never acceptable, even for values that look safe.
 - Each distinct `$name` in the query literal creates one input pin, supplied as `param<Name>`:
-  `dfSqlQuery({ session, query: "SELECT * FROM users WHERE org = $org_id AND created > $since", paramOrgId: orgId, paramSince: cutoff })`
+  `df::sqlQuery({ session, query: "SELECT * FROM users WHERE org = $org_id AND created > $since", paramOrgId: orgId, paramSince: cutoff })`
 - Repeating `$name` reuses that one pin and value; supply `param<Name>` exactly once (typed IR:
   occurrence `0`). Numbered placeholders work too: `$1` -> `param1`.
 - Placeholders stand for VALUES ONLY. A table or column name cannot be a placeholder — pick those
@@ -1208,7 +1219,7 @@ only the static pins, so these will never appear there — that is expected, not
 - When the query itself arrives over a wire, no pins can be derived from it; pass a `params` object
   keyed by placeholder name without the `$` instead.
 
-### Widget bindings — `a2uiInstantiateWidget` ONLY
+### Widget bindings — `ui::instantiateWidget` ONLY
 - Pins come from the persisted widget, not from a literal: `dynPath<Field>` (bound data paths),
   `dynProp<Id>` (exposed props), `dynCust<Id>` (customization options), `dynIn<Key>` (package widget
   contract inputs).
@@ -1217,22 +1228,24 @@ only the static pins, so these will never appear there — that is expected, not
 - `widgetSelector` must be a plain string literal in the same call as the `dyn*` values, and must
   name a widget that already exists. If the widget is being created in the same request, its build
   has to land first.
-- `a2uiWidgetUpdateInputs` and `a2uiWidgetQuery` derive their pins from a CONNECTED `elementRef`,
+- `ui::widgetUpdateInputs` and `ui::widgetQuery` derive their pins from a CONNECTED `elementRef`,
   not from a literal, so their `dynIn<Key>` / `dynArg<Key>` pins **cannot be written in FlowScript
   at all** — connections are applied after every pin write, so no call in any revision can see
-  them. Set the values on `a2uiInstantiateWidget` instead. Attempting them fails the whole
+  them. Set the values on `ui::instantiateWidget` instead. Attempting them fails the whole
   revision.
 
 ### Other nodes that mint their own pins
-- `stringFormat` — one Generic pin per `{token}` in `formatString`:
-  `stringFormat({ formatString: "Hi {name}, {count} new", name: user.name, count: unread.count })`.
+- `string::format` — one Generic pin per `{token}` in `formatString`. A template literal is the
+  sugar: `` `Hi ${user.name}, ${unread.count} new` `` mints `name` and `count`; the explicit forms are
+  `"Hi {name}, {count} new".format({ name: user.name, count: unread.count })` and
+  `string::format({ formatString: "Hi {name}, {count} new", name: user.name, count: unread.count })`.
   `formatString` must be a plain string literal on that call; a computed or wired one derives no
   pins. A token may not be named `format_string`/`formatString`.
-- `stringRenderTemplate` — one pin per undeclared Jinja variable in `template`, same rules; a
+- `string::renderTemplate` — one pin per undeclared Jinja variable in `template`, same rules; a
   variable may not be named `template`.
-- `a2uiPushCsvToChart` — its input pins swap with `format` (`JSON` -> `data`; `CSV` -> `csv`,
+- `ui::pushCsvToChart` — its input pins swap with `format` (`JSON` -> `data`; `CSV` -> `csv`,
   `table`, `chartType`, `delimiter`).
-- `controlCallFunction` / `controlCallReference` — pins mirror the target function's boundary, so
+- `control::callFunction` / `control::callReference` — pins mirror the target function's boundary, so
   the function has to exist in this revision before the call can bind them.
 "#;
 
@@ -1242,13 +1255,13 @@ only the static pins, so these will never appear there — that is expected, not
 pub const FLOW_PATH_ACCESSOR_GUIDANCE: &str = r#"
 ## FILES ARE FlowPath HANDLES, NOT FIELD BAGS
 - Every file value on this platform (upload/storage/cache/user dirs, chat attachments,
-  `a2uiGetFileInputFiles`, list and download nodes) is a `FlowPath` struct with exactly three
+  `ui::getFileInputFiles`, list and download nodes) is a `FlowPath` struct with exactly three
   fields: `path`, `storeRef`, `cacheStoreRef`. It has NO `filename`, `extension`, `parent`,
   `stem`, `name`, `size`, or `mimeType` field.
-- NEVER read a file attribute with dot access or `structGet`. `file.filename` and
-  `structGet({ struct: file, field: "extension" })` select a field that does not exist — both are
-  rejected, and on any struct that slips through they return null with no error. Use the
-  `Data/Files/Path` accessor calls:
+- NEVER read a file attribute with dot access or `struct::get`. `file.filename` and
+  `file.get({ field: "extension" })` select a field that does not exist — both are rejected, and
+  on any struct that slips through they return null with no error. Use the `path::*` accessor
+  calls (`use path::*` opens them bare; `path::filename({ path: file })` is the qualified form):
   - `filename({ path: file })` -> `filename`; pass `removeExtension: true` for the stem.
   - `extension({ path: file })` -> `extension`, without the leading dot.
   - `rawPath({ path: file })` -> `rawPath`, the whole path as a string. Prefer it over `file.path`.
@@ -1258,9 +1271,9 @@ pub const FLOW_PATH_ACCESSOR_GUIDANCE: &str = r#"
     `setExtension({ path: file, extension: "csv" })` -> `pathOut` (IMPURE) rename in place.
   - `fromRawPath({ basePath: file, rawPath: text })` -> `path` rebuilds a FlowPath from a string,
     reusing `basePath`'s store. A FlowPath is NOT reconstructible from a bare string alone.
-  - `pathReplaceSegment({ inPath: file, from: "in", to: "out" })` -> `outPath` swaps one segment.
-- File CONTENT is not a field either: read it with `readToString({ path })`, `readToBytes({ path })`
-  or `pathGet({ path })`.
+  - `replaceSegment({ inPath: file, from: "in", to: "out" })` -> `outPath` swaps one segment.
+- File CONTENT is not a field either: read it with `files::readToString({ path })`,
+  `files::readToBytes({ path })` or `files::pathGet({ path })`.
 - Reading `file.path` or `file.storeRef` is legal, but `path` is the raw store key, not a display
   name — never derive a filename or extension from it with string operations.
 "#;
@@ -1296,24 +1309,55 @@ For read-only questions about an existing board, use a mixed view:
 /// the agent still has to call `get_declarations` and use the signatures returned for the current
 /// catalog.
 pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
+## FLOWSCRIPT NAMES AND SUGAR
+- Every catalog node is `namespace::alias({ pin: value })` — `::` separates namespace path
+  segments (`string::trim`, `ai::response::make`), `.` is field/method access on a VALUE. Argument
+  names are the node's exact pin names; never rename an argument.
+- `use ns::*` at the TOP of the file (before interfaces and variables, nowhere else) opens a
+  namespace so its members are called bare: `use db::*` then `open({ name: "x" })`. Open a
+  namespace when you call several of its members; rendered boards open every namespace with two or
+  more call sites. `use a::b` (brings `b::…` into scope), `use a::b as c` and `use a::{ x, y }` are
+  accepted too.
+- A declaration with a `this:` parameter is also a METHOD on that value: `s.trim()`,
+  `s.contains("?")` (one remaining input may be positional), `s.contains({ substring: "?",
+  ignoreCase: true })`, `xs.push(item)`, `date.format("%Y-%m-%d")`. The receiver binds the `this`
+  pin, so do not repeat that pin inside `{ … }`. Numeric literals need parens: `(5).abs()`.
+- The legacy camelCase name (`stringTrim`, `openLocalDb`, shown as `@alias` in declarations)
+  still resolves everywhere; prefer the qualified or method spelling in new code.
+- Template literals lower to `string::format`: `` `Topic ${label}\nGoal: ${source.goal}` `` mints one
+  pin per placeholder (named after the reference, the last `.segment`, or `argN`). Plain string
+  `+` concatenates (`string::concat`). Literal text containing `{name}` is rejected — it would be
+  read as a placeholder at runtime.
+- Loops: `for (const item of items) { … }` (element = the loop node's `value`),
+  `for (const [index, item] of items) { … }`, `@parallel for (const item of items) { … }`, and
+  `while (cond) { … }` (`control::whileLoop`). The explicit `for (const it of control::forEach({ array: items }))`
+  handle form, with `it.value`, stays accepted.
+- Destructure outputs by pin name: `const { text, usage } = ai::invoke({ … })`,
+  `const { hash: digest } = content.md5()`. `const x = call()` binds the default output.
+- Top-level `const name = "literal"` infers `string | int | float | bool` (JSON object → `Struct`,
+  array → `any[]`); `const name: Type = …` is still required for anything else. Operators:
+  `+ - * / % **`, comparisons, `&& || !`, unary `-x`, `+= -= *= /=`, ternary `c ? a : b`.
+  `'single quotes'` and trailing `;` are accepted and render as double quotes without `;`.
+
 ## FLOWSCRIPT FEW-SHOT PATTERNS
 Use these as shape examples when the current board is empty or sparse. They are syntax patterns,
-not a replacement for `get_declarations`: always use the exact function names and parameter names
-returned by declarations. App Event interfaces/sinks (cron, chat UI, forms, API exposure) are not
-catalog nodes; choose a compatible entry-node pattern below and let the outer assistant configure
-the Event record after the board edit.
+not a replacement for `get_declarations`: always use the exact qualified names and parameter
+names returned by declarations. App Event interfaces/sinks (cron, chat UI, forms, API exposure)
+are not catalog nodes; choose a compatible entry-node pattern below and let the outer assistant
+configure the Event record after the board edit.
 
 Actionable empty-board edits:
 - New catalog nodes are created by **calls inside a function/event block**, for example
-  `function run() { const db = openLocalDb({ name: "email_vectors" }) }`.
-- Do not put node calls in top-level declarations. Top-level `const name: Type = literal` is only
-  board state/defaults and must use literal defaults, not `openLocalDb(...)` or another call.
-- For `variableGet({ varRef: "NAME" })` and other `varRef` inputs, `NAME` must already exist as a
+  `function run() { const db = db::open({ name: "email_vectors" }) }`.
+- Do not put node calls in top-level declarations. Top-level `const name = literal` /
+  `const name: Type = literal` is only board state/defaults and must use literal defaults, not
+  `db::open(...)` or another call.
+- For `variable::get({ varRef: "NAME" })` and other `varRef` inputs, `NAME` must already exist as a
   board variable or be declared as a top-level FlowScript variable, for example
-  `const NAME: string = ""`.
+  `const NAME = ""`.
 - Inside a function/event block, `const name = ...` is only for binding a node-call output. The
-  right side must be a call expression like `openLocalDb({ name: "x" })`, not a literal, object,
-  array, field access, or arithmetic expression.
+  right side must be a call expression like `db::open({ name: "x" })`, a method call, or a
+  template literal — not a plain literal, object, array, field access, or arithmetic expression.
 - Function-local alias sugar like `let rows = []` or `let subject = ""` is accepted for local
   literals/aliases and may canonicalize to `rows = []` when rendered. It does not create a board
   variable or node by itself.
@@ -1321,12 +1365,13 @@ Actionable empty-board edits:
   Do not write `{ host = "imap.gmail.com" }`; `expected Colon, found Assign` means a field used
   `=` where FlowScript expected `:`.
 - If you need a transformed value, prefer binding the output of a real utility node call.
-- For database rows or payload structs with dynamic values, use explicit `structMake` +
-  `structSet({ structIn, field, value })` chains. To change fields on an EXISTING struct value,
-  call `structSet` on it or write a dot-path on a mutable binding (`row.status = "done"` lowers to
-  `structSet`) — never rebuild every field from a fresh `structMake` just to change one. Do not put
-  dynamic field expressions directly inside object/array literals for inserts/upserts, for example
-  avoid `{ id: cuid().cuid, vector: embedded.vector }` as an inline row. Inline object literals are
+- For database rows or payload structs with dynamic values, use explicit `struct::make` +
+  `struct::set({ structIn, field, value })` chains (`row.set({ field, value })` in method form). To
+  change fields on an EXISTING struct value, call `struct::set` on it or write a dot-path on a
+  mutable binding (`row.status = "done"` lowers to `struct::set`) — never rebuild every field
+  from a fresh `struct::make` just to change one. Do not put dynamic field expressions directly
+  inside object/array literals for inserts/upserts, for example avoid
+  `{ id: cuid().cuid, vector: embedded.vector }` as an inline row. Inline object literals are
   safe only when all fields are literal defaults.
 - Functions ARE first-class in FlowScript: a `function name(params): (returns) { ... }` declaration
   creates a Function layer — its params become input pins, its returns become output pins, and its
@@ -1358,17 +1403,14 @@ Actionable empty-board edits:
   with an empty string, a summary, or a markdown fenced block instead of the full document.
 - Control flow IS supported: plain `if (booleanValue) { ... } else { ... }` creates a Branch node
   with both arms wired from its true/false pins, and the statement after the `if` continues
-  correctly (fan-in from the arm ends and any untaken pin). Loops use the exact loop-node call
-  form: `for (const item of controlForEach({ array: items })) { ... }`.
+  correctly (fan-in from the arm ends and any untaken pin). Loops use `for (const item of items)`.
 - A trailing comment on an `if` brace is an execution-pin LABEL only when the condition is itself
   a catalog/control-node call. On a boolean condition it is ordinary text and is kept as the first
   comment inside the branch body — it does NOT name an exec pin, so do not use it to steer
   execution. To wire specific arms, use an exact control-node call from `get_declarations` and
   label its arms.
-- `!` negates a boolean: `if (!ready) { ... }`. It is a real operator now, so it also works with an
-  `else`. A loop head is not a boolean — `while (!done)` is rejected; loops take a loop-node call
-  such as `controlForEach({ array: items })`.
-- There is no unary minus: write `0 - x`. A negative literal like `-1` is fine.
+- `!` negates a boolean: `if (!ready) { ... }`, and `while (!done) { ... }` is a real loop. Unary
+  minus is an operator too: `-x` lowers to `0 - x`.
 
 ### Compiler-verified microexamples
 These small examples are kept parseable and reconcilable in CI against the generated catalog
@@ -1378,7 +1420,8 @@ the placeholder values.
 - Treat each returned declaration as authoritative even when its function or argument shape is
   unintuitive; do not substitute a familiar library name or guessed pin.
 - When a declaration repeats the same argument name, repeat that exact key in declaration order.
-  Do not invent aliases such as `a` / `b` or put command-only `[#N]` selectors in FlowScript.
+  Argument names are never renamed: do not invent names such as `a` / `b` for repeated pins, and
+  do not put command-only `[#N]` selectors in FlowScript.
 - A closed-schema `Struct` return permits only fields listed in its live schema note; use
   the catalog's typed accessor calls when supplied as companions. An open or schema-less Struct
   still does not justify guessed business fields: validate the intended accessor/declaration first.
@@ -1387,21 +1430,23 @@ the placeholder values.
 FlowScript accepts repeated object keys when the catalog declaration has repeated pins.
 ```flowscript-verified
 function either(first: bool, second: bool): (result: bool) {
-    const result = boolOr({ boolean: first, boolean: second })
+    const result = bool::or({ boolean: first, boolean: second })
     return result
 }
 ```
 
 #### Secret state, Generic conversion, a typed return, and a plain branch
-`structGet(...).value` is `any`. Convert it before a typed comparison; never compare the raw
+`struct::get(...).value` is `any`. Convert it before a typed comparison; never compare the raw
 Generic value directly with a string.
 ```flowscript-verified
+use log::*
+
 @secret
-const expectedSender: string = ""
+const expectedSender = ""
 
 function senderMatches(payload: Struct, expected: string): (matches: bool) {
-    const rawSender = structGet({ struct: payload, field: "sender" })
-    const sender = valToString({ value: rawSender.value })
+    const { value: rawSender } = payload.get({ field: "sender" })
+    const sender = json::stringify({ value: rawSender })
     let matches = sender == expected
     return matches
 }
@@ -1409,9 +1454,9 @@ function senderMatches(payload: Struct, expected: string): (matches: bool) {
 eventsGeneric(payload: Struct) {
     const approved = senderMatches({ payload: payload, expected: expectedSender })
     if (approved) {
-        logInfo({ message: "approved sender" })
+        info({ message: "approved sender" })
     } else {
-        logInfo({ message: "unapproved sender" })
+        info({ message: "unapproved sender" })
     }
 }
 ```
@@ -1421,27 +1466,29 @@ Aim for 20–30 nodes per helper and split before the hard 100-node layer limit.
 the loop runs from its `done` output; the statement after `processBatch` continues from the helper's
 Function `exec_out` boundary.
 ```flowscript-verified
+use log::*
+
 function validateBatch(items: any[]) {
-    logInfo({ message: items })
+    info({ message: items })
 }
 
 function processBatch(items: any[]) {
-    for (const item of controlForEach({ array: items })) {
-        logInfo({ message: item.value })
+    for (const item of items) {
+        info({ message: item })
     }
-    logInfo({ message: "batch complete" })
+    info({ message: "batch complete" })
 }
 
 eventsSimple() {
     validateBatch({ items: ["first", "second"] })
     processBatch({ items: ["first", "second"] })
-    logInfo({ message: "all helpers continued" })
+    info({ message: "all helpers continued" })
 }
 ```
 
 #### Function references
 `tools: [echoTool]` is explicit FlowScript function-reference syntax emitted by the decompiler. It
-is metadata for `agentRegisterFunctionTools`, not a catalog input pin.
+is metadata for `agent::registerFunctionTools`, not a catalog input pin.
 
 **Each array item must name a handler block — `name(params) { … }` — never a `function`.** A
 `function` compiles to a Function layer whose signature becomes boundary pins, and a layer cannot be
@@ -1450,14 +1497,16 @@ and the whole edit is refused. A handler block compiles to an event entry, which
 actually invokes: its **data outputs become the tool's arguments** and its **`return` becomes the
 tool result**. Declare the handler inside the same scope that registers it.
 ```flowscript-verified
+use agent::*
+
 eventsSimple() {
-    const agent = agentRegisterFunctionTools({
-        agentIn: agentFromModel({ model: structMake() }),
+    const agent = registerFunctionTools({
+        agentIn: fromModel({ model: struct::make() }),
         tools: [echoTool]
     })
-    logInfo({ message: agent })
+    log::info({ message: agent })
     echoTool(payload: Struct) {
-        return valToString({ value: payload }).string
+        return json::stringify({ value: payload }).string
     }
 }
 ```
@@ -1466,22 +1515,25 @@ eventsSimple() {
 Never place a sequential statement directly after a multi-exec node. Bind the call, name every
 execution arm shown by its declaration, and continue after the enclosing helper call.
 ```flowscript-verified
+use http::*
+use log::*
+
 function fetchWithPolicy(url: string) {
-    const request = httpMakeRequest({ method: "GET", url: url })
-    const result = httpFetch({ request: request })
+    const request = makeRequest({ method: "GET", url: url })
+    const result = fetch({ request: request })
     result {
         execSuccess: {
-            logInfo({ message: "request succeeded" })
+            info({ message: "request succeeded" })
         }
         execError: {
-            logError({ message: "request failed" })
+            error({ message: "request failed" })
         }
     }
 }
 
 eventsSimple() {
     fetchWithPolicy({ url: "https://example.com" })
-    logInfo({ message: "fetch helper continued" })
+    info({ message: "fetch helper continued" })
 }
 ```
 
@@ -1490,57 +1542,58 @@ Function names and field names below demonstrate grammar only; use `get_declarat
 signatures before submitting.
 ```ts
 // Bad: object fields use `=`
-emailImapConnect({ host = "imap.gmail.com", port = 993 })
+imap::connect({ host = "imap.gmail.com", port = 993 })
 
 // Good
-emailImapConnect({ host: "imap.gmail.com", port: 993 })
+imap::connect({ host: "imap.gmail.com", port: 993 })
 
 // Bad: function `const` binding is not a node call
 function run() {
     const row = { id: "<CUID>", body: "<BODY>" }
 }
 
-// Good: local literal alias sugar
+// Good: local literal alias sugar, then a method call on the array
 function run() {
     let rows = []
-    rows = arrayPush({ arrayIn: rows, value: { id: "<CUID>", body: "<BODY>" } })
+    rows = rows.push({ id: "<CUID>", body: "<BODY>" })
 }
 
 // Good: pass objects/literals directly to a real node call
 function run() {
-    batchUpsertLocalDb({
-        database: openLocalDb({ name: "email_vectors" }),
+    db::batchUpsert({
+        database: db::open({ name: "email_vectors" }),
         value: [{ id: "<CUID>", body: "<BODY>", sentiment: "neutral" }]
     })
 }
 
 // Also good: `const` binds a node-call output, then dynamic row fields are built explicitly
+use ai::embedding::*
+
 function run(embeddingBit: Struct) {
-    const db = openLocalDb({ name: "email_vectors" })
-    const model = loadModel({ bit: embeddingBit })
-    const embedded = embedDocument({ model: model.model, queryString: "<BODY>" })
-    const id = cuid()
+    const { database } = db::open({ name: "email_vectors" })
+    const { model } = loadModel({ bit: embeddingBit })
+    const vector = embedDocument({ model: model, queryString: "<BODY>" })
+    const id = random::cuid()
     let rows = []
-    let row = structMake()
-    row = structSet({ structIn: row, field: "id", value: id.cuid })
-    row = structSet({ structIn: row, field: "body", value: "<BODY>" })
-    row = structSet({ structIn: row, field: "vector", value: embedded.vector })
-    const push = arrayPush({ arrayIn: rows, value: row })
-    rows = push.arrayOut
-    batchUpsertLocalDb({ database: db, value: rows, idRow: "id" })
+    let row = struct::make()
+    row = row.set({ field: "id", value: id })
+    row = row.set({ field: "body", value: "<BODY>" })
+    row = row.set({ field: "vector", value: vector })
+    rows = rows.push(row)
+    database.batchUpsert({ value: rows, idRow: "id" })
 }
 
 // Bad: labelled branch with a non-call condition
 function run() {
     if (rowCount > 0) { // exec_out_has_rows
-        notifyUser({ title: "Rows found" })
+        notify::user({ title: "Rows found" })
     }
 }
 
 // Good: plain boolean branch has no labels
 function run() {
     if (rowCount > 0) {
-        notifyUser({ title: "Rows found" })
+        notify::user({ title: "Rows found" })
     }
 }
 ```
@@ -1548,61 +1601,64 @@ function run() {
 ### 1. Create typed state first, then build behavior around it
 ```ts
 @category("Report")
-const reportCreated: bool = false
+const reportCreated = false
 @category("Report")
-const reportID: string = ""
+const reportID = ""
 @category("Report")
 const reportRows: Struct[] = []
 
 function generateReport() {
-    const id = cuid()
-    reportID = id.cuid
-    const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-    batchInsertLocalDb({ database: db, value: reportRows })
+    const { cuid } = random::cuid()
+    reportID = cuid
+    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    database.batchInsert({ value: reportRows })
 }
 ```
 
-### 2. Build dynamic database rows with structSet chains
+### 2. Build dynamic database rows with struct::set chains
 ```ts
 function ingestRows() {
-    const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-    const id = cuid()
-    const now = utilsDatetimeNow()
+    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const { cuid } = random::cuid()
+    const { date } = datetime::now()
     let rows = []
-    let row = structMake()
-    row = structSet({ structIn: row, field: "id", value: id.cuid })
-    row = structSet({ structIn: row, field: "created_at", value: now.date })
-    row = structSet({ structIn: row, field: "title", value: "Placeholder title" })
-    const push = arrayPush({ arrayIn: rows, value: row })
-    rows = push.arrayOut
-    batchUpsertLocalDb({ database: db, value: rows, idRow: "id" })
+    let row = struct::make()
+    row = row.set({ field: "id", value: cuid })
+    row = row.set({ field: "created_at", value: date })
+    row = row.set({ field: "title", value: "Placeholder title" })
+    rows = rows.push(row)
+    database.batchUpsert({ value: rows, idRow: "id" })
 }
 ```
 
 ### 3. Prefer readable intermediate constants for nested calls
 ```ts
+use http::*
+use types::*
+
 function search(query: string, language: string, page: int, payload: Struct): (result: Struct) {
-    const request = httpMakeRequest({
+    const { result: pageNumber } = fallback({ value: page, default: 1 })
+    const { result: lang } = fallback({ value: language, default: "en-US" })
+    const q = ui::urlEncode({ input: query })
+    const request = makeRequest({
         method: "GET",
-        url: stringFormat({
-            formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}",
-            q: a2uiUrlEncode({ input: query }),
-            page: utilsTypesFallback({ value: page, default: 1 }).result,
-            lang: utilsTypesFallback({ value: language, default: "en-US" }).result
-        })
+        url: `https://search.flow-like.com/search?q=${q}&format=json&pageno=${pageNumber}&language=${lang}`
     })
-    const response = httpFetch({ request: request })
-    const json = httpResponseToJson({ response: response.response })
-    return json.struct
+    const { response } = fetch({ request: request })
+    const { struct: json } = responseToJson({ response: response })
+    return json
 }
 ```
 
 ### 4. Existing branches and loop bodies render as normal FlowScript blocks
 ```ts
+use files::*
+use path::*
+
 function loadConfig() {
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
-        const file = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
-        userConfiguration = valFromString({ string: file.content })
+        const { content } = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
+        userConfiguration = json::parse({ string: content })
     } else { // exec_out_missing
         userConfiguration = { general: { news: false }, sources: [] }
         saveConfig({ config: userConfiguration })
@@ -1610,28 +1666,30 @@ function loadConfig() {
 }
 
 function processAllSources() {
-    for (const item of controlForEach({ array: userConfiguration.sources })) {
-        processSource({ source: item.value })
+    for (const source of userConfiguration.sources) {
+        processSource({ source: source })
     }
 }
 ```
 
 ### 5. DataFusion over Open Database follows open -> session -> register -> SQL
-`dfCreateSession` needs only a session name — every other pin is an optional tuning default.
-Create the session ONCE in the entry function and pass `session.session` to helpers as a `Struct`
+`df::createSession` needs only a session name — every other pin is an optional tuning default.
+Create the session ONCE in the entry function and pass `session` to helpers as a `Struct`
 parameter instead of recreating it per helper.
 ```ts
+use df::*
+
 function loadOverview(session: Struct): (rows: Struct[]) {
-    const db = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    dfRegisterLance({ session: session, database: db, tableName: "reports" })
-    const rows = dfSqlQuery({ session: session, query: "SELECT report_id, title, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
-    return rows.rows
+    const { database } = db::open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    registerLance({ session: session, database: database, tableName: "reports" })
+    const { rows } = sqlQuery({ session: session, query: "SELECT report_id, title, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
+    return rows
 }
 
 eventsSimple() {
-    const session = dfCreateSession({ sessionName: "default" })
-    const overview = loadOverview({ session: session.session })
-    logInfo({ message: overview })
+    const { session } = createSession({ sessionName: "default" })
+    const overview = loadOverview({ session: session })
+    log::info({ message: overview })
 }
 ```
 
@@ -1641,72 +1699,81 @@ signature. Prefer several small helpers over one giant event block. Note the spl
 reusable logic is a `function`, but anything an agent invokes is a **handler block** declared in the
 scope that registers it, because only a handler compiles to an entry node the runtime can trigger.
 ```ts
+use agent::*
+use http::*
+
 function runResearch(task: string): (answer: string) {
-    const model = aiGenerativeFindModel({})
-    const history = aiGenerativeHistoryFromString({ modelName: "", message: task })
-    const agent = agentRegisterFunctionTools({
-        agentIn: agentFromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }),
+    const model = ai::findModel({})
+    const history = history::fromString({ modelName: "", message: task })
+    const agent = registerFunctionTools({
+        agentIn: fromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }),
         tools: [fetchPage]
     })
-    const result = agentInvoke({ agent: agent, history: history })
+    const { response } = invoke({ agent: agent, history: history })
     fetchPage(url: string) {
-        const response = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
-        const text = httpResponseToText({ response: response.response })
-        return utilsMdHtmlToMd({ html: text.text, skippedTags: ["script","style","iframe"] }).markdown
+        const { response: page } = fetch({ request: makeRequest({ method: "GET", url: url }) })
+        const { text } = responseToText({ response: page })
+        return md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] }).markdown
     }
-    return aiGenerativeLlmResponseLastContent({ response: result.response }).content
+    return ai::response::lastContent({ response: response }).content
 }
 ```
 
 ### 7. Dashboard onLoad: query data, then populate page elements and widgets
 Element refs (`"<page_id>/<element_id>"`) and the widget selector (`"Article"`) come from
 `ui_inspect`, NOT from guessing. Keep the page-load logic in its own function and factor the
-container fill into a helper. Iterate rows with the exact `controlForEach` declaration.
+container fill into a helper. Iterate rows with `for (const row of rows)`.
 ```ts
+use df::*
+use ui::*
+
 function briefingPageLoad() {
-    const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-    const session = dfCreateSession({ sessionName: "default" })
-    dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
-    const result = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, summary, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: result.rowCount }) })
-    fillArticles({ rows: result.rows })
-    a2uiShowScreen()
+    const { database } = db::open({ name: "reports", userScoped: true, batchSize: 1000 })
+    const { session } = createSession({ sessionName: "default" })
+    registerLance({ session: session, database: database, tableName: "reports" })
+    const { rows, rowCount } = sqlQuery({ session: session, query: "SELECT report_id, title, summary, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: `${rowCount} Briefing(s)` })
+    fillArticles({ rows: rows })
+    showScreen()
 }
 
 function fillArticles(rows: Struct[]) {
-    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
-    for (const row of controlForEach({ array: rows })) {
-        const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: row.value.report_id, dynPathTitle: row.value.title, dynPathSummary: row.value.summary, dynPathDate: utilsDatetimeFormat({ date: row.value.created_at, format: "%B %-d, %Y" }), fnRefs: [openBriefing] })
-        a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: instance.elementRef, position: -1 })
+    clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
+    for (const row of rows) {
+        const { elementRef } = instantiateWidget({ widgetSelector: "Article", instanceId: row.report_id, dynPathTitle: row.title, dynPathSummary: row.summary, dynPathDate: row.created_at.format("%B %-d, %Y"), fnRefs: [openBriefing] })
+        pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef, position: -1 })
     }
 }
 
 eventsWidgetAction openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
-    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
+    navigateTo({ route: `/briefing?report_id=${widgetInstanceId}` })
 }
 ```
-A widget action target is neither a `function` nor a generic handler: `a2uiInstantiateWidget`
+A widget action target is neither a `function` nor a generic handler: `ui::instantiateWidget`
 validates that every `fnRefs` entry is a **Widget Action Event** and errors otherwise, so declare it
 as `eventsWidgetAction name(...)`. Its parameters are the action payload the runtime delivers.
 
 ### 8. Drive a dashboard chart/table directly from a DataFusion query
-`dfSqlQuery(...).table` is a `CSVTable` you can hand straight to `a2uiPushCsvToChart` (format `CSV`).
+`df::sqlQuery(...).table` is a `CSVTable` you can hand straight to `ui::pushCsvToChart` (format `CSV`).
 Look up the chart element ref with `ui_inspect` first.
 ```ts
+use df::*
+use ui::*
+
 function renderTrend() {
-    const db = openLocalDb({ name: "metrics", userScoped: true, batchSize: 1000 })
-    const session = dfCreateSession({ sessionName: "default" })
-    dfRegisterLance({ session: session.session, database: db, tableName: "metrics" })
-    const result = dfSqlQuery({ session: session.session, query: "SELECT day, SUM(amount) AS total FROM metrics GROUP BY day ORDER BY day;" })
-    a2uiPushCsvToChart({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/trend-chart" }).element, library: "Nivo", format: "CSV", table: result.table, chartType: "Line" })
-    a2uiShowScreen()
+    const { database } = db::open({ name: "metrics", userScoped: true, batchSize: 1000 })
+    const { session } = createSession({ sessionName: "default" })
+    registerLance({ session: session, database: database, tableName: "metrics" })
+    const { table } = sqlQuery({ session: session, query: "SELECT day, SUM(amount) AS total FROM metrics GROUP BY day ORDER BY day;" })
+    pushCsvToChart({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/trend-chart" }).element, library: "Nivo", format: "CSV", table: table, chartType: "Line" })
+    showScreen()
 }
 ```
 
 When generating from an empty board, start with this kind of coherent skeleton: placeholder
 literals/state when useful, small helper/tool functions, one entry function, and concrete
 database/index/search node calls where needed. For dashboard work, call `ui_inspect` first so every
-`a2ui*` element reference and widget selector is real.
+`ui::*` element reference and widget selector is real.
 "##;
 
 /// Domain-specific worked examples covering the widely-used catalog areas (mail, LLM invoke,
@@ -1718,34 +1785,36 @@ pub const FLOWSCRIPT_DOMAIN_EXAMPLES: &str = r##"
 ### Email round-trip: fetch unseen mail, send a tagged draft for approval, persist, mark seen
 Connection nodes take real credentials — leave them as empty strings for the user to fill.
 ```ts
+use imap::*
+
 eventsSimple triageInbox() {
-    const imap = emailImapConnect({ host: "", port: 993, username: "", password: "" })
-    const inbox = mailImapInbox({ connection: imap.connection, inbox: "INBOX" })
-    const listed = mailImapList({ inbox: inbox.inboxStruct })
-    const smtp = emailSmtpConnect({ host: "", port: 587, username: "", password: "" })
-    const db = openLocalDb({ name: "Mail Drafts", userScoped: false, batchSize: 1000 })
-    for (const mail of controlForEach({ array: listed.emails })) {
-        const reference = mailImapInboxMailToReference({ mail: mail.value })
-        const full = emailImapInboxFetchMail({ emailRef: reference.reference })
-        const content = emailGetContent({ email: full.email })
-        const headers = emailGetHeaders({ email: full.email })
-        const sender = valToString({ value: headers.from, pretty: false })
-        const draftId = cuid()
-        const tagged = stringFormat({ formatString: "[DRAFT {id}] {subject}", id: draftId.cuid, subject: content.subject })
-        let row = structSet({ structIn: {}, field: "id", value: draftId.cuid }).structOut
-        row = structSet({ structIn: row, field: "sender", value: sender.string }).structOut
-        row = structSet({ structIn: row, field: "subject", value: content.subject }).structOut
-        row = structSet({ structIn: row, field: "status", value: "awaiting_approval" }).structOut
+    const conn = connect({ host: "", port: 993, username: "", password: "" })
+    const inbox = conn.inbox({ inbox: "INBOX" })
+    const listed = inbox.listMails()
+    const smtp = smtp::connect({ host: "", port: 587, username: "", password: "" })
+    const db = db::open({ name: "Mail Drafts", userScoped: false, batchSize: 1000 })
+    for (const mail of listed) {
+        const reference = mail.toReference()
+        const full = reference.fetchMail()
+        const { subject, plain } = full.getContent()
+        const { from } = full.getHeaders()
+        const sender = json::stringify({ value: from, pretty: false })
+        const draftId = random::cuid()
+        const tagged = `[DRAFT ${draftId}] ${subject}`
+        let row = struct::set({ structIn: {}, field: "id", value: draftId })
+        row = row.set({ field: "sender", value: sender })
+        row = row.set({ field: "subject", value: subject })
+        row = row.set({ field: "status", value: "awaiting_approval" })
         // Database writes have (execOut, error) outputs: bind and branch instead of sequencing.
-        const saved = upsertLocalDb({ database: db.database, value: row, idRow: "id" })
+        const saved = db.upsert({ value: row, idRow: "id" })
         saved {
             execOut: {
-                emailSmtpSend({ connection: smtp.connection, from: "", to: "", subject: tagged.formattedString, bodyText: content.plain })
+                smtp::send({ connection: smtp, from: "", to: "", subject: tagged, bodyText: plain })
                 // Mark-as-seen takes the EmailRef (connection/inbox/uid), not the fetched mail.
-                emailImapMarkSeen({ email: reference.reference, markAsSeen: true })
+                markSeen({ email: reference, markAsSeen: true })
             }
             error: {
-                logInfo({ message: "draft persist failed; leaving mail unseen for a retry" })
+                log::info({ message: "draft persist failed; leaving mail unseen for a retry" })
             }
         }
     }
@@ -1756,13 +1825,13 @@ eventsSimple triageInbox() {
 `row.revision + 1` directly is INVALID: a struct field read is Generic, so coerce first.
 ```ts
 function reviseDraft(row: Struct, feedback: string): (updated: Struct) {
-    const llm = aiGenerativeFindModel({})
-    const revised = aiGenerativeInvokeSimple({ model: llm.model, systemPrompt: "Revise the reply draft using the reviewer feedback. Return only the new draft body.", prompt: feedback })
-    let updated = structSet({ structIn: row, field: "body", value: revised.result }).structOut
-    const revision = structGet({ struct: updated, field: "revision" })
-    const parsed = utilsTypesTryTransform({ typeIn: revision.value })
-    const nextRevision = intAdd({ integer1: parsed.typeOut, integer2: 1 })
-    updated = structSet({ structIn: updated, field: "revision", value: nextRevision.sum }).structOut
+    const llm = ai::findModel({})
+    const { result: revised } = ai::invokeSimple({ model: llm, systemPrompt: "Revise the reply draft using the reviewer feedback. Return only the new draft body.", prompt: feedback })
+    let updated = row.set({ field: "body", value: revised })
+    const { value: revision } = updated.get({ field: "revision" })
+    const { typeOut: parsed } = types::tryTransform({ typeIn: revision })
+    const nextRevision = int::add({ integer1: parsed, integer2: 1 })
+    updated = updated.set({ field: "revision", value: nextRevision })
     return updated
 }
 ```
@@ -1770,18 +1839,20 @@ function reviseDraft(row: Struct, feedback: string): (updated: Struct) {
 ### Knowledge ingest: extract, chunk, embed, persist searchable rows
 The embedding model loads from a Bit; leave the bit id empty for the user to select.
 ```ts
+use ai::embedding::*
+
 eventsSimple ingestDocument() {
-    const bit = bitFromString({ bitId: "" })
-    const embedder = loadModel({ bit: bit.outputBit })
-    const db = openLocalDb({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
-    const chunks = chunkText({ model: embedder.model, text: "document text", overlap: 80 })
-    for (const chunk of controlForEach({ array: chunks.chunks })) {
-        const vector = embedDocument({ model: embedder.model, queryString: chunk.value })
-        const id = cuid()
-        let row = structSet({ structIn: {}, field: "id", value: id.cuid }).structOut
-        row = structSet({ structIn: row, field: "text", value: chunk.value }).structOut
-        row = structSet({ structIn: row, field: "vector", value: vector.vector }).structOut
-        upsertLocalDb({ database: db.database, value: row, idRow: "id" })
+    const bit = ai::loadBit({ bitId: "" })
+    const embedder = loadModel({ bit: bit })
+    const db = db::open({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
+    const chunks = ai::processing::chunkText({ model: embedder, text: "document text", overlap: 80 })
+    for (const chunk of chunks) {
+        const vector = embedDocument({ model: embedder, queryString: chunk })
+        const id = random::cuid()
+        let row = struct::set({ structIn: {}, field: "id", value: id })
+        row = row.set({ field: "text", value: chunk })
+        row = row.set({ field: "vector", value: vector })
+        db.upsert({ value: row, idRow: "id" })
     }
 }
 ```
@@ -1789,16 +1860,17 @@ eventsSimple ingestDocument() {
 ### Semantic search with an explicit empty-result path
 Search reads have a single `execOut`; detect emptiness from the values array, not from an arm.
 ```ts
+use ai::embedding::*
+
 function answerFromLibrary(question: string): (answer: string) {
     let answer = "No matching knowledge found."
-    const bit = bitFromString({ bitId: "" })
-    const embedder = loadModel({ bit: bit.outputBit })
-    const db = openLocalDb({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
-    const queryVector = embedDocument({ model: embedder.model, queryString: question })
-    const found = vectorSearchLocalDb({ database: db.database, vector: queryVector.vector, limit: 5 })
-    const count = arrayLength({ array: found.values })
-    if (count.length > 0) {
-        answer = valToString({ value: found.values, pretty: true }).string
+    const bit = ai::loadBit({ bitId: "" })
+    const embedder = loadModel({ bit: bit })
+    const db = db::open({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
+    const queryVector = embedDocument({ model: embedder, queryString: question })
+    const found = db.vectorSearch({ vector: queryVector, limit: 5 })
+    if (found.length() > 0) {
+        answer = json::stringify({ value: found, pretty: true })
     }
     return answer
 }
@@ -1815,8 +1887,8 @@ function persistDecision(row: Struct, approved: bool): (status: string) {
     if (approved) {
         status = "sent"
     }
-    const updated = structSet({ structIn: row, field: "status", value: status })
-    logInfo({ message: valToString({ value: updated.structOut, pretty: false }).string })
+    const updated = row.set({ field: "status", value: status })
+    log::info({ message: json::stringify({ value: updated, pretty: false }) })
     return status
 }
 ```
@@ -3047,7 +3119,7 @@ mod tests {
             description: param.doc.clone().unwrap_or_default(),
             data_type: data_type.to_string(),
             value_type: value_type.to_string(),
-            default_value: None,
+            default_value: param.optional.then(|| "null".to_string()),
             schema: param.schema.clone(),
             is_generic: param.ty.base == "any",
             valid_values: None,
@@ -3131,6 +3203,9 @@ mod tests {
                 .collect(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: signature.namespace.clone(),
+            alias: signature.alias.clone(),
+            receiver: signature.receiver.clone(),
         }
     }
 
@@ -3377,16 +3452,51 @@ mod tests {
         );
         assert!(
             !FLOWSCRIPT_FEW_SHOT_EXAMPLES
-                .contains("aiGenerativeMakeHistoryMessage({ role: \"User\", type: \"Text\", text:")
+                .contains("makeHistoryMessage({ role: \"User\", type: \"Text\", text:")
         );
         assert!(
             FLOWSCRIPT_FEW_SHOT_EXAMPLES
-                .contains("aiGenerativeHistoryFromString({ modelName: \"\", message: task })")
+                .contains("history::fromString({ modelName: \"\", message: task })")
         );
         assert!(
             !FLOWSCRIPT_FEW_SHOT_EXAMPLES
-                .contains("openLocalDb({ name: \"email_vectors\" }).database")
+                .contains("db::open({ name: \"email_vectors\" }).database")
         );
+    }
+
+    /// The renderer now emits `ns::alias`, method calls, `use` lines and template literals; a
+    /// prompt that still teaches only the flat spelling makes the model fight the board text it
+    /// is shown.
+    #[test]
+    fn board_prompts_teach_namespaces_methods_and_sugar() {
+        for prompt in [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+        ] {
+            assert!(prompt.contains("## FLOWSCRIPT NAMES AND SUGAR"));
+            assert!(prompt.contains("`use ns::*` at the TOP of the file"));
+            assert!(prompt.contains("A declaration with a `this:` parameter is also a METHOD"));
+            assert!(prompt.contains("The legacy camelCase name"));
+            assert!(prompt.contains("Template literals lower to `string::format`"));
+            assert!(prompt.contains("for (const [index, item] of items)"));
+            assert!(prompt.contains("Destructure outputs by pin name"));
+            assert!(prompt.contains("never rename an argument"));
+            assert!(!prompt.contains("There is no unary minus"));
+            assert!(!prompt.contains("Do not invent aliases"));
+        }
+        for example in FLOWSCRIPT_FEW_SHOT_EXAMPLES
+            .split("```flowscript-verified\n")
+            .skip(1)
+        {
+            let body = example
+                .split_once("\n```")
+                .map(|(body, _)| body)
+                .unwrap_or("");
+            assert!(
+                body.contains("::") || body.contains("use "),
+                "verified example must show the namespaced spelling:\n{body}"
+            );
+        }
     }
 
     #[test]
@@ -3467,7 +3577,7 @@ mod tests {
         for prompt in prompts {
             assert!(prompt.contains("## NUMBERS & CONVERSIONS"));
             assert!(prompt.contains("NEVER invoke an LLM/agent node for arithmetic"));
-            assert!(prompt.contains("no `valToInt`/`valToFloat` catalog node"));
+            assert!(prompt.contains("no `json::toInt`/`json::toFloat` catalog node"));
             assert!(prompt.contains("No no-op identity calls"));
         }
 
@@ -3480,9 +3590,9 @@ mod tests {
             assert!(prompt.contains("each declared return pin needs a matching return value"));
             assert!(prompt.contains("An event-level `return` accepts exactly\n  one value"));
             assert!(prompt.contains("Never reassign a `const` binding inside a branch arm"));
-            assert!(prompt.contains("dfCreateSession({ sessionName: \"default\" })"));
+            assert!(prompt.contains("df::createSession({ sessionName: \"default\" })"));
             assert!(!prompt.contains("collectStatistics: true"));
-            assert!(prompt.contains("never rebuild every field from a fresh `structMake`"));
+            assert!(prompt.contains("never rebuild every field\n  from a fresh `struct::make`"));
         }
     }
 
@@ -3608,7 +3718,9 @@ mod tests {
         for prompt in prompts {
             assert!(prompt.contains("## FILES ARE FlowPath HANDLES, NOT FIELD BAGS"));
             assert!(prompt.contains("`path`, `storeRef`, `cacheStoreRef`"));
-            assert!(prompt.contains("NEVER read a file attribute with dot access or `structGet`"));
+            assert!(
+                prompt.contains("NEVER read a file attribute with dot access or `struct::get`")
+            );
             for accessor in [
                 "filename({ path: file })",
                 "extension({ path: file })",
@@ -3931,11 +4043,9 @@ mod tests {
             assert!(prompt.contains("BUILD THE WORKFLOW ANYWAY"));
             assert!(prompt.contains("not an unbuildable unit"));
             assert!(prompt.contains("exact vector width of the embedding model"));
-            assert!(
-                prompt.contains(
-                    "Build indices IN THE FLOW with `indexLocalDb`, AFTER that first write"
-                )
-            );
+            assert!(prompt.contains(
+                "Build indices IN THE FLOW with `db::buildIndex`, AFTER that first write"
+            ));
         }
         assert!(
             UNBUILDABLE_UNIT_GUIDANCE
@@ -4036,8 +4146,8 @@ mod tests {
         ] {
             assert!(prompt.contains("### DATE/TIME TYPE CONTRACT"));
             assert!(prompt.contains("use `Date` for the field"));
-            assert!(prompt.contains("`utilsDatetimeNow`"));
-            assert!(prompt.contains("`utilsDatetimeParse`"));
+            assert!(prompt.contains("`datetime::now`"));
+            assert!(prompt.contains("`datetime::parse`"));
             assert!(prompt.contains("`type: \"timestamp:ms:UTC\"`"));
             assert!(prompt.contains("Utf8/LargeUtf8"));
             assert!(prompt.contains("`to_timestamp(column)`"));
@@ -4068,22 +4178,22 @@ mod tests {
             assert!(prompt.contains("## A2UI PAGES: UPDATING WHAT AN ELEMENT SHOWS"));
             assert!(prompt.contains("It writes to the ELEMENT with that element's\nsetter"));
             for setter in [
-                "a2uiSetElementText",
-                "a2uiSetElementValue",
-                "a2uiWriteCsvToTable",
-                "a2uiPushCsvToChart",
-                "a2uiInstantiateWidget",
-                "a2uiWidgetUpdateInputs",
-                "a2uiPushChild",
+                "ui::setElementText",
+                "ui::setElementValue",
+                "ui::writeCsvToTable",
+                "ui::pushCsvToChart",
+                "ui::instantiateWidget",
+                "ui::widgetUpdateInputs",
+                "ui::pushChild",
             ] {
                 assert!(prompt.contains(setter), "missing element setter: {setter}");
             }
-            assert!(prompt.contains("`a2uiDataUpdate`) is FORBIDDEN"));
+            assert!(prompt.contains("`ui::dataUpdate`) is FORBIDDEN"));
             assert!(prompt.contains("FS_PROHIBITED_NODE"));
-            assert!(!prompt.contains("`a2uiDataUpdate` is a LAST RESORT"));
-            assert!(!prompt.contains("`a2uiDataUpdate`) is a LAST RESORT"));
+            assert!(!prompt.contains("`ui::dataUpdate` is a LAST RESORT"));
+            assert!(!prompt.contains("`ui::dataUpdate`) is a LAST RESORT"));
             assert!(!prompt.contains("This is the ONLY node that updates the live UI"));
-            assert!(!prompt.contains("visible now -> `a2uiDataUpdate`"));
+            assert!(!prompt.contains("visible now -> `ui::dataUpdate`"));
         }
     }
 
@@ -4098,8 +4208,8 @@ mod tests {
         for prompt in prompts {
             assert!(prompt.contains("### Interaction events PULL their own inputs"));
             assert!(prompt.contains("NEVER declare a Generic Event with payload parameters"));
-            assert!(prompt.contains("a2uiGetElementValue({ elementRef }).value"));
-            assert!(prompt.contains("a2uiGetFileInputFiles"));
+            assert!(prompt.contains("ui::getElementValue({ elementRef }).value"));
+            assert!(prompt.contains("ui::getFileInputFiles"));
             assert!(prompt.contains("addTarget() {"));
             assert!(prompt.contains("refreshTargetsTable()"));
         }

@@ -24,6 +24,8 @@ impl NodeLogic for HexEncodeNode {
             "Encodes a string's bytes to a hexadecimal string",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "hexEncode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "String to encode", VariableType::String);

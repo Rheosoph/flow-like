@@ -54,7 +54,9 @@ impl UuidV4Node {
 #[async_trait]
 impl NodeLogic for UuidV4Node {
     fn get_node(&self) -> Node {
-        uuid_node("uuid_v4", "UUID v4", "A random identifier")
+        let mut node = uuid_node("uuid_v4", "UUID v4", "A random identifier");
+        node.set_flowscript_name("random", "uuidV4");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -75,11 +77,13 @@ impl UuidV7Node {
 #[async_trait]
 impl NodeLogic for UuidV7Node {
     fn get_node(&self) -> Node {
-        uuid_node(
+        let mut node = uuid_node(
             "uuid_v7",
             "UUID v7",
             "A time ordered identifier — sorts by creation time, which keeps database indexes tidy",
-        )
+        );
+        node.set_flowscript_name("random", "uuidV7");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

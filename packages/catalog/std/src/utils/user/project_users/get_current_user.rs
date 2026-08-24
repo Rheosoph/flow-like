@@ -23,6 +23,7 @@ impl NodeLogic for GetCurrentUserNode {
             "Get Current User",
             "Gets the current runtime user and, when available, their project membership, role, effective permissions, and attributes.",
         );
+        node.set_flowscript_name("user", "getCurrent");
         add_app_pin(&mut node);
         node.add_output_pin(
             "current_user",

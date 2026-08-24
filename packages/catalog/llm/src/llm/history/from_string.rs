@@ -30,6 +30,7 @@ impl NodeLogic for HistoryFromStringNode {
             "Creates a ChatHistory Struct from String (as User Message)",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "fromString");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
 

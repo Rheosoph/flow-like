@@ -98,6 +98,8 @@ impl NodeLogic for TimeBinAggregationNode {
             "Create time-based aggregations using DataFusion's date_bin function. Groups data by fixed time intervals (minute, hour, day, etc.) and applies aggregation functions.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "timeBinAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
         node.set_version(1);
 
@@ -369,6 +371,8 @@ impl NodeLogic for DateTruncAggregationNode {
             "Truncate timestamps to a specific precision (hour, day, month, etc.) and aggregate. Simpler alternative to date_bin for standard intervals.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "dateTruncAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
         node.set_version(1);
 
@@ -532,6 +536,8 @@ impl NodeLogic for WindowAggregationNode {
             "Apply window functions for rolling/moving aggregations over time series data.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "windowAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(1);
 
@@ -753,6 +759,8 @@ impl NodeLogic for DateTimeToTimestampNode {
             "Convert a DateTime (ISO 8601 string) to SQL timestamp literal for use in DataFusion queries.",
             "Data/DataFusion/Time",
         );
+        node.set_flowscript_name("df", "toSqlTimestamp");
+        node.set_receiver("datetime");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(
@@ -839,6 +847,7 @@ impl NodeLogic for TimeRangeFilterNode {
             "Generate a SQL WHERE clause for filtering by time range. Supports relative time expressions.",
             "Data/DataFusion/Time",
         );
+        node.set_flowscript_name("df", "timeRangeFilter");
         node.add_icon("/flow/icons/filter.svg");
 
         node.add_input_pin(

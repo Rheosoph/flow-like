@@ -44,6 +44,7 @@ impl NodeLogic for GetSheetNamesNode {
             "List worksheet names using calamine",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "getSheetNames");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Pure node: no execution pins

@@ -49,6 +49,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
             "Invokes an LLM with a system prompt and user prompt, returning text and the full structured response.",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "invokeSimple");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(5);
 

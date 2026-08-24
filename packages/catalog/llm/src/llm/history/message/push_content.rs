@@ -386,6 +386,8 @@ impl NodeLogic for PushContentNode {
             "Appends text, image, audio, video, or document parts onto a chat message",
             "AI/Generative/History/Message",
         );
+        node.set_flowscript_name("history", "pushContent");
+        node.set_receiver("message");
         node.set_version(5);
         node.add_icon("/flow/icons/message.svg");
         node.set_scores(

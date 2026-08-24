@@ -25,6 +25,7 @@ impl NodeLogic for DateTimeNowNode {
             "Returns the current date and time in UTC",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "now");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 

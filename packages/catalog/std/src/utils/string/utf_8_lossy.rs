@@ -25,6 +25,7 @@ impl NodeLogic for ParseUtf8LossyNode {
             "Converts a byte array to a string using the UTF-8 lossy strategy",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "fromUtf8Lossy");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("bytes", "Bytes", "", VariableType::Byte)

@@ -27,6 +27,8 @@ impl NodeLogic for SetHasNode {
             "Checks if an element is present in the set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "has");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

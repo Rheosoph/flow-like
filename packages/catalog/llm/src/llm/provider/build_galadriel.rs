@@ -34,6 +34,7 @@ impl NodeLogic for BuildGaladrielNode {
             "Prepares a Bit for Galadriel's verified endpoint using the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "galadriel");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

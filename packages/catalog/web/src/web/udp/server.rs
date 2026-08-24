@@ -44,6 +44,7 @@ impl NodeLogic for UdpServerNode {
             "Binds a UDP socket. Typed lifecycle pins describe the socket; incoming datagrams are delivered to the referenced on-message handler.",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "server");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

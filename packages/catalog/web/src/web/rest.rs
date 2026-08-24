@@ -188,6 +188,7 @@ impl NodeLogic for CreateRestServerConfigNode {
             "Creates a REST server config that route, file, auth, and server nodes can compose.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "serverConfig");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin("host", "Host", "Bind host", VariableType::String)
@@ -273,6 +274,8 @@ impl NodeLogic for RegisterRestFunctionNode {
             "Registers referenced Flow functions as handlers for a REST path.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerFunction");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.set_can_reference_fns(true);
@@ -431,6 +434,8 @@ impl NodeLogic for RegisterRestFilesNode {
             "Registers a FlowPath file or directory as static REST responses.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerFiles");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -526,6 +531,8 @@ impl NodeLogic for RegisterRestOpenApiNode {
             "Registers OpenAPI JSON and browser UI endpoints generated from the REST server config.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerOpenApi");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -602,6 +609,7 @@ impl NodeLogic for CreateApiKeyAuthNode {
             "Creates REST auth that requires a configured API key header.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "apiKey");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -656,6 +664,7 @@ impl NodeLogic for CreateBearerTokenAuthNode {
             "Creates REST auth that requires a static Authorization bearer token.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "bearer");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -706,6 +715,7 @@ impl NodeLogic for CreateBasicAuthNode {
             "Creates REST auth that requires HTTP Basic credentials.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "basic");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -758,6 +768,7 @@ impl NodeLogic for CreateHmacSha256AuthNode {
             "Creates REST auth that verifies an HMAC-SHA256 request signature.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "hmacSha256");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -847,6 +858,7 @@ impl NodeLogic for CreateOidcDiscoveryAuthNode {
             "Creates OAuth bearer auth by discovering the JWKS URI from an OpenID Connect issuer.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oidcDiscovery");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -920,6 +932,7 @@ impl NodeLogic for CreateOAuthJwksUrlAuthNode {
             "Creates OAuth bearer auth that fetches a JWKS endpoint once when the server starts.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oauthJwksUrl");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -998,6 +1011,7 @@ impl NodeLogic for CreateOAuthJwksFileAuthNode {
             "Creates OAuth bearer auth from a JWKS JSON FlowPath loaded when the server starts.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oauthJwksFile");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -1084,6 +1098,8 @@ impl NodeLogic for RegisterRestAuthNode {
             "Registers REST server authentication settings.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerAuth");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -1144,6 +1160,7 @@ impl NodeLogic for RestServerNode {
             "Starts a REST server from a composed config. Function routes and files are registered on the config before this node runs.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "server");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);

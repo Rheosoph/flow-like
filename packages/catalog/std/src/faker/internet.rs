@@ -21,6 +21,7 @@ impl NodeLogic for FakeEmail {
             "Generates a random email address for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "email");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -64,6 +65,7 @@ impl NodeLogic for FakeUsername {
             "Generates a random username for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "username");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -107,6 +109,7 @@ impl NodeLogic for FakePassword {
             "Generates a random password for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "password");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -166,6 +169,7 @@ impl NodeLogic for FakeIPv4 {
             "Generates a random IPv4 address for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "ipv4");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -204,6 +208,7 @@ impl NodeLogic for FakeIPv6 {
             "Generates a random IPv6 address for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "ipv6");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -242,6 +247,7 @@ impl NodeLogic for FakeUserAgent {
             "Generates a random user agent string for mocking data",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "userAgent");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -285,6 +291,7 @@ impl NodeLogic for FakeDomainSuffix {
             "Generates a random domain suffix (com, org, net, etc.)",
             "Utils/Faker/Internet",
         );
+        node.set_flowscript_name("faker.internet", "domainSuffix");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

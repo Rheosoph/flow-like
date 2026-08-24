@@ -29,6 +29,7 @@ impl NodeLogic for PdfFillFormNode {
             "Sets the value of a named AcroForm field in a PDF document.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "fillForm");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

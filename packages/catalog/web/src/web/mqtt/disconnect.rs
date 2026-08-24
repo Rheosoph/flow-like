@@ -31,6 +31,8 @@ impl NodeLogic for MqttDisconnectNode {
             "Disconnects from an MQTT broker and cleans up the session",
             "Web/MQTT",
         );
+        node.set_flowscript_name("mqtt", "disconnect");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

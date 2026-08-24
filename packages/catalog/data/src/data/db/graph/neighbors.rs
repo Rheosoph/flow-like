@@ -28,6 +28,8 @@ impl NodeLogic for GraphNeighborsNode {
             "Finds neighbor nodes by traversing edges from a seed node",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "neighbors");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

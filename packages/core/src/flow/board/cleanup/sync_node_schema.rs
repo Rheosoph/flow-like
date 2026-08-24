@@ -269,6 +269,7 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
     placed_node.only_offline = catalog_node.only_offline;
     placed_node.oauth_providers = catalog_node.oauth_providers.clone();
     placed_node.required_oauth_scopes = catalog_node.required_oauth_scopes.clone();
+    sync_flowscript_names(placed_node, catalog_node);
 
     // Sync WASM permissions from catalog so placed nodes reflect current declarations
     sync_wasm_permissions(placed_node, catalog_node);
@@ -323,6 +324,14 @@ pub async fn sync_board_node_schemas(
     }
 }
 
+/// The FlowScript spelling (`namespace::alias`, method receiver) is catalog-owned presentation
+/// metadata: a renamed alias must reach placed nodes without a schema version bump.
+fn sync_flowscript_names(placed_node: &mut Node, catalog_node: &Node) {
+    placed_node.namespace = catalog_node.namespace.clone();
+    placed_node.alias = catalog_node.alias.clone();
+    placed_node.receiver = catalog_node.receiver.clone();
+}
+
 /// Refreshes the descriptive, catalog-owned metadata of a placed node from the current catalog
 /// definition at the same schema version.
 ///
@@ -342,6 +351,7 @@ fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
     placed_node.long_running = catalog_node.long_running;
     placed_node.event_callback = catalog_node.event_callback;
     placed_node.only_offline = catalog_node.only_offline;
+    sync_flowscript_names(placed_node, catalog_node);
 
     // Pins are matched by name; a name that maps to more than one catalog pin is ambiguous and
     // left alone, as is any pin the catalog does not define.

@@ -38,11 +38,14 @@ impl DateBeforeNode {
 #[async_trait]
 impl NodeLogic for DateBeforeNode {
     fn get_node(&self) -> Node {
-        pair_node(
+        let mut node = pair_node(
             "utils_datetime_before",
             "Is Before",
             "True when the first date lies before the second",
-        )
+        );
+        node.set_flowscript_name("datetime", "isBefore");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -66,11 +69,14 @@ impl DateAfterNode {
 #[async_trait]
 impl NodeLogic for DateAfterNode {
     fn get_node(&self) -> Node {
-        pair_node(
+        let mut node = pair_node(
             "utils_datetime_after",
             "Is After",
             "True when the first date lies after the second",
-        )
+        );
+        node.set_flowscript_name("datetime", "isAfter");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -99,6 +105,8 @@ impl NodeLogic for DateSameNode {
             "Is Same",
             "True when both dates fall into the same unit",
         );
+        node.set_flowscript_name("datetime", "isSame");
+        node.set_receiver("date");
         node.add_input_pin(
             "unit",
             "Unit",
@@ -152,6 +160,8 @@ impl NodeLogic for DateBetweenNode {
             "True when a date falls inside a range",
             "Utils/DateTime/Comparison",
         );
+        node.set_flowscript_name("datetime", "isBetween");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 

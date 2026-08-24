@@ -52,12 +52,15 @@ impl IntNegateNode {
 #[async_trait]
 impl NodeLogic for IntNegateNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_negate",
             "Negate (Int)",
             "Flips the sign of an integer",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "negate");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -78,12 +81,15 @@ impl IntSignumNode {
 #[async_trait]
 impl NodeLogic for IntSignumNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_signum",
             "Sign (Int)",
             "Returns -1, 0 or 1 depending on the sign of an integer",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "signum");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -104,12 +110,15 @@ impl IntIsEvenNode {
 #[async_trait]
 impl NodeLogic for IntIsEvenNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_is_even",
             "Is Even",
             "Checks whether an integer is divisible by two",
             VariableType::Boolean,
-        )
+        );
+        node.set_flowscript_name("int", "isEven");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -130,12 +139,15 @@ impl IntIsOddNode {
 #[async_trait]
 impl NodeLogic for IntIsOddNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_is_odd",
             "Is Odd",
             "Checks whether an integer is not divisible by two",
             VariableType::Boolean,
-        )
+        );
+        node.set_flowscript_name("int", "isOdd");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -156,12 +168,15 @@ impl IntIsPositiveNode {
 #[async_trait]
 impl NodeLogic for IntIsPositiveNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_is_positive",
             "Is Positive",
             "Checks whether an integer is greater than zero",
             VariableType::Boolean,
-        )
+        );
+        node.set_flowscript_name("int", "isPositive");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -182,12 +197,15 @@ impl IntIsNegativeNode {
 #[async_trait]
 impl NodeLogic for IntIsNegativeNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "int_is_negative",
             "Is Negative",
             "Checks whether an integer is less than zero",
             VariableType::Boolean,
-        )
+        );
+        node.set_flowscript_name("int", "isNegative");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

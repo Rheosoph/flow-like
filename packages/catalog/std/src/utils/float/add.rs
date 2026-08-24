@@ -24,6 +24,8 @@ impl NodeLogic for AddFloatNode {
             "Adds two floats together",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "add");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

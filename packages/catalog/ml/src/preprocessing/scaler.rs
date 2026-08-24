@@ -49,6 +49,7 @@ impl NodeLogic for FitFeatureScalerNode {
             "Learn per-feature offsets and scales from a training table. Distance- and gradient-based models (Logistic Regression, Elastic Net, SVM, KNN, Gaussian Mixture) only behave when their features share a scale.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "fitFeatureScaler");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -734,6 +734,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
             "Uses AI to locate tables in complex Excel worksheets (unusual layouts, multiple tables, multi-row headers, styling-based hints); extraction itself stays deterministic",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "extractTablesAi");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
         node.set_version(4);
 

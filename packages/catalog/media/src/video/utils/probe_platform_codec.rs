@@ -19,6 +19,7 @@ impl NodeLogic for ProbePlatformCodecNode {
             "Check whether the current host can decode or encode a codec through native platform APIs",
             "Diagnostics",
         );
+        node.set_flowscript_name("video", "probePlatformCodec");
         node.add_icon("/flow/icons/info.svg");
         add_exec_pins(&mut node);
         node.add_input_pin(

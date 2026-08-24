@@ -134,6 +134,8 @@ impl NodeLogic for DrawBoxesNode {
             "Draw Bounding Boxes",
             "Image/Annotate",
         );
+        node.set_flowscript_name("image", "drawBoxes");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

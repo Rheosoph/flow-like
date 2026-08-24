@@ -25,6 +25,7 @@ impl NodeLogic for PushChildAtIndex {
             "Inserts a child element at a specific index in a container",
             "UI/Elements/Containers",
         );
+        node.set_flowscript_name("ui", "pushChildAtIndex");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

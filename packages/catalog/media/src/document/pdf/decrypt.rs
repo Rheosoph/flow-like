@@ -29,6 +29,7 @@ impl NodeLogic for PdfDecryptNode {
             "Remove password protection from a PDF using the owner or user password.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "decrypt");
         node.add_icon("/flow/icons/unlock.svg");
         node.set_scores(
             NodeScores::new()

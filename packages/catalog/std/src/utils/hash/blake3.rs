@@ -28,6 +28,8 @@ impl NodeLogic for Blake3Node {
             "Computes the Blake3 hash of the input",
             "Utils/Hash",
         );
+        node.set_flowscript_name("hash", "blake3");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("exec_in", "Execute", "", VariableType::Execution);

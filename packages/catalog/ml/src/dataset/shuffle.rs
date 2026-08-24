@@ -34,6 +34,7 @@ impl NodeLogic for ShuffleDatasetNode {
             "Shuffle dataset rows randomly",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "shuffleDataset");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

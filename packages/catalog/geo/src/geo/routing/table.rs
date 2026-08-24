@@ -43,6 +43,7 @@ impl NodeLogic for OsrmTableNode {
             "Computes travel time and distance matrices between coordinates using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "osrmTable");
         node.add_icon("/flow/icons/table.svg");
 
         node.add_input_pin(

@@ -481,6 +481,7 @@ impl NodeLogic for GetFileInputFiles {
             "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element",
             "UI/Elements/Files",
         );
+        node.set_flowscript_name("ui", "getFileInputFiles");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

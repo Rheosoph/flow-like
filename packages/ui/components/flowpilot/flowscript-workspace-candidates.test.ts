@@ -1,8 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { loadFlowScriptNamesTable } from "../../lib/flowscript/names";
 import {
 	flowScriptWorkspaceDiagnostics,
 	flowScriptWorkspaceRepairResolved,
+	normalizeCallName,
 	parseFlowScriptWorkspaceCandidate,
+	profileFlowScriptCandidate,
 } from "./flowscript-workspace-candidates";
 
 describe("FlowScript workspace diagnostics", () => {
@@ -66,5 +69,49 @@ describe("FlowScript workspace diagnostics", () => {
 				status: "validation_errors",
 			}),
 		).toBe(false);
+	});
+});
+
+describe("FlowScript candidate profiling across call spellings", () => {
+	beforeAll(async () => {
+		await loadFlowScriptNamesTable();
+	});
+
+	test("normalises flat, qualified and method spellings to one node id", () => {
+		expect(normalizeCallName("logInfo", false)).toBe("log_info");
+		expect(normalizeCallName("log::info", false)).toBe("log_info");
+		expect(normalizeCallName("string :: format", false)).toBe("string_format");
+		expect(normalizeCallName("trim", true)).toBe("string_trim");
+		expect(normalizeCallName("format", true)).toBe(".format");
+		expect(normalizeCallName("shout", true, new Set(["shout"]))).toBe("shout");
+		expect(normalizeCallName("myHelper", false)).toBe("myhelper");
+	});
+
+	test("profiles qualified and method call sites like their legacy spellings", () => {
+		const legacy = profileFlowScriptCandidate(`function enrich(item: Struct) {
+	const text = stringTrim({ string: item })
+	const hash = utilsHashMd5({ input: text })
+	logInfo({ message: hash })
+}
+eventsSimple onLoad() {
+	enrich({ item: payload })
+}`);
+		const sugared = profileFlowScriptCandidate(`use string::*
+
+function enrich(item: Struct) {
+	const text = \`\${item}\`.trim()
+	const hash = hash::md5({ input: text })
+	log::info(hash)
+}
+eventsSimple onLoad() {
+	payload.enrich()
+}`);
+		expect(sugared.callSites).toBe(legacy.callSites);
+		expect(sugared.callNames).toEqual(legacy.callNames);
+		expect(sugared.helperDomainCallSites).toBe(legacy.helperDomainCallSites);
+		expect(sugared.eventsCallingHelpers).toBe(1);
+		expect(sugared.eventEntries).toBe(1);
+		expect(legacy.callNames).toContain("utils_hash_md5");
+		expect(legacy.callNames).not.toContain("events_simple");
 	});
 });

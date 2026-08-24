@@ -57,6 +57,8 @@ impl NodeLogic for CopilotSendAndWaitNode {
             "Sends a message to Copilot and waits for complete response. Supports history input for context.",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "sendMessage");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 
@@ -221,6 +223,8 @@ impl NodeLogic for CopilotSendStreamingNode {
             "Sends a message to Copilot and streams the response. Supports history input and matches Model Invoke interface.",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "streamMessage");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 
@@ -427,6 +431,8 @@ impl NodeLogic for CopilotAbortNode {
             "Aborts the current message processing",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "abort");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

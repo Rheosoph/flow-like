@@ -26,6 +26,7 @@ impl NodeLogic for FromMessagesNode {
             "Creates a Chat History from Messages",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "fromMessages");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
 

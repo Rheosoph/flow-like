@@ -48,6 +48,7 @@ impl NodeLogic for FitDbscanNode {
             "Fit/Train DBSCAN Density-Based Clustering",
             "AI/ML/Clustering",
         );
+        node.set_flowscript_name("ml", "fitDbscan");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

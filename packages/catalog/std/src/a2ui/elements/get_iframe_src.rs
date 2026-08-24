@@ -27,6 +27,7 @@ impl NodeLogic for GetIframeSrc {
             "Gets the src URL of an iframe element",
             "UI/Elements/Get",
         );
+        node.set_flowscript_name("ui", "getIframeSrc");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -46,6 +46,7 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Snaps noisy GPS traces to the road network using OSRM map matching.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "osrmMatchTrace");
         node.add_icon("/flow/icons/route.svg");
 
         node.add_input_pin(

@@ -24,6 +24,8 @@ impl NodeLogic for LessThanFloatNode {
             "Checks if one float is less than another",
             "Math/Float/Comparison",
         );
+        node.set_flowscript_name("float", "lessThan");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

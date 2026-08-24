@@ -50,6 +50,7 @@ impl NodeLogic for WriteQrCodeNode {
             "Encode text as a barcode image",
             "Data/QR",
         );
+        node.set_flowscript_name("image", "writeBarcode");
         node.set_version(2);
         node.add_icon("/flow/icons/barcode.svg");
 

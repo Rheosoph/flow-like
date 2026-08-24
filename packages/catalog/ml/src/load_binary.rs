@@ -34,6 +34,7 @@ impl NodeLogic for LoadMLModelBinaryNode {
             "Load Trained ML Model from Path using fast binary format (Fory)",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "loadBinary");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

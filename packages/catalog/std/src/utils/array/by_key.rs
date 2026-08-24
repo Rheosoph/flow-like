@@ -59,6 +59,8 @@ impl NodeLogic for UniqueArrayNode {
             "Unique",
             "The array without duplicate values",
         );
+        node.set_flowscript_name("array", "unique");
+        node.set_receiver("array_in");
         generic_array_pin(
             &mut node,
             "array_out",
@@ -126,6 +128,8 @@ impl NodeLogic for GroupArrayByNode {
             "Group By",
             "Groups elements that share the same key value",
         );
+        node.set_flowscript_name("array", "groupBy");
+        node.set_receiver("array_in");
         node.add_input_pin("key", "Key", KEY_DESCRIPTION, VariableType::String)
             .set_default_value(Some(json!("")));
 
@@ -200,6 +204,8 @@ impl NodeLogic for PluckArrayNode {
             "Pluck",
             "Reads one field out of every element",
         );
+        node.set_flowscript_name("array", "pluck");
+        node.set_receiver("array_in");
         node.add_input_pin("key", "Key", KEY_DESCRIPTION, VariableType::String)
             .set_default_value(Some(json!("")));
         node.add_input_pin(
@@ -329,11 +335,14 @@ impl MinByArrayNode {
 #[async_trait]
 impl NodeLogic for MinByArrayNode {
     fn get_node(&self) -> Node {
-        extreme_node(
+        let mut node = extreme_node(
             "array_min_by",
             "Min By",
             "The element with the smallest key",
-        )
+        );
+        node.set_flowscript_name("array", "minBy");
+        node.set_receiver("array_in");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -358,7 +367,10 @@ impl MaxByArrayNode {
 #[async_trait]
 impl NodeLogic for MaxByArrayNode {
     fn get_node(&self) -> Node {
-        extreme_node("array_max_by", "Max By", "The element with the largest key")
+        let mut node = extreme_node("array_max_by", "Max By", "The element with the largest key");
+        node.set_flowscript_name("array", "maxBy");
+        node.set_receiver("array_in");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

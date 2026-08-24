@@ -27,6 +27,7 @@ impl NodeLogic for SetSurfaceCustomCss {
             "Sets or clears scoped custom CSS for a custom UI surface at runtime",
             "UI/Surface",
         );
+        node.set_flowscript_name("ui", "setSurfaceCustomCss");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

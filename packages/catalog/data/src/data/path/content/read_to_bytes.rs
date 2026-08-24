@@ -26,6 +26,8 @@ impl NodeLogic for ReadToBytesNode {
             "Reads the content of a file Fto bytes",
             "Data/Files/Content",
         );
+        node.set_flowscript_name("files", "readToBytes");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg"); // Consider a more appropriate icon
 
         node.add_input_pin(

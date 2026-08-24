@@ -34,6 +34,7 @@ impl NodeLogic for SampleDatasetNode {
             "Random sample N records or a ratio from a dataset",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "sampleDataset");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -28,6 +28,7 @@ impl NodeLogic for OntologyActionInputNode {
             "Reads the typed objects and parameters the ontology action was invoked with",
             "Data Studio/Actions",
         );
+        node.set_flowscript_name("ontology", "actionInput");
         node.set_version(2);
         node.add_icon("/flow/icons/database.svg");
         // The action invoke delivers its payload to the event's start node, and

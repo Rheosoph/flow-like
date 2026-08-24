@@ -1192,6 +1192,7 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
         .collect::<Vec<_>>();
     let mut ast = BoardAst {
         board_id: String::new(),
+        uses: Vec::new(),
         interfaces,
         variables,
         functions: Vec::new(),
@@ -1882,6 +1883,9 @@ fn compile_steps_with_offset(
                 let call = Call {
                     node_type: branch_metadata.name.clone(),
                     display: flow_like_ast::to_camel_case(&branch_metadata.name),
+                    path: Vec::new(),
+                    receiver: None,
+                    positional: Vec::new(),
                     args: vec![Arg {
                         name: condition_pin,
                         value: condition_source.expression.clone(),
@@ -2045,9 +2049,15 @@ fn compile_steps_with_offset(
                         "forEach".to_string()
                     },
                     bind: Some(id.clone()),
+                    iterable: None,
+                    element: None,
+                    index: None,
                     call: Call {
                         node_type: loop_metadata.name.clone(),
                         display: flow_like_ast::to_camel_case(&loop_metadata.name),
+                        path: Vec::new(),
+                        receiver: None,
+                        positional: Vec::new(),
                         args: vec![Arg {
                             name: array_pin,
                             value: array_source.expression,
@@ -2398,6 +2408,9 @@ fn compile_catalog_call(
     Call {
         node_type: metadata.name.clone(),
         display: flow_like_ast::to_camel_case(&metadata.name),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: compiled_args
             .into_iter()
             .map(|(_, argument)| argument)
@@ -2518,6 +2531,9 @@ fn compile_function_call(
     Call {
         node_type: signature.name.clone(),
         display: signature.name.clone(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: compiled_args
             .into_iter()
             .map(|(_, argument)| argument)
@@ -4748,6 +4764,9 @@ mod tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 

@@ -26,6 +26,7 @@ impl NodeLogic for HTMLToMarkdownNode {
             "Attempts to convert HTML to Markdown, removing unwanted tags",
             "Utils/Markdown",
         );
+        node.set_flowscript_name("md", "fromHtml");
 
         node.add_icon("/flow/icons/web.svg");
 

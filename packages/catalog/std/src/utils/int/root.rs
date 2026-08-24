@@ -24,6 +24,8 @@ impl NodeLogic for RootIntegerNode {
             "Calculates the nth root of an integer",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "root");
+        node.set_receiver("radicand");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

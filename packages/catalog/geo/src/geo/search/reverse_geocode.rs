@@ -51,6 +51,7 @@ impl NodeLogic for ReverseGeocodeNode {
             "Converts geographic coordinates to a human-readable address using the Nominatim service (OpenStreetMap).",
             "Web/Geo/Search",
         );
+        node.set_flowscript_name("geo", "reverseGeocode");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(

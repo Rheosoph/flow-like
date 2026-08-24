@@ -52,11 +52,14 @@ impl IntGcdNode {
 #[async_trait]
 impl NodeLogic for IntGcdNode {
     fn get_node(&self) -> Node {
-        pair_node(
+        let mut node = pair_node(
             "int_gcd",
             "Greatest Common Divisor",
             "Largest integer that divides both inputs",
-        )
+        );
+        node.set_flowscript_name("int", "gcd");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -82,11 +85,14 @@ impl IntLcmNode {
 #[async_trait]
 impl NodeLogic for IntLcmNode {
     fn get_node(&self) -> Node {
-        pair_node(
+        let mut node = pair_node(
             "int_lcm",
             "Least Common Multiple",
             "Smallest positive integer that both inputs divide",
-        )
+        );
+        node.set_flowscript_name("int", "lcm");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

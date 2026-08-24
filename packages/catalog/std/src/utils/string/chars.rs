@@ -26,6 +26,8 @@ impl NodeLogic for StringIsEmptyNode {
             "Checks whether a string contains no characters",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "isEmpty");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -82,6 +84,8 @@ impl NodeLogic for StringToCharsNode {
             "Splits a string into an array of single characters",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "toChars");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 
@@ -126,6 +130,8 @@ impl NodeLogic for StringCharAtNode {
             "Returns the character at a index. Negative indices count from the end",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "charAt");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -200,6 +206,8 @@ impl NodeLogic for StringReverseNode {
             "Reverses the characters of a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "reverse");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -241,6 +249,8 @@ impl NodeLogic for StringRepeatNode {
             "Repeats a string a number of times",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "repeat");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -302,6 +312,8 @@ impl NodeLogic for StringLinesNode {
             "Splits a string into its lines",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "lines");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 
@@ -354,6 +366,8 @@ impl NodeLogic for StringConcatNode {
             "Appends strings to each other without a separator",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "concat");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 

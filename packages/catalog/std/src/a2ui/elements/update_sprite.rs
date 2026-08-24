@@ -38,6 +38,7 @@ impl NodeLogic for UpdateSprite {
             "Update any property of a sprite",
             "UI/Elements/Game",
         );
+        node.set_flowscript_name("ui", "updateSprite");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

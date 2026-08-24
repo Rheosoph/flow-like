@@ -26,6 +26,8 @@ impl NodeLogic for LastContentNode {
             "Extracts the content string from the last assistant message in a response",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "lastContent");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(2);
         node.set_scores(

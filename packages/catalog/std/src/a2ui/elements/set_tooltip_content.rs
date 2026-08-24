@@ -27,6 +27,7 @@ impl NodeLogic for SetTooltipContent {
             "Sets the content text of a tooltip element",
             "UI/Elements/Set",
         );
+        node.set_flowscript_name("ui", "setTooltipContent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

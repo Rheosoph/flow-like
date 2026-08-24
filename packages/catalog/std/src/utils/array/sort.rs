@@ -96,6 +96,8 @@ impl SortArrayNode {
 impl NodeLogic for SortArrayNode {
     fn get_node(&self) -> Node {
         let mut node = array_node("array_sort", "Sort", "The sorted array");
+        node.set_flowscript_name("array", "sort");
+        node.set_receiver("array_in");
         node.add_input_pin(
             "descending",
             "Descending",
@@ -150,7 +152,10 @@ impl ReverseArrayNode {
 #[async_trait]
 impl NodeLogic for ReverseArrayNode {
     fn get_node(&self) -> Node {
-        array_node("array_reverse", "Reverse", "The reversed array")
+        let mut node = array_node("array_reverse", "Reverse", "The reversed array");
+        node.set_flowscript_name("array", "reverse");
+        node.set_receiver("array_in");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -179,6 +184,8 @@ impl SliceArrayNode {
 impl NodeLogic for SliceArrayNode {
     fn get_node(&self) -> Node {
         let mut node = array_node("array_slice", "Slice", "The selected range of elements");
+        node.set_flowscript_name("array", "slice");
+        node.set_receiver("array_in");
         node.add_input_pin(
             "start",
             "Start",

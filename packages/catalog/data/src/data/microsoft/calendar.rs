@@ -147,6 +147,7 @@ impl NodeLogic for ListCalendarsNode {
             "List all calendars for the user",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "listCalendars");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -225,6 +226,7 @@ impl NodeLogic for CreateCalendarNode {
             "Create a new calendar",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "createCalendar");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -346,6 +348,7 @@ impl NodeLogic for ListEventsNode {
             "List calendar events within a time range",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "listEvents");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -459,6 +462,7 @@ impl NodeLogic for CreateEventNode {
             "Create a new calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "createEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -655,6 +659,7 @@ impl NodeLogic for DeleteEventNode {
             "Delete a calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "deleteEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -741,6 +746,7 @@ impl NodeLogic for FindMeetingTimesNode {
             "Find available meeting times for attendees",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "findMeetingTimes");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -904,6 +910,7 @@ impl NodeLogic for GetScheduleNode {
             "Get free/busy schedule for users",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "getSchedule");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1048,6 +1055,7 @@ impl NodeLogic for UpdateEventNode {
             "Update an existing calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_flowscript_name("microsoft.calendar", "updateEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 

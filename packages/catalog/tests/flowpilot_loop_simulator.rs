@@ -622,7 +622,7 @@ fn validation_repair_path() {
     assert!(
         fix.catalog_declarations
             .iter()
-            .any(|declaration| declaration.contains("stringFormat(")),
+            .any(|declaration| declaration.contains("string::format(")),
         "repair context must offer the real catalog declaration: {written:#?}"
     );
 
@@ -1571,10 +1571,17 @@ async fn rewiring_a_dynamic_pin_to_a_differently_typed_source_applies() {
             ..RenderOptions::default()
         },
     );
-    let rewired = anchored.replace(
+    // The renderer spells the placeholder source in method form when the receiver is a string
+    // literal; accept the static and legacy spellings too so the edit tracks the real render.
+    let upper_spelling = [
+        "\"x\".toUpper()",
+        "string::toUpper({ string: \"x\" })",
         "stringToUpper({ string: \"x\" })",
-        "stringLength({ string: \"x\" })",
-    );
+    ]
+    .into_iter()
+    .find(|spelling| anchored.contains(spelling))
+    .unwrap_or_else(|| panic!("no known spelling of string_to_upper in:\n{anchored}"));
+    let rewired = anchored.replace(upper_spelling, "string::length({ string: \"x\" })");
     assert_ne!(rewired, anchored, "the rewrite must have matched");
 
     let reapplied =

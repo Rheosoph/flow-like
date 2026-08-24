@@ -92,6 +92,7 @@ impl NodeLogic for ListWorkflowsNode {
             "List GitHub Actions workflows in a repository",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "listWorkflows");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -218,6 +219,7 @@ impl NodeLogic for TriggerWorkflowNode {
             "Trigger a GitHub Actions workflow dispatch event",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "triggerWorkflow");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -378,6 +380,7 @@ impl NodeLogic for ListWorkflowRunsNode {
             "List runs for a specific workflow or all workflows in a repository",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "listWorkflowRuns");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -623,6 +626,7 @@ impl NodeLogic for GetWorkflowRunNode {
             "Get details of a specific workflow run",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "getWorkflowRun");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -733,6 +737,7 @@ impl NodeLogic for CancelWorkflowRunNode {
             "Cancel a workflow run that is in progress",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "cancelWorkflowRun");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -837,6 +842,7 @@ impl NodeLogic for RerunWorkflowNode {
             "Re-run a workflow run",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "rerunWorkflow");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -968,6 +974,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             "Get the most recent workflow run, optionally filtered by conclusion (success/failure)",
             "Data/GitHub/Workflows",
         );
+        node.set_flowscript_name("github", "getLatestWorkflowRun");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 

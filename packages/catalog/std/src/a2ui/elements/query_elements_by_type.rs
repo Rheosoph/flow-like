@@ -33,6 +33,7 @@ impl NodeLogic for QueryElementsByType {
             "Gets all elements of a specific component type",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryElementsByType");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -95,6 +95,7 @@ impl NodeLogic for OrdinalMetricsNode {
             "Evaluate predictions for an ordered target with distance-aware metrics. Plain accuracy is inadequate here: it treats \"predicted high when the truth was medium\" exactly as harshly as \"predicted low\", so a model that is reliably one level off scores like one that guesses. Quadratic weighted kappa is the standard headline metric because it weights every miss by how far off it was and corrects for chance agreement, but it answers only one of three questions: the linear kappa and the macro-averaged error say how far off the model is under a different cost structure and on the rare levels, while Kendall's tau-b and the Spearman correlation say whether it orders the rows correctly at all.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "ordinalMetrics");
         node.set_version(2);
         node.add_icon("/flow/icons/chart-network.svg");
 

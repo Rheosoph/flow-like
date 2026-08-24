@@ -95,6 +95,7 @@ impl NodeLogic for FitSVMMultiClassNode {
             "Fit/Train Support Vector Machines (SVM) for Multi-Class Classification ",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitSvmMultiClass");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 

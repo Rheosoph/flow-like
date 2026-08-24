@@ -30,6 +30,7 @@ impl NodeLogic for GetButtonLoading {
             "Gets whether a button element is in loading state",
             "UI/Elements/Button",
         );
+        node.set_flowscript_name("ui", "getButtonLoading");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

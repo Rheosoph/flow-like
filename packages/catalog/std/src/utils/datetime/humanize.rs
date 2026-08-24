@@ -52,6 +52,8 @@ impl NodeLogic for DateHumanizeNode {
             "Describes how far a date lies from now, for example \"3 days ago\"",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "humanize");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/clock.svg");
         node.set_scores(pure_scores());
 

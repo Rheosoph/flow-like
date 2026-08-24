@@ -25,6 +25,7 @@ impl NodeLogic for BrowserGotoNode {
             "Navigates the page to a URL",
             "Automation/Browser/Navigation",
         );
+        node.set_flowscript_name("browser", "goto");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -127,6 +128,7 @@ impl NodeLogic for BrowserBackNode {
             "Navigates back in browser history",
             "Automation/Browser/Navigation",
         );
+        node.set_flowscript_name("browser", "back");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -209,6 +211,7 @@ impl NodeLogic for BrowserForwardNode {
             "Navigates forward in browser history",
             "Automation/Browser/Navigation",
         );
+        node.set_flowscript_name("browser", "forward");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -291,6 +294,7 @@ impl NodeLogic for BrowserReloadNode {
             "Reloads the current page",
             "Automation/Browser/Navigation",
         );
+        node.set_flowscript_name("browser", "reload");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

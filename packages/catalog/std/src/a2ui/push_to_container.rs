@@ -29,6 +29,7 @@ impl NodeLogic for PushToContainer {
             "Dynamically adds an element to a container's children list",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "pushToContainer");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

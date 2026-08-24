@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseBoard } from "./flow-board-utils";
+import { doPinsMatch, parseBoard } from "./flow-board-utils";
 import type {
 	IBoard,
 	ILayer,
@@ -8,8 +8,9 @@ import type {
 } from "./schema/flow/board";
 import { ILayerCacheScope, ILayerType } from "./schema/flow/board";
 import type { INode } from "./schema/flow/node";
+import type { IPin } from "./schema/flow/pin";
 import { IVariableType } from "./schema/flow/node";
-import { IValueType } from "./schema/flow/pin";
+import { IPinType, IValueType } from "./schema/flow/pin";
 import { convertJsonToUint8Array, parseUint8ArrayToJson } from "./uint8";
 
 /** Only the slice of a rendered React Flow node these tests read. */
@@ -369,5 +370,162 @@ describe("boardContentVersion on rendered nodes", () => {
 		);
 		// ...but nothing the node reads did, so it must not re-render.
 		expect(contentVersion(second, "n1")).toBe(token);
+	});
+});
+
+/**
+ * `{"type":"object","additionalProperties":true}` — `flow_like::flow::pin::OPEN_OBJECT_SCHEMA`,
+ * stamped on every pin built with `Pin::set_open_schema()`.
+ */
+const OPEN_SCHEMA = '{"type":"object","additionalProperties":true}';
+const USER_SCHEMA = '{"type":"object","properties":{"sub":{"type":"string"}}}';
+const OTHER_SCHEMA = '{"type":"object","properties":{"count":{"type":"number"}}}';
+
+const structPin = (name: string, overrides: Partial<IPin> = {}): IPin =>
+	({
+		id: `pin_${name}`,
+		name,
+		friendly_name: name,
+		description: "",
+		pin_type: IPinType.Output,
+		data_type: IVariableType.Struct,
+		value_type: IValueType.Normal,
+		depends_on: [],
+		connected_to: [],
+		index: 0,
+		...overrides,
+	}) as IPin;
+
+/**
+ * A pin declaring an open shape must never veto a peer. Regression guard for the break that
+ * followed `set_open_schema()` landing on `struct_in` and the whole Structs family: the pins went
+ * from `schema: null` to the open marker, and the two-sided equality check in `doPinsMatch` — which
+ * sits ahead of the break/make escape hatch — started rejecting every typed struct producer.
+ */
+describe("doPinsMatch treats an open-object schema as no schema", () => {
+	test("a typed struct output connects to Break Struct's struct_in", () => {
+		expect(
+			doPinsMatch(
+				structPin("user_context", { schema: USER_SCHEMA }),
+				structPin("struct_in", {
+					pin_type: IPinType.Input,
+					schema: OPEN_SCHEMA,
+				}),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("an enforcing typed output still connects to struct_in", () => {
+		expect(
+			doPinsMatch(
+				structPin("user_context", {
+					schema: USER_SCHEMA,
+					options: { enforce_schema: true },
+				}),
+				structPin("struct_in", {
+					pin_type: IPinType.Input,
+					schema: OPEN_SCHEMA,
+				}),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("a typed output connects to a plain 'struct' input (Get Field, Has Field)", () => {
+		expect(
+			doPinsMatch(
+				structPin("rows", { schema: USER_SCHEMA }),
+				structPin("struct", { pin_type: IPinType.Input, schema: OPEN_SCHEMA }),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("Make Struct's open output connects to a typed struct input", () => {
+		expect(
+			doPinsMatch(
+				structPin("struct", { schema: OPEN_SCHEMA }),
+				structPin("body", { pin_type: IPinType.Input, schema: USER_SCHEMA }),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("the open schema is recognized through a board ref", () => {
+		expect(
+			doPinsMatch(
+				structPin("rows", { schema: USER_SCHEMA }),
+				structPin("struct_in", { pin_type: IPinType.Input, schema: "ref1" }),
+				{ ref1: OPEN_SCHEMA },
+			),
+		).toBe(true);
+	});
+
+	test("the open schema is recognized regardless of key order and whitespace", () => {
+		expect(
+			doPinsMatch(
+				structPin("rows", { schema: USER_SCHEMA }),
+				structPin("struct_in", {
+					pin_type: IPinType.Input,
+					schema: '{ "additionalProperties" : true , "type" : "object" }',
+				}),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("two different real schemas are still rejected", () => {
+		expect(
+			doPinsMatch(
+				structPin("a", { schema: USER_SCHEMA }),
+				structPin("b", { pin_type: IPinType.Input, schema: OTHER_SCHEMA }),
+				{},
+			),
+		).toBe(false);
+	});
+
+	test("an object schema carrying properties is not mistaken for the open marker", () => {
+		expect(
+			doPinsMatch(
+				structPin("a", { schema: USER_SCHEMA }),
+				structPin("b", {
+					pin_type: IPinType.Input,
+					schema:
+						'{"type":"object","additionalProperties":true,"properties":{"x":{"type":"string"}}}',
+				}),
+				{},
+			),
+		).toBe(false);
+	});
+
+	test("an enforcing output still cannot reach a shapeless plain 'struct' input", () => {
+		// Pre-existing behavior, unchanged: only struct_in/struct_out get the adopt-any hatch.
+		expect(
+			doPinsMatch(
+				structPin("user_context", {
+					schema: USER_SCHEMA,
+					options: { enforce_schema: true },
+				}),
+				structPin("struct", { pin_type: IPinType.Input, schema: OPEN_SCHEMA }),
+				{},
+			),
+		).toBe(false);
+	});
+
+	test("a value_type mismatch still blocks the struct hatch", () => {
+		expect(
+			doPinsMatch(
+				structPin("rows", {
+					schema: USER_SCHEMA,
+					value_type: IValueType.Array,
+				}),
+				structPin("struct_in", {
+					pin_type: IPinType.Input,
+					schema: OPEN_SCHEMA,
+				}),
+				{},
+			),
+		).toBe(false);
 	});
 });

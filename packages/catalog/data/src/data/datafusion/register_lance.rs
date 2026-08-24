@@ -87,6 +87,8 @@ impl NodeLogic for RegisterLanceTableNode {
             "Register a LanceDB table into a DataFusion session for SQL. Supports SELECT, INSERT INTO, and UPDATE/DELETE with a column-referencing WHERE clause (SQL Query node). Uses the existing to_datafusion() implementation from the vector store.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "registerLance");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

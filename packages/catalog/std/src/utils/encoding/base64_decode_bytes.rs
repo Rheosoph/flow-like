@@ -29,6 +29,7 @@ impl NodeLogic for Base64DecodeBytesNode {
             "Decodes a Base64 string to raw bytes",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("bytes", "fromBase64");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin(

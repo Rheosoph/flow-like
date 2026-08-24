@@ -45,12 +45,15 @@ impl StringIsNumericNode {
 #[async_trait]
 impl NodeLogic for StringIsNumericNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_numeric",
             "Is Numeric",
             "Checks whether a string can be read as a number",
             "True when the string parses as a number",
-        )
+        );
+        node.set_flowscript_name("string", "isNumeric");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -71,12 +74,15 @@ impl StringIsAlphanumericNode {
 #[async_trait]
 impl NodeLogic for StringIsAlphanumericNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_alphanumeric",
             "Is Alphanumeric",
             "Checks whether every character is a letter or a digit",
             "True when all characters are alphanumeric",
-        )
+        );
+        node.set_flowscript_name("string", "isAlphanumeric");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -97,12 +103,15 @@ impl StringIsAsciiNode {
 #[async_trait]
 impl NodeLogic for StringIsAsciiNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_ascii",
             "Is ASCII",
             "Checks whether a string only contains ASCII characters",
             "True when the string is pure ASCII",
-        )
+        );
+        node.set_flowscript_name("string", "isAscii");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -195,12 +204,15 @@ impl StringIsEmailNode {
 #[async_trait]
 impl NodeLogic for StringIsEmailNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_email",
             "Is Email",
             "Checks whether a string looks like an email address",
             "True when the string is a plausible email address",
-        )
+        );
+        node.set_flowscript_name("string", "isEmail");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -221,12 +233,15 @@ impl StringIsUrlNode {
 #[async_trait]
 impl NodeLogic for StringIsUrlNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_url",
             "Is URL",
             "Checks whether a string is a URL with a scheme and a host",
             "True when the string is a plausible URL",
-        )
+        );
+        node.set_flowscript_name("string", "isUrl");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -247,12 +262,15 @@ impl StringIsUuidNode {
 #[async_trait]
 impl NodeLogic for StringIsUuidNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_uuid",
             "Is UUID",
             "Checks whether a string is a UUID",
             "True when the string is a UUID",
-        )
+        );
+        node.set_flowscript_name("string", "isUuid");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -273,12 +291,15 @@ impl StringIsIpNode {
 #[async_trait]
 impl NodeLogic for StringIsIpNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_ip",
             "Is IP Address",
             "Checks whether a string is an IPv4 or IPv6 address",
             "True when the string is an IP address",
-        )
+        );
+        node.set_flowscript_name("string", "isIp");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -299,12 +320,15 @@ impl StringIsJsonNode {
 #[async_trait]
 impl NodeLogic for StringIsJsonNode {
     fn get_node(&self) -> Node {
-        predicate_node(
+        let mut node = predicate_node(
             "string_is_json",
             "Is JSON",
             "Checks whether a string parses as JSON",
             "True when the string is valid JSON",
-        )
+        );
+        node.set_flowscript_name("string", "isJson");
+        node.set_receiver("string");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

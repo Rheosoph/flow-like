@@ -26,6 +26,7 @@ impl NodeLogic for ClearMapRefNode {
             "Clear all entries directly from a variable map without copying.",
             "Utils/Map/By Reference",
         );
+        node.set_flowscript_name("map", "clearRef");
         node.add_icon("/flow/icons/book-key.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

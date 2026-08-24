@@ -24,15 +24,19 @@
 			"end": "\\*/",
 			"patterns": [
 				{
-					"match": "(@)(param|returns|impure|pure)\\b",
+					"match": "(@)(param|returns|impure|pure|node|receiver|alias|namespace)\\b",
 					"captures": {
 						"1": { "name": "punctuation.definition.block.tag.jsdoc.flow" },
 						"2": { "name": "storage.type.class.jsdoc.flow" }
 					}
 				},
 				{
-					"match": "(?<=@param\\s|@returns\\s)([A-Za-z_$][\\w$]*)",
+					"match": "(?<=@param\\s|@returns\\s|@receiver\\s|@alias\\s)([A-Za-z_$][\\w$]*)",
 					"name": "variable.other.jsdoc.flow"
+				},
+				{
+					"match": "(?<=@node\\s)([A-Za-z_][\\w]*)",
+					"name": "entity.name.type.node.jsdoc.flow"
 				}
 			]
 		},
@@ -44,6 +48,28 @@
 						"1": { "name": "storage.modifier.flow" },
 						"2": { "name": "storage.type.function.flow" },
 						"3": { "name": "entity.name.function.flow" }
+					}
+				},
+				{
+					"match": "\\b(?:(declare)\\s+)?(namespace)\\s+([A-Za-z_$][\\w$]*(?:\\s*(?:\\.|::)\\s*[A-Za-z_$][\\w$]*)*)",
+					"captures": {
+						"1": { "name": "storage.modifier.flow" },
+						"2": { "name": "storage.type.namespace.flow" },
+						"3": { "name": "entity.name.namespace.flow" }
+					}
+				},
+				{
+					"match": "\\b(function)\\s+([A-Za-z_$][\\w$]*)",
+					"captures": {
+						"1": { "name": "storage.type.function.flow" },
+						"2": { "name": "entity.name.function.flow" }
+					}
+				},
+				{
+					"match": "\\b(this)\\s*(:)",
+					"captures": {
+						"1": { "name": "variable.language.this.flow" },
+						"2": { "name": "punctuation.separator.key-value.flow" }
 					}
 				}
 			]
@@ -84,7 +110,9 @@
 		"punctuation": {
 			"patterns": [
 				{ "name": "punctuation.terminator.flow", "match": ";" },
-				{ "name": "punctuation.array.flow", "match": "\\[\\]" }
+				{ "name": "punctuation.array.flow", "match": "\\[\\]" },
+				{ "name": "punctuation.separator.namespace.flow", "match": "::" },
+				{ "name": "punctuation.definition.block.flow", "match": "[{}]" }
 			]
 		}
 	}

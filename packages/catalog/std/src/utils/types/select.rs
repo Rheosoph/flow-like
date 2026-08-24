@@ -25,6 +25,7 @@ impl NodeLogic for SelectNode {
             "Selects between two values based on a boolean condition. Returns A if true, B if false.",
             "Utils/Types",
         );
+        node.set_flowscript_name("types", "select");
         node.add_icon("/flow/icons/split.svg");
 
         node.add_input_pin(

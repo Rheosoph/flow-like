@@ -26,6 +26,8 @@ impl NodeLogic for BatchRemoveArrayNode {
             "Remove multiple elements at specific indices in one operation. More efficient than multiple single removes. Indices are processed in descending order to maintain correctness.",
             "Utils/Array/Batch",
         );
+        node.set_flowscript_name("array", "batchRemove");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

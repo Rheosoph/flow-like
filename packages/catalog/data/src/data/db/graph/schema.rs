@@ -28,6 +28,8 @@ impl NodeLogic for GraphSchemaNode {
             "Retrieves the schema (labels and properties) of a graph overlay",
             "Data/Database/Graph/Meta",
         );
+        node.set_flowscript_name("db.graph", "schema");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

@@ -21,6 +21,7 @@ impl NodeLogic for FakeCompanyName {
             "Generates a random company name for mocking data",
             "Utils/Faker/Company",
         );
+        node.set_flowscript_name("faker.company", "name");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -64,6 +65,7 @@ impl NodeLogic for FakeBuzzword {
             "Generates a random business buzzword for mocking data",
             "Utils/Faker/Company",
         );
+        node.set_flowscript_name("faker.company", "buzzword");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -107,6 +109,7 @@ impl NodeLogic for FakeCatchPhrase {
             "Generates a random business catch phrase for mocking data",
             "Utils/Faker/Company",
         );
+        node.set_flowscript_name("faker.company", "catchPhrase");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -150,6 +153,7 @@ impl NodeLogic for FakeIndustry {
             "Generates a random industry name for mocking data",
             "Utils/Faker/Company",
         );
+        node.set_flowscript_name("faker.company", "industry");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -193,6 +197,7 @@ impl NodeLogic for FakeProfession {
             "Generates a random profession/job title for mocking data",
             "Utils/Faker/Company",
         );
+        node.set_flowscript_name("faker.company", "profession");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

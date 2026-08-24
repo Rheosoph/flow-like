@@ -31,6 +31,8 @@ impl NodeLogic for WebSocketCloseNode {
             "Closes an open WebSocket connection gracefully",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "close");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

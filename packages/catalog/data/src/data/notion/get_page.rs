@@ -127,6 +127,7 @@ impl NodeLogic for GetNotionPageNode {
             "Retrieves a Notion page with its content and blocks",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "getPage");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

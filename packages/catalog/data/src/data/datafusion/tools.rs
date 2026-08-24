@@ -45,6 +45,8 @@ impl NodeLogic for ListTablesNode {
             "List all tables registered in a DataFusion session. Returns array of table names.",
             "Data/DataFusion/Tools",
         );
+        node.set_flowscript_name("df", "listTables");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 
@@ -174,6 +176,8 @@ impl NodeLogic for DescribeTableNode {
             "Get the schema (column names and types) of a table in a DataFusion session.",
             "Data/DataFusion/Tools",
         );
+        node.set_flowscript_name("df", "describeTable");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -284,6 +288,8 @@ impl NodeLogic for ExecuteSqlNode {
             "Execute a read-only SQL query and return results as formatted text. Ideal for agent-driven data exploration; writing statements are rejected.",
             "Data/DataFusion/Tools",
         );
+        node.set_flowscript_name("df", "executeSql");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

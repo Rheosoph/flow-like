@@ -27,6 +27,7 @@ impl NodeLogic for ListGraphOverlaysNode {
             "Lists all graph overlay definitions in the database",
             "Data/Database/Graph/Meta",
         );
+        node.set_flowscript_name("db.graph", "listOverlays");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

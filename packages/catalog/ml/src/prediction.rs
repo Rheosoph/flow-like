@@ -50,6 +50,8 @@ impl NodeLogic for MLPredictNode {
             "Predict with Machine Learning Model",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "predict");
+        node.set_receiver("model");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 

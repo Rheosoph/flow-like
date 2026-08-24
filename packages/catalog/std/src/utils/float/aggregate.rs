@@ -88,11 +88,13 @@ impl FloatSumNode {
 #[async_trait]
 impl NodeLogic for FloatSumNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_sum",
             "Sum (Float)",
             "Adds up every float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "sum");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -117,11 +119,13 @@ impl FloatAverageNode {
 #[async_trait]
 impl NodeLogic for FloatAverageNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_average",
             "Average (Float)",
             "Arithmetic mean of every float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "average");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -146,11 +150,13 @@ impl FloatMinOfNode {
 #[async_trait]
 impl NodeLogic for FloatMinOfNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_min_of",
             "Min Of (Float)",
             "Smallest float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "minOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -179,11 +185,13 @@ impl FloatMaxOfNode {
 #[async_trait]
 impl NodeLogic for FloatMaxOfNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_max_of",
             "Max Of (Float)",
             "Largest float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "maxOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -212,11 +220,13 @@ impl FloatMedianNode {
 #[async_trait]
 impl NodeLogic for FloatMedianNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_median",
             "Median",
             "Middle value of an array, averaging the two middle values for even counts",
-        )
+        );
+        node.set_flowscript_name("float", "median");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -241,11 +251,13 @@ impl FloatVarianceNode {
 #[async_trait]
 impl NodeLogic for FloatVarianceNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_variance",
             "Variance",
             "Population variance of every float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "variance");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -270,11 +282,13 @@ impl FloatStdDevNode {
 #[async_trait]
 impl NodeLogic for FloatStdDevNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "float_std_dev",
             "Standard Deviation",
             "Population standard deviation of every float in an array",
-        )
+        );
+        node.set_flowscript_name("float", "stdDev");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -304,6 +318,7 @@ impl NodeLogic for FloatPercentileNode {
             "Percentile",
             "Value at a percentile of an array, interpolating between neighbours",
         );
+        node.set_flowscript_name("float", "percentile");
         node.add_input_pin(
             "percentile",
             "Percentile",

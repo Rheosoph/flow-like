@@ -2514,6 +2514,9 @@ fn node_to_metadata(node: &Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(node.flowscript_namespace()),
+        alias: Some(node.flowscript_alias()),
+        receiver: node.flowscript_receiver(),
     })
 }
 
@@ -11783,7 +11786,7 @@ fn declaration_result_is_usable(result_text: &str) -> bool {
 
 fn declaration_line_is_complete(line: &str) -> bool {
     let line = line.trim();
-    line.starts_with("declare function ")
+    flow_like::flow::ast::is_signature_line(line)
         && line.contains('(')
         && line.contains(')')
         && line.contains(';')

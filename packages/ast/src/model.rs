@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 pub struct BoardAst {
     /// Source board id (metadata, not rendered in-band).
     pub board_id: String,
+    /// Top-level `use` declarations, rendered first (before interfaces), in source order.
+    #[serde(default)]
+    pub uses: Vec<UseDecl>,
     /// Top-level struct interfaces. These are the readable FlowScript form of JSON schemas;
     /// variables typed with an interface still carry the generated schema internally.
     #[serde(default)]
@@ -23,6 +26,27 @@ pub struct BoardAst {
     pub functions: Vec<FnDecl>,
     /// Exec entrypoints (start / event-callback nodes), each owning a block.
     pub events: Vec<EventBlock>,
+}
+
+/// A top-level `use` declaration (Rust `use`-tree subset over `::` namespace paths).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UseDecl {
+    /// The `::`-separated namespace path (`["ai", "ml"]` for `use ai::ml`).
+    pub path: Vec<String>,
+    pub kind: UseKind,
+}
+
+/// What a [`UseDecl`] brings into scope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UseKind {
+    /// `use a::b` — the last path segment becomes a namespace name.
+    Namespace,
+    /// `use a::b::*` — every member of the namespace is callable bare.
+    Glob,
+    /// `use a::b as x` — the namespace is reachable as `x`.
+    Alias(String),
+    /// `use a::b::{ x, y }` — only the listed members become bare names.
+    Members(Vec<String>),
 }
 
 /// A TypeScript-like interface declaration used as the readable surface for struct schemas.
@@ -209,6 +233,12 @@ pub enum Stmt {
         call: Call,
         anchor: Option<String>,
     },
+    /// `const { a, b: c } = call(...)` — one node whose outputs are bound by pin name.
+    Destructure {
+        fields: Vec<DestructureField>,
+        call: Call,
+        anchor: Option<String>,
+    },
     /// `call(...)` — impure node with no captured output.
     Call { call: Call, anchor: Option<String> },
     /// A branch/loop node opening one nested block per exec output pin.
@@ -226,12 +256,29 @@ pub enum Stmt {
     /// A loop node (`forEach`/`forEachParallel`/`while`). The loop handle binding (its
     /// `value`/`index`/`iter` outputs) is introduced for use inside `body`; statements after
     /// the loop's `done` exec follow as siblings in the enclosing block.
+    ///
+    /// Two surface forms share this node. The explicit form names the loop-node call
+    /// (`for (const h of controlForEach({ array: xs }))`, `while (controlWhileLoop({ … }))`)
+    /// and binds the handle. The sugared form (`for (const item of xs)`,
+    /// `for (const [i, item] of xs)`, `@parallel for (…)`, `while (cond)`) stores the head
+    /// expression in `iterable` with a placeholder `call`; reconcile synthesizes the loop node
+    /// and binds `element`/`index` to its `value`/`index` outputs.
     Loop {
         /// Loop keyword (`forEach`, `forEachParallel`, `while`).
         keyword: String,
-        /// Binding name for the loop handle, if its data outputs are consumed.
+        /// Binding name for the loop handle, if its data outputs are consumed (explicit form).
         bind: Option<String>,
+        /// The loop-node call (explicit form), or a placeholder when `iterable` is set.
         call: Call,
+        /// Sugared head: the array of a `for…of`, or the condition of a `while`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        iterable: Option<Expr>,
+        /// `for (const item of …)` — bound to the loop's `value` output inside `body`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element: Option<String>,
+        /// `for (const [i, item] of …)` — bound to the loop's `index` output inside `body`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<String>,
         body: Block,
         anchor: Option<String>,
     },
@@ -275,6 +322,16 @@ pub enum Stmt {
     Handler(EventBlock),
     /// A free-standing comment line.
     Comment(String),
+}
+
+/// One binding of a [`Stmt::Destructure`]: `{ text }` → (`text`, `text`), `{ usage: u }` →
+/// (`usage`, `u`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DestructureField {
+    /// Output pin name (camelCased in text).
+    pub pin: String,
+    /// Binding name introduced into the enclosing scope.
+    pub name: String,
 }
 
 /// One exec-output arm of a branch/loop node.
@@ -323,7 +380,19 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// A template literal (`` `Topic ${label}` ``), sugared from a `string_format` node: the
+    /// static text becomes the format string and every `${expr}` a named placeholder pin.
+    Template {
+        parts: Vec<TemplatePart>,
+    },
     Literal(Literal),
+}
+
+/// One segment of an [`Expr::Template`]: raw text or an interpolated `${expr}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TemplatePart {
+    Text(String),
+    Expr(Expr),
 }
 
 /// One `key: value` entry of an [`Expr::Object`] struct literal.
@@ -338,11 +407,42 @@ pub struct ObjectField {
 pub struct Call {
     /// Catalog node type (e.g. `ai_generative_find_model`).
     pub node_type: String,
-    /// JS-flavoured display name (e.g. `aiGenerativeFindModel`).
+    /// The identifier right before `(`: a member/alias (`trim`) or a flat legacy name
+    /// (`stringTrim`).
     pub display: String,
+    /// `::`-separated namespace path before `display` (`["string"]`, `["ai", "ml"]`); empty
+    /// for flat calls.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    /// Method form `receiver.display(...)`. Never set together with a non-empty `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<Box<Expr>>,
+    /// Positional arguments written before the trailing `{ named }` object.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positional: Vec<Expr>,
     pub args: Vec<Arg>,
     /// Stable identity anchor (the node id).
     pub anchor: Option<String>,
+}
+
+impl Call {
+    /// The empty call carried by sugared statements (`if (cond)`, `for (const item of xs)`,
+    /// `while (cond)`) whose node is synthesized from the sugar rather than spelled in text.
+    pub fn placeholder() -> Self {
+        Self {
+            node_type: String::new(),
+            display: String::new(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
+            args: Vec::new(),
+            anchor: None,
+        }
+    }
+
+    pub fn is_placeholder(&self) -> bool {
+        self.node_type.is_empty() && self.display.is_empty() && self.args.is_empty()
+    }
 }
 
 /// A call argument bound to an input pin by name.
@@ -363,6 +463,36 @@ pub enum Literal {
     Null,
     /// Raw JSON for structured defaults (objects/arrays) that have no scalar form.
     Json(String),
+}
+
+impl Literal {
+    /// The declared type an annotation-less `const x = <literal>` infers. Spellings match
+    /// `variable_type_base` in core (`string`, `int`, `float`, `bool`, `Struct`, `any[]`);
+    /// `null` carries no type.
+    pub fn inferred_type(&self) -> Option<TypeRef> {
+        let (base, container) = match self {
+            Literal::String(_) => ("string", Container::Normal),
+            Literal::Int(_) => ("int", Container::Normal),
+            Literal::Float(_) => ("float", Container::Normal),
+            Literal::Bool(_) => ("bool", Container::Normal),
+            Literal::Json(raw) if raw.starts_with('[') => ("any", Container::Array),
+            Literal::Json(_) => ("Struct", Container::Normal),
+            Literal::Null => return None,
+        };
+        Some(TypeRef::new(base, container))
+    }
+
+    /// Whether a declaration of `ty` with this literal as its default can drop the annotation:
+    /// the literal alone infers exactly `ty`, and `ty` is a scalar (`string`, `int`, `float`,
+    /// `bool`). Struct/array defaults keep their annotation so the declared shape stays visible.
+    pub fn infers_scalar_type(&self, ty: &TypeRef) -> bool {
+        matches!(
+            self,
+            Literal::String(_) | Literal::Int(_) | Literal::Float(_) | Literal::Bool(_)
+        ) && self
+            .inferred_type()
+            .is_some_and(|inferred| inferred.base == ty.base && inferred.container == ty.container)
+    }
 }
 
 /// Container shape of a typed value.

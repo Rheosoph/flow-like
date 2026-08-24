@@ -24,7 +24,10 @@ impl NodeLogic for EqualFloatNode {
             "Checks if two floats are equal (within a tolerance)",
             "Math/Float/Comparison",
         );
+        node.set_flowscript_name("float", "equal");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
+        node.set_version(1);
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);
         node.add_input_pin("float2", "Float 2", "Second Float", VariableType::Float);
@@ -33,7 +36,8 @@ impl NodeLogic for EqualFloatNode {
             "Tolerance",
             "Comparison Tolerance",
             VariableType::Float,
-        );
+        )
+        .set_default_value(Some(json!(0.0)));
 
         node.add_output_pin(
             "is_equal",

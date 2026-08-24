@@ -186,6 +186,7 @@ impl NodeLogic for ParseWithSchema {
             "Parse JSON input Data With JSON/OpenAI Schema and Return Value",
             "Utils/JSON",
         );
+        node.set_flowscript_name("json", "parseWithSchema");
 
         node.add_icon("/flow/icons/repair.svg");
 

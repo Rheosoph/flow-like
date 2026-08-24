@@ -25,6 +25,7 @@ impl NodeLogic for PathFromUserDirNode {
             "Converts the user directory to a Path",
             "Data/Files/Directories",
         );
+        node.set_flowscript_name("files", "userDir");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_output_pin("path", "Path", "Output Path", VariableType::Struct)

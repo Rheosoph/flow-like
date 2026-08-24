@@ -25,6 +25,7 @@ impl NodeLogic for MakeStructNode {
             "Creates a new struct",
             "Structs",
         );
+        node.set_flowscript_name("struct", "make");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_output_pin("struct", "Struct", "Struct Output", VariableType::Struct)

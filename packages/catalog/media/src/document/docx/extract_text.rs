@@ -29,6 +29,7 @@ impl NodeLogic for DocxExtractTextNode {
             "Extract all text content from a DOCX file as plain text",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "extractText");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

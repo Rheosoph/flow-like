@@ -50,6 +50,7 @@ impl NodeLogic for FitLinearRegressionNode {
             "Fit/Train Linear Regression Model",
             "AI/ML/Regression",
         );
+        node.set_flowscript_name("ml", "fitLinearRegression");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -42,6 +42,7 @@ impl NodeLogic for GoogleProviderNode {
             "Authenticate with Google to access Drive, Sheets, Docs, Gmail, YouTube, Calendar and more.",
             "Data/Google",
         );
+        node.set_flowscript_name("google", "provider");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_output_pin(

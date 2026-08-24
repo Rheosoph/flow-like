@@ -24,6 +24,8 @@ impl NodeLogic for RootFloatNode {
             "Calculates the nth root of a float",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "root");
+        node.set_receiver("radicand");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

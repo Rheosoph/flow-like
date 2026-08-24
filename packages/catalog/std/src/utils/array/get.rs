@@ -26,6 +26,8 @@ impl NodeLogic for GetArrayElementNode {
             "Gets an element from an array by index",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "get");
+        node.set_receiver("array_in");
 
         node.add_icon("/flow/icons/grip.svg");
 

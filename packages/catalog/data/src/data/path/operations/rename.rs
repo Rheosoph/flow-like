@@ -26,6 +26,8 @@ impl NodeLogic for RenameNode {
             "Renames a file",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "rename");
+        node.set_receiver("from");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

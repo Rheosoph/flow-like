@@ -29,6 +29,7 @@ impl NodeLogic for GetJiraTransitionsNode {
             "Get available workflow transitions for a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getTransitions");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

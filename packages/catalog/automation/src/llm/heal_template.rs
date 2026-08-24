@@ -101,6 +101,7 @@ impl NodeLogic for LLMHealTemplateNode {
             "Uses vision LLM to find a visually similar element when template matching fails",
             "Automation/LLM/Healing",
         );
+        node.set_flowscript_name("automation.llm", "healTemplate");
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(3);
 

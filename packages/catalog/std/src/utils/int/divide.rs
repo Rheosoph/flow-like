@@ -24,6 +24,8 @@ impl NodeLogic for DivideIntegerNode {
             "Divides two Integers (handles division by zero)",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "divide");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("integer1", "Integer 1", "Dividend", VariableType::Integer);

@@ -26,6 +26,7 @@ impl NodeLogic for ListTablesNode {
             "Lists all available table names in the database location",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "listTables");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

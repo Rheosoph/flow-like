@@ -19,6 +19,7 @@ impl NodeLogic for WriteSubtitlesNode {
             "Write subtitle cue structs to an SRT or WebVTT sidecar",
             "Subtitles",
         );
+        node.set_flowscript_name("video", "writeSubtitles");
         node.add_icon("/flow/icons/text.svg");
         add_exec_pins(&mut node);
         node.add_input_pin("cues", "Cues", "Subtitle cues", VariableType::Struct)

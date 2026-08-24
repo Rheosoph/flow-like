@@ -99,6 +99,8 @@ impl NodeLogic for RegisterDeltaTableNode {
             "Register a Delta Lake table in DataFusion using a FlowPath. Requires the 'delta' feature.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerDelta");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -248,6 +250,8 @@ impl NodeLogic for DeltaTimeTravelNode {
             "Load a specific version or timestamp of a Delta table for point-in-time queries.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "deltaTimeTravel");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(
@@ -426,6 +430,7 @@ impl NodeLogic for DeltaTableInfoNode {
             "Get metadata and history information about a Delta table.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "deltaInfo");
         node.add_icon("/flow/icons/info.svg");
         node.set_version(1);
 
@@ -603,6 +608,8 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
             "Register Hive-partitioned Parquet files as a table in DataFusion using a FlowPath.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerHiveParquet");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -727,6 +734,8 @@ impl NodeLogic for RegisterPartitionedJsonNode {
             "Register partitioned JSON/NDJSON files as a table in DataFusion using a FlowPath.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerPartitionedJson");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -866,6 +875,8 @@ impl NodeLogic for WriteDeltaTableNode {
             "Write query results to a new or existing Delta Lake table using FlowPath. Supports append, overwrite modes.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "writeDelta");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -1090,6 +1101,8 @@ impl NodeLogic for RegisterIcebergTableNode {
             "Register an Apache Iceberg table in DataFusion from a metadata file. Supports schema evolution and partition pruning.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerIceberg");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -1255,6 +1268,7 @@ impl NodeLogic for IcebergTableInfoNode {
             "Get metadata, snapshots, and history of an Apache Iceberg table from a metadata file.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "icebergInfo");
         node.add_icon("/flow/icons/info.svg");
 
         node.add_input_pin(
@@ -1431,6 +1445,8 @@ impl NodeLogic for IcebergTimeTravelNode {
             "Load a specific snapshot of an Iceberg table for point-in-time queries.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "icebergTimeTravel");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(

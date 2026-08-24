@@ -30,6 +30,8 @@ impl NodeLogic for DropTableLocalDatabaseNode {
             "Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes.",
             "Data/Database/Delete",
         );
+        node.set_flowscript_name("db", "dropTable");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

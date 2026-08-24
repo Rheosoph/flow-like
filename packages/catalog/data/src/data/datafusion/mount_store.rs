@@ -143,6 +143,8 @@ impl NodeLogic for MountStoreParquetNode {
             "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountParquet");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -246,6 +248,8 @@ impl NodeLogic for MountStoreCsvNode {
             "Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountCsv");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -372,6 +376,8 @@ impl NodeLogic for MountStoreJsonNode {
             "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountJson");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

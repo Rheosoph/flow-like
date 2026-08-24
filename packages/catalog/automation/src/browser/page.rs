@@ -25,6 +25,7 @@ impl NodeLogic for BrowserNewPageNode {
             "Creates a new browser page/tab in the given context",
             "Automation/Browser",
         );
+        node.set_flowscript_name("browser", "newPage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -109,6 +110,7 @@ impl NodeLogic for BrowserClosePageNode {
             "Closes a browser page/tab",
             "Automation/Browser",
         );
+        node.set_flowscript_name("browser", "closePage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

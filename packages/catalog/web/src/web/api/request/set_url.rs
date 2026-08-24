@@ -27,6 +27,8 @@ impl NodeLogic for SetUrlNode {
             "Sets the url of a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setUrl");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

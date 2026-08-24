@@ -53,6 +53,7 @@ impl NodeLogic for StratifiedSplitNode {
             "Split a dataset into training and testing subsets, keeping every class at its original proportion in both subsets",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "stratifiedSplit");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 

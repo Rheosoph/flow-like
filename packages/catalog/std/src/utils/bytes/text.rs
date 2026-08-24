@@ -24,6 +24,8 @@ impl NodeLogic for BytesToTextNode {
             "Bytes to Text",
             "Reads a byte buffer as UTF-8 text",
         );
+        node.set_flowscript_name("bytes", "toText");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         node.add_input_pin(
             "lossy",
@@ -87,6 +89,7 @@ impl NodeLogic for TextToBytesNode {
             "Text to Bytes",
             "Writes text out as UTF-8 bytes",
         );
+        node.set_flowscript_name("bytes", "fromText");
         node.add_input_pin("text", "Text", "Input Text", VariableType::String);
         bytes_output(&mut node, "bytes", "Bytes", "The encoded bytes");
 

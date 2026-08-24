@@ -192,6 +192,9 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
             package_id: package_id.to_string(),
             permissions: entry.permissions.clone(),
         }),
+        namespace: None,
+        alias: None,
+        receiver: None,
     }
 }
 

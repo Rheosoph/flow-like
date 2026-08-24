@@ -46,6 +46,7 @@ impl NodeLogic for FitKnnRegressorNode {
             "Fit a K-Nearest-Neighbours regressor that averages the target of the nearest training rows. Non-parametric and instance based: the fitted model embeds a verbatim copy of the whole training set instead of learned coefficients, so every training row (and any personal data in it) travels with the model, is written into every saved model file and can be reconstructed by anyone holding it. Treat the model with the same care as the source table.",
             "AI/ML/Regression",
         );
+        node.set_flowscript_name("ml", "fitKnnRegressor");
         node.add_icon("/flow/icons/chart-network.svg");
 
         // Deliberately far below the parametric regressors: the model is the raw training data,

@@ -27,6 +27,7 @@ impl NodeLogic for WaitTemplateNode {
             "Waits for a template image to appear on screen",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "waitTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(
@@ -201,6 +202,7 @@ impl NodeLogic for WaitTemplateDisappearNode {
             "Waits for a template image to disappear from screen",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "waitTemplateDisappear");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(

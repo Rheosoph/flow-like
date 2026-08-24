@@ -11,6 +11,7 @@ mod diagnostics;
 mod lower;
 mod reconcile;
 mod signatures;
+mod template;
 mod types;
 
 pub use apply::{
@@ -23,21 +24,23 @@ pub use diagnostics::{
     structure_reconcile_diagnostics,
 };
 pub use flow_like_ast::{
-    BoardAst, DeclarationFile, NodeSchemas, ParseError, RedactedFlowScript, RenderOptions,
-    Signature, SignatureSet, declarations_by_category, declarations_by_package, parse,
-    redact_flowscript, render, schema_sidecar,
+    BoardAst, DeclarationFile, NameCollision, NameEntry, NodeNames, NodeSchemas, ParseError,
+    RedactedFlowScript, RenderOptions, Signature, SignatureSet, check_names,
+    declarations_by_category, declarations_by_package, is_signature_line, parse, redact_flowscript,
+    render, schema_sidecar,
 };
-pub use lower::lower_board;
+pub use lower::{binary_operator_node_types, lower_board, pin_is_untouched_default};
 pub use reconcile::{
     MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileResult, reconcile,
     reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
     reconcile_with_catalog, reconcile_with_catalog_mode,
 };
+pub(crate) use reconcile::{catalog_names, parse_pin_occurrence_ref, pin_occurrence_ref};
 pub(crate) use reconcile::{
     dynamic_placeholder_config_pin, synthesize_dynamic_input_pin_from_template,
 };
-pub(crate) use reconcile::{parse_pin_occurrence_ref, pin_occurrence_ref};
-pub use signatures::{node_to_signature, node_to_signature_in};
+pub use signatures::{node_name_entry, node_names, node_to_signature, node_to_signature_in};
+pub(crate) use template::template_format_call;
 
 use crate::flow::board::Board;
 
@@ -75,6 +78,35 @@ mod generate_flowscript {
             Ok(_) => mismatches.push(format!("{}: content differs", path.display())),
             Err(_) => mismatches.push(format!("{}: snapshot missing", path.display())),
         }
+    }
+
+    /// The fixture boards predate explicit FlowScript names on placed nodes. A loaded board
+    /// gets them (and a repaired `category`) from the catalog — `sync_board_node_schemas` runs
+    /// on every load — but the catalog is not available in this crate, so stamp its committed
+    /// snapshot (`flow.d/names.json`) the same way and the fixtures lower exactly as a loaded
+    /// board does.
+    fn fixture_board(proto: flow_like_types::proto::Board) -> Board {
+        use std::{collections::BTreeMap, sync::OnceLock};
+        static NAMES: OnceLock<BTreeMap<String, NodeNames>> = OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ast/flow.d/names.json");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            flow_like_types::json::from_str(&text).expect("parse flow.d/names.json")
+        });
+        let stamp = |node: &mut crate::flow::node::Node| {
+            if let Some(names) = names.get(&node.name) {
+                node.set_flowscript_name(&names.namespace, &names.alias);
+                node.set_receiver(names.receiver.as_deref().unwrap_or(""));
+                node.category.clone_from(&names.category);
+            }
+        };
+        let mut board = Board::from_proto(proto);
+        board.nodes.values_mut().for_each(stamp);
+        for layer in board.layers.values_mut() {
+            layer.nodes.values_mut().for_each(stamp);
+        }
+        board
     }
 
     /// Recursively collect every `.board` fixture under `dir`, descending into subdirectories
@@ -126,7 +158,7 @@ mod generate_flowscript {
                 crate::utils::compression::from_compressed(store.clone(), store_path)
                     .await
                     .unwrap_or_else(|e| panic!("decode {rel}: {e}"));
-            let board = Board::from_proto(proto);
+            let board = fixture_board(proto);
 
             let plain = board_to_flowscript(&board, &RenderOptions::default());
             let annotated = board_to_flowscript(
@@ -214,7 +246,7 @@ mod generate_flowscript {
                 crate::utils::compression::from_compressed(store.clone(), store_path)
                     .await
                     .unwrap_or_else(|e| panic!("decode {file_name}: {e}"));
-            let board = Board::from_proto(proto);
+            let board = fixture_board(proto);
 
             let annotated = board_to_flowscript(
                 &board,
@@ -915,7 +947,7 @@ mod lower_tests {
         );
         assert!(matches!(
             &function.body.stmts[1],
-            Stmt::Let {
+            Stmt::Destructure {
                 anchor: Some(anchor),
                 ..
             } if anchor == "query"
@@ -929,10 +961,8 @@ mod lower_tests {
                 ..Default::default()
             },
         );
-        let branch_end = text.find("    const sQLQuery").expect("top-level query");
-        let return_start = text
-            .find("    return sQLQuery.rows")
-            .expect("return query rows");
+        let branch_end = text.find("    const { rows } = ").expect("top-level query");
+        let return_start = text.find("    return rows").expect("return query rows");
         assert!(
             branch_end < return_start,
             "rendered query and return must remain top-level siblings:\n{text}"

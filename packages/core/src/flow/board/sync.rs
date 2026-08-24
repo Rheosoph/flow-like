@@ -316,6 +316,12 @@ pub struct SyncNode {
     pub oauth_providers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_oauth_scopes: Option<BTreeMap<String, Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
 }
 
 impl SyncNode {
@@ -355,6 +361,9 @@ impl SyncNode {
                     .map(|(provider, scopes)| (provider.clone(), scopes.clone()))
                     .collect()
             }),
+            namespace: node.namespace.clone(),
+            alias: node.alias.clone(),
+            receiver: node.receiver.clone(),
         }
     }
 
@@ -380,6 +389,9 @@ impl SyncNode {
         self.only_offline = None;
         self.oauth_providers = None;
         self.required_oauth_scopes = None;
+        self.namespace = None;
+        self.alias = None;
+        self.receiver = None;
         for pin in self.pins.values_mut() {
             pin.strip_catalog_fields();
         }
@@ -406,6 +418,9 @@ impl SyncNode {
             || node.only_offline != catalog.only_offline
             || node.oauth_providers != catalog.oauth_providers
             || node.required_oauth_scopes != catalog.required_oauth_scopes
+            || node.namespace != catalog.namespace
+            || node.alias != catalog.alias
+            || node.receiver != catalog.receiver
         {
             return false;
         }

@@ -34,6 +34,7 @@ impl NodeLogic for PdfPageToImageNode {
             "Render a single PDF page as an image",
             "Image/PDF",
         );
+        node.set_flowscript_name("pdf", "pageToImage");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

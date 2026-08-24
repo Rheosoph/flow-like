@@ -55,6 +55,7 @@ impl NodeLogic for GetNotionDatabaseNode {
             "Retrieves a Notion database schema with its properties",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "getDatabase");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

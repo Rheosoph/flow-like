@@ -30,6 +30,7 @@ impl NodeLogic for GetSelectValue {
             "Gets the selected value of a select element",
             "UI/Elements/Select",
         );
+        node.set_flowscript_name("ui", "getSelectValue");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

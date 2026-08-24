@@ -41,6 +41,7 @@ impl NodeLogic for RandomStringNode {
             "Generates a random string, for example a token or a short code",
             "Utils/Random",
         );
+        node.set_flowscript_name("random", "string");
         node.add_icon("/flow/icons/random.svg");
         node.set_scores(pure_scores());
 
@@ -148,6 +149,7 @@ impl NodeLogic for RandomChoiceNode {
             "Picks elements out of an array at random",
             "Utils/Random",
         );
+        node.set_flowscript_name("random", "choice");
         node.add_icon("/flow/icons/random.svg");
         node.set_scores(pure_scores());
 

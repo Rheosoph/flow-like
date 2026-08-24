@@ -30,6 +30,8 @@ impl NodeLogic for GetSchemaLocalDatabaseNode {
             "Get Local Database Schema",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "schema");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         // inputs

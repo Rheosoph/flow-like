@@ -103,6 +103,7 @@ impl NodeLogic for FitRandomForestNode {
             "Fit/Train a Random Forest classifier: many Decision Trees, each grown on a bootstrapped sample of the rows and a random subset of the features, combined by majority vote. Far more robust to overfitting than a single tree, at the price of interpretability. Model size and fit time grow linearly with Ensemble Size, so a forest of 500 trees costs roughly 500x a single tree.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitRandomForest");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

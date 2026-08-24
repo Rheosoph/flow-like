@@ -34,6 +34,7 @@ impl NodeLogic for BuildCohereNode {
             "Prepares a Bit for Cohere's API using the supplied credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "cohere");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

@@ -19,6 +19,7 @@ impl NodeLogic for AddSubtitleTrackNode {
             "Mux an SRT or WebVTT sidecar into a Matroska subtitle track",
             "Subtitles",
         );
+        node.set_flowscript_name("video", "addSubtitleTrack");
         node.add_icon("/flow/icons/text.svg");
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

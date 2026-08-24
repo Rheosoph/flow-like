@@ -26,6 +26,8 @@ impl NodeLogic for ArrayLengthNode {
             "Gets the length of an array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "length");
+        node.set_receiver("array");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("array", "Array", "Input Array", VariableType::Generic)

@@ -27,6 +27,7 @@ impl NodeLogic for RepairParseNode {
             "Attempts to repair and parse potentially malformed JSON",
             "Utils/JSON",
         );
+        node.set_flowscript_name("json", "repairParse");
 
         node.add_icon("/flow/icons/repair.svg");
 

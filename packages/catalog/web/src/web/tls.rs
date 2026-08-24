@@ -259,6 +259,7 @@ impl NodeLogic for CreateCaCertificateNode {
             "Creates a local certificate authority certificate and private key.",
             "Web/TLS",
         );
+        node.set_flowscript_name("tls", "createCaCertificate");
         node.add_icon("/flow/icons/shield.svg");
 
         node.add_input_pin(
@@ -332,6 +333,7 @@ impl NodeLogic for CreateCaSignedCertificateNode {
             "Creates a server or client certificate signed by a local certificate authority.",
             "Web/TLS",
         );
+        node.set_flowscript_name("tls", "createCaSignedCertificate");
         node.add_icon("/flow/icons/shield.svg");
         node.set_version(1);
 
@@ -433,6 +435,7 @@ impl NodeLogic for CreateSelfSignedCertificateNode {
             "Creates a self-signed certificate and private key.",
             "Web/TLS",
         );
+        node.set_flowscript_name("tls", "createSelfSignedCertificate");
         node.add_icon("/flow/icons/shield.svg");
         node.set_version(1);
 

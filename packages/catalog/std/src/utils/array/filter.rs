@@ -108,6 +108,8 @@ impl NodeLogic for FilterArrayByNode {
             "Keeps the elements whose key passes a comparison",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "filterBy");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/filter.svg");
         node.set_scores(pure_scores());
 

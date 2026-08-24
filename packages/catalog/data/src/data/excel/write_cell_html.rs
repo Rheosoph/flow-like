@@ -34,6 +34,7 @@ impl NodeLogic for WriteCellHtmlNode {
             "Write/update a single cell value in an XLSX sheet (HTML)",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "writeCellHtml");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Impure node → needs execution pins

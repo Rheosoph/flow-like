@@ -31,6 +31,8 @@ impl NodeLogic for FloatVectorCrossProductNode {
             "Calculates the cross product of two float vectors",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "cross");
+        node.set_receiver("vector1");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

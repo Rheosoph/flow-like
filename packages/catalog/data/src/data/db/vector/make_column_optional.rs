@@ -28,6 +28,8 @@ impl NodeLogic for MakeColumnOptionalLocalDatabaseNode {
             "Marks a column as optional (nullable).",
             "Data/Database/Schema",
         );
+        node.set_flowscript_name("db", "makeColumnOptional");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

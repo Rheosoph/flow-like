@@ -32,11 +32,14 @@ impl IntIncrementNode {
 #[async_trait]
 impl NodeLogic for IntIncrementNode {
     fn get_node(&self) -> Node {
-        step_node(
+        let mut node = step_node(
             "int_increment",
             "Increment",
             "Increases an integer by a step",
-        )
+        );
+        node.set_flowscript_name("int", "increment");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -62,11 +65,14 @@ impl IntDecrementNode {
 #[async_trait]
 impl NodeLogic for IntDecrementNode {
     fn get_node(&self) -> Node {
-        step_node(
+        let mut node = step_node(
             "int_decrement",
             "Decrement",
             "Decreases an integer by a step",
-        )
+        );
+        node.set_flowscript_name("int", "decrement");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

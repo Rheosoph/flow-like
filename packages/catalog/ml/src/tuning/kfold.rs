@@ -73,6 +73,7 @@ impl NodeLogic for KFoldGeneratorNode {
             "Generate K train/test splits for cross-validation. Each fold uses (K-1)/K data for training and 1/K for validation, and runs the connected fold branch once per fold.",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "kfold");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

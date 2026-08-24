@@ -24,6 +24,7 @@ impl NodeLogic for DeleteSurface {
             "Removes a surface from the frontend",
             "UI/Surface",
         );
+        node.set_flowscript_name("ui", "deleteSurface");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

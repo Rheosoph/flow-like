@@ -26,6 +26,7 @@ impl NodeLogic for ClickAtPositionNode {
             "Performs a click at a specific screen position",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "clickAtPosition");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -139,6 +140,7 @@ impl NodeLogic for TypeTextNode {
             "Types text using keyboard simulation",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "typeText");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -225,6 +227,7 @@ impl NodeLogic for DragAndDropNode {
             "Performs a drag and drop operation",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "dragDrop");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -338,6 +341,7 @@ impl NodeLogic for ScrollNode {
             "Performs a scroll action at the current mouse position",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "scroll");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

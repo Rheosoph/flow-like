@@ -87,6 +87,8 @@ impl NodeLogic for CachedSqlQueryNode {
             "Execute a read-only SQL query against a DataFusion session, remembering the result in the app's cache. Writing statements (INSERT/UPDATE/DELETE) are rejected — a cache hit would skip them; use the SQL Query node for writes. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "sqlQueryCached");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

@@ -26,6 +26,8 @@ impl NodeLogic for WriteStringNode {
             "Writes a string to a file",
             "Data/Files/Content",
         );
+        node.set_flowscript_name("files", "writeString");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

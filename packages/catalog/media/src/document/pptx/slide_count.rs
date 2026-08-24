@@ -29,6 +29,7 @@ impl NodeLogic for PptxSlideCountNode {
             "Return the number of slides in a PPTX file",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "slideCount");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

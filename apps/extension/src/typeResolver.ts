@@ -1,5 +1,12 @@
 import type * as vscode from "vscode";
-import type { FlowInterface, FlowVariable } from "./flowDocument";
+import {
+	type FlowDocumentModel,
+	type FlowInterface,
+	type FlowVariable,
+	type UseDeclaration,
+	calleeOf,
+	expandUsePath,
+} from "./flowDocument";
 import type { NodeSignature, SignatureRegistry } from "./signatures";
 
 /** A resolved FlowScript type. Object shapes carry named members so member
@@ -253,14 +260,14 @@ function scalarTypeText(type: string | undefined, format?: string): string {
 }
 
 /** Object shape for a node's outputs (`{ session: DfSession }`). */
-function shapeFromSignature(
+export function shapeFromSignature(
 	sig: NodeSignature,
 	registry: SignatureRegistry,
 ): Shape {
 	if (sig.returns.length === 0) {
 		return { kind: "scalar", text: "void" };
 	}
-	const outputSchemas = registry.schemasFor(sig.name)?.outputs;
+	const outputSchemas = registry.schemasFor(sig)?.outputs;
 	const deepShape = (name: string | undefined, fallback: string): Shape => {
 		const schema = name ? outputSchemas?.[name] : undefined;
 		const resolved = schema ? shapeFromJsonSchema(schema) : undefined;
@@ -353,16 +360,298 @@ function parseLiteral(text: string): unknown {
 	return undefined;
 }
 
+/** Method class of a resolved shape (`string`, `int`, `array`, a struct title, …). */
+export function shapeClass(shape: Shape | undefined): string | undefined {
+	if (!shape) {
+		return undefined;
+	}
+	if (shape.kind === "array") {
+		return shape.text.startsWith("Set<") ? "set" : "array";
+	}
+	if (shape.kind === "object") {
+		if (shape.origin?.startsWith("Map<")) {
+			return "map";
+		}
+		return shape.text && shape.text !== "Struct" && /^[A-Z][\w$]*$/.test(shape.text)
+			? shape.text
+			: "struct";
+	}
+	switch (shape.text) {
+		case "string":
+			return "string";
+		case "int":
+			return "int";
+		case "float":
+		case "number":
+			return "float";
+		case "bool":
+			return "bool";
+		case "Date":
+			return "datetime";
+		case "bytes":
+		case "Byte":
+			return "bytes";
+		case "Path":
+		case "PathBuf":
+			return "path";
+		default:
+			return undefined;
+	}
+}
+
+/** Context needed to resolve expressions: the document model plus its `use` scope. */
+export interface ResolveContext {
+	readonly registry: SignatureRegistry;
+	readonly variables: readonly FlowVariable[];
+	readonly interfaces?: ReadonlyMap<string, FlowInterface>;
+	readonly uses: readonly UseDeclaration[];
+	readonly functionReceivers?: ReadonlyMap<string, string | undefined>;
+}
+
+export function contextOf(
+	registry: SignatureRegistry,
+	model: FlowDocumentModel,
+): ResolveContext {
+	return {
+		registry,
+		variables: model.variables,
+		interfaces: model.interfaces,
+		uses: model.uses,
+		functionReceivers: model.functionReceivers,
+	};
+}
+
+/** Resolve a call spelled `ns::member` (after `use` expansion), `member` (flat or opened) or as a method. */
+export function resolveCallee(
+	callee: string,
+	ctx: ResolveContext,
+): NodeSignature | undefined {
+	const normalized = callee.replace(/\s*::\s*/g, "::");
+	if (normalized.includes("::")) {
+		const segments = normalized.split("::");
+		const path = expandUsePath(segments.slice(0, -1), ctx.uses);
+		return ctx.registry.member(path, segments[segments.length - 1]);
+	}
+	return ctx.registry.get(normalized) ?? openedMembers(normalized, ctx)[0];
+}
+
+/** Nodes a bare name refers to through `use ns::*` / `use ns::{ name }`. */
+export function openedMembers(name: string, ctx: ResolveContext): NodeSignature[] {
+	const out: NodeSignature[] = [];
+	for (const use of ctx.uses) {
+		if (use.kind !== "glob" && use.kind !== "members") {
+			continue;
+		}
+		if (use.kind === "members" && !use.members.includes(name)) {
+			continue;
+		}
+		const sig = ctx.registry.member(expandUsePath(use.path, ctx.uses), name);
+		if (sig && !out.includes(sig)) {
+			out.push(sig);
+		}
+	}
+	return out;
+}
+
+/** Namespace keys opened by any `use` line (method-dispatch tie-breaker). */
+function openedNamespaces(ctx: ResolveContext): Set<string> {
+	const keys = new Set<string>();
+	for (const use of ctx.uses) {
+		if (use.kind !== "invalid") {
+			keys.add(expandUsePath(use.path, ctx.uses).join("::"));
+		}
+	}
+	return keys;
+}
+
+/** Candidate nodes for `receiver.member(...)`, narrowed by the receiver class and `use` lines. */
+export function resolveMethod(
+	receiverShape: Shape | undefined,
+	member: string,
+	ctx: ResolveContext,
+): { readonly candidates: NodeSignature[]; readonly cls?: string } {
+	const cls = shapeClass(receiverShape);
+	let candidates = ctx.registry.methodCandidates(cls, member);
+	if (candidates.length > 1) {
+		const opened = openedNamespaces(ctx);
+		const preferred = candidates.filter((sig) =>
+			sig.namespace ? opened.has(sig.namespace.join("::")) : false,
+		);
+		if (preferred.length > 0) {
+			candidates = preferred;
+		}
+	}
+	return { candidates, cls };
+}
+
+/**
+ * Resolve the shape of an expression: a literal, a variable (declared before `position`), a
+ * flat/qualified call, a method call on a resolved receiver, or a member/index chain over any
+ * of those (`http::fetch({ url }).response.body`, `s.trim()`, `items[0].name`).
+ */
+export function expressionShape(
+	expr: string,
+	ctx: ResolveContext,
+	position?: vscode.Position,
+	depth = 0,
+): Shape | undefined {
+	const e = expr.trim();
+	if (!e || depth > 8) {
+		return undefined;
+	}
+	if (e[0] === '"' || e[0] === "'" || e[0] === "`") {
+		return { kind: "scalar", text: "string" };
+	}
+	if (/^-?\d/.test(e)) {
+		return { kind: "scalar", text: /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(e) && /[.eE]/.test(e) ? "float" : "int" };
+	}
+	if (e === "true" || e === "false" || e[0] === "!") {
+		return { kind: "scalar", text: "bool" };
+	}
+	if (e[0] === "[") {
+		return { kind: "array", text: "Struct[]" };
+	}
+	if (e[0] === "{") {
+		const value = parseLiteral(e);
+		return value === undefined ? { kind: "object", text: "Struct", fields: new Map() } : shapeFromValue(value);
+	}
+	if (e[0] === "(") {
+		const close = matchingBracket(e, 0);
+		if (close < 0) {
+			return undefined;
+		}
+		return walkPostfix(expressionShape(e.slice(1, close), ctx, position, depth + 1), e.slice(close + 1), ctx);
+	}
+	const callee = calleeOf(e);
+	if (callee.initCall) {
+		const sig = resolveCallee(callee.initCall, ctx);
+		const open = e.indexOf("(");
+		const close = matchingBracket(e, open);
+		if (!sig || close < 0) {
+			return undefined;
+		}
+		return walkPostfix(shapeFromSignature(sig, ctx.registry), e.slice(close + 1), ctx);
+	}
+	const head = /^([A-Za-z_$][\w$]*)/.exec(e);
+	if (!head) {
+		return undefined;
+	}
+	const variable = position
+		? findVariable(ctx.variables, head[1], position)
+		: ctx.variables.find((v) => v.name === head[1]);
+	if (!variable) {
+		return undefined;
+	}
+	return walkPostfix(variableShape(variable, ctx.registry, ctx.interfaces, ctx, position, depth + 1), e.slice(head[1].length), ctx);
+}
+
+/** Apply `.member`, `.method(...)` and `[index]` steps to a base shape. */
+function walkPostfix(
+	base: Shape | undefined,
+	rest: string,
+	ctx: ResolveContext,
+): Shape | undefined {
+	let current = base;
+	let text = rest.trimStart();
+	while (text.length > 0 && current) {
+		const member = /^\.\s*([A-Za-z_$][\w$]*)/.exec(text);
+		if (member) {
+			text = text.slice(member[0].length).trimStart();
+			if (text.startsWith("(")) {
+				const close = matchingBracket(text, 0);
+				if (close < 0) {
+					return undefined;
+				}
+				const { candidates } = resolveMethod(current, member[1], ctx);
+				current = candidates.length === 1 ? shapeFromSignature(candidates[0], ctx.registry) : undefined;
+				text = text.slice(close + 1).trimStart();
+			} else if (member[1] === "length" && current.kind === "array") {
+				current = { kind: "scalar", text: "int" };
+			} else {
+				current = walkAccessors(current, [{ kind: "field", name: member[1] }]);
+			}
+			continue;
+		}
+		if (text.startsWith("[")) {
+			const close = matchingBracket(text, 0);
+			if (close < 0) {
+				return undefined;
+			}
+			current = walkAccessors(current, [{ kind: "index" }]);
+			text = text.slice(close + 1).trimStart();
+			continue;
+		}
+		return undefined;
+	}
+	return current;
+}
+
+function matchingBracket(text: string, open: number): number {
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		const c = text[i];
+		if (c === "(" || c === "[" || c === "{") {
+			depth++;
+		} else if (c === ")" || c === "]" || c === "}") {
+			depth--;
+			if (depth === 0) {
+				return i;
+			}
+		}
+	}
+	return -1;
+}
+
 /** Resolve the declared/inferred `Shape` of a variable. */
 export function variableShape(
 	variable: FlowVariable,
 	registry: SignatureRegistry,
 	interfaces?: ReadonlyMap<string, FlowInterface>,
+	ctx?: ResolveContext,
+	position?: vscode.Position,
+	depth = 0,
 ): Shape | undefined {
+	const resolveCtx: ResolveContext = ctx ?? {
+		registry,
+		variables: [],
+		interfaces,
+		uses: [],
+	};
+	const selectField = (shape: Shape | undefined): Shape | undefined =>
+		variable.initField && shape
+			? walkAccessors(shape, [{ kind: "field", name: variable.initField }])
+			: shape;
 	if (variable.initCall) {
-		const sig = registry.get(variable.initCall);
+		const sig = resolveCallee(variable.initCall, resolveCtx);
 		if (sig) {
-			return shapeFromSignature(sig, registry);
+			const shape = shapeFromSignature(sig, registry);
+			if (variable.iterates && !sig.returns.some((r) => r.name === "value")) {
+				return walkAccessors(shape, [{ kind: "index" }]);
+			}
+			return selectField(shape);
+		}
+	}
+	if (variable.initMethod && depth <= 8) {
+		const receiver = expressionShape(
+			variable.initMethod.receiverText,
+			resolveCtx,
+			position ?? variable.range.start,
+			depth + 1,
+		);
+		const { candidates } = resolveMethod(receiver, variable.initMethod.member, resolveCtx);
+		if (candidates.length === 1) {
+			return selectField(shapeFromSignature(candidates[0], registry));
+		}
+	}
+	if (variable.iterates && depth <= 8) {
+		const iterated = expressionShape(
+			variable.iterates,
+			resolveCtx,
+			position ?? variable.range.start,
+			depth + 1,
+		);
+		if (iterated) {
+			return walkAccessors(iterated, [{ kind: "index" }]);
 		}
 	}
 	// A `@schema(…)` decorator is the authoritative type for struct variables: it carries the
@@ -385,19 +674,26 @@ export function variableShape(
 			return annotated;
 		}
 	}
+	if (variable.typeText) {
+		return shapeFromTypeText(variable.typeText, interfaces);
+	}
 	if (variable.initLiteral) {
 		const value = parseLiteral(variable.initLiteral);
 		if (value !== undefined) {
 			const shape = shapeFromValue(value);
-			// Prefer an explicit annotation for the top-level display text.
-			if (variable.typeText && shape.kind === "object") {
-				return { ...shape, text: variable.typeText };
-			}
-			return shape;
+			return variable.typeText && shape.kind === "object"
+				? { ...shape, text: variable.typeText }
+				: shape;
 		}
-	}
-	if (variable.typeText) {
-		return shapeFromTypeText(variable.typeText, interfaces);
+		if (depth <= 8) {
+			// Not JSON: a single-quoted / template string, or an expression over other bindings.
+			return expressionShape(
+				variable.initLiteral,
+				resolveCtx,
+				position ?? variable.range.start,
+				depth + 1,
+			);
+		}
 	}
 	return undefined;
 }

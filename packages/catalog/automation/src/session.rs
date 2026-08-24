@@ -25,6 +25,7 @@ impl NodeLogic for StartSessionNode {
             "Starts a unified automation session for desktop, browser, and RPA automation",
             "Automation",
         );
+        node.set_flowscript_name("automation", "startSession");
         node.add_icon("/flow/icons/automation.svg");
 
         node.set_scores(
@@ -127,6 +128,7 @@ impl NodeLogic for StopSessionNode {
             "Stops an automation session and releases all resources",
             "Automation",
         );
+        node.set_flowscript_name("automation", "stopSession");
         node.add_icon("/flow/icons/automation.svg");
 
         node.set_scores(

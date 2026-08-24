@@ -42,6 +42,7 @@ impl NodeLogic for MqttConnectNode {
              Publish, Subscribe, and Disconnect nodes.",
             "Web/MQTT",
         );
+        node.set_flowscript_name("mqtt", "connect");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

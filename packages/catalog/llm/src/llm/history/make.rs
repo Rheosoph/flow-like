@@ -26,6 +26,7 @@ impl NodeLogic for MakeHistoryNode {
             "Creates a ChatHistory struct",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "make");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
 

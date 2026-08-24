@@ -30,6 +30,7 @@ impl NodeLogic for CloneGitHubRepoNode {
             "Clone a GitHub repository. Works with any FlowPath store type (local, S3, memory, etc.). For non-local stores, clones to a temp directory first, then copies files into the target store.",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "cloneRepo");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

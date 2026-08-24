@@ -22,6 +22,8 @@ impl CropImageNode {
 impl NodeLogic for CropImageNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("crop_image", "Crop Image", "Crop Image", "Image/Transform");
+        node.set_flowscript_name("image", "crop");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

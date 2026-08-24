@@ -70,6 +70,7 @@ impl NodeLogic for FitGaussianMixtureNode {
             "Fit/Train a Gaussian Mixture Model. Soft clustering with per-component covariances and mixture weights, fitted by Expectation-Maximization.",
             "AI/ML/Clustering",
         );
+        node.set_flowscript_name("ml", "fitGaussianMixture");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

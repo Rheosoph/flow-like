@@ -101,6 +101,7 @@ impl NodeLogic for ListMyPlansNode {
             "List all Planner plans the user has access to",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "listMyPlans");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -179,6 +180,7 @@ impl NodeLogic for GetPlanNode {
             "Get details of a specific Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "getPlan");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -265,6 +267,7 @@ impl NodeLogic for ListPlanTasksNode {
             "List all tasks in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "listTasks");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -349,6 +352,7 @@ impl NodeLogic for ListPlanBucketsNode {
             "List all buckets in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "listBuckets");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -433,6 +437,7 @@ impl NodeLogic for CreatePlannerTaskNode {
             "Create a new task in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "createTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -567,6 +572,7 @@ impl NodeLogic for UpdatePlannerTaskNode {
             "Update an existing Planner task",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "updateTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -695,6 +701,7 @@ impl NodeLogic for CreateBucketNode {
             "Create a new bucket in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "createBucket");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -798,6 +805,7 @@ impl NodeLogic for ListMyTasksNode {
             "List all Planner tasks assigned to the current user",
             "Data/Microsoft/Planner",
         );
+        node.set_flowscript_name("microsoft.planner", "listMyTasks");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 

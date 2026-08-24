@@ -826,6 +826,7 @@ impl NodeLogic for OrdinalGridSearchNode {
             "Exhaustively searches the hyperparameters of ONE ordinal model family with cross-validation, for a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Every combination in the Parameter Grid is scored on the SAME folds and ranked by an ordinal metric that knows how far a miss was. Use this rather than Grid Search, which resolves the target without its order and tunes against accuracy, scoring a five-level miss exactly like a one-level one. Model Type accepts the names Auto Ordinal reports as its best model, so the usual chain is Auto Ordinal to pick the family, then this node to tune it. Every family here is a gradient or a least-squares fit on the raw columns, so scale your features with the Fit Feature Scaler node first: unscaled columns change which hyperparameters win, not just how fast they converge.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "ordinalGridSearch");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

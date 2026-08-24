@@ -35,6 +35,7 @@ impl NodeLogic for TeachableMachineNode {
             "Image classification using Teachable Machine models.",
             "AI/ML",
         );
+        node.set_flowscript_name("ml.teachableMachine", "classify");
 
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -282,6 +283,8 @@ impl NodeLogic for PredictionClassOrLabelNode {
             "Extract class_idx and label from predictions.",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "classOrLabel");
+        node.set_receiver("prediction");
         node.add_icon("/flow/icons/find_model.svg");
 
         node.add_input_pin(
@@ -341,6 +344,8 @@ impl NodeLogic for PredictionScoreNode {
             "Extract score from predictions.",
             "AI/ML/Teachable Machine",
         );
+        node.set_flowscript_name("ml", "score");
+        node.set_receiver("prediction");
         node.add_icon("/flow/icons/find_model.svg");
 
         node.add_input_pin(

@@ -28,6 +28,8 @@ impl NodeLogic for ListLocalDatabaseNode {
             "List Content",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "list");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

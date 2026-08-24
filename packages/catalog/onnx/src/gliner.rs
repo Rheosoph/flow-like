@@ -475,6 +475,7 @@ impl NodeLogic for GlinerNode {
             "Extract entities for any labels you name at runtime, with no fixed label set and no retraining. Load a GLiNER ONNX export (e.g. https://huggingface.co/onnx-community/gliner_small-v2.1, gliner_multi-v2.1, gliner_medium_news-v2.1, gliner_multi_pii-v1, NuNER_Zero) plus the tokenizer.json from the same repository. For models with a fixed label set, use the Named Entity Recognition node instead.",
             "AI/ML/ONNX/NLP",
         );
+        node.set_flowscript_name("onnx", "gliner");
         node.set_version(1);
 
         node.add_icon("/flow/icons/type.svg");

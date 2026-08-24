@@ -28,6 +28,7 @@ impl NodeLogic for FindLLMNode {
             "Finds the best model based on certain selection criteria",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "findModel");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
         node.set_scores(

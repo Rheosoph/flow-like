@@ -27,6 +27,8 @@ impl NodeLogic for SetAcceptNode {
             "Sets the Accept header of a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setAccept");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

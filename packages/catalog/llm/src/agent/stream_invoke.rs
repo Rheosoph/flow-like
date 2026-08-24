@@ -41,6 +41,8 @@ impl NodeLogic for StreamInvokeAgentNode {
             "Executes an Agent with streaming, emitting chunks in real-time",
             "AI/Agents",
         );
+        node.set_flowscript_name("agent", "streamInvoke");
+        node.set_receiver("agent");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

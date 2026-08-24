@@ -24,6 +24,7 @@ impl WarningNode {
 impl NodeLogic for WarningNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("log_warning", "Log Warning", "Logs a Warning", "Logging");
+        node.set_flowscript_name("log", "warn");
         node.add_icon("/flow/icons/log-warning.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

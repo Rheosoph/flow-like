@@ -61,6 +61,8 @@ impl NodeLogic for StringPadStartNode {
             "Fills up a string at the start until it reaches the target length",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "padStart");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
         pad_pins(&mut node);
@@ -100,6 +102,8 @@ impl NodeLogic for StringPadEndNode {
             "Fills up a string at the end until it reaches the target length",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "padEnd");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
         pad_pins(&mut node);
@@ -139,6 +143,8 @@ impl NodeLogic for StringNormalizeWhitespaceNode {
             "Collapses runs of whitespace into single spaces and trims the result",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "normalizeWhitespace");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 

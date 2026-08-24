@@ -45,6 +45,8 @@ impl NodeLogic for RegisterBigQueryNode {
             "Register a Google BigQuery table or query result into a DataFusion session. Takes a GcpProvider for authentication — pair it with the GCP Provider node.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerBigquery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

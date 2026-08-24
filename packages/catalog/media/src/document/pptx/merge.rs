@@ -84,6 +84,7 @@ impl NodeLogic for PptxMergeNode {
             "Combine slides from multiple PPTX files into one. The base file's theme and masters are preserved.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "merge");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

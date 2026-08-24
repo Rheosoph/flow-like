@@ -26,6 +26,7 @@ impl NodeLogic for PushWidgetsNode {
             "Embeds multiple a2ui widget instances into the chat message. Add an Element Ref pin for each Instantiate Widget node.",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushWidgets");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_event_callback(true);
 

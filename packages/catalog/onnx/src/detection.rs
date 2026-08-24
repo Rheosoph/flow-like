@@ -1816,6 +1816,7 @@ impl NodeLogic for ObjectDetectionNode {
             "Object Detection in Images with ONNX-Models. Download models from: TinyYOLOv2 (https://github.com/onnx/models/tree/main/validated/vision/object_detection_segmentation/tiny-yolov2), YOLO (https://github.com/onnx/models/tree/main/validated/vision/object_detection_segmentation), SSD-MobileNet (https://github.com/onnx/models/tree/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1)",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "objectDetection");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

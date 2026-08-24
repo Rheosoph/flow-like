@@ -329,6 +329,7 @@ impl NodeLogic for SemanticSegmentationNode {
             "Segment images into semantic classes using ONNX models. Download models from: DeepLabV3 (https://github.com/onnx/models/tree/main/validated/vision/object_detection_segmentation/duc), FCN (https://github.com/onnx/models/tree/main/validated/vision/object_detection_segmentation/fcn)",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "semanticSegmentation");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

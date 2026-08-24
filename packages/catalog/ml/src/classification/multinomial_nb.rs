@@ -76,6 +76,7 @@ impl NodeLogic for FitMultinomialNaiveBayesNode {
             "Fit/Train a Multinomial Naive Bayes classifier, the standard baseline for text and other count data. Features must be non-negative counts or TF-IDF weights, which is what the Fit TF-IDF Vectorizer node produces. Native multi-class support and a single pass over the data.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitMultinomialNaiveBayes");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

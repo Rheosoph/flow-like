@@ -25,6 +25,7 @@ impl NodeLogic for FloatVectorMultiplicationNode {
             "Multiplies two float vectors element-wise",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "multiply");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

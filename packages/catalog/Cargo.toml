@@ -140,6 +140,7 @@ tracing.workspace = true
 criterion = { version = "0.7", features = ["html_reports", "async_tokio"] }
 rkyv.workspace = true
 flow-like.workspace = true
+flow-like-ast.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

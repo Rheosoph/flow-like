@@ -27,6 +27,8 @@ impl NodeLogic for ClearSetNode {
             "Removes / Clears all elements from a set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "clear");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

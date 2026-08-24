@@ -24,6 +24,8 @@ impl NodeLogic for LessThanOrEqualIntegerNode {
             "Checks if the first integer is less than or equal to the second",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "lessThanOrEqual");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

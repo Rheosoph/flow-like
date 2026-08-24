@@ -26,6 +26,7 @@ impl NodeLogic for BrowserUploadFileNode {
             "Uploads a file to an input element using its selector",
             "Automation/Browser/Files",
         );
+        node.set_flowscript_name("browser", "uploadFile");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -144,6 +145,7 @@ impl NodeLogic for BrowserUploadMultipleFilesNode {
             "Uploads multiple files to a file input that accepts multiple",
             "Automation/Browser/Files",
         );
+        node.set_flowscript_name("browser", "uploadMultipleFiles");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -274,6 +276,7 @@ impl NodeLogic for BrowserSetDownloadDirNode {
             "Sets the default download directory for the browser (must be called before downloads)",
             "Automation/Browser/Files",
         );
+        node.set_flowscript_name("browser", "setDownloadDir");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -378,6 +381,7 @@ impl NodeLogic for BrowserWaitForDownloadNode {
             "Waits for a file to appear in the download directory",
             "Automation/Browser/Files",
         );
+        node.set_flowscript_name("browser", "waitForDownload");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -557,6 +561,7 @@ impl NodeLogic for BrowserTriggerDownloadNode {
             "Clicks an element to trigger a download",
             "Automation/Browser/Files",
         );
+        node.set_flowscript_name("browser", "triggerDownload");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

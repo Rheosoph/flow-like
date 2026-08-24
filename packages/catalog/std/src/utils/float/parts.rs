@@ -18,12 +18,15 @@ impl FloatTruncNode {
 #[async_trait]
 impl NodeLogic for FloatTruncNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_trunc",
             "Truncate",
             "Drops the fractional part of a float",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "trunc");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -44,12 +47,15 @@ impl FloatFractNode {
 #[async_trait]
 impl NodeLogic for FloatFractNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_fract",
             "Fraction",
             "Keeps only the fractional part of a float",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "fract");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -70,12 +76,15 @@ impl FloatSignumNode {
 #[async_trait]
 impl NodeLogic for FloatSignumNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_signum",
             "Sign (Float)",
             "Returns -1 or 1 depending on the sign of a float",
             "Math/Float",
-        )
+        );
+        node.set_flowscript_name("float", "signum");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

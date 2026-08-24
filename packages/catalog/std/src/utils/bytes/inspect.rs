@@ -74,6 +74,8 @@ impl NodeLogic for BytesDetectTypeNode {
             "Detect Type",
             "Reads the leading bytes to work out what kind of file a buffer holds",
         );
+        node.set_flowscript_name("bytes", "detectType");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
 
         node.add_output_pin(

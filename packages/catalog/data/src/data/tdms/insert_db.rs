@@ -449,6 +449,8 @@ impl NodeLogic for BatchInsertTdmsLocalDatabaseNode {
             "Reads a LabVIEW TDMS file and batch-inserts its channel data as rows into a vector database.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "insertTdms");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

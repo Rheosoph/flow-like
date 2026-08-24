@@ -28,6 +28,8 @@ impl NodeLogic for HttpDownloadNode {
             "Downloads a file from a url",
             "Web",
         );
+        node.set_flowscript_name("http", "download");
+        node.set_receiver("request");
 
         node.set_long_running(true);
         node.add_icon("/flow/icons/web.svg");

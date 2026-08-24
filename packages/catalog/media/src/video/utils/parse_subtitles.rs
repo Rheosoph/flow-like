@@ -19,6 +19,7 @@ impl NodeLogic for ParseSubtitlesNode {
             "Parse SRT or WebVTT sidecar subtitles into cue structs",
             "Subtitles",
         );
+        node.set_flowscript_name("video", "parseSubtitles");
         node.add_icon("/flow/icons/text.svg");
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "sidecar", "Sidecar", "Subtitle sidecar FlowPath");

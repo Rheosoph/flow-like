@@ -24,6 +24,8 @@ impl NodeLogic for UnequalIntegerNode {
             "Checks if two integers are unequal",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "unequal");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

@@ -24,6 +24,8 @@ impl NodeLogic for ModuloIntegerNode {
             "Calculates the remainder of integer division",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "modulo");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("integer1", "Integer 1", "Dividend", VariableType::Integer);

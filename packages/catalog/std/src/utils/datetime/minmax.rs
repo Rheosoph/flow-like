@@ -83,7 +83,10 @@ impl DateMinNode {
 #[async_trait]
 impl NodeLogic for DateMinNode {
     fn get_node(&self) -> Node {
-        pair_node("utils_datetime_min", "Earlier", "The earlier of two dates")
+        let mut node = pair_node("utils_datetime_min", "Earlier", "The earlier of two dates");
+        node.set_flowscript_name("datetime", "min");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -109,7 +112,10 @@ impl DateMaxNode {
 #[async_trait]
 impl NodeLogic for DateMaxNode {
     fn get_node(&self) -> Node {
-        pair_node("utils_datetime_max", "Later", "The later of two dates")
+        let mut node = pair_node("utils_datetime_max", "Later", "The later of two dates");
+        node.set_flowscript_name("datetime", "max");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -135,11 +141,13 @@ impl DateMinOfNode {
 #[async_trait]
 impl NodeLogic for DateMinOfNode {
     fn get_node(&self) -> Node {
-        array_node(
+        let mut node = array_node(
             "utils_datetime_min_of",
             "Earliest Of",
             "The earliest date in an array",
-        )
+        );
+        node.set_flowscript_name("datetime", "minOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -160,11 +168,13 @@ impl DateMaxOfNode {
 #[async_trait]
 impl NodeLogic for DateMaxOfNode {
     fn get_node(&self) -> Node {
-        array_node(
+        let mut node = array_node(
             "utils_datetime_max_of",
             "Latest Of",
             "The latest date in an array",
-        )
+        );
+        node.set_flowscript_name("datetime", "maxOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -191,6 +201,8 @@ impl NodeLogic for DateClampNode {
             "Pulls a date into a range, leaving it alone when it already fits",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "clamp");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 

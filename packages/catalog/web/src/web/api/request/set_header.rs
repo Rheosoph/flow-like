@@ -27,6 +27,8 @@ impl NodeLogic for SetHeaderNode {
             "Sets a header of a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setHeader");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

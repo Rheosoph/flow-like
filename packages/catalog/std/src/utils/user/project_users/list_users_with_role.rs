@@ -23,6 +23,7 @@ impl NodeLogic for ListUsersWithRoleNode {
             "List Users with Role",
             "Lists project users assigned to a role ID or exact role name.",
         );
+        node.set_flowscript_name("user", "listWithRole");
         add_app_pin(&mut node);
         node.add_input_pin(
             "role",

@@ -95,6 +95,7 @@ impl NodeLogic for FitLogisticRegressionNode {
             "Fit/Train a Logistic Regression classifier with L2 regularization. Handles binary and multi-class targets and yields interpretable coefficients plus calibrated probabilities. The solver expects features on a comparable scale - fit a Feature Scaler first if your columns have very different ranges.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitLogisticRegression");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

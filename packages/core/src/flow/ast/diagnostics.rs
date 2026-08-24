@@ -646,6 +646,23 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
             "Refresh FlowScript from the current board before editing it.",
             None,
         );
+    } else if message.contains("inside a template literal would be read as a placeholder") {
+        diagnostic.phase = FlowScriptDiagnosticPhase::Lowering;
+        diagnostic.actual = ticks.first().cloned();
+        diagnostic.expected = Some("template text without `{identifier}` sequences".into());
+        diagnostic.fix = fix(
+            "Write string::format({ formatString: … }) explicitly, or drop the braces from the template text.",
+            None,
+        );
+    } else if message.contains("`for…of` iterates") && message.contains("not an array") {
+        diagnostic.code = FlowScriptDiagnosticCode::FsTypeMismatch;
+        diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
+        diagnostic.actual = ticks.first().cloned();
+        diagnostic.expected = Some("an array value".into());
+        diagnostic.fix = fix(
+            "Iterate an array-typed value, or call the loop node explicitly with the intended input.",
+            None,
+        );
     } else if message.contains("new event") && message.contains("no executable body nodes") {
         diagnostic.code = FlowScriptDiagnosticCode::FsEventEmpty;
         diagnostic.phase = FlowScriptDiagnosticPhase::Validation;

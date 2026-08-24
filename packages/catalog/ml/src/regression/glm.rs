@@ -50,6 +50,7 @@ impl NodeLogic for FitGlmNode {
             "Fit/Train a Generalized Linear Model. Pick the distribution that matches the target: Normal for unbounded values, Poisson for counts, Gamma for positive skewed amounts, Inverse Gaussian for heavy tails.",
             "AI/ML/Regression",
         );
+        node.set_flowscript_name("ml", "fitGlm");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

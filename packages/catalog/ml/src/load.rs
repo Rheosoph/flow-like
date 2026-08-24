@@ -36,6 +36,7 @@ impl NodeLogic for LoadMLModelNode {
             "Load Trained ML Model from Path",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "load");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -29,6 +29,7 @@ impl NodeLogic for DocxAddTocNode {
             "Insert a TOC field that Word will populate on open",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addToc");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

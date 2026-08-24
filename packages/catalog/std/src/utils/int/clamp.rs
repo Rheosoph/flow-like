@@ -24,6 +24,8 @@ impl NodeLogic for ClampIntegerNode {
             "Clamps an integer within a range",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "clamp");
+        node.set_receiver("integer");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("integer", "Integer", "Input Integer", VariableType::Integer);

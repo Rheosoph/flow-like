@@ -27,6 +27,7 @@ impl NodeLogic for ListConfluenceSpacesNode {
             "List all accessible Confluence spaces",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "listSpaces");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

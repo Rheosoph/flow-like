@@ -29,6 +29,7 @@ impl NodeLogic for DocxReplaceTableRowNode {
             "Find a table containing a placeholder, duplicate that row for each data item, replacing placeholders per row",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "replaceTableRow");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

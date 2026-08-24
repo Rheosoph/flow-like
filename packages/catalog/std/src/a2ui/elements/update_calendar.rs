@@ -139,6 +139,7 @@ impl NodeLogic for UpdateCalendar {
             "Add, remove, or update calendar events and view configuration",
             "UI/Elements/Calendar",
         );
+        node.set_flowscript_name("ui", "updateCalendar");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

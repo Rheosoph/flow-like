@@ -28,6 +28,8 @@ impl NodeLogic for Base64DecodeNode {
             "Decodes a Base64 string back to a UTF-8 string",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "base64Decode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin(

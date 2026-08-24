@@ -25,6 +25,8 @@ impl NodeLogic for RoundFloatNode {
             "Rounds a float to the given number of decimal places",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "round");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_version(1);
         node.set_scores(pure_scores());

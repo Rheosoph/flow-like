@@ -44,11 +44,35 @@ struct Writer<'a> {
     schema_types: HashMap<String, String>,
 }
 
+/// Loop keywords shared with the parser (`Stmt::Loop::keyword`).
+const PARALLEL_FOR_EACH_KEYWORD: &str = "forEachParallel";
+const WHILE_KEYWORD: &str = "while";
+
+/// The head of a [`Stmt::Loop`] as the renderer reads it.
+struct LoopHead<'a> {
+    keyword: &'a str,
+    bind: Option<&'a str>,
+    call: &'a Call,
+    iterable: Option<&'a Expr>,
+    element: Option<&'a str>,
+    index: Option<&'a str>,
+}
+
 impl Writer<'_> {
     fn board(&mut self, ast: &BoardAst) {
         let mut first_section = true;
 
+        if !ast.uses.is_empty() {
+            for decl in &ast.uses {
+                self.use_decl(decl);
+            }
+            first_section = false;
+        }
+
         if !ast.interfaces.is_empty() {
+            if !first_section {
+                self.out.push('\n');
+            }
             for interface in &ast.interfaces {
                 self.interface_decl(interface);
             }
@@ -82,6 +106,28 @@ impl Writer<'_> {
         }
     }
 
+    fn use_decl(&mut self, decl: &UseDecl) {
+        self.out.push_str("use ");
+        self.out.push_str(&decl.path.join("::"));
+        match &decl.kind {
+            UseKind::Namespace => {}
+            UseKind::Glob => self.out.push_str("::*"),
+            UseKind::Alias(alias) => {
+                self.out.push_str(" as ");
+                self.out.push_str(alias);
+            }
+            UseKind::Members(members) => {
+                self.out.push_str("::{ ");
+                self.out.push_str(&members.join(", "));
+                self.out.push_str(" }");
+            }
+        }
+        self.out.push('\n');
+    }
+
+    /// A top-level declaration. A scalar default that infers exactly the declared type drops
+    /// the annotation (`const x = "a"`), mirroring what the parser accepts; every other shape
+    /// (struct, array, interface, no default) keeps `: Type`.
     fn var_decl(&mut self, var: &VarDecl) {
         self.var_decorators(var);
         self.indent();
@@ -89,8 +135,14 @@ impl Writer<'_> {
         self.out.push_str(kw);
         self.out.push(' ');
         self.out.push_str(&var.name);
-        self.out.push_str(": ");
-        self.out.push_str(&self.render_var_type(var));
+        let annotated = !var
+            .default
+            .as_ref()
+            .is_some_and(|default| var.schema.is_none() && default.infers_scalar_type(&var.ty));
+        if annotated {
+            self.out.push_str(": ");
+            self.out.push_str(&self.render_var_type(var));
+        }
         if let Some(default) = &var.default {
             self.out.push_str(" = ");
             self.out.push_str(&render_literal(default));
@@ -273,6 +325,19 @@ impl Writer<'_> {
                 self.anchor("n", anchor.as_deref());
                 self.out.push('\n');
             }
+            Stmt::Destructure {
+                fields,
+                call,
+                anchor,
+            } => {
+                self.indent();
+                self.out.push_str("const { ");
+                self.out.push_str(&render_destructure_fields(fields));
+                self.out.push_str(" } = ");
+                self.out.push_str(&render_call(call));
+                self.anchor("n", anchor.as_deref());
+                self.out.push('\n');
+            }
             Stmt::Call { call, anchor } => {
                 self.indent();
                 self.out.push_str(&render_call(call));
@@ -298,10 +363,21 @@ impl Writer<'_> {
                 keyword,
                 bind,
                 call,
+                iterable,
+                element,
+                index,
                 body,
                 anchor,
             } => {
-                self.loop_stmt(keyword, bind.as_deref(), call, body, anchor.as_deref());
+                let head = LoopHead {
+                    keyword,
+                    bind: bind.as_deref(),
+                    call,
+                    iterable: iterable.as_ref(),
+                    element: element.as_deref(),
+                    index: index.as_deref(),
+                };
+                self.loop_stmt(&head, body, anchor.as_deref());
             }
             Stmt::Assign {
                 target,
@@ -525,26 +601,46 @@ impl Writer<'_> {
         self.out.push_str("}\n");
     }
 
-    fn loop_stmt(
-        &mut self,
-        keyword: &str,
-        bind: Option<&str>,
-        call: &Call,
-        body: &Block,
-        anchor: Option<&str>,
-    ) {
+    fn loop_stmt(&mut self, head: &LoopHead<'_>, body: &Block, anchor: Option<&str>) {
+        if head.iterable.is_some() && head.keyword == PARALLEL_FOR_EACH_KEYWORD {
+            self.indent();
+            self.out.push_str("@parallel\n");
+        }
         self.indent();
-        if keyword == "while" {
-            // `while (cond) { … }` — condition is the call's first/only argument.
+        if head.keyword == WHILE_KEYWORD {
+            // `while (cond) { … }` — the sugared condition, or the explicit loop-node call.
             self.out.push_str("while (");
-            self.out.push_str(&render_call(call));
+            match head.iterable {
+                Some(condition) => self.out.push_str(&render_expr(condition)),
+                None => self.out.push_str(&render_call(head.call)),
+            }
             self.out.push_str(") {");
         } else {
-            // `for (const handle of forEach(array)) { … }`.
+            // `for (const item of array)` / `for (const [i, item] of array)`, or the explicit
+            // `for (const handle of forEach(array))`.
             self.out.push_str("for (const ");
-            self.out.push_str(bind.unwrap_or("_"));
-            self.out.push_str(" of ");
-            self.out.push_str(&render_call(call));
+            match head.iterable {
+                Some(iterable) => {
+                    let element = head.element.unwrap_or("_");
+                    match head.index {
+                        Some(index) => {
+                            self.out.push('[');
+                            self.out.push_str(index);
+                            self.out.push_str(", ");
+                            self.out.push_str(element);
+                            self.out.push(']');
+                        }
+                        None => self.out.push_str(element),
+                    }
+                    self.out.push_str(" of ");
+                    self.out.push_str(&render_expr(iterable));
+                }
+                None => {
+                    self.out.push_str(head.bind.unwrap_or("_"));
+                    self.out.push_str(" of ");
+                    self.out.push_str(&render_call(head.call));
+                }
+            }
             self.out.push_str(") {");
         }
         self.anchor("n", anchor);
@@ -694,8 +790,41 @@ fn render_expr(expr: &Expr) -> String {
                 render_binary_operand(rhs)
             )
         }
+        Expr::Template { parts } => render_template(parts),
         Expr::Literal(lit) => render_literal(lit),
     }
+}
+
+/// `` `text ${expr} text` `` — static text keeps raw newlines; `` ` ``, `\` and a `${` sequence
+/// are escaped so the text re-lexes to the same parts.
+pub fn render_template(parts: &[TemplatePart]) -> String {
+    let mut out = String::from("`");
+    for part in parts {
+        match part {
+            TemplatePart::Text(text) => {
+                let mut chars = text.chars().peekable();
+                while let Some(ch) = chars.next() {
+                    match ch {
+                        '`' => out.push_str("\\`"),
+                        '\\' => out.push_str("\\\\"),
+                        '$' if chars.peek() == Some(&'{') => out.push_str("\\$"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        '\u{8}' => out.push_str("\\b"),
+                        '\u{c}' => out.push_str("\\f"),
+                        _ => out.push(ch),
+                    }
+                }
+            }
+            TemplatePart::Expr(expr) => {
+                out.push_str("${");
+                out.push_str(&render_expr(expr));
+                out.push('}');
+            }
+        }
+    }
+    out.push('`');
+    out
 }
 
 fn schema_type_map(interfaces: &[InterfaceDecl]) -> HashMap<String, String> {
@@ -773,19 +902,57 @@ fn is_plain_ident(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// `[receiver.][path::]display(positional, …, { named })`.
 fn render_call(call: &Call) -> String {
-    let named: Vec<String> = call
-        .args
-        .iter()
-        .map(|a| format!("{}: {}", to_camel_case(&a.name), render_expr(&a.value)))
-        .collect();
-    if named.is_empty() {
-        format!("{}()", call.display)
-    } else {
-        format!("{}({{ {} }})", call.display, named.join(", "))
+    let mut out = String::new();
+    if let Some(receiver) = &call.receiver {
+        out.push_str(&render_receiver(receiver));
+        out.push('.');
+    }
+    for segment in &call.path {
+        out.push_str(segment);
+        out.push_str("::");
+    }
+    out.push_str(&call.display);
+    out.push('(');
+    let mut parts: Vec<String> = call.positional.iter().map(render_expr).collect();
+    if !call.args.is_empty() {
+        let named: Vec<String> = call
+            .args
+            .iter()
+            .map(|a| format!("{}: {}", to_camel_case(&a.name), render_expr(&a.value)))
+            .collect();
+        parts.push(format!("{{ {} }}", named.join(", ")));
+    }
+    out.push_str(&parts.join(", "));
+    out.push(')');
+    out
+}
+
+/// A method receiver: binary/ternary operands are grouped as usual, and a numeric literal is
+/// parenthesised too so `(5).abs()` never re-lexes as a float.
+fn render_receiver(expr: &Expr) -> String {
+    match expr {
+        Expr::Literal(Literal::Int(_) | Literal::Float(_)) => format!("({})", render_expr(expr)),
+        _ => render_binary_operand(expr),
     }
 }
 
+fn render_destructure_fields(fields: &[DestructureField]) -> String {
+    fields
+        .iter()
+        .map(|field| {
+            let pin = to_camel_case(&field.pin);
+            if pin == field.name {
+                pin
+            } else {
+                format!("{pin}: {}", field.name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn is_placeholder_call(call: &Call) -> bool {
-    call.node_type.is_empty() && call.display.is_empty() && call.args.is_empty()
+    call.is_placeholder()
 }

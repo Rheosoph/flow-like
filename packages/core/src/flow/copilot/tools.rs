@@ -416,7 +416,7 @@ fn declaration_exact_signature_line(section: &str) -> Option<&str> {
     section
         .lines()
         .map(str::trim)
-        .find(|line| line.starts_with("declare function "))
+        .find(|line| flow_like_ast::is_signature_line(line))
 }
 
 fn declaration_section_identity(section: &str) -> String {
@@ -781,7 +781,7 @@ impl Tool for CatalogTool {
             description: r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact `ns::alias({ pin: type })` signatures plus the `use ns::*` idiom.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#.to_string(),
             parameters: json!({
                 "type": "object",
@@ -2105,7 +2105,7 @@ retained source and revision with patch_flowscript/check_flowscript/commit_flows
 /// Retrieve `.flow.d`-style FlowScript declarations for nodes matching a query.
 ///
 /// This is the FlowScript counterpart to `catalog_search`/`get_node_details`: instead of
-/// per-pin JSON, it returns the exact `declare function …` signatures the agent should call when
+/// per-pin JSON, it returns the exact `function ns::alias(…)` signatures the agent should call when
 /// writing FlowScript, including third-party package nodes injected into the catalog.
 pub struct GetDeclarationsTool {
     pub provider: Arc<dyn CatalogProvider>,
@@ -2123,12 +2123,14 @@ impl Tool for GetDeclarationsTool {
             name: "get_declarations".to_string(),
             description: r#"Look up FlowScript node declarations (.flow.d) by intent. The initial pass is ONE bounded, focused batch (at most 32 queries) for the highest-leverage catalog calls needed to establish the workflow's end-to-end shape — not an inventory of every utility operation.
 
-Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
-signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Exact live
-metadata also contributes bounded usage notes for required and repeated pins, Struct schema fields,
-and companion calls/structural chains. Treat those notes as authoritative: repeat same-name inputs
-in declaration order and never invent Struct members. The result is deliberately bounded and
-self-contained. Never try to read a temporary/persisted-output path with filesystem tools; if
+Returns a compact ranked list of exact `function <ns>::<alias>(this: T, { pin: type, ... }): R;`
+signatures per query, the `// use <ns>::*` line that lets you call the bare `<alias>({ ... })`, and
+an `// impure` marker for side-effecting / control-flow nodes. A `this:` parameter names the
+receiver pin: that node is also callable as a method on the value (`x.alias(...)`); the legacy
+camelCase name still resolves. Exact live metadata also contributes bounded usage notes for
+required and repeated pins, Struct schema fields, and companion calls/structural chains. Treat
+those notes as authoritative: repeat same-name inputs in declaration order and never invent Struct
+members. The result is deliberately bounded and self-contained. Never try to read a temporary/persisted-output path with filesystem tools; if
 validation later names a failing node/pin or a comparison/type-conversion mismatch, use one focused
 repair lookup for that diagnostic. Empty queries intentionally return guidance only, not the full
 catalog.
@@ -2143,8 +2145,9 @@ retain its ACTIVE SEGMENT, even when compiler repairs are expected. Do not make 
 declaration batch or chase `omitted_queries` / `unmatched_queries` before the first write. Defer
 those searches until compiler diagnostics identify a concrete gap, then use one narrow repair lookup.
 
-Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
-typed arguments. This covers every package in the project's catalog, including third-party ones."#
+Use this BEFORE writing FlowScript so you call nodes by their exact qualified name with correctly
+typed and exactly named arguments. This covers every package in the project's catalog, including
+third-party ones."#
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -2707,9 +2710,9 @@ fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCan
             profile.meaningful_statements = profile.meaningful_statements.saturating_add(1);
         }
         match statement {
-            FlowScriptStmt::Let { call, .. } | FlowScriptStmt::Call { call, .. } => {
-                profile_flowscript_call(call, profile)
-            }
+            FlowScriptStmt::Let { call, .. }
+            | FlowScriptStmt::Destructure { call, .. }
+            | FlowScriptStmt::Call { call, .. } => profile_flowscript_call(call, profile),
             FlowScriptStmt::Branch {
                 call,
                 condition,
@@ -2724,8 +2727,16 @@ fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCan
                     profile_flowscript_block(&arm.body, profile);
                 }
             }
-            FlowScriptStmt::Loop { call, body, .. } => {
+            FlowScriptStmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
                 profile_flowscript_call(call, profile);
+                if let Some(iterable) = iterable {
+                    profile_flowscript_expr(iterable, profile);
+                }
                 profile_flowscript_block(body, profile);
             }
             FlowScriptStmt::Assign { value, .. }
@@ -2763,9 +2774,9 @@ fn flowscript_block_calls_any(block: &FlowScriptBlock, names: &HashSet<String>) 
 fn collect_flowscript_block_call_names(block: &FlowScriptBlock, calls: &mut Vec<String>) {
     for statement in &block.stmts {
         match statement {
-            FlowScriptStmt::Let { call, .. } | FlowScriptStmt::Call { call, .. } => {
-                collect_flowscript_call_names(call, calls)
-            }
+            FlowScriptStmt::Let { call, .. }
+            | FlowScriptStmt::Destructure { call, .. }
+            | FlowScriptStmt::Call { call, .. } => collect_flowscript_call_names(call, calls),
             FlowScriptStmt::Branch {
                 call,
                 condition,
@@ -2780,8 +2791,16 @@ fn collect_flowscript_block_call_names(block: &FlowScriptBlock, calls: &mut Vec<
                     collect_flowscript_block_call_names(&arm.body, calls);
                 }
             }
-            FlowScriptStmt::Loop { call, body, .. } => {
+            FlowScriptStmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
                 collect_flowscript_call_names(call, calls);
+                if let Some(iterable) = iterable {
+                    collect_flowscript_expr_call_names(iterable, calls);
+                }
                 collect_flowscript_block_call_names(body, calls);
             }
             FlowScriptStmt::Assign { value, .. }
@@ -2810,9 +2829,18 @@ fn collect_flowscript_call_names(call: &FlowScriptCall, calls: &mut Vec<String>)
             &call.display
         },
     ));
-    for argument in &call.args {
-        collect_flowscript_expr_call_names(&argument.value, calls);
+    for operand in flowscript_call_operands(call) {
+        collect_flowscript_expr_call_names(operand, calls);
     }
+}
+
+/// Every expression a call evaluates: the method receiver, positional values and named values.
+fn flowscript_call_operands(call: &FlowScriptCall) -> impl Iterator<Item = &FlowScriptExpr> {
+    call.receiver
+        .iter()
+        .map(|receiver| receiver.as_ref())
+        .chain(call.positional.iter())
+        .chain(call.args.iter().map(|argument| &argument.value))
 }
 
 fn collect_flowscript_expr_call_names(expression: &FlowScriptExpr, calls: &mut Vec<String>) {
@@ -2848,6 +2876,13 @@ fn collect_flowscript_expr_call_names(expression: &FlowScriptExpr, calls: &mut V
             collect_flowscript_expr_call_names(lhs, calls);
             collect_flowscript_expr_call_names(rhs, calls);
         }
+        FlowScriptExpr::Template { parts } => {
+            for part in parts {
+                if let flow_like_ast::TemplatePart::Expr(expr) = part {
+                    collect_flowscript_expr_call_names(expr, calls);
+                }
+            }
+        }
         FlowScriptExpr::Ref(_) | FlowScriptExpr::Literal(_) => {}
     }
 }
@@ -2880,8 +2915,8 @@ fn profile_flowscript_call(call: &FlowScriptCall, profile: &mut FlowScriptCandid
             &call.display
         },
     ));
-    for argument in &call.args {
-        profile_flowscript_expr(&argument.value, profile);
+    for operand in flowscript_call_operands(call) {
+        profile_flowscript_expr(operand, profile);
     }
 }
 
@@ -2917,6 +2952,13 @@ fn profile_flowscript_expr(expression: &FlowScriptExpr, profile: &mut FlowScript
         FlowScriptExpr::Binary { lhs, rhs, .. } => {
             profile_flowscript_expr(lhs, profile);
             profile_flowscript_expr(rhs, profile);
+        }
+        FlowScriptExpr::Template { parts } => {
+            for part in parts {
+                if let flow_like_ast::TemplatePart::Expr(expr) = part {
+                    profile_flowscript_expr(expr, profile);
+                }
+            }
         }
         FlowScriptExpr::Ref(_) | FlowScriptExpr::Literal(_) => {}
     }

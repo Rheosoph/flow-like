@@ -53,6 +53,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
             "Open a local database",
             "Data/Database",
         );
+        node.set_flowscript_name("db", "open");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

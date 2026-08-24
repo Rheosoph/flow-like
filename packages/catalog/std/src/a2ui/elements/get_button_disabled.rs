@@ -30,6 +30,7 @@ impl NodeLogic for GetButtonDisabled {
             "Gets whether a button element is disabled",
             "UI/Elements/Button",
         );
+        node.set_flowscript_name("ui", "getButtonDisabled");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

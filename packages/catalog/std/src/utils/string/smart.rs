@@ -35,6 +35,8 @@ impl NodeLogic for StringSlugifyNode {
             "Slugify",
             "Turns text into a URL safe slug",
         );
+        node.set_flowscript_name("string", "slugify");
+        node.set_receiver("string");
         node.add_input_pin(
             "separator",
             "Separator",
@@ -143,6 +145,8 @@ impl NodeLogic for StringWordCountNode {
             "Word Count",
             "Counts words, sentences and reading time",
         );
+        node.set_flowscript_name("string", "wordCount");
+        node.set_receiver("string");
         node.add_input_pin(
             "words_per_minute",
             "Words Per Minute",
@@ -215,6 +219,8 @@ impl NodeLogic for StringMaskNode {
             "Mask",
             "Hides the middle of a value, keeping a few characters visible",
         );
+        node.set_flowscript_name("string", "mask");
+        node.set_receiver("string");
         node.add_input_pin(
             "keep_start",
             "Keep Start",
@@ -315,6 +321,8 @@ impl NodeLogic for StringExtractNode {
             "Extract",
             "Pulls every email, link, number or handle out of a text",
         );
+        node.set_flowscript_name("string", "extract");
+        node.set_receiver("string");
         node.add_input_pin(
             "pattern",
             "Pattern",

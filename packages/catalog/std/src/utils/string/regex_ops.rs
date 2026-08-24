@@ -37,6 +37,8 @@ impl NodeLogic for StringRegexMatchNode {
             "Checks whether a regular expression matches a string",
             "Utils/String/Regex",
         );
+        node.set_flowscript_name("string", "regexMatch");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -94,6 +96,8 @@ impl NodeLogic for StringRegexFindAllNode {
             "Returns every match of a regular expression in a string",
             "Utils/String/Regex",
         );
+        node.set_flowscript_name("string", "regexFindAll");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -148,6 +152,8 @@ impl NodeLogic for StringRegexCapturesNode {
             "Extracts the capture groups of the first regular expression match",
             "Utils/String/Regex",
         );
+        node.set_flowscript_name("string", "regexCaptures");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 

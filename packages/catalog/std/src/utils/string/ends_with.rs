@@ -24,6 +24,8 @@ impl NodeLogic for StringEndsWithNode {
             "Checks if a string ends with a specific string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "endsWith");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
 

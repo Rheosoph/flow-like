@@ -58,6 +58,7 @@ impl NodeLogic for HasPermissionNode {
             "Checks if the executing user has a specific permission. Admin and Owner roles automatically have all permissions. Returns false if no user context is available.",
             "Utils/User",
         );
+        node.set_flowscript_name("user", "hasPermission");
         node.add_icon("/flow/icons/shield.svg");
 
         let permission_names: Vec<String> = PERMISSION_OPTIONS

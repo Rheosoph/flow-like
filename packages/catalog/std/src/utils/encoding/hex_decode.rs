@@ -24,6 +24,8 @@ impl NodeLogic for HexDecodeNode {
             "Decodes a hexadecimal string back to a UTF-8 string",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "hexDecode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "Hex-encoded string", VariableType::String);

@@ -28,6 +28,7 @@ impl NodeLogic for SetSelectOptions {
             "Sets the available options in a select element",
             "UI/Elements/Select",
         );
+        node.set_flowscript_name("ui", "setSelectOptions");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

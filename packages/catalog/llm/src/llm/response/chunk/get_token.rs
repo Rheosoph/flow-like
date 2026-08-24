@@ -26,6 +26,8 @@ impl NodeLogic for GetTokenNode {
             "Extracts the latest streamed token from a response chunk",
             "AI/Generative/Response/Chunk",
         );
+        node.set_flowscript_name("ai.response", "getToken");
+        node.set_receiver("chunk");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

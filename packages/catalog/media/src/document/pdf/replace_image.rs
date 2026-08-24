@@ -33,6 +33,7 @@ impl NodeLogic for PdfReplaceImageNode {
             "Replaces an image XObject in a PDF by name. Any image format is accepted and automatically converted to JPEG.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "replaceImage");
         node.add_icon("/flow/icons/image.svg");
 
         node.set_scores(

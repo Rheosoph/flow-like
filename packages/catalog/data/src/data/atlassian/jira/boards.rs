@@ -64,6 +64,7 @@ impl NodeLogic for GetBoardsNode {
             "Get all agile boards (Scrum or Kanban)",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "getBoards");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -218,6 +219,7 @@ impl NodeLogic for GetBoardIssuesNode {
             "Get all issues on an agile board",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "getBoardIssues");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -382,6 +384,7 @@ impl NodeLogic for GetBacklogNode {
             "Get backlog issues for a board",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "getBacklog");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

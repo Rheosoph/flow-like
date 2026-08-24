@@ -38,6 +38,7 @@ impl NodeLogic for GetChangesNode {
             "Diffs a folder against a manifest, emitting added, updated and deleted files while ignoring directory manifests. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "getChanges");
         node.set_version(1);
         node.add_icon("/flow/icons/path.svg");
 

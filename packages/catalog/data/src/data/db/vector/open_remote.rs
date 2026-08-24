@@ -144,6 +144,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
             "Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. The run reuses the connection and refreshes its scoped credentials automatically.",
             "Data/Database",
         );
+        node.set_flowscript_name("db", "openRemote");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

@@ -28,6 +28,7 @@ impl NodeLogic for FromBytesNode {
             "Convert String to Bytes",
             "Utils/Conversions",
         );
+        node.set_flowscript_name("json", "fromBytes");
         node.add_icon("/flow/icons/convert.svg");
 
         node.add_input_pin("bytes", "Bytes", "Bytes to convert", VariableType::Byte)

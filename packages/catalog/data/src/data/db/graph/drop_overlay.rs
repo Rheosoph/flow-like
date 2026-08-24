@@ -26,6 +26,7 @@ impl NodeLogic for DropGraphOverlayNode {
             "Deletes a graph overlay definition (does not drop underlying tables)",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "dropOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

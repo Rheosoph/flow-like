@@ -30,6 +30,7 @@ impl NodeLogic for TimeoutNode {
             "Executes with a timeout, branching based on completion",
             "Control",
         );
+        node.set_flowscript_name("control", "timeout");
 
         node.set_long_running(true);
         node.add_icon("/flow/icons/clock.svg");

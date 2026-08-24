@@ -105,6 +105,7 @@ impl NodeLogic for ListGitHubCommitsNode {
             "List commits for a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listCommits");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -354,6 +355,7 @@ impl NodeLogic for GetGitHubCommitNode {
             "Get details about a specific commit",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getCommit");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -545,6 +547,7 @@ impl NodeLogic for CompareGitHubCommitsNode {
             "Compare two commits, branches, or tags",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "compareCommits");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -178,6 +178,7 @@ impl NodeLogic for PiiMaskAiNode {
             "Masks Personally Identifiable Information using an LLM. Can detect contextual PII like names, addresses, and sensitive information that regex patterns might miss.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "maskPii");
         node.add_icon("/flow/icons/shield-ai.svg");
         node.set_version(3);
 

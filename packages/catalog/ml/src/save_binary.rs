@@ -32,6 +32,8 @@ impl NodeLogic for SaveMLModelBinaryNode {
             "Save Trained ML Model to Path using fast binary format (Fory)",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "saveBinary");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

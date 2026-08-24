@@ -52,6 +52,7 @@ impl NodeLogic for CopyWorksheetNode {
             "Duplicate a worksheet within the same file",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "copyWorksheet");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

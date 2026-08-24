@@ -29,6 +29,8 @@ impl NodeLogic for KgExtractNode {
             "Extracts entities (nodes) and relationships (edges) from text using an LLM, returning structured arrays ready for graph insertion",
             "AI/Memory/Graph",
         );
+        node.set_flowscript_name("ai.memory", "kgExtract");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

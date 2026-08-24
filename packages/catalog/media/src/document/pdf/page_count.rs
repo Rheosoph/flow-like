@@ -29,6 +29,7 @@ impl NodeLogic for PdfPageCountNode {
             "Return the number of pages in a PDF file",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "pageCount");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

@@ -26,6 +26,7 @@ impl NodeLogic for BuildSelectorNode {
             "Creates a selector from a value and kind",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "build");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -144,6 +145,7 @@ impl NodeLogic for CreateSelectorSetNode {
             "Creates a new empty selector set",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "createSet");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -194,6 +196,8 @@ impl NodeLogic for AddToSelectorSetNode {
             "Adds a selector to an existing selector set",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "addToSet");
+        node.set_receiver("selector_set");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -265,6 +269,8 @@ impl NodeLogic for GetPrimarySelectorNode {
             "Gets the primary (first) selector from a selector set",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "getPrimary");
+        node.set_receiver("selector_set");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -340,6 +346,8 @@ impl NodeLogic for SelectorToStringNode {
             "Converts a selector to its string representation",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "toString");
+        node.set_receiver("selector");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

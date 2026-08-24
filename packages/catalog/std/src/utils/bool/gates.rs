@@ -43,7 +43,10 @@ impl BoolNandNode {
 #[async_trait]
 impl NodeLogic for BoolNandNode {
     fn get_node(&self) -> Node {
-        variadic_node("bool_nand", "Nand", "True unless every input is true")
+        let mut node = variadic_node("bool_nand", "Nand", "True unless every input is true");
+        node.set_flowscript_name("bool", "nand");
+        node.set_receiver("boolean");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -68,7 +71,10 @@ impl BoolNorNode {
 #[async_trait]
 impl NodeLogic for BoolNorNode {
     fn get_node(&self) -> Node {
-        variadic_node("bool_nor", "Nor", "True only when every input is false")
+        let mut node = variadic_node("bool_nor", "Nor", "True only when every input is false");
+        node.set_flowscript_name("bool", "nor");
+        node.set_receiver("boolean");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -99,6 +105,8 @@ impl NodeLogic for BoolImpliesNode {
             "False only when the premise is true and the conclusion is false",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "implies");
+        node.set_receiver("premise");
         node.add_icon("/flow/icons/bool.svg");
         node.set_scores(pure_scores());
 

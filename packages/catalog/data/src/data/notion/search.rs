@@ -46,6 +46,7 @@ impl NodeLogic for SearchNotionNode {
             "Searches across all pages and databases the integration has access to",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "search");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

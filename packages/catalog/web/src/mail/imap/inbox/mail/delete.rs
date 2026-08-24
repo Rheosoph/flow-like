@@ -31,6 +31,8 @@ impl NodeLogic for ImapDeleteMailNode {
             "Deletes a mail (by UID) from its current mailbox",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "deleteMessage");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

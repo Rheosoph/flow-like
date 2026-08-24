@@ -24,6 +24,8 @@ impl NodeLogic for StringTrimNode {
             "Removes leading and trailing whitespace from a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "trim");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);

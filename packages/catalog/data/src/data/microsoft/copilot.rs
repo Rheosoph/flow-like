@@ -160,6 +160,7 @@ impl NodeLogic for GetCopilotInteractionsNode {
             "Get Microsoft 365 Copilot interaction history (prompts and responses)",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "getInteractions");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -291,6 +292,7 @@ impl NodeLogic for ListMeetingInsightsNode {
             "Get AI-generated meeting notes and action items from Teams meetings",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "listMeetingInsights");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -384,6 +386,7 @@ impl NodeLogic for GetMeetingInsightNode {
             "Get a specific AI insight from a Teams meeting",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "getMeetingInsight");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -725,6 +728,7 @@ impl NodeLogic for GraphSearchNode {
             "Search across Microsoft 365 content using the Microsoft Graph Search API. Supports files, emails, calendar events, Teams messages, SharePoint sites, and more.",
             "Data/Microsoft/Search",
         );
+        node.set_flowscript_name("microsoft.search", "query");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -1617,6 +1621,7 @@ impl NodeLogic for CopilotChatNode {
             "Send a message to Microsoft 365 Copilot using the official Chat API with streaming support. Supports file context from OneDrive/SharePoint and web search grounding.",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "chat");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -2207,6 +2212,7 @@ impl NodeLogic for CopilotSemanticSearchNode {
             "Perform hybrid semantic and lexical search across OneDrive for work or school content using the official Microsoft 365 Copilot Search API",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "semanticSearch");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -2390,6 +2396,7 @@ impl NodeLogic for SubscribeCopilotNotificationsNode {
             "Subscribe to change notifications for Copilot interactions",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "subscribeNotifications");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -2539,6 +2546,7 @@ impl NodeLogic for GetUserCopilotSettingsNode {
             "Get the current user's Copilot settings and preferences",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "getUserSettings");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
@@ -2621,6 +2629,7 @@ impl NodeLogic for FilterCopilotInteractionsByTypeNode {
             "Filter Copilot interactions by type (user prompts vs AI responses)",
             "Data/Microsoft/Copilot",
         );
+        node.set_flowscript_name("microsoft.copilot", "filterInteractions");
         node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 

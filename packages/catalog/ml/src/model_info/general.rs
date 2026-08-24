@@ -44,6 +44,8 @@ impl NodeLogic for GetModelInfoNode {
             "Get general information about any ML model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "info");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.add_input_pin(

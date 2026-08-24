@@ -100,6 +100,7 @@ impl NodeLogic for GetGitHubPullRequestNode {
             "Get details about a specific pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getPullRequest");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -277,6 +278,7 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             "Create a new pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createPullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -531,6 +533,7 @@ impl NodeLogic for UpdateGitHubPullRequestNode {
             "Update an existing pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "updatePullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -746,6 +749,7 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             "Merge a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "mergePullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -977,6 +981,7 @@ impl NodeLogic for ListGitHubPullRequestFilesNode {
             "List files changed in a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listPrFiles");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1173,6 +1178,7 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
             "List reviews on a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listPrReviews");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -1349,6 +1355,7 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             "Create a review on a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createPrReview");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

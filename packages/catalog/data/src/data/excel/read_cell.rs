@@ -80,6 +80,7 @@ impl NodeLogic for ReadCellNode {
             "Read a single cell value from an XLSX sheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "readCell");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

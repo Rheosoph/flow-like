@@ -58,6 +58,8 @@ impl NodeLogic for RegisterCSVTableNode {
             "Register a CSVTable (from Excel/CSV extraction) into a DataFusion session for SQL queries. Converts the table to an in-memory Arrow table.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "registerCsvTable");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

@@ -64,6 +64,7 @@ impl NodeLogic for TsneNode {
             "t-Distributed Stochastic Neighbor Embedding. Projects high-dimensional vectors into 2-3 dimensions for visualization and writes the embedding back into the source table. t-SNE is transductive, so it produces no reusable model.",
             "AI/ML/Reduction",
         );
+        node.set_flowscript_name("ml", "fitTsne");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 

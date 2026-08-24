@@ -27,6 +27,7 @@ impl NodeLogic for ToStringNode {
             "Convert any object to String",
             "Utils/Conversions",
         );
+        node.set_flowscript_name("json", "stringify");
         node.add_icon("/flow/icons/convert.svg");
 
         node.add_input_pin("value", "Value", "Input Value", VariableType::Generic);

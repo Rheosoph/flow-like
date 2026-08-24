@@ -29,6 +29,8 @@ impl NodeLogic for FloatVectorNormalizeNode {
             "Normalizes a float vector",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "normalize");
+        node.set_receiver("vector");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

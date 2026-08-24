@@ -26,6 +26,8 @@ impl NodeLogic for SizeMapNode {
             "Gets the number of entries in the map",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "size");
+        node.set_receiver("map_in");
 
         node.add_icon("/flow/icons/book-key.svg");
 

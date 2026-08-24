@@ -51,6 +51,7 @@ impl NodeLogic for FitKnnClassifierNode {
             "Fit a K-Nearest-Neighbours classifier. Non-parametric and instance based: the fitted model embeds a verbatim copy of the whole training set instead of learned coefficients, so every training row (and any personal data in it) travels with the model, is written into every saved model file and can be reconstructed by anyone holding it. Treat the model with the same care as the source table.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitKnnClassifier");
         node.add_icon("/flow/icons/chart-network.svg");
 
         // Deliberately far below the other classifiers: the model is the raw training data, not a

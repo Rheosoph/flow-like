@@ -24,6 +24,8 @@ impl NodeLogic for MaxFloatNode {
             "Returns the larger of two floats",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "max");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

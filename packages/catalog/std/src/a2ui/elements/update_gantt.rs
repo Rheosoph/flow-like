@@ -153,6 +153,7 @@ impl NodeLogic for UpdateGantt {
             "Add, remove, or update gantt tasks, dependencies and configuration",
             "UI/Elements/Gantt",
         );
+        node.set_flowscript_name("ui", "updateGantt");
         node.add_icon("/flow/icons/gantt.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

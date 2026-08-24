@@ -28,6 +28,8 @@ impl NodeLogic for DropColumnLocalDatabaseNode {
             "Drops a column from the database table.",
             "Data/Database/Schema",
         );
+        node.set_flowscript_name("db", "dropColumn");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

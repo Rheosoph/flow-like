@@ -38,6 +38,7 @@ impl NodeLogic for UpdateModel3d {
             "Update any property of a 3D model",
             "UI/Elements/Game",
         );
+        node.set_flowscript_name("ui", "updateModel3d");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

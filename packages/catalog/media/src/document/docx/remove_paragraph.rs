@@ -29,6 +29,7 @@ impl NodeLogic for DocxRemoveParagraphNode {
             "Remove paragraphs containing a specific placeholder. Useful for conditional content.",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "removeParagraph");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

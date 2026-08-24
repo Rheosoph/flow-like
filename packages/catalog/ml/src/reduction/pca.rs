@@ -51,6 +51,7 @@ impl NodeLogic for FitPcaNode {
             "Principal Component Analysis for dimensionality reduction",
             "AI/ML/Reduction",
         );
+        node.set_flowscript_name("ml", "fitPca");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

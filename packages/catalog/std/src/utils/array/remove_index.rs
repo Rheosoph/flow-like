@@ -26,6 +26,8 @@ impl NodeLogic for RemoveArrayIndexNode {
             "Removes an element from an array at a specific index",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "removeIndex");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

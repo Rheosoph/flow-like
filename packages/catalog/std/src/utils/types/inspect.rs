@@ -40,6 +40,8 @@ impl NodeLogic for TypeOfNode {
             "Reports what a value actually is — useful for data coming back from an API or a model",
             "Utils/Types",
         );
+        node.set_flowscript_name("types", "typeOf");
+        node.set_receiver("value");
         node.add_icon("/flow/icons/type.svg");
         node.set_scores(pure_scores());
 
@@ -116,6 +118,7 @@ impl NodeLogic for IsEmptyValueNode {
             "True for null, an empty string, an empty array and an empty struct",
             "Utils/Types",
         );
+        node.set_flowscript_name("types", "isEmpty");
         node.add_icon("/flow/icons/type.svg");
         node.set_scores(pure_scores());
 

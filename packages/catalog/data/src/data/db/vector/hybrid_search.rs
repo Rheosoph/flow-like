@@ -30,6 +30,8 @@ impl NodeLogic for HybridSearchLocalDatabaseNode {
             "Searches the Database using both Vector and Full-Text Search",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "hybridSearch");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

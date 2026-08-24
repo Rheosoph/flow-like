@@ -34,6 +34,7 @@ impl NodeLogic for SplitDatasetNode {
             "Split a dataset into training and testing subsets",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "splitDataset");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

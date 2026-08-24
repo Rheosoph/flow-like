@@ -27,6 +27,7 @@ impl NodeLogic for CreateFingerprintNode {
             "Creates a new element fingerprint for identification",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "create");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -153,6 +154,7 @@ impl NodeLogic for CreateFingerprintFromJsonNode {
             "Parses an element fingerprint from JSON",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "fromJson");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

@@ -29,6 +29,7 @@ impl NodeLogic for SetSelectValue {
             "Sets the selected value of a select element",
             "UI/Elements/Select",
         );
+        node.set_flowscript_name("ui", "setSelectValue");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

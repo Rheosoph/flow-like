@@ -26,6 +26,8 @@ impl NodeLogic for GetStructFieldNode {
             "Fetches a field from a struct (supports dot notation and array access)",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "get");
+        node.set_receiver("struct");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_output_pin(

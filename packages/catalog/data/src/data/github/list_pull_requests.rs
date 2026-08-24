@@ -113,6 +113,7 @@ impl NodeLogic for ListGitHubPullRequestsNode {
             "List pull requests for a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listPullRequests");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

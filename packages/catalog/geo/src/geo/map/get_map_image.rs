@@ -28,6 +28,7 @@ impl NodeLogic for GetMapImageNode {
             "Fetches a static map image for the given coordinates using OpenStreetMap tiles. Returns a satellite/standard map image centered on the location.",
             "Web/Geo/Map",
         );
+        node.set_flowscript_name("geo", "getMapImage");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(

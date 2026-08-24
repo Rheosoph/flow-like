@@ -24,6 +24,7 @@ impl NodeLogic for GridDistanceNode {
             "Calculates the grid distance (number of steps) between two H3 cells. Both cells must be at the same resolution.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "gridDistance");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

@@ -28,6 +28,7 @@ impl NodeLogic for OntologyActionRequestNode {
             "Builds a validated, typed action request from a Data Studio action binding",
             "Data Studio/Actions",
         );
+        node.set_flowscript_name("ontology", "prepareAction");
         node.set_version(1);
         node.add_icon("/flow/icons/database.svg");
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

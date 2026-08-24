@@ -43,6 +43,7 @@ impl NodeLogic for GetElement {
             "Gets an element's data from the page",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "getElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

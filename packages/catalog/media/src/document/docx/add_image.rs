@@ -29,6 +29,7 @@ impl NodeLogic for DocxAddImageNode {
             "Insert an inline image into a DOCX document",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addImage");
         node.add_icon("/flow/icons/image.svg");
         node.set_scores(
             NodeScores::new()

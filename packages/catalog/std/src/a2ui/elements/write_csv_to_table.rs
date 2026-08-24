@@ -32,6 +32,7 @@ impl NodeLogic for WriteCsvToTable {
             "Push CSV or Table data directly to a table element",
             "UI/Elements/Table",
         );
+        node.set_flowscript_name("ui", "writeCsvToTable");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

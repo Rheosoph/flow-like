@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddTextBoxNode {
             "Add a styled text box to a specific slide in a PPTX.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addTextBox");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

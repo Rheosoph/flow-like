@@ -191,6 +191,7 @@ impl NodeLogic for ExtractDocumentNode {
             "Extracts text and content from documents (PDF, DOCX, XLSX, images, etc.) and converts to markdown.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocument");
         node.add_icon("/flow/icons/file-text.svg");
 
         node.set_scores(
@@ -307,6 +308,7 @@ impl NodeLogic for ExtractDocumentAiNode {
             "Extracts text and content from documents using AI for enhanced image descriptions and OCR.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocumentAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 
@@ -502,6 +504,7 @@ impl NodeLogic for ExtractDocumentsNode {
             "Extracts text and content from multiple documents in parallel.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocuments");
         node.add_icon("/flow/icons/files.svg");
 
         node.set_scores(
@@ -629,6 +632,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
             "Extracts text and content from multiple documents using AI in parallel.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocumentsAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 
@@ -831,6 +835,7 @@ impl NodeLogic for PagesToMarkdownNode {
             "Combines an array of document pages into a single markdown string.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "pagesToMarkdown");
         node.add_icon("/flow/icons/file-text.svg");
 
         node.set_scores(
@@ -1088,6 +1093,7 @@ impl NodeLogic for SummarizeDocumentNode {
             "Creates an intelligent summary of document pages using AI with configurable strategies and detail levels. Handles long documents via chunked summarization with multiple strategy options.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "summarizeDocument");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 
@@ -1454,6 +1460,7 @@ impl NodeLogic for ExtractContentSectionsNode {
             "Intelligently segments document into thematic sections with summaries, tracking content across non-contiguous pages. Ideal for large document corpora.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractContentSections");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 

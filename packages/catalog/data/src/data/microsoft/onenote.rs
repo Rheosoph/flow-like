@@ -109,6 +109,7 @@ impl NodeLogic for ListNotebooksNode {
             "List all OneNote notebooks",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "listNotebooks");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -192,6 +193,7 @@ impl NodeLogic for CreateNotebookNode {
             "Create a new OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "createNotebook");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -296,6 +298,7 @@ impl NodeLogic for ListSectionsNode {
             "List all sections in a OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "listSections");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -386,6 +389,7 @@ impl NodeLogic for CreateSectionNode {
             "Create a new section in a OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "createSection");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -497,6 +501,7 @@ impl NodeLogic for ListPagesNode {
             "List all pages in a OneNote section",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "listPages");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -586,6 +591,7 @@ impl NodeLogic for CreatePageNode {
             "Create a new page in a OneNote section",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "createPage");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -709,6 +715,7 @@ impl NodeLogic for GetPageContentNode {
             "Get the HTML content of a OneNote page",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "getPageContent");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
@@ -799,6 +806,7 @@ impl NodeLogic for DeletePageNode {
             "Delete a OneNote page",
             "Data/Microsoft/OneNote",
         );
+        node.set_flowscript_name("microsoft.onenote", "deletePage");
         node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 

@@ -25,6 +25,7 @@ impl NodeLogic for BrowserClickNode {
             "Clicks on an element matching the selector",
             "Automation/Browser/Interact",
         );
+        node.set_flowscript_name("browser", "click");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -123,6 +124,7 @@ impl NodeLogic for BrowserDoubleClickNode {
             "Double-clicks on an element matching the selector",
             "Automation/Browser/Interact",
         );
+        node.set_flowscript_name("browser", "doubleClick");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -223,6 +225,7 @@ impl NodeLogic for BrowserHoverNode {
             "Hovers over an element matching the selector",
             "Automation/Browser/Interact",
         );
+        node.set_flowscript_name("browser", "hover");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -323,6 +326,7 @@ impl NodeLogic for BrowserScrollIntoViewNode {
             "Scrolls element into the visible area",
             "Automation/Browser/Interact",
         );
+        node.set_flowscript_name("browser", "scrollIntoView");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

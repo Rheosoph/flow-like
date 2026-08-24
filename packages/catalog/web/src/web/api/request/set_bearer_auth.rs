@@ -27,6 +27,8 @@ impl NodeLogic for SetBearerAuthNode {
             "Sets the Authorization header using a Bearer token",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setBearerAuth");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

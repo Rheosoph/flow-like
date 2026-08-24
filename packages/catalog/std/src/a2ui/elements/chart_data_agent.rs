@@ -119,6 +119,7 @@ impl NodeLogic for ChartDataAgent {
             "Uses an LLM to write and run SQL against a DataFusion session, returning chart-ready struct data.",
             "UI/Elements/Charts/Agent",
         );
+        node.set_flowscript_name("ui", "chartDataAgent");
         node.set_version(5);
         node.add_icon("/flow/icons/a2ui.svg");
 

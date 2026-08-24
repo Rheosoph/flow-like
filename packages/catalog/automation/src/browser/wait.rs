@@ -25,6 +25,7 @@ impl NodeLogic for BrowserWaitForNode {
             "Waits for an element matching the selector to appear in the DOM",
             "Automation/Browser/Wait",
         );
+        node.set_flowscript_name("browser", "waitFor");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -144,6 +145,7 @@ impl NodeLogic for BrowserWaitForDelayNode {
             "Waits for a specified amount of time",
             "Automation/Browser/Wait",
         );
+        node.set_flowscript_name("browser", "waitDelay");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

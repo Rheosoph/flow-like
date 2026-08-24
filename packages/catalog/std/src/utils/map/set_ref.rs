@@ -26,6 +26,7 @@ impl NodeLogic for SetMapRefNode {
             "Set a value directly in a variable map without copying. Much faster for large maps.",
             "Utils/Map/By Reference",
         );
+        node.set_flowscript_name("map", "setRef");
         node.add_icon("/flow/icons/book-key.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

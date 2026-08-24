@@ -295,6 +295,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
             "Creates a new DataFusion session for SQL analytics. Configure optimization settings for production workloads.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "createSession");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

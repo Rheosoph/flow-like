@@ -36,6 +36,7 @@ impl NodeLogic for UpdateToggle {
             "Set or toggle checkbox/switch checked state",
             "UI/Elements/Checkbox",
         );
+        node.set_flowscript_name("ui", "updateToggle");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

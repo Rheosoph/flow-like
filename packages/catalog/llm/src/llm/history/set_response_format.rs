@@ -27,6 +27,8 @@ impl NodeLogic for SetHistoryResponseFormatNode {
             "Configures the structured response format expected from later LLM calls",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setResponseFormat");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

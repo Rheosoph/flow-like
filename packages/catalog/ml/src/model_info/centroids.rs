@@ -30,6 +30,8 @@ impl NodeLogic for GetKMeansCentroidsNode {
             "Extract cluster centroids from a trained KMeans model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "getKmeansCentroids");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

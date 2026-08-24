@@ -25,6 +25,8 @@ impl NodeLogic for DateTimeDurationNode {
             "Adds or subtracts a duration from a date",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "add");
+        node.set_receiver("date");
 
         node.add_input_pin("date", "Date", "Base date", VariableType::Date);
         node.add_input_pin(

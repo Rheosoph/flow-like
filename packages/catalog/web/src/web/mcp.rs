@@ -145,6 +145,7 @@ impl NodeLogic for CreateMcpServerConfigNode {
             "Creates an MCP server config that function, resource, prompt, auth, and server nodes can compose.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "serverConfig");
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin("host", "Host", "Bind host", NodeVariableType::String)
             .set_default_value(Some(flow_like_types::json::json!("127.0.0.1")));
@@ -237,6 +238,8 @@ impl NodeLogic for RegisterMcpFunctionsNode {
             "Registers referenced Flow functions as MCP tools.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "registerFunctions");
+        node.set_receiver("config_in");
         node.add_icon("/flow/icons/web.svg");
         node.set_can_reference_fns(true);
         node.add_input_pin(
@@ -292,6 +295,8 @@ impl NodeLogic for RegisterMcpAuthNode {
             "Registers MCP server authentication settings.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "registerAuth");
+        node.set_receiver("config_in");
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
             "config_in",
@@ -345,6 +350,8 @@ impl NodeLogic for RegisterMcpResourceNode {
             "Registers a FlowPath as an MCP resource.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "registerResource");
+        node.set_receiver("config_in");
         node.set_version(MCP_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -445,6 +452,8 @@ impl NodeLogic for RegisterMcpPromptNode {
             "Registers a static MCP prompt template.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "registerPrompt");
+        node.set_receiver("config_in");
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
             "config_in",
@@ -514,6 +523,7 @@ impl NodeLogic for McpServerNode {
             "Starts an MCP server from a composed config.",
             "Web/MCP",
         );
+        node.set_flowscript_name("mcp", "server");
         node.add_icon("/flow/icons/web.svg");
         node.set_version(MCP_CONFIG_NODE_VERSION);
         node.set_long_running(true);

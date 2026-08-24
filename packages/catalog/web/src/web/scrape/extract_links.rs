@@ -45,6 +45,7 @@ impl NodeLogic for ExtractLinksNode {
             "Extracts links from the input text",
             "Web/Scraping",
         );
+        node.set_flowscript_name("web", "extractLinks");
         node.add_icon("/flow/icons/spider-web.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

@@ -27,6 +27,8 @@ impl NodeLogic for UpsertLocalDatabaseNode {
             "Inserts if the Item does not exist, Updates if it does",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "upsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -107,6 +109,8 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
             "Inserts if the Item does not exist, Updates if it does",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "batchUpsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

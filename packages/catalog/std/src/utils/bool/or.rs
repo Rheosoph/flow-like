@@ -19,6 +19,8 @@ impl BoolOr {
 impl NodeLogic for BoolOr {
     fn get_node(&self) -> Node {
         let mut node = Node::new("bool_or", "Or", "Boolean Or operation", "Utils/Bool");
+        node.set_flowscript_name("bool", "or");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/bool.svg");
 
         node.add_input_pin(

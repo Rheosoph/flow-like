@@ -53,6 +53,8 @@ impl NodeLogic for TextOverlayNode {
             "Draw text on top of an image with configurable font size, position, and color",
             "Image/Overlay",
         );
+        node.set_flowscript_name("image", "textOverlay");
+        node.set_receiver("base_image");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

@@ -34,6 +34,7 @@ impl NodeLogic for BuildDeepseekNode {
             "Prepares a Bit for Deepseek's API using the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "deepseek");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

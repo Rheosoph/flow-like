@@ -52,6 +52,8 @@ impl NodeLogic for ImapListCalendarEventsNode {
             "Lists calendar events from an IMAP calendar folder",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "listCalendarEvents");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -202,6 +204,8 @@ impl NodeLogic for ImapListCalendarsNode {
             "Lists mailbox names and heuristically-detected calendar folders",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "listCalendars");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -321,6 +325,7 @@ impl NodeLogic for ImapSubscribeCalendarNode {
             "Fetches and parses calendar events from an iCalendar subscription URL",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "subscribeCalendar");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -515,6 +520,8 @@ impl NodeLogic for ImapGetCalendarEventNode {
             "Gets a specific calendar event by UID",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "getCalendarEvent");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -670,6 +677,8 @@ impl NodeLogic for ImapCreateCalendarEventNode {
             "Creates a new calendar event in an IMAP calendar folder",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "createCalendarEvent");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -851,6 +860,8 @@ impl NodeLogic for ImapDeleteCalendarEventNode {
             "Deletes a calendar event from an IMAP calendar folder",
             "Email/IMAP/Calendar",
         );
+        node.set_flowscript_name("imap", "deleteCalendarEvent");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/calendar.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);

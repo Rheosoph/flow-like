@@ -30,6 +30,8 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             "Delete rows from a database table and return the removed rows",
             "Data/Database/Delete",
         );
+        node.set_flowscript_name("db", "delete");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(3);
 

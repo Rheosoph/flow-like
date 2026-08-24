@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddImageToSlideNode {
             "Place an image at a specified position on a PPTX slide.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addImage");
         node.add_icon("/flow/icons/image.svg");
         node.set_scores(
             NodeScores::new()

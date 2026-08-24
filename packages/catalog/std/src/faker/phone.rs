@@ -21,6 +21,7 @@ impl NodeLogic for FakePhoneNumber {
             "Generates a random phone number for mocking data",
             "Utils/Faker/Phone",
         );
+        node.set_flowscript_name("faker.phone", "number");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -64,6 +65,7 @@ impl NodeLogic for FakeCellNumber {
             "Generates a random cell/mobile phone number for mocking data",
             "Utils/Faker/Phone",
         );
+        node.set_flowscript_name("faker.phone", "cellNumber");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

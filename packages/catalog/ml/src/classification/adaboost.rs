@@ -104,6 +104,7 @@ impl NodeLogic for FitAdaBoostNode {
             "Fit/Train an AdaBoost classifier using multi-class SAMME boosting over shallow Decision Trees. Each learner focuses on the rows its predecessors got wrong, so boosting usually beats a single tree on weak signal, but it is far more sensitive to label noise and outliers than Random Forest. Estimators is a maximum, not a guarantee: boosting stops early once a learner is no better than random guessing.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitAdaboost");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

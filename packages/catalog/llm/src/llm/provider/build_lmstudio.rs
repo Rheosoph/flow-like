@@ -33,6 +33,7 @@ impl NodeLogic for BuildLMStudioNode {
             "Connects to a locally running LM Studio server via its OpenAI-compatible API",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "lmstudio");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

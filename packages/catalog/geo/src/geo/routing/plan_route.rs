@@ -35,6 +35,7 @@ impl NodeLogic for PlanRouteNode {
             "Plans a route between two points using the OSRM routing service. Returns turn-by-turn directions, distance, and duration.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "planRoute");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(

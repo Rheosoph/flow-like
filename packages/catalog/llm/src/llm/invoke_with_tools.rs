@@ -101,6 +101,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             "Invokes an LLM that can call Flow tools/functions and routes each call to execution pins.",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "invokeWithTools");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

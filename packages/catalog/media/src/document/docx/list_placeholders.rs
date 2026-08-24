@@ -29,6 +29,7 @@ impl NodeLogic for DocxListPlaceholdersNode {
             "Scan document body, headers, footers for all {{...}} placeholder strings",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "listPlaceholders");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

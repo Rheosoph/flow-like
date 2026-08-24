@@ -86,6 +86,7 @@ impl NodeLogic for TdmsMetadataNode {
             "Extracts metadata (groups, channels, properties) from a LabVIEW TDMS file.",
             "Data/TDMS",
         );
+        node.set_flowscript_name("data", "tdmsMetadata");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

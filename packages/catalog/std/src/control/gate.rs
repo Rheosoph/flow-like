@@ -34,6 +34,7 @@ impl NodeLogic for GateNode {
             "Open/close a gate to conditionally pass execution.",
             "Control/Flow",
         );
+        node.set_flowscript_name("control", "gate");
         node.add_icon("/flow/icons/gate.svg");
 
         // Execution inputs

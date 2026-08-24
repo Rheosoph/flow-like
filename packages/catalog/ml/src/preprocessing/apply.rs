@@ -99,6 +99,8 @@ impl NodeLogic for MLApplyTransformNode {
             "Apply a fitted transformer (Feature Scaler, TF-IDF) to a table, writing one vector per row. A Feature Scaler replays the exact offsets and scales learned at fit time, so applying it to train and test gives both the same statistics. TF-IDF is different: linfa recomputes the inverse document frequencies from the table being transformed, so vectors are only comparable within a single Apply Transform run.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "applyTransform");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

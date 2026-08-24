@@ -69,6 +69,8 @@ impl NodeLogic for IntCheckedOpNode {
             "Checked Arithmetic",
             "Arithmetic that reports overflow and division by zero instead of failing",
         );
+        node.set_flowscript_name("int", "checkedOp");
+        node.set_receiver("integer1");
         node.add_output_pin(
             "success",
             "Success",
@@ -112,11 +114,14 @@ impl IntSaturatingOpNode {
 #[async_trait]
 impl NodeLogic for IntSaturatingOpNode {
     fn get_node(&self) -> Node {
-        operation_node(
+        let mut node = operation_node(
             "int_saturating_op",
             "Saturating Arithmetic",
             "Arithmetic that clamps to the integer limits instead of overflowing",
-        )
+        );
+        node.set_flowscript_name("int", "saturatingOp");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -147,11 +152,14 @@ impl IntWrappingOpNode {
 #[async_trait]
 impl NodeLogic for IntWrappingOpNode {
     fn get_node(&self) -> Node {
-        operation_node(
+        let mut node = operation_node(
             "int_wrapping_op",
             "Wrapping Arithmetic",
             "Arithmetic that wraps around the integer limits",
-        )
+        );
+        node.set_flowscript_name("int", "wrappingOp");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

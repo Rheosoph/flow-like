@@ -37,11 +37,14 @@ impl FloatIsNanNode {
 #[async_trait]
 impl NodeLogic for FloatIsNanNode {
     fn get_node(&self) -> Node {
-        check_node(
+        let mut node = check_node(
             "float_is_nan",
             "Is Not A Number",
             "True when the value is missing or not a real number",
-        )
+        );
+        node.set_flowscript_name("float", "isNan");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -65,11 +68,14 @@ impl FloatIsFiniteNode {
 #[async_trait]
 impl NodeLogic for FloatIsFiniteNode {
     fn get_node(&self) -> Node {
-        check_node(
+        let mut node = check_node(
             "float_is_finite",
             "Is Finite",
             "True when the value is a real, finite number",
-        )
+        );
+        node.set_flowscript_name("float", "isFinite");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -93,11 +99,14 @@ impl FloatIsInfiniteNode {
 #[async_trait]
 impl NodeLogic for FloatIsInfiniteNode {
     fn get_node(&self) -> Node {
-        check_node(
+        let mut node = check_node(
             "float_is_infinite",
             "Is Infinite",
             "True when the value is positive or negative infinity",
-        )
+        );
+        node.set_flowscript_name("float", "isInfinite");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

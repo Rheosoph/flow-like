@@ -128,6 +128,7 @@ impl NodeLogic for GridSearchNode {
             "Exhaustive search over parameter combinations with cross-validation. Returns the best parameters found. Model Type accepts the same names the Auto Classifier reports as its best model, so the two nodes chain directly.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "gridSearch");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 

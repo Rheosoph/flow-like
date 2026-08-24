@@ -68,6 +68,7 @@ impl NodeLogic for GetMeNode {
             "Get the current authenticated user's LinkedIn profile information",
             "Data/LinkedIn",
         );
+        node.set_flowscript_name("linkedin", "getMe");
         node.add_icon("/flow/icons/linkedin.svg");
 
         node.add_input_pin(

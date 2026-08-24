@@ -29,6 +29,8 @@ impl NodeLogic for KgSummarizeNode {
             "Converts a subgraph (nodes + edges) into a natural-language summary for LLM consumption",
             "AI/Memory/Graph",
         );
+        node.set_flowscript_name("ai.memory", "kgSummarize");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

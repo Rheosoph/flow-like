@@ -92,6 +92,7 @@ impl NodeLogic for LLMHealSelectorNode {
             "Uses LLM to fix a broken CSS/XPath selector based on page context",
             "Automation/LLM/Healing",
         );
+        node.set_flowscript_name("automation.llm", "healSelector");
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(3);
 

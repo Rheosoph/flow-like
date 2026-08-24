@@ -28,6 +28,8 @@ impl NodeLogic for ListIndicesNode {
             "Lists all indices on a database table",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "listIndices");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

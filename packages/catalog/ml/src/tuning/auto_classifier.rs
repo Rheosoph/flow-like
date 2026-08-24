@@ -211,6 +211,7 @@ impl NodeLogic for AutoClassifierNode {
             "Automatically finds the best classification model. Cross-validates Naive Bayes, Decision Tree, Logistic Regression, Random Forest and SVM, then retrains the winner on the full dataset. The reported Best Model Type can be fed straight into Grid Search to tune it further.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "autoClassifier");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 

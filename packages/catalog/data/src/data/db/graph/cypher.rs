@@ -28,6 +28,8 @@ impl NodeLogic for CypherQueryNode {
             "Executes a Cypher query against the graph overlay",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "cypherQuery");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

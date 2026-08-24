@@ -24,6 +24,8 @@ impl NodeLogic for StringUnescapeNode {
             "Unescapes special character sequences in a string (\\n, \\t, \\r, \\\\, \\\").",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "unescape");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);

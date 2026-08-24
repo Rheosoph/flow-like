@@ -26,6 +26,8 @@ impl NodeLogic for RemoveMapNode {
             "Removes a key from the map",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "remove");
+        node.set_receiver("map_in");
         node.add_icon("/flow/icons/book-key.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

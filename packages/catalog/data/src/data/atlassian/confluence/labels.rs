@@ -58,6 +58,7 @@ impl NodeLogic for GetLabelsNode {
             "Get all labels for a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getLabels");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -207,6 +208,7 @@ impl NodeLogic for AddLabelNode {
             "Add a label to a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "addLabel");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -332,6 +334,7 @@ impl NodeLogic for RemoveLabelNode {
             "Remove a label from a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "removeLabel");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

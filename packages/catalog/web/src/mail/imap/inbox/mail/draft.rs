@@ -31,6 +31,8 @@ impl NodeLogic for ImapCreateDraftNode {
             "Appends a new draft message to a mailbox (defaults to 'Drafts')",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "createDraft");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

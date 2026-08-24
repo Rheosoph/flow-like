@@ -29,6 +29,7 @@ impl NodeLogic for PdfExtractPagesNode {
             "Extract specific pages (non-contiguous) from a PDF",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "extractPages");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

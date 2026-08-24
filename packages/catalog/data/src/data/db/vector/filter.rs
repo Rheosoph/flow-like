@@ -30,6 +30,8 @@ impl NodeLogic for FilterLocalDatabaseNode {
             "Filter Database",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "filter");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

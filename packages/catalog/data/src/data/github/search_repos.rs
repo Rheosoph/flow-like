@@ -55,6 +55,7 @@ impl NodeLogic for SearchGitHubReposNode {
             "Search for repositories on GitHub",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "searchRepos");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

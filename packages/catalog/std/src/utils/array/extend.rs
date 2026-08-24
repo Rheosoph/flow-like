@@ -26,6 +26,8 @@ impl NodeLogic for ExtendArrayNode {
             "Append an Array to another Array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "extend");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

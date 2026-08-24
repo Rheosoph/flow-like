@@ -28,6 +28,8 @@ impl NodeLogic for DeleteNode {
             "Deletes a file or directory",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "delete");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

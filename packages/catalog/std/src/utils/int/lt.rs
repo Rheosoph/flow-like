@@ -24,6 +24,8 @@ impl NodeLogic for LessThanIntegerNode {
             "Checks if the first integer is less than the second",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "lessThan");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

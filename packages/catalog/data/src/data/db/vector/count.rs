@@ -30,6 +30,8 @@ impl NodeLogic for CountLocalDatabaseNode {
             "Count Items",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "count");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

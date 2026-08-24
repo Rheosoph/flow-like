@@ -44,6 +44,7 @@ impl NodeLogic for CreateGoogleMeetNode {
             "Create a new Google Meet meeting",
             "Data/Google/Meet",
         );
+        node.set_flowscript_name("google.meet", "create");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -304,6 +305,7 @@ impl NodeLogic for CreateInstantMeetNode {
             "Create an instant Google Meet meeting starting now",
             "Data/Google/Meet",
         );
+        node.set_flowscript_name("google.meet", "instant");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -454,6 +456,7 @@ impl NodeLogic for GetGoogleMeetDetailsNode {
             "Get details of a Google Meet meeting from its calendar event",
             "Data/Google/Meet",
         );
+        node.set_flowscript_name("google.meet", "get");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -627,6 +630,7 @@ impl NodeLogic for AddMeetToEventNode {
             "Add Google Meet to an existing calendar event",
             "Data/Google/Meet",
         );
+        node.set_flowscript_name("google.meet", "addToEvent");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -25,6 +25,7 @@ impl NodeLogic for RequestElements {
             "Requests element values from the frontend before processing",
             "UI/Data",
         );
+        node.set_flowscript_name("ui", "requestElements");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

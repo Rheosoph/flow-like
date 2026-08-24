@@ -20,7 +20,10 @@ impl FloatSinNode {
 #[async_trait]
 impl NodeLogic for FloatSinNode {
     fn get_node(&self) -> Node {
-        unary_node("float_sin", "Sin", "Sine of an angle in radians", CATEGORY)
+        let mut node = unary_node("float_sin", "Sin", "Sine of an angle in radians", CATEGORY);
+        node.set_flowscript_name("float", "sin");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -41,12 +44,15 @@ impl FloatCosNode {
 #[async_trait]
 impl NodeLogic for FloatCosNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_cos",
             "Cos",
             "Cosine of an angle in radians",
             CATEGORY,
-        )
+        );
+        node.set_flowscript_name("float", "cos");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -67,12 +73,15 @@ impl FloatTanNode {
 #[async_trait]
 impl NodeLogic for FloatTanNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_tan",
             "Tan",
             "Tangent of an angle in radians",
             CATEGORY,
-        )
+        );
+        node.set_flowscript_name("float", "tan");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -93,12 +102,15 @@ impl FloatAsinNode {
 #[async_trait]
 impl NodeLogic for FloatAsinNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_asin",
             "Asin",
             "Arc sine in radians, input must be between -1 and 1",
             CATEGORY,
-        )
+        );
+        node.set_flowscript_name("float", "asin");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -119,12 +131,15 @@ impl FloatAcosNode {
 #[async_trait]
 impl NodeLogic for FloatAcosNode {
     fn get_node(&self) -> Node {
-        unary_node(
+        let mut node = unary_node(
             "float_acos",
             "Acos",
             "Arc cosine in radians, input must be between -1 and 1",
             CATEGORY,
-        )
+        );
+        node.set_flowscript_name("float", "acos");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -145,7 +160,10 @@ impl FloatAtanNode {
 #[async_trait]
 impl NodeLogic for FloatAtanNode {
     fn get_node(&self) -> Node {
-        unary_node("float_atan", "Atan", "Arc tangent in radians", CATEGORY)
+        let mut node = unary_node("float_atan", "Atan", "Arc tangent in radians", CATEGORY);
+        node.set_flowscript_name("float", "atan");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -166,12 +184,15 @@ impl FloatAtan2Node {
 #[async_trait]
 impl NodeLogic for FloatAtan2Node {
     fn get_node(&self) -> Node {
-        binary_node(
+        let mut node = binary_node(
             "float_atan2",
             "Atan2",
             "Angle in radians between the positive x axis and the point (x, y)",
             CATEGORY,
-        )
+        );
+        node.set_flowscript_name("float", "atan2");
+        node.set_receiver("float1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -192,7 +213,10 @@ impl FloatSinhNode {
 #[async_trait]
 impl NodeLogic for FloatSinhNode {
     fn get_node(&self) -> Node {
-        unary_node("float_sinh", "Sinh", "Hyperbolic sine", CATEGORY)
+        let mut node = unary_node("float_sinh", "Sinh", "Hyperbolic sine", CATEGORY);
+        node.set_flowscript_name("float", "sinh");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -213,7 +237,10 @@ impl FloatCoshNode {
 #[async_trait]
 impl NodeLogic for FloatCoshNode {
     fn get_node(&self) -> Node {
-        unary_node("float_cosh", "Cosh", "Hyperbolic cosine", CATEGORY)
+        let mut node = unary_node("float_cosh", "Cosh", "Hyperbolic cosine", CATEGORY);
+        node.set_flowscript_name("float", "cosh");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -234,7 +261,10 @@ impl FloatTanhNode {
 #[async_trait]
 impl NodeLogic for FloatTanhNode {
     fn get_node(&self) -> Node {
-        unary_node("float_tanh", "Tanh", "Hyperbolic tangent", CATEGORY)
+        let mut node = unary_node("float_tanh", "Tanh", "Hyperbolic tangent", CATEGORY);
+        node.set_flowscript_name("float", "tanh");
+        node.set_receiver("float");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

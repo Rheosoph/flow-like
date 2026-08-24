@@ -27,6 +27,8 @@ impl NodeLogic for WriteCacheNode {
             "Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "write");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

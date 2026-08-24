@@ -30,6 +30,7 @@ impl NodeLogic for QueryElementsById {
             "Gets elements whose IDs match a pattern",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryElementsById");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

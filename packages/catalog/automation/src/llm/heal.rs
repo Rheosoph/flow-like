@@ -101,6 +101,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
             "Uses LLM to diagnose automation failures and suggest/apply healing actions",
             "Automation/LLM/Healing",
         );
+        node.set_flowscript_name("automation.llm", "diagnoseAndHeal");
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(3);
 

@@ -28,6 +28,8 @@ impl NodeLogic for UpsertGraphEdgeNode {
             "Inserts or updates an edge in the graph overlay's underlying edge table",
             "Data/Database/Graph/Write",
         );
+        node.set_flowscript_name("db.graph", "upsertEdge");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

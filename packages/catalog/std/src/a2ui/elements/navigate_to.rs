@@ -26,6 +26,7 @@ impl NodeLogic for NavigateTo {
             "Navigates to a page route",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "navigateTo");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

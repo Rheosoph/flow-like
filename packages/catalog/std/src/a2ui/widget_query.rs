@@ -285,6 +285,7 @@ impl NodeLogic for WidgetQuery {
             "Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "widgetQuery");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_scores(
             NodeScores::new()

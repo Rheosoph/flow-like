@@ -26,6 +26,7 @@ impl NodeLogic for ConstructArrayNode {
             "Creates an array from individual elements. Add more input pins by connecting to the 'element' pins.",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "construct");
 
         node.add_icon("/flow/icons/grip.svg");
 

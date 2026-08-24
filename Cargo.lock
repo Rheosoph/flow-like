@@ -7994,6 +7994,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "flow-like",
+ "flow-like-ast",
  "flow-like-catalog-automation",
  "flow-like-catalog-core",
  "flow-like-catalog-data",

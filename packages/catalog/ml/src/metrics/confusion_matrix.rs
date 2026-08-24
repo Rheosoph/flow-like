@@ -37,6 +37,7 @@ impl NodeLogic for ConfusionMatrixNode {
             "Build confusion matrix and calculate precision, recall, and F1 score",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "evalConfusionMatrix");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

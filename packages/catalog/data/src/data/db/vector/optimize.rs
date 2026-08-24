@@ -28,6 +28,8 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
             "Optimize and Update the Database",
             "Data/Database/Optimization",
         );
+        node.set_flowscript_name("db", "optimize");
+        node.set_receiver("database");
         node.set_long_running(true);
         node.add_icon("/flow/icons/database.svg");
 

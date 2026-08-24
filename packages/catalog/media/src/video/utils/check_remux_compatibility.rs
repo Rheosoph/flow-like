@@ -19,6 +19,7 @@ impl NodeLogic for CheckRemuxCompatibilityNode {
             "Check whether source streams can be packet-copied into a target container",
             "Video/Planning",
         );
+        node.set_flowscript_name("video", "checkRemuxCompatibility");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

@@ -26,6 +26,7 @@ impl NodeLogic for ClearSetRefNode {
             "Clear all elements directly from a variable set without copying.",
             "Utils/Set/By Reference",
         );
+        node.set_flowscript_name("set", "clearRef");
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

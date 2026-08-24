@@ -138,6 +138,7 @@ impl NodeLogic for OpenGraphOverlayNode {
             "Opens an existing graph overlay and returns a connection for querying",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "openOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -319,6 +320,7 @@ impl NodeLogic for CreateGraphOverlayNode {
             "Creates a new graph overlay definition over existing database tables",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "createOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

@@ -29,6 +29,7 @@ impl NodeLogic for PdfListFormFieldsNode {
             "Reads a PDF and returns all AcroForm field names so you know which fields are available to fill.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "listFormFields");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

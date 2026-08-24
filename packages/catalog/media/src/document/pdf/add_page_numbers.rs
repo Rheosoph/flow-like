@@ -29,6 +29,7 @@ impl NodeLogic for PdfAddPageNumbersNode {
             "Add 'Page X of Y' labels to each page of a PDF.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "addPageNumbers");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

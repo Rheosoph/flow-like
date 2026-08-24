@@ -1387,6 +1387,7 @@ impl NodeLogic for LoadFaceAnalyzerNode {
             "Load a face_id analyzer (SCRFD detector + ArcFace embedder + gender/age). Weights are verified and cached when a session identity is first built; equivalent analyzers reuse process-wide sessions.",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdLoadAnalyzer");
         node.set_version(2);
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -1623,6 +1624,7 @@ impl NodeLogic for UnloadFaceAnalyzerNode {
             "Release a cached face analyzer and its three ONNX sessions. Equivalent analyzer handles share the same cache entry and are invalidated together.",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdUnloadAnalyzer");
         node.set_version(1);
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -2047,6 +2049,7 @@ impl NodeLogic for AnalyzeFacesNode {
             "Detect faces and extract embeddings, gender and age using a face_id analyzer",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdAnalyze");
         node.set_version(2);
         node.add_icon("/flow/icons/face.svg");
 

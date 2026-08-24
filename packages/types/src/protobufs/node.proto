@@ -46,6 +46,9 @@ message Node {
     bool only_offline = 23;
     optional uint32 version = 24;
     optional NodeWasm wasm = 25;
+    optional string namespace = 26;
+    optional string alias = 27;
+    optional string receiver = 28;
 }
 
 message NodeWasm {

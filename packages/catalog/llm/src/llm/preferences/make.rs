@@ -27,6 +27,7 @@ impl NodeLogic for MakePreferencesNode {
             "Creates a BitModelPreference struct used to guide model selection",
             "AI/Generative/Preferences",
         );
+        node.set_flowscript_name("ai.preferences", "make");
         node.add_icon("/flow/icons/struct.svg");
         node.set_scores(
             NodeScores::new()

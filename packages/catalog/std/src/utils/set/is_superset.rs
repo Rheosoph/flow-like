@@ -27,6 +27,8 @@ impl NodeLogic for SetIsSuperSetNode {
             "Checks if a hash set is a superset from a supposed smaller one",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "isSuperset");
+        node.set_receiver("set_in_1");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

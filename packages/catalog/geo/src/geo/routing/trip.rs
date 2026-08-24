@@ -44,6 +44,7 @@ impl NodeLogic for OsrmTripNode {
             "Plans the shortest round trip through multiple coordinates using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "osrmTrip");
         node.add_icon("/flow/icons/route.svg");
 
         node.add_input_pin(

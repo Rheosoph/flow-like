@@ -19,6 +19,7 @@ impl NodeLogic for DetectVideoContainerNode {
             "Detect the media container for a FlowPath object",
             "Video/Inspect",
         );
+        node.set_flowscript_name("video", "detectContainer");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Media FlowPath to inspect");

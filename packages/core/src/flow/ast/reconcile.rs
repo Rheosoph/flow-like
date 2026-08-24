@@ -26,6 +26,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
+use super::lower::{WHILE_LOOP, loop_node_keyword, sugared_loop_head_pin, sugared_loop_node_type};
+use super::template::{STRING_FORMAT_NODE_TYPE, template_format_call};
 use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
     BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
@@ -157,19 +159,21 @@ fn reconcile_inner(
         .commands
         .extend(reconcile_function_caches(existing, new));
 
-    // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
-    // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
-    // the calls and must outlive the `new_calls`/`visible` maps that borrow them, so build them in
-    // full up front — pushing to the Vec later would reallocate and invalidate the references.
-    let new_field_assign_calls = collect_anchored_field_assign_calls(new);
-    let board_field_assign_calls = collect_anchored_field_assign_calls(&board_ast);
+    // Anchored `base.path = value` writes and sugared loop heads carry no `&Call` with their
+    // arguments, so synthesize the equivalent `struct_set`/loop-node calls the anchor-keyed
+    // collectors below diff against / delete. These arenas own the calls and must outlive the
+    // `new_calls`/`visible` maps that borrow them, so build them in full up front — pushing to the
+    // Vec later would reallocate and invalidate the references.
+    let new_synthesized_calls = collect_anchored_synthesized_calls(new);
+    let board_synthesized_calls = collect_anchored_synthesized_calls(&board_ast);
 
-    // 1. Index every anchored call in the new AST by node id.
+    // 1. Index every anchored call in the new AST by node id. A synthesized call replaces the
+    //    argument-less placeholder a sugared loop statement registered for the same anchor.
     let mut new_calls: HashMap<String, &Call> = HashMap::new();
     collect_calls(new, &mut new_calls);
-    for call in &new_field_assign_calls {
+    for call in &new_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
-            new_calls.entry(anchor.to_string()).or_insert(call);
+            new_calls.insert(anchor.to_string(), call);
         }
     }
 
@@ -181,6 +185,24 @@ fn reconcile_inner(
                 "anchor {anchor} no longer resolves to a board node; skipped"
             ));
             continue;
+        };
+        // A hand-written method receiver or positional literal on an anchored call binds to the
+        // live node's pins exactly like the structural planner binds it.
+        let folded;
+        let call: &Call = if call.receiver.is_some() || !call.positional.is_empty() {
+            let live = node_to_metadata(node);
+            match fold_call_arguments(call, &live, live_receiver_pin(&live).as_deref()) {
+                Ok(call) => {
+                    folded = call;
+                    &folded
+                }
+                Err(diagnostic) => {
+                    result.diagnostics.push(diagnostic);
+                    continue;
+                }
+            }
+        } else {
+            call
         };
         // Multi-pins (several input pins sharing one name) pair positionally with the
         // same-named args, mirroring the order lowering emitted them in.
@@ -296,7 +318,7 @@ fn reconcile_inner(
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
     collect_statement_calls(&board_ast, &mut visible);
-    for call in &board_field_assign_calls {
+    for call in &board_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
             visible.entry(anchor.to_string()).or_insert(call);
         }
@@ -520,6 +542,7 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
                 Stmt::Loop { body, .. } => visit_block(body, scope, diagnostics),
                 Stmt::Handler(event) => visit_event(event, scope, diagnostics),
                 Stmt::Let { .. }
+                | Stmt::Destructure { .. }
                 | Stmt::Call { .. }
                 | Stmt::Assign { .. }
                 | Stmt::FieldAssign { .. }
@@ -720,6 +743,20 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
         duplicate: &mut HashSet<String>,
     ) {
         register(call.anchor.as_deref().or(fallback_anchor), seen, duplicate);
+        visit_call_operands(call, seen, duplicate);
+    }
+
+    fn visit_call_operands(
+        call: &Call,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        if let Some(receiver) = &call.receiver {
+            visit_expr(receiver, None, seen, duplicate);
+        }
+        for value in &call.positional {
+            visit_expr(value, None, seen, duplicate);
+        }
         for argument in &call.args {
             visit_expr(&argument.value, None, seen, duplicate);
         }
@@ -768,6 +805,12 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 visit_expr(then, None, seen, duplicate);
                 visit_expr(otherwise, None, seen, duplicate);
             }
+            Expr::Template { parts } => {
+                register(fallback_anchor, seen, duplicate);
+                for part in template_exprs(parts) {
+                    visit_expr(part, None, seen, duplicate);
+                }
+            }
             Expr::Ref(_) | Expr::Literal(_) => register(fallback_anchor, seen, duplicate),
         }
     }
@@ -807,9 +850,7 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 .map(str::trim)
                 .filter(|anchor| !anchor.is_empty());
             if branch_anchor == Some(event_anchor) {
-                for argument in &call.args {
-                    visit_expr(&argument.value, None, seen, duplicate);
-                }
+                visit_call_operands(call, seen, duplicate);
                 if let Some(condition) = condition {
                     visit_expr(condition, None, seen, duplicate);
                 }
@@ -832,9 +873,9 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
 
     fn visit_stmt(statement: &Stmt, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
         match statement {
-            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                visit_call(call, anchor.as_deref(), seen, duplicate)
-            }
+            Stmt::Let { call, anchor, .. }
+            | Stmt::Destructure { call, anchor, .. }
+            | Stmt::Call { call, anchor } => visit_call(call, anchor.as_deref(), seen, duplicate),
             Stmt::Branch {
                 call,
                 condition,
@@ -851,9 +892,16 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 }
             }
             Stmt::Loop {
-                call, body, anchor, ..
+                call,
+                iterable,
+                body,
+                anchor,
+                ..
             } => {
                 visit_call(call, anchor.as_deref(), seen, duplicate);
+                if let Some(iterable) = iterable {
+                    visit_expr(iterable, None, seen, duplicate);
+                }
                 visit_block(body, seen, duplicate);
             }
             Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
@@ -1464,6 +1512,11 @@ const CALL_FUNCTION_NODE_TYPE: &str = "control_call_function";
 /// this catalog type, so anchored display validation must treat it as intentional sugar.
 const CALL_REFERENCE_NODE_TYPE: &str = "control_call_reference";
 const FUNCTION_LAYER_ID_PIN: &str = "function_layer_id";
+/// The node a `cond ? a : b` ternary lowers from and materializes to (`lower.rs::TYPES_SELECT`).
+const TYPES_SELECT_NODE_TYPE: &str = "utils_types_select";
+
+/// `string_format`'s output pin, read by a template literal.
+const FORMATTED_STRING_PIN: &str = "formatted_string";
 
 /// Catalog nodes that FlowScript renders as binary operators. This is the write-side counterpart
 /// of `lower.rs::BINARY_OPS`: every two-data-input operator the reader emits must be materializable
@@ -1474,6 +1527,7 @@ const FUNCTION_LAYER_ID_PIN: &str = "function_layer_id";
 const BINARY_OPERATOR_NODES: &[(&str, &str, &str, &str)] = &[
     ("==", "String", "Boolean", "equal_string"),
     ("!=", "String", "Boolean", "not_equal_string"),
+    ("+", "String", "String", "string_concat"),
     ("==", "Boolean", "Boolean", "bool_equal"),
     ("&&", "Boolean", "Boolean", "bool_and"),
     ("||", "Boolean", "Boolean", "bool_or"),
@@ -1516,13 +1570,20 @@ fn binary_operator_op(node_type: &str) -> Option<&'static str> {
         .map(|(op, _, _, _)| *op)
 }
 
+/// The two operand pins of a binary-operator node: its first two data inputs. Trailing inputs
+/// (`ignore_case` on `equal_string`) are allowed only when they carry a default, which the
+/// operator form leaves untouched; a node with a required third input cannot be an operator.
 fn binary_data_inputs(meta: &NodeMetadata) -> Option<Vec<&PinMetadata>> {
     let inputs = meta
         .inputs
         .iter()
         .filter(|pin| pin.data_type != "Execution")
         .collect::<Vec<_>>();
-    (inputs.len() == 2).then_some(inputs)
+    let (operands, extras) = inputs.split_at_checked(2)?;
+    extras
+        .iter()
+        .all(|pin| pin.default_value.is_some())
+        .then(|| operands.to_vec())
 }
 
 fn binary_operator_call(
@@ -1534,6 +1595,9 @@ fn binary_operator_call(
     Call {
         node_type: meta.name.clone(),
         display: to_camel_case(&meta.name),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: [lhs, rhs]
             .into_iter()
             .zip(inputs)
@@ -1838,6 +1902,7 @@ fn describe_expr(expr: &Expr) -> String {
             Expr::Index { base, .. } => format!("{}[...]", render(base)),
             Expr::Binary { op, lhs, rhs } => format!("{} {op} {}", render(lhs), render(rhs)),
             Expr::Ternary { cond, .. } => format!("{} ? ... : ...", render(cond)),
+            Expr::Template { .. } => "`...`".to_string(),
             Expr::Object(_) => "{...}".to_string(),
             Expr::Array(_) => "[...]".to_string(),
             Expr::Literal(literal) => match literal {
@@ -2169,13 +2234,22 @@ fn input_arg_alias_correction(
     )
 }
 
+/// Whether a call names `node` in any accepted spelling: the flat name or friendly name, or
+/// the node's own `alias` (bare, in method form, or under its own `::` namespace path).
 fn call_matches_node(call: &Call, node: &Node) -> bool {
     if !call.node_type.trim().is_empty() {
         return call.node_type == node.name;
     }
 
     let display = safe_catalog_call_alias(&call.display).unwrap_or(&call.display);
-    pin_name_matches(&node.name, display) || pin_name_matches(&node.friendly_name, display)
+    if call.path.is_empty()
+        && (pin_name_matches(&node.name, display) || pin_name_matches(&node.friendly_name, display))
+    {
+        return true;
+    }
+    node.flowscript_alias().eq_ignore_ascii_case(display)
+        && (call.path.is_empty()
+            || path_key(&call.path) == namespace_key(&node.flowscript_namespace()))
 }
 
 fn is_exec_pin(pin: &Pin) -> bool {
@@ -2237,14 +2311,20 @@ fn metadata_input_pin_at<'a>(
     name: &str,
     occurrence: usize,
 ) -> Option<&'a PinMetadata> {
-    let mut matching: Vec<&PinMetadata> = meta
+    metadata_input_index_at(meta, name, occurrence).map(|index| &meta.inputs[index])
+}
+
+/// Index into `meta.inputs` of the `occurrence`-th input pin matching `name`.
+fn metadata_input_index_at(meta: &NodeMetadata, name: &str, occurrence: usize) -> Option<usize> {
+    let mut matching: Vec<(usize, &PinMetadata)> = meta
         .inputs
         .iter()
-        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .enumerate()
+        .filter(|(_, p)| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
         .collect();
     // Stable, so pins of equal rank keep their catalog order (`node_to_metadata` sorts by index).
-    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
-    matching.get(occurrence).copied()
+    matching.sort_by_key(|(_, p)| metadata_pin_match_rank(p, name));
+    matching.get(occurrence).map(|(index, _)| *index)
 }
 
 /// Encode an occurrence of a same-named pin in a board-command pin reference. Catalog nodes can
@@ -2398,7 +2478,7 @@ fn minted_wire_typed_pin(node_type: &str, pin_name: &str) -> bool {
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
-fn format_string_placeholders(template: &str) -> Vec<String> {
+pub(crate) fn format_string_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut names = Vec::new();
     let mut seen = HashSet::new();
@@ -2758,6 +2838,11 @@ fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -
         .map(String::as_str)
         .unwrap_or(schema)
         .trim();
+    // An open-object schema declares that the shape is open, so it carries no constraint and must
+    // compare as an absent schema rather than as a contract a real schema would have to equal.
+    if crate::flow::pin::is_open_object_schema(expanded) {
+        return None;
+    }
     flow_like_types::json::from_str::<flow_like_types::Value>(expanded)
         .map(|value| canonical_schema_value(&value))
         .ok()
@@ -3360,42 +3445,384 @@ enum SymbolValue {
     VariableRef { variable_id: String },
 }
 
+/// The method class a receiver pin puts a node in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReceiverClass {
+    /// A value-type namespace (`string`, `array`, …) or a struct schema title (`HttpResponse`).
+    Named(String),
+    /// A `Generic` receiver: the node is a method of every class.
+    Universal,
+}
+
+/// Effective FlowScript names of one catalog entry — explicit metadata fields or the derived
+/// defaults — as the resolver indexes them.
+#[derive(Debug, Clone)]
+pub(crate) struct CatalogNames {
+    /// Dotted namespace path (`ai.ml`), empty for a node without a category.
+    pub(crate) namespace: String,
+    pub(crate) alias: String,
+    /// Legacy flat spelling (`stringTrim`).
+    pub(crate) flat: String,
+    /// `namespace::alias`, or the bare alias for a node without a namespace.
+    pub(crate) qualified: String,
+    /// Input pin the receiver binds to in method form; `None` for static-only nodes.
+    pub(crate) receiver: Option<String>,
+    pub(crate) class: Option<ReceiverClass>,
+}
+
+pub(crate) fn catalog_names(meta: &NodeMetadata) -> CatalogNames {
+    let category = meta.category.as_deref().unwrap_or_default();
+    let flow_like_ast::EffectiveNames {
+        namespace,
+        alias,
+        receiver,
+    } = flow_like_ast::effective_names(
+        &meta.name,
+        category,
+        flow_like_ast::NameFields {
+            namespace: meta.namespace.as_deref(),
+            alias: meta.alias.as_deref(),
+            receiver: meta.receiver.as_deref(),
+        },
+        meta.inputs.iter().map(|pin| {
+            (
+                pin.name.as_str(),
+                pin.data_type.as_str(),
+                pin.value_type.as_str(),
+            )
+        }),
+    );
+    let class = receiver
+        .as_deref()
+        .and_then(|pin| metadata_input_pin(meta, pin))
+        .and_then(|pin| {
+            if pin.data_type == "Generic" && pin.value_type == "Normal" {
+                return Some(ReceiverClass::Universal);
+            }
+            flow_like_ast::receiver_class_of(&pin.data_type, &pin.value_type, pin.schema.as_deref())
+                .map(ReceiverClass::Named)
+        });
+    let qualified = if namespace.is_empty() {
+        alias.clone()
+    } else {
+        flow_like_ast::qualified_name(&namespace, &alias)
+    };
+    CatalogNames {
+        namespace,
+        alias,
+        flat: flow_like_ast::legacy_display(&meta.name),
+        qualified,
+        receiver,
+        class,
+    }
+}
+
+/// Lowercase `::`-joined key of a dotted namespace path.
+fn namespace_key(namespace: &str) -> String {
+    flow_like_ast::naming::namespace_segments(namespace)
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn path_key(path: &[String]) -> String {
+    path.iter()
+        .map(|segment| segment.trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn qualified_key(namespace_key: &str, alias: &str) -> String {
+    format!("{namespace_key}::{}", alias.to_lowercase())
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (i, l) in left.iter().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, r) in right.iter().enumerate() {
+            let substitution = previous[j] + usize::from(l != r);
+            current.push(substitution.min(previous[j + 1] + 1).min(current[j] + 1));
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
+/// Up to three names close to `needle` (case-insensitive prefix or small edit distance),
+/// closest first.
+fn closest_names<'a>(needle: &str, haystack: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let needle = needle.to_lowercase();
+    let tolerance = (needle.chars().count() / 3).clamp(1, 3);
+    let mut scored: Vec<(usize, String)> = haystack
+        .filter_map(|candidate| {
+            let lower = candidate.to_lowercase();
+            if lower == needle {
+                return None;
+            }
+            let distance = edit_distance(&needle, &lower);
+            let related = distance <= tolerance
+                || lower.starts_with(&needle)
+                || needle.starts_with(&lower)
+                || lower.ends_with(&needle)
+                || needle.ends_with(&lower);
+            related.then(|| (distance, candidate.to_string()))
+        })
+        .collect();
+    scored.sort();
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored.into_iter().map(|(_, name)| name).take(3).collect()
+}
+
+/// Qualified spellings for a diagnostic list; candidates that share a spelling (two node types
+/// under one key) are told apart by their node type.
+fn disambiguated_labels(items: &[(String, String)]) -> Vec<String> {
+    items
+        .iter()
+        .map(|(qualified, node_type)| {
+            let shared = items.iter().filter(|(other, _)| other == qualified).count();
+            if shared > 1 {
+                format!("{qualified} ({node_type})")
+            } else {
+                qualified.clone()
+            }
+        })
+        .collect()
+}
+
+fn quoted_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct CatalogIndex {
-    by_display: HashMap<String, Vec<NodeMetadata>>,
-    by_display_lower: HashMap<String, Vec<NodeMetadata>>,
+    entries: Vec<NodeMetadata>,
+    names: Vec<CatalogNames>,
+    /// Legacy flat spelling, exact and lowercased.
+    by_display: HashMap<String, Vec<usize>>,
+    by_display_lower: HashMap<String, Vec<usize>>,
     // Catalogs can contain one entry per installed package or live board instance. Keep every
     // declaration for an internal name: selecting the last HashMap insertion makes reconciliation
     // depend on provider iteration order when two packages expose conflicting contracts.
     by_type: HashMap<String, Vec<NodeMetadata>>,
+    /// `ns::alias` (lowercase) → entries.
+    by_qualified: HashMap<String, Vec<usize>>,
+    /// Alias (lowercase) → every entry carrying it, in any namespace.
+    by_alias: HashMap<String, Vec<usize>>,
+    /// Every namespace path and every proper prefix (lowercase key → display spelling).
+    namespaces: HashMap<String, String>,
+    /// Alias (lowercase) → entries callable in method form; the class is in `names`.
+    methods: HashMap<String, Vec<usize>>,
 }
 
 impl CatalogIndex {
     fn new(catalog: &[NodeMetadata]) -> Self {
-        let mut by_display: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
-        let mut by_display_lower: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
-        let mut by_type: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
+        let mut index = Self {
+            entries: Vec::with_capacity(catalog.len()),
+            names: Vec::with_capacity(catalog.len()),
+            by_display: HashMap::new(),
+            by_display_lower: HashMap::new(),
+            by_type: HashMap::new(),
+            by_qualified: HashMap::new(),
+            by_alias: HashMap::new(),
+            namespaces: HashMap::new(),
+            methods: HashMap::new(),
+        };
         for meta in catalog {
-            let display = to_camel_case(&meta.name);
-            by_display
-                .entry(display.clone())
+            let idx = index.entries.len();
+            let names = catalog_names(meta);
+            index
+                .by_display
+                .entry(names.flat.clone())
                 .or_default()
-                .push(meta.clone());
-            by_display_lower
-                .entry(display.to_lowercase())
+                .push(idx);
+            index
+                .by_display_lower
+                .entry(names.flat.to_lowercase())
                 .or_default()
-                .push(meta.clone());
-            by_type
+                .push(idx);
+            index
+                .by_type
                 .entry(meta.name.clone())
                 .or_default()
                 .push(meta.clone());
+            index.register_names(idx, &names.namespace, &names.alias, names.class.is_some());
+            index.entries.push(meta.clone());
+            index.names.push(names);
         }
-        Self {
-            by_display,
-            by_display_lower,
-            by_type,
+        index.register_derived_names();
+        index
+    }
+
+    /// Index one spelling of an entry: its alias, its `ns::alias` key (plus every namespace
+    /// prefix) and, when the node is callable in method form, its method-table entry.
+    fn register_names(&mut self, idx: usize, namespace: &str, alias: &str, method: bool) {
+        self.by_alias
+            .entry(alias.to_lowercase())
+            .or_default()
+            .push(idx);
+        if !namespace.is_empty() {
+            let key = namespace_key(namespace);
+            self.by_qualified
+                .entry(qualified_key(&key, alias))
+                .or_default()
+                .push(idx);
+            let segments: Vec<&str> =
+                flow_like_ast::naming::namespace_segments(namespace).collect();
+            for depth in 1..=segments.len() {
+                let display = segments[..depth].join("::");
+                self.namespaces
+                    .entry(display.to_lowercase())
+                    .or_insert(display);
+            }
+        }
+        if method {
+            self.methods
+                .entry(alias.to_lowercase())
+                .or_default()
+                .push(idx);
         }
     }
 
+    /// A placed node that predates an explicit `namespace`/`alias` still renders with the
+    /// names derived from its category, so that derived spelling stays resolvable as a
+    /// secondary key of the same node type — unless it is another node's real name, in which
+    /// case that node keeps it (fail closed).
+    fn register_derived_names(&mut self) {
+        let owners: HashMap<String, HashSet<String>> = self
+            .names
+            .iter()
+            .zip(&self.entries)
+            .filter(|(names, _)| !names.namespace.is_empty())
+            .fold(HashMap::new(), |mut owners, (names, meta)| {
+                owners
+                    .entry(qualified_key(
+                        &namespace_key(&names.namespace),
+                        &names.alias,
+                    ))
+                    .or_default()
+                    .insert(meta.name.clone());
+                owners
+            });
+        let derived: Vec<(usize, String, String, bool)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, meta)| {
+                let category = meta.category.as_deref().unwrap_or_default();
+                let namespace = flow_like_ast::derive_namespace(category);
+                let alias = flow_like_ast::derive_alias(&meta.name, category);
+                let names = &self.names[idx];
+                if namespace.is_empty()
+                    || (namespace_key(&namespace) == namespace_key(&names.namespace)
+                        && alias.eq_ignore_ascii_case(&names.alias))
+                {
+                    return None;
+                }
+                let key = qualified_key(&namespace_key(&namespace), &alias);
+                let taken = owners
+                    .get(&key)
+                    .is_some_and(|types| types.iter().any(|owner| *owner != meta.name));
+                (!taken).then_some((idx, namespace, alias, names.class.is_some()))
+            })
+            .collect();
+        for (idx, namespace, alias, method) in derived {
+            self.register_names(idx, &namespace, &alias, method);
+        }
+    }
+
+    fn entries_of(&self, indices: &[usize]) -> Vec<NodeMetadata> {
+        indices
+            .iter()
+            .map(|idx| self.entries[*idx].clone())
+            .collect()
+    }
+
+    fn one_match(&self, display: &str, indices: &[usize]) -> Result<NodeMetadata, String> {
+        one_catalog_match(display, &self.entries_of(indices))
+    }
+
+    fn indices<'a>(map: &'a HashMap<String, Vec<usize>>, key: &str) -> &'a [usize] {
+        map.get(key).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Flat-name entries: the exact spelling, else the case-insensitive one.
+    fn flat_matches(&self, display: &str) -> &[usize] {
+        let exact = Self::indices(&self.by_display, display);
+        if !exact.is_empty() {
+            return exact;
+        }
+        Self::indices(&self.by_display_lower, &display.to_lowercase())
+    }
+
+    fn qualified_matches(&self, namespace_key: &str, alias: &str) -> &[usize] {
+        Self::indices(&self.by_qualified, &qualified_key(namespace_key, alias))
+    }
+
+    fn alias_matches(&self, alias: &str) -> &[usize] {
+        Self::indices(&self.by_alias, &alias.to_lowercase())
+    }
+
+    fn method_matches(&self, alias: &str) -> &[usize] {
+        Self::indices(&self.methods, &alias.to_lowercase())
+    }
+
+    fn namespace_known(&self, namespace_key: &str) -> bool {
+        self.namespaces.contains_key(namespace_key)
+    }
+
+    fn namespace_display(&self, namespace_key: &str) -> String {
+        self.namespaces
+            .get(namespace_key)
+            .cloned()
+            .unwrap_or_else(|| namespace_key.to_string())
+    }
+
+    fn closest_namespaces(&self, namespace_key: &str) -> Vec<String> {
+        closest_names(namespace_key, self.namespaces.values().map(String::as_str))
+    }
+
+    /// Distinct qualified spellings of `indices`, in index order.
+    fn qualified_names(&self, indices: &[usize]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for idx in indices {
+            let qualified = &self.names[*idx].qualified;
+            if !out.contains(qualified) {
+                out.push(qualified.clone());
+            }
+        }
+        out
+    }
+
+    /// Members of one namespace (direct members only), for did-you-mean.
+    fn namespace_member_aliases(&self, key: &str) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .names
+            .iter()
+            .filter(|names| namespace_key(&names.namespace) == key)
+            .map(|names| names.alias.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The first indexed entry of a node type, for anchored calls whose live node carries no
+    /// explicit names.
+    fn names_for_type(&self, node_type: &str) -> Option<&CatalogNames> {
+        self.entries
+            .iter()
+            .position(|meta| meta.name == node_type)
+            .map(|idx| &self.names[idx])
+    }
+
+    /// Legacy resolution of a bare call: the flat spelling (exact, then case-insensitive), then
+    /// the `RENAMES` table guarded by argument-shape compatibility.
     fn resolve_call(&self, call: &Call) -> Result<NodeMetadata, String> {
         if !call.node_type.trim().is_empty() {
             return self.resolve_type(&call.node_type).map_err(|reason| {
@@ -3473,18 +3900,534 @@ impl CatalogIndex {
             return Err("empty call display cannot be resolved to a catalog node".to_string());
         }
 
-        if let Some(matches) = self.by_display.get(display) {
-            return one_catalog_match(display, matches);
-        }
-
-        if let Some(matches) = self.by_display_lower.get(&display.to_lowercase()) {
-            return one_catalog_match(display, matches);
+        let matches = self.flat_matches(display);
+        if !matches.is_empty() {
+            return self.one_match(display, matches);
         }
 
         Err(format!(
             "FlowScript call `{display}` does not match a catalog declaration; call `get_declarations` and use the exact function name"
         ))
     }
+}
+
+/// The scope a document's `use` declarations open for call resolution. Keys are lowercase;
+/// `use` indices point into `BoardAst.uses` so unused imports can be reported.
+#[derive(Debug, Default)]
+struct UseScope {
+    /// `use a::b` → `b`, `use a::b as x` → `x`: name → (namespace key, use index).
+    namespaces: HashMap<String, (String, usize)>,
+    /// `use a::b::*`: (namespace key, use index).
+    globs: Vec<(String, usize)>,
+    /// `use a::b::{ x }`: member → (namespace key, use index).
+    members: HashMap<String, (String, usize)>,
+    /// Rendered source of every `use` line, by index.
+    rendered: Vec<String>,
+    /// Lines that already produced a diagnostic (never reported as unused).
+    invalid: HashSet<usize>,
+}
+
+impl UseScope {
+    /// The `use` line that opens `namespace_key`'s member `alias`, if any: globs and namespace
+    /// imports open a namespace (and everything nested below it), member lists open one name.
+    fn opens(&self, namespace_key: &str, alias: &str) -> Option<usize> {
+        let alias = alias.to_lowercase();
+        let nested_in = |opened: &str| {
+            namespace_key == opened || namespace_key.starts_with(&format!("{opened}::"))
+        };
+        self.globs
+            .iter()
+            .filter(|(opened, _)| nested_in(opened))
+            .map(|(_, idx)| *idx)
+            .chain(
+                self.namespaces
+                    .values()
+                    .filter(|(opened, _)| nested_in(opened))
+                    .map(|(_, idx)| *idx),
+            )
+            .chain(
+                self.members
+                    .get(&alias)
+                    .filter(|(opened, _)| opened == namespace_key)
+                    .map(|(_, idx)| *idx),
+            )
+            .min()
+    }
+}
+
+fn render_use_decl(decl: &UseDecl) -> String {
+    let mut out = format!("use {}", decl.path.join("::"));
+    match &decl.kind {
+        UseKind::Namespace => {}
+        UseKind::Glob => out.push_str("::*"),
+        UseKind::Alias(alias) => {
+            out.push_str(" as ");
+            out.push_str(alias);
+        }
+        UseKind::Members(members) => {
+            out.push_str("::{ ");
+            out.push_str(&members.join(", "));
+            out.push_str(" }");
+        }
+    }
+    out
+}
+
+/// What a FlowScript call resolved to.
+#[derive(Debug, Clone)]
+enum CallTarget {
+    Catalog(NodeMetadata),
+    /// A declared FlowScript `function`, by name.
+    Function(String),
+}
+
+/// A resolved call: its target plus the call rewritten so the receiver and positional
+/// arguments are ordinary named arguments.
+#[derive(Debug, Clone)]
+struct ResolvedCall {
+    target: CallTarget,
+    call: Call,
+    /// Non-blocking notes (lenient spellings, shadowed catalog methods).
+    corrections: Vec<String>,
+    /// `use` declarations this resolution relied on.
+    used_uses: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+enum CandidateKind {
+    /// Every catalog entry of one node type.
+    Catalog(Vec<usize>),
+    Function(String),
+}
+
+/// One candidate of a method or opened-member lookup before narrowing.
+#[derive(Debug, Clone)]
+struct CallCandidate {
+    kind: CandidateKind,
+    receiver_pin: Option<String>,
+    /// Qualified spelling for diagnostics (`string::contains`, ``function `parseName` ``).
+    qualified: String,
+    node_type: String,
+    opened_by: Option<usize>,
+}
+
+fn candidate_labels(candidates: &[CallCandidate]) -> Vec<String> {
+    disambiguated_labels(
+        &candidates
+            .iter()
+            .map(|candidate| (candidate.qualified.clone(), candidate.node_type.clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The receiver's type as far as the planner can tell, mirroring a pin contract.
+#[derive(Debug, Clone)]
+struct ReceiverHint {
+    data_type: String,
+    value_type: String,
+    schema: Option<String>,
+}
+
+/// The method class a receiver value dispatches on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReceiverKind {
+    Unknown,
+    /// A value-type class (`string`, `int`, `array`, …).
+    Value(String),
+    /// A struct, with its schema title when the hint carried one.
+    Struct(Option<String>),
+}
+
+impl ReceiverKind {
+    /// Spelling for diagnostics; `None` when the type is unknown.
+    fn display(&self) -> Option<String> {
+        match self {
+            Self::Unknown => None,
+            Self::Value(class) => Some(class.clone()),
+            Self::Struct(Some(title)) => Some(title.clone()),
+            Self::Struct(None) => Some("struct".to_string()),
+        }
+    }
+
+    /// Whether a node of `class` is a method of this receiver. An untitled struct considers
+    /// the plain `struct` table and every interface class; a titled one its own title and the
+    /// plain `struct` table.
+    fn accepts(&self, class: Option<&ReceiverClass>) -> bool {
+        match class {
+            None => false,
+            Some(ReceiverClass::Universal) => true,
+            Some(ReceiverClass::Named(class)) => match self {
+                Self::Unknown => true,
+                Self::Value(value) => class.eq_ignore_ascii_case(value),
+                Self::Struct(Some(title)) => {
+                    class.eq_ignore_ascii_case(title) || class.eq_ignore_ascii_case("struct")
+                }
+                Self::Struct(None) => {
+                    class.eq_ignore_ascii_case("struct")
+                        || !flow_like_ast::is_value_type_namespace(class)
+                }
+            },
+        }
+    }
+}
+
+fn pin_receiver_hint(pin: &PinMetadata) -> ReceiverHint {
+    ReceiverHint {
+        data_type: pin.data_type.clone(),
+        value_type: pin.value_type.clone(),
+        schema: pin.schema.clone(),
+    }
+}
+
+fn shape_receiver_hint(shape: OutputShape) -> ReceiverHint {
+    ReceiverHint {
+        data_type: shape.data_type,
+        value_type: shape.value_type,
+        schema: shape.schema,
+    }
+}
+
+fn literal_receiver_hint(value: &flow_like_types::Value) -> ReceiverHint {
+    let (data_type, value_type) = infer_variable_types(Some(value));
+    ReceiverHint {
+        data_type,
+        value_type,
+        schema: None,
+    }
+}
+
+/// The contract of one property of an object schema, for `a.b.c` receiver typing. Follows local
+/// `$ref`s and strips `null` from unions; an object property keeps its schema (with the root's
+/// `$defs`) so a nested title still classes it.
+fn schema_property_hint(schema: &str, field: &str) -> Option<ReceiverHint> {
+    use flow_like_types::Value;
+
+    fn deref<'a>(schema: &'a Value, root: &'a Value, depth: usize) -> Option<&'a Value> {
+        if depth > 8 {
+            return None;
+        }
+        if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+            && let Some(pointer) = reference.strip_prefix('#')
+        {
+            return deref(root.pointer(pointer)?, root, depth + 1);
+        }
+        for union in ["anyOf", "oneOf"] {
+            if let Some(variants) = schema.get(union).and_then(Value::as_array) {
+                let mut non_null = variants
+                    .iter()
+                    .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"));
+                let candidate = non_null.next()?;
+                if non_null.next().is_some() {
+                    return None;
+                }
+                return deref(candidate, root, depth + 1);
+            }
+        }
+        Some(schema)
+    }
+
+    fn type_name(schema: &Value) -> Option<String> {
+        match schema.get("type")? {
+            Value::String(kind) => Some(kind.clone()),
+            Value::Array(kinds) => {
+                let mut named = kinds
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|kind| *kind != "null");
+                let kind = named.next()?;
+                named.next().is_none().then(|| kind.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn with_defs(property: &Value, root: &Value) -> String {
+        let mut property = property.clone();
+        if let Value::Object(object) = &mut property {
+            for defs in ["$defs", "definitions"] {
+                if let Some(shared) = root.get(defs)
+                    && !object.contains_key(defs)
+                {
+                    object.insert(defs.to_string(), shared.clone());
+                }
+            }
+        }
+        property.to_string()
+    }
+
+    let root = flow_like_types::json::from_str::<Value>(schema).ok()?;
+    let object = deref(&root, &root, 0)?;
+    let properties = object.get("properties").and_then(Value::as_object)?;
+    let property = properties.get(field).or_else(|| {
+        properties
+            .iter()
+            .find(|(key, _)| pin_name_matches(key, field))
+            .map(|(_, value)| value)
+    })?;
+    let property = deref(property, &root, 0)?;
+    let scalar = |data_type: &str| {
+        Some(ReceiverHint {
+            data_type: data_type.to_string(),
+            value_type: "Normal".to_string(),
+            schema: None,
+        })
+    };
+    match type_name(property)?.as_str() {
+        "string" => scalar("String"),
+        "integer" => scalar("Integer"),
+        "number" => scalar("Float"),
+        "boolean" => scalar("Boolean"),
+        "object" => Some(ReceiverHint {
+            data_type: "Struct".to_string(),
+            value_type: "Normal".to_string(),
+            schema: Some(with_defs(property, &root)),
+        }),
+        "array" => {
+            let items = property
+                .get("items")
+                .and_then(|items| deref(items, &root, 0));
+            let data_type = match items.and_then(type_name).as_deref() {
+                Some("string") => "String",
+                Some("integer") => "Integer",
+                Some("number") => "Float",
+                Some("boolean") => "Boolean",
+                Some("object") => "Struct",
+                _ => "Generic",
+            };
+            Some(ReceiverHint {
+                data_type: data_type.to_string(),
+                value_type: "Array".to_string(),
+                schema: items
+                    .filter(|_| data_type == "Struct")
+                    .map(|items| with_defs(items, &root)),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The plain identifier chain of a receiver expression (`a`, `a.b`, `a.b.c`), or `None` when it
+/// contains anything else. Used for the lenient `ns.member(...)` spelling of a namespace path.
+fn identifier_chain(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Ref(name) => Some(vec![name.clone()]),
+        Expr::Field { base, pin } => {
+            let mut chain = identifier_chain(base)?;
+            chain.push(pin.clone());
+            Some(chain)
+        }
+        Expr::Member { base, field } => {
+            let mut chain = identifier_chain(base)?;
+            chain.push(field.clone());
+            Some(chain)
+        }
+        _ => None,
+    }
+}
+
+/// How a call is spelled in the source, for diagnostics.
+fn call_callee(call: &Call) -> String {
+    if !call.path.is_empty() {
+        return format!("{}::{}", call.path.join("::"), call.display);
+    }
+    match &call.receiver {
+        Some(receiver) => format!("{}.{}", describe_expr(receiver), call.display),
+        None => call.display.clone(),
+    }
+}
+
+/// Metadata standing in for a declared function's call shape: its parameters as data inputs
+/// and its returns as outputs, so the same binding and typing code serves both targets.
+fn function_shape_metadata(
+    name: &str,
+    params: &[PinMetadata],
+    returns: &[PinMetadata],
+) -> NodeMetadata {
+    NodeMetadata {
+        name: CALL_FUNCTION_NODE_TYPE.to_string(),
+        friendly_name: format!("Call {name}"),
+        description: String::new(),
+        inputs: params.to_vec(),
+        outputs: returns.to_vec(),
+        category: None,
+        required_inputs: Vec::new(),
+        companion_nodes: Vec::new(),
+        capability_tags: Vec::new(),
+        namespace: None,
+        alias: None,
+        receiver: None,
+    }
+}
+
+/// Nodes whose `on_update` mints input pins the static catalog cannot list, so an unknown named
+/// argument is not evidence against them during candidate narrowing.
+pub(crate) fn accepts_dynamic_named_args(node_type: &str) -> bool {
+    dynamic_placeholder_config_pin(node_type).is_some() || widget_dynamic_pin_node(node_type)
+}
+
+/// Whether the authored named/positional arguments can bind to `meta`'s data inputs, excluding
+/// the receiver pin. Used only to narrow several candidates; a sole candidate is never rejected
+/// here so the argument planner reports the precise pin problem.
+fn call_shape_fits(call: &Call, meta: &NodeMetadata, receiver_pin: Option<&str>) -> bool {
+    let receiver_index = receiver_pin.and_then(|pin| metadata_input_index_at(meta, pin, 0));
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    let mut claimed: HashSet<usize> = HashSet::new();
+    for arg in &call.args {
+        if is_synthetic_fn_ref_arg(arg) {
+            continue;
+        }
+        let occurrence = {
+            let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+            let current = *seen;
+            *seen += 1;
+            current
+        };
+        match metadata_input_index_at(meta, &arg.name, occurrence) {
+            Some(index) if Some(index) == receiver_index => return false,
+            Some(index) => {
+                claimed.insert(index);
+            }
+            None if accepts_dynamic_named_args(&meta.name) => {}
+            None => return false,
+        }
+    }
+    let free = meta
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(index, pin)| {
+            pin.data_type != "Execution"
+                && Some(*index) != receiver_index
+                && !claimed.contains(index)
+        })
+        .count();
+    call.positional.len() <= free
+}
+
+/// Fold a call's method receiver and positional arguments into named arguments against
+/// `meta`'s data inputs, so the rest of the planner only ever sees `{ name: value }` bindings.
+/// The receiver takes `receiver_pin`; positionals fill the remaining data inputs in pin order
+/// (Python semantics: naming a pin a positional already filled is an error). Same-named pins keep
+/// their occurrence order because the result is sorted by pin index.
+fn fold_call_arguments(
+    call: &Call,
+    meta: &NodeMetadata,
+    receiver_pin: Option<&str>,
+) -> Result<Call, String> {
+    let mut folded = call.clone();
+    folded.path = Vec::new();
+    folded.receiver = None;
+    folded.positional = Vec::new();
+    if call.receiver.is_none() && call.positional.is_empty() {
+        return Ok(folded);
+    }
+    let callee = call_callee(call);
+    let node = if meta.name == CALL_FUNCTION_NODE_TYPE {
+        format!("function `{}`", call.display)
+    } else {
+        format!("`{}`", catalog_names(meta).qualified)
+    };
+
+    // Named arguments keep their pin index so the final order pairs same-named pins by
+    // occurrence; arguments that bind no static pin (dynamic pins, fn refs) sort last.
+    let mut bound: Vec<(usize, Arg)> = Vec::new();
+    let mut claimed_by_name: HashSet<usize> = HashSet::new();
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    for arg in &call.args {
+        let occurrence = {
+            let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+            let current = *seen;
+            *seen += 1;
+            current
+        };
+        let index = metadata_input_index_at(meta, &arg.name, occurrence).unwrap_or(usize::MAX);
+        if index != usize::MAX {
+            claimed_by_name.insert(index);
+        }
+        bound.push((index, arg.clone()));
+    }
+
+    let mut receiver_index = None;
+    if let Some(receiver) = &call.receiver {
+        let Some(pin) = receiver_pin else {
+            return Err(format!(
+                "`{callee}(...)` cannot be written in method form: {node} has no receiver pin; write `{}({{ ... }})` with every argument named",
+                call.display
+            ));
+        };
+        let Some(index) = metadata_input_index_at(meta, pin, 0) else {
+            return Err(format!(
+                "`{callee}(...)` cannot be written in method form: {node} has no input pin `{pin}` to bind the receiver to"
+            ));
+        };
+        if claimed_by_name.contains(&index) {
+            return Err(format!(
+                "`{callee}(...)` binds its receiver to `{}`, which is also given as a named argument; remove one of them",
+                to_camel_case(pin)
+            ));
+        }
+        receiver_index = Some(index);
+        bound.push((
+            index,
+            Arg {
+                name: meta.inputs[index].name.clone(),
+                value: receiver.as_ref().clone(),
+            },
+        ));
+    }
+
+    let bindable = |index: usize, pin: &PinMetadata| {
+        pin.data_type != "Execution"
+            && Some(index) != receiver_index
+            && !(meta.name == CALL_FUNCTION_NODE_TYPE && pin.name == FUNCTION_LAYER_ID_PIN)
+    };
+    let mut free = meta
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(index, pin)| bindable(*index, pin));
+    for (position, value) in call.positional.iter().enumerate() {
+        let Some((index, pin)) = free.next() else {
+            let data_inputs = meta
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|(index, pin)| bindable(*index, pin))
+                .map(|(_, pin)| to_camel_case(&pin.name))
+                .collect::<Vec<_>>();
+            return Err(format!(
+                "`{callee}(...)` has {} positional arguments, but {node} only has {} to bind them to ({})",
+                call.positional.len(),
+                match data_inputs.len() {
+                    1 => "1 data input".to_string(),
+                    n => format!("{n} data inputs"),
+                },
+                if data_inputs.is_empty() {
+                    "none".to_string()
+                } else {
+                    data_inputs.join(", ")
+                },
+            ));
+        };
+        if claimed_by_name.contains(&index) {
+            return Err(format!(
+                "positional argument {} of `{callee}(...)` fills `{}`, which is also given by name; remove one of them",
+                position + 1,
+                to_camel_case(&pin.name)
+            ));
+        }
+        bound.push((
+            index,
+            Arg {
+                name: pin.name.clone(),
+                value: value.clone(),
+            },
+        ));
+    }
+
+    bound.sort_by_key(|(index, _)| *index);
+    folded.args = bound.into_iter().map(|(_, arg)| arg).collect();
+    Ok(folded)
 }
 
 /// Deliberately tiny catalog migration table. These are historical/obvious names with exactly one
@@ -3964,6 +4907,17 @@ struct StructuralPlanner<'a> {
     /// Declared FlowScript functions by camelCase name, pre-created before events/bodies are
     /// planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
     planned_functions: HashMap<String, PlannedFunction>,
+    /// Every declared function's boundary by name, available from the start of planning (the
+    /// impurity prescan runs before `planned_functions` is filled) and replaced by the live
+    /// layer contract once a function is planned.
+    function_sigs: HashMap<String, FunctionSig>,
+    /// The document's interface declarations (with generated schemas), the class identity of
+    /// struct receivers whose schema carries no title.
+    interfaces: Vec<InterfaceDecl>,
+    /// What the document's `use` lines bring into scope.
+    use_scope: UseScope,
+    /// `use` lines at least one resolution relied on; the rest are reported as unused.
+    use_hits: HashSet<usize>,
     /// Literal-return sources materialized during THIS plan, keyed by the deterministic
     /// `var_{function}_{pin}` id, so repeated literal returns (branch arms, re-planned bodies)
     /// share one variable + `variable_get` instead of minting suffixed duplicates.
@@ -4010,6 +4964,10 @@ impl<'a> StructuralPlanner<'a> {
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
+            function_sigs: HashMap::new(),
+            interfaces: Vec::new(),
+            use_scope: UseScope::default(),
+            use_hits: HashSet::new(),
             planned_literal_return_sources: HashMap::new(),
             planned_boundary_passthroughs: HashMap::new(),
             enricher,
@@ -4043,6 +5001,9 @@ impl<'a> StructuralPlanner<'a> {
 
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
         self.interface_schemas = interface_schema_map(ast);
+        self.interfaces = ast.interfaces.clone();
+        self.prepare_uses(ast);
+        self.prepare_function_sigs(ast);
         // Reserve every still-live explicit event anchor before planning. A stale declaration that
         // appears earlier in the document must not steal the entry owned by a later declaration.
         self.reserve_declared_event_entries(ast);
@@ -4062,6 +5023,7 @@ impl<'a> StructuralPlanner<'a> {
         self.check_new_function_structure();
         self.check_function_ref_targets();
         self.check_dangling_impure_execution();
+        self.report_unused_uses();
 
         // The entry node is the registration target for the outer app Event. Materialize every
         // layer, variable and workflow node first, then add the entry node last. Connections are
@@ -4098,12 +5060,21 @@ impl<'a> StructuralPlanner<'a> {
             let has_unresolved_calls =
                 self.function_body_has_unresolved_calls(ast, &func.body, &mut resolution_seen);
             let Some(entity) = self.function_layer_entity(func, impure) else {
+                self.function_sigs.remove(&func.name);
                 continue;
             };
             let Some((params, returns)) = self.function_contract_metadata(func, &entity, impure)
             else {
+                self.function_sigs.remove(&func.name);
                 continue;
             };
+            self.function_sigs.insert(
+                func.name.clone(),
+                FunctionSig {
+                    params: params.clone(),
+                    returns: returns.clone(),
+                },
+            );
             self.planned_functions.insert(
                 func.name.clone(),
                 PlannedFunction {
@@ -4233,7 +5204,7 @@ impl<'a> StructuralPlanner<'a> {
     ) -> bool {
         block.stmts.iter().any(|stmt| match stmt {
             Stmt::Branch { .. } | Stmt::Loop { .. } => true,
-            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
                 self.call_is_impure(ast, call, seen)
             }
             Stmt::Assign { target, value, .. } => {
@@ -4257,26 +5228,40 @@ impl<'a> StructuralPlanner<'a> {
     fn call_is_impure(&self, ast: &BoardAst, call: &Call, seen: &mut HashSet<String>) -> bool {
         // Impure calls hidden inside the ARGUMENTS make the enclosing statement impure no matter
         // what the callee is — they get exec-spliced ahead of it at plan time.
-        let args_impure = call
-            .args
-            .iter()
-            .any(|arg| self.expr_contains_impure_call(ast, &arg.value, seen));
-        if let Some(func) = ast.functions.iter().find(|func| func.name == call.display) {
-            let body_impure = seen.insert(func.name.clone())
-                && self.function_body_is_impure(ast, &func.body, seen);
-            return body_impure || args_impure;
-        }
-        let impure_by_meta = match self.catalog.resolve_call(call) {
-            Ok(meta) => metadata_exec_input_pin(&meta).is_some(),
+        let args_impure =
+            call_operands(call).any(|operand| self.expr_contains_impure_call(ast, operand, seen));
+        let impure_by_meta = match self
+            .resolve_call_target(call)
+            .map(|resolved| resolved.target)
+        {
+            Ok(CallTarget::Function(name)) => ast
+                .functions
+                .iter()
+                .find(|func| func.name == name)
+                .is_some_and(|func| {
+                    seen.insert(func.name.clone())
+                        && self.function_body_is_impure(ast, &func.body, seen)
+                }),
+            Ok(CallTarget::Catalog(meta)) => metadata_exec_input_pin(&meta).is_some(),
             // An unresolvable call (e.g. conflicting same-type declarations in a board-derived
-            // catalog) must not silently classify as pure: the anchored live node knows whether
-            // it carries an execution input, and misclassifying flips the function layer's
-            // exec-boundary contract.
-            Err(_) => call
-                .anchor
-                .as_deref()
-                .and_then(|anchor| find_board_node(self.existing, anchor))
-                .is_some_and(|node| exec_input_pin(node).is_some()),
+            // catalog, or a method call whose receiver type the prescan cannot see) must not
+            // silently classify as pure: the anchored live node knows whether it carries an
+            // execution input, any impure method candidate is evidence, and misclassifying
+            // flips the function layer's exec-boundary contract.
+            Err(_) => {
+                call.anchor
+                    .as_deref()
+                    .and_then(|anchor| find_board_node(self.existing, anchor))
+                    .is_some_and(|node| exec_input_pin(node).is_some())
+                    || (call.receiver.is_some()
+                        && self
+                            .catalog
+                            .method_matches(&call.display)
+                            .iter()
+                            .any(|idx| {
+                                metadata_exec_input_pin(&self.catalog.entries[*idx]).is_some()
+                            }))
+            }
         };
         impure_by_meta || args_impure
     }
@@ -4315,6 +5300,9 @@ impl<'a> StructuralPlanner<'a> {
                 self.expr_contains_impure_call(ast, lhs, seen)
                     || self.expr_contains_impure_call(ast, rhs, seen)
             }
+            Expr::Template { parts } => {
+                template_exprs(parts).any(|part| self.expr_contains_impure_call(ast, part, seen))
+            }
             Expr::Ref(_) | Expr::Literal(_) => false,
         }
     }
@@ -4329,7 +5317,7 @@ impl<'a> StructuralPlanner<'a> {
         seen: &mut HashSet<String>,
     ) -> bool {
         block.stmts.iter().any(|stmt| match stmt {
-            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
                 self.call_has_unresolved_target(ast, call, seen)
             }
             Stmt::Assign { value, .. } | Stmt::LocalAlias { value, .. } => {
@@ -4350,8 +5338,16 @@ impl<'a> StructuralPlanner<'a> {
                         .iter()
                         .any(|arm| self.function_body_has_unresolved_calls(ast, &arm.body, seen))
             }
-            Stmt::Loop { call, body, .. } => {
-                self.call_has_unresolved_target(ast, call, seen)
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
+                (!is_placeholder_call(call) && self.call_has_unresolved_target(ast, call, seen))
+                    || iterable
+                        .as_ref()
+                        .is_some_and(|iterable| self.expr_has_unresolved_call(ast, iterable, seen))
                     || self.function_body_has_unresolved_calls(ast, body, seen)
             }
             Stmt::Return { values, .. } => values
@@ -4368,26 +5364,32 @@ impl<'a> StructuralPlanner<'a> {
         call: &Call,
         seen: &mut HashSet<String>,
     ) -> bool {
-        let args_unresolved = call
-            .args
-            .iter()
-            .any(|arg| self.expr_has_unresolved_call(ast, &arg.value, seen));
-        if let Some(function) = ast
-            .functions
-            .iter()
-            .find(|function| function.name == call.display)
-        {
-            return args_unresolved
-                || (seen.insert(function.name.clone())
-                    && self.function_body_has_unresolved_calls(ast, &function.body, seen));
-        }
-        if args_unresolved {
-            return true;
-        }
-        let Ok(meta) = self.catalog.resolve_call(call) else {
+        let args_unresolved =
+            call_operands(call).any(|operand| self.expr_has_unresolved_call(ast, operand, seen));
+        let Ok(resolved) = self.resolve_call_target(call) else {
             return true;
         };
-        unsafe_catalog_call_shape_diagnostic(call, &meta).is_some()
+        match resolved.target {
+            CallTarget::Function(name) => {
+                args_unresolved
+                    || ast
+                        .functions
+                        .iter()
+                        .find(|function| function.name == name)
+                        .is_some_and(|function| {
+                            seen.insert(function.name.clone())
+                                && self.function_body_has_unresolved_calls(
+                                    ast,
+                                    &function.body,
+                                    seen,
+                                )
+                        })
+            }
+            CallTarget::Catalog(meta) => {
+                args_unresolved
+                    || unsafe_catalog_call_shape_diagnostic(&resolved.call, &meta).is_some()
+            }
+        }
     }
 
     fn expr_has_unresolved_call(
@@ -4423,6 +5425,9 @@ impl<'a> StructuralPlanner<'a> {
             Expr::Binary { lhs, rhs, .. } => {
                 self.expr_has_unresolved_call(ast, lhs, seen)
                     || self.expr_has_unresolved_call(ast, rhs, seen)
+            }
+            Expr::Template { parts } => {
+                template_exprs(parts).any(|part| self.expr_has_unresolved_call(ast, part, seen))
             }
             Expr::Ref(_) | Expr::Literal(_) => false,
         }
@@ -5179,6 +6184,44 @@ impl<'a> StructuralPlanner<'a> {
                 );
                 Some(PlannedStmt::with_input_sources(entity, input_sources))
             }
+            Stmt::Destructure {
+                fields,
+                call,
+                anchor,
+            } => {
+                let (entity, input_sources) =
+                    self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer)?;
+                for field in fields {
+                    let output = self
+                        .resolve_entity_output_pin(&entity, Some(&field.pin))
+                        .filter(|pin| {
+                            self.entity_output_data_type(&entity, Some(pin)).as_deref()
+                                != Some("Execution")
+                        });
+                    let Some(output) = output else {
+                        let outputs = self.entity_data_output_names(&entity);
+                        self.result.diagnostics.push(format!(
+                            "`{}` has no data output `{}` to destructure; its outputs are {}",
+                            call_callee(call),
+                            field.pin,
+                            if outputs.is_empty() {
+                                "none".to_string()
+                            } else {
+                                quoted_list(&outputs)
+                            }
+                        ));
+                        continue;
+                    };
+                    self.insert_symbol(
+                        field.name.clone(),
+                        SymbolValue::Source(ValueSource {
+                            node: entity.clone(),
+                            output_pin: Some(output),
+                        }),
+                    );
+                }
+                Some(PlannedStmt::with_input_sources(entity, input_sources))
+            }
             Stmt::Call { call, anchor } => {
                 let (entity, input_sources) =
                     self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer)?;
@@ -5391,6 +6434,9 @@ impl<'a> StructuralPlanner<'a> {
                     let branch_call = Call {
                         node_type: "control_branch".to_string(),
                         display: "controlBranch".to_string(),
+                        path: Vec::new(),
+                        receiver: None,
+                        positional: Vec::new(),
                         args: vec![Arg {
                             name: "condition".to_string(),
                             value: condition.clone().expect("condition checked above"),
@@ -5426,6 +6472,9 @@ impl<'a> StructuralPlanner<'a> {
                         let condition_call = Call {
                             node_type: node.name.clone(),
                             display: to_camel_case(&node.name),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: vec![Arg {
                                 name: "condition".to_string(),
                                 value: cond.clone(),
@@ -5520,30 +6569,65 @@ impl<'a> StructuralPlanner<'a> {
                 })
             }
             Stmt::Loop {
+                keyword,
                 bind,
                 call,
+                iterable,
+                element,
+                index,
                 body,
                 anchor,
-                ..
             } => {
+                let head = self.loop_head(
+                    keyword,
+                    bind.as_deref(),
+                    call,
+                    iterable.as_ref(),
+                    element.as_deref(),
+                    index.as_deref(),
+                )?;
                 let entity =
-                    self.plan_call_statement(call, anchor.as_deref(), target_layer.clone());
+                    self.plan_call_statement(&head.call, anchor.as_deref(), target_layer.clone());
                 // The loop's own argument splices must chain BEFORE the loop node, not inside
                 // its body — stash them across the nested plan_block.
                 let mut stashed_splices = std::mem::take(&mut self.pending_exec_splices);
                 self.push_scope();
-                if let (Some(bind), Some(entity)) = (bind, entity.as_ref()) {
-                    self.insert_symbol(
-                        bind.clone(),
-                        SymbolValue::Source(ValueSource {
-                            node: entity.clone(),
-                            output_pin: None,
-                        }),
-                    );
+                if let Some(entity) = entity.as_ref() {
+                    if let Some(bind) = head.bind {
+                        self.insert_symbol(
+                            bind,
+                            SymbolValue::Source(ValueSource {
+                                node: entity.clone(),
+                                output_pin: None,
+                            }),
+                        );
+                    }
+                    for (name, output) in [
+                        (head.element, LOOP_VALUE_OUTPUT),
+                        (head.index, LOOP_INDEX_OUTPUT),
+                    ] {
+                        let Some(name) = name else {
+                            continue;
+                        };
+                        let Some(output_pin) = self.resolve_entity_output_pin(entity, Some(output))
+                        else {
+                            self.result.diagnostics.push(format!(
+                                "loop binding `{name}` needs a `{output}` output, which `{}` does not have",
+                                head.call.display
+                            ));
+                            continue;
+                        };
+                        self.insert_symbol(
+                            name,
+                            SymbolValue::Source(ValueSource {
+                                node: entity.clone(),
+                                output_pin: Some(output_pin),
+                            }),
+                        );
+                    }
                 }
                 if let Some(entity) = entity.as_ref() {
-                    let body_pin =
-                        self.entity_exec_output_pin_named(entity, &["exec_out", "loop", "body"]);
+                    let body_pin = self.entity_exec_output_pin_named(entity, LOOP_BODY_EXEC_PINS);
                     self.plan_block(
                         body,
                         Some(ExecCursor::with_output(entity.clone(), body_pin)),
@@ -5556,7 +6640,7 @@ impl<'a> StructuralPlanner<'a> {
                 entity.map(|entity| {
                     PlannedStmt::with_next_exec_pin(
                         entity.clone(),
-                        self.entity_exec_output_pin_named(&entity, &["done", "exec_done"]),
+                        self.entity_exec_output_pin_named(&entity, LOOP_DONE_EXEC_PINS),
                     )
                 })
             }
@@ -6014,6 +7098,90 @@ impl<'a> StructuralPlanner<'a> {
             .map(|(entity, _)| entity)
     }
 
+    /// Normalize a loop statement's two surface forms to the loop-node call it plans plus the
+    /// names bound in its body. A sugared head (`for (const item of xs)`, `while (cond)`)
+    /// synthesizes the loop node; an explicit head keeps its call and handle binding unless
+    /// the call resolves to something other than a loop node (a method returning an array, a
+    /// boolean condition), in which case it is the iterable and the handle is the element.
+    /// Returns `None` after pushing a diagnostic.
+    fn loop_head(
+        &mut self,
+        keyword: &str,
+        bind: Option<&str>,
+        call: &Call,
+        iterable: Option<&Expr>,
+        element: Option<&str>,
+        index: Option<&str>,
+    ) -> Option<LoopHead> {
+        let Some(node_type) = sugared_loop_node_type(keyword) else {
+            if iterable.is_some() {
+                self.result.diagnostics.push(format!(
+                    "loop keyword `{keyword}` has no sugared form; write the loop-node call explicitly"
+                ));
+                return None;
+            }
+            return Some(LoopHead {
+                call: call.clone(),
+                bind: bind.map(str::to_string),
+                element: None,
+                index: None,
+            });
+        };
+        let (head, element, index) = match iterable {
+            Some(head) => (head.clone(), element, index),
+            None => {
+                let is_loop_call = match self.resolve_call_target(call) {
+                    Ok(resolved) => match &resolved.target {
+                        CallTarget::Catalog(meta) => {
+                            loop_node_keyword(&meta.name).is_some() || metadata_is_loop_shaped(meta)
+                        }
+                        CallTarget::Function(_) => false,
+                    },
+                    // Leave the diagnostic to the call planner.
+                    Err(_) => true,
+                };
+                if is_loop_call {
+                    return Some(LoopHead {
+                        call: call.clone(),
+                        bind: bind.map(str::to_string),
+                        element: None,
+                        index: None,
+                    });
+                }
+                (Expr::Call(call.clone()), bind, None)
+            }
+        };
+        if node_type == WHILE_LOOP {
+            if element.is_some() || index.is_some() {
+                self.result.diagnostics.push(
+                    "a `while` loop binds no element or index; use `for (const item of …)` to iterate an array"
+                        .to_string(),
+                );
+                return None;
+            }
+        } else if let Some(hint) = self.expr_receiver_hint(&head)
+            && hint.value_type != "Array"
+            && !(hint.data_type == "Generic" && hint.value_type == "Normal")
+        {
+            let shape = match hint.value_type.as_str() {
+                "Map" => format!("a map of `{}`", hint.data_type),
+                "Set" => format!("a set of `{}`", hint.data_type),
+                _ => format!("a `{}` value", hint.data_type),
+            };
+            self.result.diagnostics.push(format!(
+                "`for…of` iterates `{}`, which is {shape}, not an array",
+                describe_expr(&head)
+            ));
+            return None;
+        }
+        Some(LoopHead {
+            call: sugared_loop_call(node_type, head, None),
+            bind: None,
+            element: element.map(str::to_string),
+            index: index.map(str::to_string),
+        })
+    }
+
     fn plan_call_statement_with_sources(
         &mut self,
         call: &Call,
@@ -6034,9 +7202,11 @@ impl<'a> StructuralPlanner<'a> {
             // other wholesale.
             let mut meta = node_to_metadata(node);
             self.merge_catalog_required_inputs(&mut meta);
-            let planned_function_target = self
-                .planned_functions
-                .get(&call.display)
+            let planned_function_target = call
+                .path
+                .is_empty()
+                .then(|| self.planned_functions.get(&call.display))
+                .flatten()
                 .map(|planned| planned.entity.node_ref());
             let expected_node_type = if planned_function_target.is_some() {
                 CALL_FUNCTION_NODE_TYPE
@@ -6053,7 +7223,7 @@ impl<'a> StructuralPlanner<'a> {
             if expected_node_type.trim().is_empty()
                 && meta.name != CALL_REFERENCE_NODE_TYPE
                 && !(is_placeholder_call(call) && meta.name == "control_branch")
-                && !call_matches_node(call, node)
+                && !self.anchored_call_matches_node(call, node, &meta)
             {
                 self.result.diagnostics.push(format!(
                     "call `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the node type",
@@ -6071,9 +7241,18 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 return None;
             }
+            let receiver_pin = live_receiver_pin(&meta);
+            let call = match fold_call_arguments(call, &meta, receiver_pin.as_deref()) {
+                Ok(call) => call,
+                Err(diagnostic) => {
+                    self.result.diagnostics.push(diagnostic);
+                    return None;
+                }
+            };
             let entity = NodeEntity::Existing(anchor.to_string());
-            let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, false);
-            self.check_required_inputs_after_planning(call, &entity, &meta);
+            let input_sources =
+                self.plan_call_arguments(&call, &entity, &meta, target_layer, false);
+            self.check_required_inputs_after_planning(&call, &entity, &meta);
             return Some((entity, input_sources));
         }
 
@@ -6225,18 +7404,23 @@ impl<'a> StructuralPlanner<'a> {
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
+        let resolved = match self.resolve_call_target(call) {
+            Ok(resolved) => resolved,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        self.note_resolution(&resolved);
+        let call = &resolved.call;
         // `functionName(...)` calling a FlowScript `function` declaration: create a
         // `control_call_function` node targeting that function's layer instead of resolving
         // against the catalog.
-        if self.planned_functions.contains_key(&call.display) {
-            return self.add_function_call_node(call, target_layer);
-        }
-        let meta = match self.catalog.resolve_call(call) {
-            Ok(meta) => meta,
-            Err(err) => {
-                self.result.diagnostics.push(err);
-                return None;
+        let meta = match &resolved.target {
+            CallTarget::Function(name) => {
+                return self.add_function_call_node(name, call, target_layer);
             }
+            CallTarget::Catalog(meta) => meta.clone(),
         };
         if let Some(diagnostic) = unsafe_catalog_call_shape_diagnostic(call, &meta) {
             self.result.diagnostics.push(diagnostic);
@@ -6512,10 +7696,16 @@ impl<'a> StructuralPlanner<'a> {
     /// the pins that will exist at apply time.
     fn add_function_call_node(
         &mut self,
+        name: &str,
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
-        let planned = self.planned_functions.get(&call.display).cloned()?;
+        let Some(planned) = self.planned_functions.get(name).cloned() else {
+            self.result.diagnostics.push(format!(
+                "cannot call function `{name}`: its declaration did not plan"
+            ));
+            return None;
+        };
         let base = match self.catalog.resolve_type(CALL_FUNCTION_NODE_TYPE) {
             Ok(meta) => meta,
             Err(reason) => {
@@ -7137,6 +8327,9 @@ impl<'a> StructuralPlanner<'a> {
             Expr::Binary { op, lhs, rhs } => {
                 self.reuse_existing_binary_source(op, lhs, rhs, source, target_layer)
             }
+            Expr::Template { parts } => {
+                self.reuse_existing_format_source(parts, source, target_layer)
+            }
             Expr::Object(fields) => {
                 self.reuse_existing_struct_make_source(fields, source, target_layer)
             }
@@ -7347,7 +8540,7 @@ impl<'a> StructuralPlanner<'a> {
             return None;
         };
         let node = find_board_node(self.existing, node_id)?;
-        if node.name != "utils_types_select" {
+        if node.name != TYPES_SELECT_NODE_TYPE {
             return None;
         }
         let meta = node_to_metadata(node);
@@ -7364,6 +8557,31 @@ impl<'a> StructuralPlanner<'a> {
             }
         }
         Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `string_format` node a template literal lowered from, diffing its
+    /// format string in place and re-planning the placeholder pins.
+    fn reuse_existing_format_source(
+        &mut self,
+        parts: &[TemplatePart],
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != STRING_FORMAT_NODE_TYPE {
+            return None;
+        }
+        let call = match template_format_call(parts, None) {
+            Ok(call) => call,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        self.reuse_existing_call_source(&call, source, Some(FORMATTED_STRING_PIN), target_layer)
     }
 
     /// Reuse the pure comparison node that an existing binary expression lowered from. Besides
@@ -7416,26 +8634,42 @@ impl<'a> StructuralPlanner<'a> {
         // A call to a declared FlowScript function reuses the existing `control_call_function`
         // node that targets that function's layer (catalog resolution can never match it, and
         // recreating it on every reconcile would duplicate call nodes).
-        let is_function_call_reuse = source_node.name == CALL_FUNCTION_NODE_TYPE
-            && self
-                .planned_functions
-                .get(&call.display)
-                .is_some_and(|planned| {
+        let resolved = self.resolve_call_target(call).ok();
+        let live = node_to_metadata(source_node);
+        let (meta, call) = match &resolved {
+            Some(ResolvedCall {
+                target: CallTarget::Function(name),
+                call: folded,
+                ..
+            }) if source_node.name == CALL_FUNCTION_NODE_TYPE
+                && self.planned_functions.get(name).is_some_and(|planned| {
                     node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
                         .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
-                });
-        let meta = if is_function_call_reuse {
-            node_to_metadata(source_node)
-        } else {
-            match self.catalog.resolve_call(call) {
-                Ok(meta) if meta.name == source_node.name => node_to_metadata(source_node),
-                Ok(_) => return None,
-                Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
-                Err(_) => return None,
+                }) =>
+            {
+                (live, folded.clone())
             }
+            Some(ResolvedCall {
+                target: CallTarget::Catalog(meta),
+                ..
+            }) if meta.name == source_node.name => {
+                let receiver_pin = live_receiver_pin(&live);
+                let folded = fold_call_arguments(call, &live, receiver_pin.as_deref()).ok()?;
+                (live, folded)
+            }
+            Some(_) => return None,
+            None if call_matches_node(call, source_node) => {
+                let receiver_pin = live_receiver_pin(&live);
+                let folded = fold_call_arguments(call, &live, receiver_pin.as_deref()).ok()?;
+                (live, folded)
+            }
+            None => return None,
         };
+        if let Some(resolved) = &resolved {
+            self.note_resolution(resolved);
+        }
         let entity = NodeEntity::Existing(source_node_id.clone());
-        self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+        self.plan_call_arguments(&call, &entity, &meta, target_layer, true);
 
         let output_pin = requested_output
             .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)))
@@ -8176,6 +9410,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "struct_get".to_string(),
             display: "structGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8241,6 +9478,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "array_length".to_string(),
             display: "arrayLength".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8289,6 +9529,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: node_type.to_string(),
             display: display.to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8360,6 +9603,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "map_get".to_string(),
             display: "mapGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8434,6 +9680,9 @@ impl<'a> StructuralPlanner<'a> {
         let call = Call {
             node_type: "array_get".to_string(),
             display: "arrayGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![
                 Arg {
                     name: "array_in".to_string(),
@@ -8522,9 +9771,77 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Index { base, index } => self.lower_array_index_access(base, index, target_layer),
             Expr::Binary { op, lhs, rhs } => self.lower_binary_operator(op, lhs, rhs, target_layer),
-            Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } => None,
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => self.lower_ternary_select(cond, then, otherwise, target_layer),
+            Expr::Template { parts } => self.lower_template_format(parts, target_layer),
+            Expr::Object(_) | Expr::Array(_) => None,
             Expr::Literal(_) => None,
         }
+    }
+
+    /// Materialize the `string_format` node a template literal lowers to, reading its
+    /// `formatted_string` output. Placeholder pins are the node's `on_update`-minted dynamic
+    /// pins, predicted from the synthesized format string exactly like a hand-written
+    /// `stringFormat({ formatString: "…{x}…", x })`.
+    fn lower_template_format(
+        &mut self,
+        parts: &[TemplatePart],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = match template_format_call(parts, None) {
+            Ok(call) => call,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        let entity = self.add_call_node(&call, target_layer)?;
+        let output = self
+            .resolve_entity_output_pin(&entity, Some(FORMATTED_STRING_PIN))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    /// Materialize a `utils_types_select` node for a `cond ? then : otherwise` ternary, reading
+    /// its `result` output. Literal arms become pin values, wired arms connections — both through
+    /// the standard argument planner. (An EXISTING select node is reused upstream by
+    /// `reuse_existing_select_source`; this is the path for a new one.)
+    fn lower_ternary_select(
+        &mut self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = Call {
+            node_type: TYPES_SELECT_NODE_TYPE.to_string(),
+            display: to_camel_case(TYPES_SELECT_NODE_TYPE),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
+            args: [("condition", cond), ("a", then), ("b", otherwise)]
+                .into_iter()
+                .map(|(name, value)| Arg {
+                    name: name.to_string(),
+                    value: value.clone(),
+                })
+                .collect(),
+            anchor: None,
+        };
+        let entity = self.add_call_node(&call, target_layer)?;
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("result"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
     }
 
     /// Materialize the catalog node represented by a FlowScript binary expression and return its
@@ -8573,18 +9890,14 @@ impl<'a> StructuralPlanner<'a> {
             return None;
         }
 
-        let lhs_type = self.expr_data_type_hint(lhs);
-        let rhs_type = self.expr_data_type_hint(rhs);
-        let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
-            (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs.to_string()),
-            (Some(lhs), Some(rhs)) => {
+        let operand_type = match self.binary_operand_type(lhs, rhs) {
+            Ok(operand_type) => operand_type,
+            Err((lhs, rhs)) => {
                 self.result.diagnostics.push(format!(
                     "binary operator `{op}` has incompatible operand types `{lhs}` and `{rhs}`"
                 ));
                 return None;
             }
-            (Some(known), None) | (None, Some(known)) => Some(known.to_string()),
-            (None, None) => None,
         };
 
         let candidates = BINARY_OPERATOR_NODES
@@ -8630,6 +9943,31 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// The common operand type of a binary expression, or the mismatched pair. An Integer
+    /// LITERAL adopts Float when the other side is Float: `0 - x` is the lowered form of `-x`
+    /// and `x * 2` is natural on a Float. Typed refs and calls keep strict matching.
+    fn binary_operand_type(
+        &self,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<Option<String>, (String, String)> {
+        let lhs_type = self.expr_data_type_hint(lhs);
+        let rhs_type = self.expr_data_type_hint(rhs);
+        let is_int_literal = |expr: &Expr| matches!(expr, Expr::Literal(Literal::Int(_)));
+        match (lhs_type.as_deref(), rhs_type.as_deref()) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => Ok(Some(lhs.to_string())),
+            (Some("Integer"), Some("Float")) if is_int_literal(lhs) => {
+                Ok(Some("Float".to_string()))
+            }
+            (Some("Float"), Some("Integer")) if is_int_literal(rhs) => {
+                Ok(Some("Float".to_string()))
+            }
+            (Some(lhs), Some(rhs)) => Err((lhs.to_string(), rhs.to_string())),
+            (Some(known), None) | (None, Some(known)) => Ok(Some(known.to_string())),
+            (None, None) => Ok(None),
+        }
+    }
+
     fn expr_data_type_hint(&self, expr: &Expr) -> Option<String> {
         if let Some(value) = literal_expr_to_value(expr) {
             return value_data_type(&value).map(str::to_string);
@@ -8640,15 +9978,13 @@ impl<'a> StructuralPlanner<'a> {
                 .lookup_symbol(name)
                 .and_then(|symbol| self.symbol_data_type_hint(&symbol)),
             Expr::Call(call) => {
-                let meta = self.catalog.resolve_call(call).ok()?;
+                let meta = self.call_output_metadata(call)?;
                 let output = default_metadata_output_pin(&meta)?;
                 metadata_output_pin(&meta, &output).map(|pin| pin.data_type.clone())
             }
             Expr::Field { base, pin } => match base.as_ref() {
                 Expr::Call(call) => self
-                    .catalog
-                    .resolve_call(call)
-                    .ok()
+                    .call_output_metadata(call)
                     .and_then(|meta| metadata_output_pin(&meta, pin).cloned())
                     .map(|output| output.data_type),
                 Expr::Ref(name) => self.lookup_symbol(name).and_then(|symbol| match symbol {
@@ -8668,18 +10004,14 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Binary { op, lhs, rhs } => {
                 let op = canonical_binary_op(op);
-                let lhs_type = self.expr_data_type_hint(lhs);
-                let rhs_type = self.expr_data_type_hint(rhs);
-                let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
-                    (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
-                    (Some(_), Some(_)) => return None,
-                    (Some(known), None) | (None, Some(known)) => Some(known),
-                    (None, None) => None,
-                };
+                let operand_type = self.binary_operand_type(lhs, rhs).ok()?;
                 let mut result_types = BINARY_OPERATOR_NODES
                     .iter()
                     .filter(|(candidate_op, data_type, _, _)| {
-                        *candidate_op == op && operand_type.is_none_or(|known| known == *data_type)
+                        *candidate_op == op
+                            && operand_type
+                                .as_deref()
+                                .is_none_or(|known| known == *data_type)
                     })
                     .map(|(_, _, result_type, _)| *result_type)
                     .collect::<Vec<_>>();
@@ -8692,6 +10024,7 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Object(_) => Some("Struct".to_string()),
             Expr::Array(_) => Some("Generic".to_string()),
+            Expr::Template { .. } => Some("String".to_string()),
             Expr::Member { .. } | Expr::Index { .. } | Expr::Literal(_) => None,
         }
     }
@@ -8710,7 +10043,13 @@ impl<'a> StructuralPlanner<'a> {
                         .values()
                         .find_map(|layer| layer.variables.get(variable_id))
                 })
-                .map(|variable| format!("{:?}", variable.data_type)),
+                .map(|variable| format!("{:?}", variable.data_type))
+                .or_else(|| {
+                    // A variable declared in this document but not yet on the board.
+                    self.variable_value_contracts
+                        .get(variable_id)
+                        .map(|contract| contract.data_type.clone())
+                }),
         }
     }
 
@@ -9451,6 +10790,988 @@ impl<'a> StructuralPlanner<'a> {
     }
 }
 
+/// A declared FlowScript function's boundary, as the resolver needs it: its parameters (the
+/// first is the UFCS receiver) and returns.
+#[derive(Debug, Clone)]
+struct FunctionSig {
+    params: Vec<PinMetadata>,
+    returns: Vec<PinMetadata>,
+}
+
+fn use_name_diagnostic(
+    rendered: &str,
+    name: &str,
+    functions: &HashSet<String>,
+    previous: Option<&str>,
+) -> Option<String> {
+    if flow_like_ast::is_keyword(name) {
+        return Some(format!(
+            "`{rendered}`: `{name}` is a FlowScript keyword and cannot be imported under that name"
+        ));
+    }
+    if functions.contains(&name.to_lowercase()) {
+        return Some(format!(
+            "`{rendered}`: `{name}` is also a `function` declared in this file; rename one of them"
+        ));
+    }
+    if let Some(previous) = previous {
+        return Some(format!(
+            "`{rendered}`: `{name}` is already imported by `{previous}`; remove one of them"
+        ));
+    }
+    None
+}
+
+/// The input pin a live node binds a method receiver to. A `control_call_function` node's
+/// receiver is its first parameter, never the `function_layer_id` config pin.
+fn live_receiver_pin(meta: &NodeMetadata) -> Option<String> {
+    if meta.name == CALL_FUNCTION_NODE_TYPE {
+        return meta
+            .inputs
+            .iter()
+            .find(|pin| pin.data_type != "Execution" && pin.name != FUNCTION_LAYER_ID_PIN)
+            .map(|pin| pin.name.clone());
+    }
+    catalog_names(meta).receiver
+}
+
+/// One node type's opened-member candidates: every catalog entry of that type plus the `use`
+/// lines that opened it.
+#[derive(Debug, Clone)]
+struct OpenedGroup {
+    node_type: String,
+    indices: Vec<usize>,
+    uses: Vec<usize>,
+}
+
+fn group_opened(
+    groups: &mut Vec<OpenedGroup>,
+    catalog: &CatalogIndex,
+    indices: &[usize],
+    use_idx: usize,
+) {
+    for idx in indices {
+        let node_type = &catalog.entries[*idx].name;
+        match groups
+            .iter_mut()
+            .find(|group| group.node_type == *node_type)
+        {
+            Some(group) => {
+                group.indices.push(*idx);
+                if !group.uses.contains(&use_idx) {
+                    group.uses.push(use_idx);
+                }
+            }
+            None => groups.push(OpenedGroup {
+                node_type: node_type.clone(),
+                indices: vec![*idx],
+                uses: vec![use_idx],
+            }),
+        }
+    }
+}
+
+impl<'a> StructuralPlanner<'a> {
+    /// Build the `use` scope for this document: unknown namespaces, duplicate or reserved import
+    /// names and members that do not exist are diagnostics; unused lines are reported at the end.
+    fn prepare_uses(&mut self, ast: &BoardAst) {
+        let functions: HashSet<String> = ast
+            .functions
+            .iter()
+            .map(|func| func.name.to_lowercase())
+            .collect();
+        let mut scope = UseScope::default();
+        for (idx, decl) in ast.uses.iter().enumerate() {
+            let rendered = render_use_decl(decl);
+            scope.rendered.push(rendered.clone());
+            let key = path_key(&decl.path);
+            if decl.path.is_empty() || !self.catalog.namespace_known(&key) {
+                scope.invalid.insert(idx);
+                let suggestions = self.catalog.closest_namespaces(&key);
+                self.result.diagnostics.push(if suggestions.is_empty() {
+                    format!(
+                        "`{rendered}`: namespace `{}` is unknown; call `get_declarations` to list the available namespaces",
+                        decl.path.join("::")
+                    )
+                } else {
+                    format!(
+                        "`{rendered}`: namespace `{}` is unknown; did you mean {}?",
+                        decl.path.join("::"),
+                        quoted_list(&suggestions)
+                    )
+                });
+                continue;
+            }
+            match &decl.kind {
+                UseKind::Namespace | UseKind::Alias(_) => {
+                    let name = match &decl.kind {
+                        UseKind::Alias(alias) => alias.clone(),
+                        _ => decl.path.last().cloned().unwrap_or_default(),
+                    };
+                    let lower = name.to_lowercase();
+                    let previous = scope
+                        .namespaces
+                        .get(&lower)
+                        .map(|(_, previous)| scope.rendered[*previous].clone());
+                    if let Some(diagnostic) =
+                        use_name_diagnostic(&rendered, &name, &functions, previous.as_deref())
+                    {
+                        scope.invalid.insert(idx);
+                        self.result.diagnostics.push(diagnostic);
+                        continue;
+                    }
+                    scope.namespaces.insert(lower, (key.clone(), idx));
+                }
+                UseKind::Glob => scope.globs.push((key.clone(), idx)),
+                UseKind::Members(members) => {
+                    for member in members {
+                        let lower = member.to_lowercase();
+                        if self.catalog.qualified_matches(&key, member).is_empty() {
+                            scope.invalid.insert(idx);
+                            let aliases = self.catalog.namespace_member_aliases(&key);
+                            let suggestions =
+                                closest_names(member, aliases.iter().map(String::as_str));
+                            self.result.diagnostics.push(if suggestions.is_empty() {
+                                format!(
+                                    "`{rendered}`: `{}::{member}` is not a function; call `get_declarations` for the members of `{}`",
+                                    decl.path.join("::"),
+                                    decl.path.join("::")
+                                )
+                            } else {
+                                format!(
+                                    "`{rendered}`: `{}::{member}` is not a function; did you mean {}?",
+                                    decl.path.join("::"),
+                                    quoted_list(&suggestions)
+                                )
+                            });
+                            continue;
+                        }
+                        let previous = scope
+                            .members
+                            .get(&lower)
+                            .map(|(_, previous)| scope.rendered[*previous].clone());
+                        if let Some(diagnostic) =
+                            use_name_diagnostic(&rendered, member, &functions, previous.as_deref())
+                        {
+                            scope.invalid.insert(idx);
+                            self.result.diagnostics.push(diagnostic);
+                            continue;
+                        }
+                        scope.members.insert(lower, (key.clone(), idx));
+                    }
+                }
+            }
+        }
+        self.use_scope = scope;
+    }
+
+    fn report_unused_uses(&mut self) {
+        for (idx, rendered) in self.use_scope.rendered.iter().enumerate() {
+            if self.use_scope.invalid.contains(&idx) || self.use_hits.contains(&idx) {
+                continue;
+            }
+            self.result
+                .corrections
+                .push(format!("`{rendered}` is unused."));
+        }
+    }
+
+    fn prepare_function_sigs(&mut self, ast: &BoardAst) {
+        self.function_sigs = ast
+            .functions
+            .iter()
+            .map(|func| {
+                (
+                    func.name.clone(),
+                    FunctionSig {
+                        params: func
+                            .params
+                            .iter()
+                            .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                            .collect(),
+                        returns: func
+                            .returns
+                            .iter()
+                            .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+    }
+
+    /// Record the side effects of a resolution the planner committed to.
+    fn note_resolution(&mut self, resolved: &ResolvedCall) {
+        self.result
+            .corrections
+            .extend(resolved.corrections.iter().cloned());
+        self.use_hits.extend(resolved.used_uses.iter().copied());
+    }
+
+    /// Resolve a call to its target without side effects, in this order: a declared `function`
+    /// named by a flat call; an exact `node_type`; a `::` path; method dispatch on a receiver;
+    /// the bare name (flat spelling, opened members, renames).
+    fn resolve_call_target(&self, call: &Call) -> Result<ResolvedCall, String> {
+        if call.path.is_empty()
+            && call.receiver.is_none()
+            && self.function_sigs.contains_key(&call.display)
+        {
+            return self.finish_function_call(call, &call.display, Vec::new(), Vec::new());
+        }
+        if !call.node_type.trim().is_empty() {
+            let meta = self
+                .catalog
+                .resolve_type(&call.node_type)
+                .map_err(|reason| {
+                    format!(
+                        "FlowScript call `{}` declares exact node_type `{}`: {reason}",
+                        call.display, call.node_type
+                    )
+                })?;
+            let receiver_pin = catalog_names(&meta).receiver;
+            return self.finish_catalog_call(
+                call,
+                meta,
+                receiver_pin.as_deref(),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+        if !call.path.is_empty() {
+            return self.resolve_path_call(call);
+        }
+        if call.receiver.is_some() {
+            return self.resolve_method_call(call);
+        }
+        self.resolve_bare_call(call)
+    }
+
+    /// The metadata a call's outputs are typed by (no diagnostics): the catalog node, or a
+    /// declared function's returns.
+    fn call_output_metadata(&self, call: &Call) -> Option<NodeMetadata> {
+        match self.resolve_call_target(call).ok()?.target {
+            CallTarget::Catalog(meta) => Some(meta),
+            CallTarget::Function(name) => self
+                .function_sigs
+                .get(&name)
+                .map(|sig| function_shape_metadata(&name, &sig.params, &sig.returns)),
+        }
+    }
+
+    fn finish_catalog_call(
+        &self,
+        call: &Call,
+        meta: NodeMetadata,
+        receiver_pin: Option<&str>,
+        corrections: Vec<String>,
+        used_uses: Vec<usize>,
+    ) -> Result<ResolvedCall, String> {
+        let folded = fold_call_arguments(call, &meta, receiver_pin)?;
+        Ok(ResolvedCall {
+            target: CallTarget::Catalog(meta),
+            call: folded,
+            corrections,
+            used_uses,
+        })
+    }
+
+    fn finish_function_call(
+        &self,
+        call: &Call,
+        name: &str,
+        corrections: Vec<String>,
+        used_uses: Vec<usize>,
+    ) -> Result<ResolvedCall, String> {
+        let Some(sig) = self.function_sigs.get(name) else {
+            return Err(format!(
+                "cannot call function `{name}`: its declaration did not plan"
+            ));
+        };
+        let shape = function_shape_metadata(name, &sig.params, &sig.returns);
+        let receiver_pin = call
+            .receiver
+            .as_ref()
+            .and_then(|_| sig.params.first().map(|param| param.name.clone()));
+        let folded = fold_call_arguments(call, &shape, receiver_pin.as_deref())?;
+        Ok(ResolvedCall {
+            target: CallTarget::Function(name.to_string()),
+            call: folded,
+            corrections,
+            used_uses,
+        })
+    }
+
+    fn finish_candidate(
+        &self,
+        call: &Call,
+        candidate: CallCandidate,
+        corrections: Vec<String>,
+    ) -> Result<ResolvedCall, String> {
+        let used = candidate.opened_by.into_iter().collect();
+        match candidate.kind {
+            CandidateKind::Catalog(indices) => {
+                let meta = self.catalog.one_match(&call_callee(call), &indices)?;
+                self.finish_catalog_call(
+                    call,
+                    meta,
+                    candidate.receiver_pin.as_deref(),
+                    corrections,
+                    used,
+                )
+            }
+            CandidateKind::Function(name) => {
+                self.finish_function_call(call, &name, corrections, used)
+            }
+        }
+    }
+
+    /// Expand a `::` path through the `use` scope: an imported namespace name (`use a::b`,
+    /// `use a::b as x`), the path itself, or a sub-namespace of a globbed one.
+    fn expand_path(&self, path: &[String]) -> Result<(String, Option<usize>), String> {
+        let Some(first) = path.first() else {
+            return Ok((String::new(), None));
+        };
+        if let Some((full, idx)) = self.use_scope.namespaces.get(&first.trim().to_lowercase()) {
+            let rest = path_key(&path[1..]);
+            let key = if rest.is_empty() {
+                full.clone()
+            } else {
+                format!("{full}::{rest}")
+            };
+            return Ok((key, Some(*idx)));
+        }
+        let raw = path_key(path);
+        if self.catalog.namespace_known(&raw) {
+            return Ok((raw, None));
+        }
+        let via_globs: Vec<(String, usize)> = self
+            .use_scope
+            .globs
+            .iter()
+            .filter_map(|(glob, idx)| {
+                let key = format!("{glob}::{raw}");
+                self.catalog.namespace_known(&key).then_some((key, *idx))
+            })
+            .collect();
+        match via_globs.as_slice() {
+            [] => Ok((raw, None)),
+            [(key, idx)] => Ok((key.clone(), Some(*idx))),
+            many => Err(format!(
+                "namespace `{}` is ambiguous: it could be {}; write the full path",
+                path.join("::"),
+                quoted_list(
+                    &many
+                        .iter()
+                        .map(|(key, _)| self.catalog.namespace_display(key))
+                        .collect::<Vec<_>>()
+                )
+            )),
+        }
+    }
+
+    fn resolve_path_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        let (key, used) = self.expand_path(&call.path)?;
+        let matches = self.catalog.qualified_matches(&key, &call.display);
+        if matches.is_empty() {
+            return Err(self.path_miss_diagnostic(&call.path, &key, &call.display));
+        }
+        let meta = self.catalog.one_match(&call_callee(call), matches)?;
+        self.finish_catalog_call(call, meta, None, Vec::new(), used.into_iter().collect())
+    }
+
+    fn path_miss_diagnostic(&self, path: &[String], key: &str, display: &str) -> String {
+        let namespace = path.join("::");
+        let callee = format!("{namespace}::{display}");
+        if !self.catalog.namespace_known(key) {
+            let suggestions = self.catalog.closest_namespaces(key);
+            return if suggestions.is_empty() {
+                format!(
+                    "namespace `{namespace}` in call `{callee}` is unknown; call `get_declarations` to list the available namespaces"
+                )
+            } else {
+                format!(
+                    "namespace `{namespace}` in call `{callee}` is unknown; did you mean {}?",
+                    quoted_list(&suggestions)
+                )
+            };
+        }
+        let mut alternatives = self
+            .catalog
+            .qualified_names(self.catalog.alias_matches(display));
+        for qualified in self
+            .catalog
+            .qualified_names(self.catalog.flat_matches(display))
+        {
+            if !alternatives.contains(&qualified) {
+                alternatives.push(qualified);
+            }
+        }
+        if alternatives.is_empty() {
+            let members = self.catalog.namespace_member_aliases(key);
+            let display_namespace = self.catalog.namespace_display(key);
+            alternatives = closest_names(display, members.iter().map(String::as_str))
+                .into_iter()
+                .map(|member| format!("{display_namespace}::{member}"))
+                .collect();
+            if alternatives.is_empty() {
+                return format!(
+                    "`{callee}` is not a function; call `get_declarations` for the members of `{display_namespace}`"
+                );
+            }
+        }
+        format!(
+            "`{callee}` is not a function; did you mean {}?",
+            quoted_list(&alternatives)
+        )
+    }
+
+    /// `ns.member(...)` with an unbound root that names a namespace path: resolve it as the
+    /// `::` call and note the spelling.
+    fn resolve_lenient_path_call(
+        &self,
+        call: &Call,
+        receiver: &Expr,
+    ) -> Option<Result<ResolvedCall, String>> {
+        let chain = identifier_chain(receiver)?;
+        let root = chain.first()?;
+        if self.lookup_symbol(root).is_some() || self.function_sigs.contains_key(root) {
+            return None;
+        }
+        let (key, used) = self.expand_path(&chain).ok()?;
+        let matches = self.catalog.qualified_matches(&key, &call.display);
+        if matches.is_empty() {
+            return None;
+        }
+        let correction = format!(
+            "Resolved `{}.{}(...)` as the namespace call `{}::{}(...)`; write `::` between namespace segments (`.` is the member/method operator).",
+            chain.join("."),
+            call.display,
+            self.catalog.namespace_display(&key),
+            call.display
+        );
+        let mut flat = call.clone();
+        flat.receiver = None;
+        Some(
+            self.catalog
+                .one_match(&call_callee(call), matches)
+                .and_then(|meta| {
+                    self.finish_catalog_call(
+                        &flat,
+                        meta,
+                        None,
+                        vec![correction],
+                        used.into_iter().collect(),
+                    )
+                }),
+        )
+    }
+
+    fn resolve_method_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        let Some(receiver) = call.receiver.as_deref() else {
+            return self.resolve_bare_call(call);
+        };
+        if let Some(resolved) = self.resolve_lenient_path_call(call, receiver) {
+            return resolved;
+        }
+        let callee = call_callee(call);
+        let alias = call.display.as_str();
+        let hint = self.expr_receiver_hint(receiver);
+        let kind = self.receiver_kind(hint.as_ref());
+
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for idx in self.catalog.method_matches(alias) {
+            let names = &self.catalog.names[*idx];
+            if !kind.accepts(names.class.as_ref()) {
+                continue;
+            }
+            let node_type = &self.catalog.entries[*idx].name;
+            match groups.iter_mut().find(|(known, _)| known == node_type) {
+                Some((_, indices)) => indices.push(*idx),
+                None => groups.push((node_type.clone(), vec![*idx])),
+            }
+        }
+        let catalog: Vec<CallCandidate> = groups
+            .into_iter()
+            .map(|(_, indices)| {
+                let names = &self.catalog.names[indices[0]];
+                CallCandidate {
+                    kind: CandidateKind::Catalog(indices.clone()),
+                    receiver_pin: names.receiver.clone(),
+                    qualified: names.qualified.clone(),
+                    node_type: self.catalog.entries[indices[0]].name.clone(),
+                    opened_by: self
+                        .use_scope
+                        .opens(&namespace_key(&names.namespace), &names.alias),
+                }
+            })
+            .collect();
+
+        let mut corrections = Vec::new();
+        let mut function_param_class = None;
+        let function = self
+            .function_sigs
+            .get(alias)
+            .and_then(|sig| sig.params.first())
+            .and_then(|first| {
+                let class = self.pin_class(first);
+                if kind.accepts(class.as_ref()) {
+                    return Some(CallCandidate {
+                        kind: CandidateKind::Function(alias.to_string()),
+                        receiver_pin: Some(first.name.clone()),
+                        qualified: format!("function `{alias}`"),
+                        node_type: CALL_FUNCTION_NODE_TYPE.to_string(),
+                        opened_by: None,
+                    });
+                }
+                function_param_class = Some(match class {
+                    Some(ReceiverClass::Named(class)) => class,
+                    _ => "any".to_string(),
+                });
+                None
+            });
+        let mut candidates = match function {
+            Some(function) => {
+                if !catalog.is_empty() {
+                    corrections.push(format!(
+                        "`{callee}(...)` calls function `{alias}`, which shadows catalog method {}.",
+                        quoted_list(&candidate_labels(&catalog))
+                    ));
+                }
+                vec![function]
+            }
+            None => catalog,
+        };
+
+        if candidates.is_empty() {
+            return Err(self.no_method_diagnostic(call, &kind, function_param_class));
+        }
+        if candidates.len() > 1 {
+            let fitting: Vec<CallCandidate> = candidates
+                .iter()
+                .filter(|candidate| self.candidate_shape_fits(call, candidate))
+                .cloned()
+                .collect();
+            if fitting.is_empty() {
+                return Err(format!(
+                    "`{callee}(...)` matches {}, but none of them accepts the given arguments; write the qualified form with every argument named",
+                    quoted_list(&candidate_labels(&candidates))
+                ));
+            }
+            candidates = fitting;
+        }
+        if candidates.len() > 1 {
+            let opened: Vec<CallCandidate> = candidates
+                .iter()
+                .filter(|candidate| candidate.opened_by.is_some())
+                .cloned()
+                .collect();
+            if !opened.is_empty() && opened.len() < candidates.len() {
+                candidates = opened;
+            }
+        }
+        match candidates.as_slice() {
+            [single] => self.finish_candidate(call, single.clone(), corrections),
+            many => {
+                let first = &many[0];
+                let receiver_pin = first
+                    .receiver_pin
+                    .as_deref()
+                    .map(to_camel_case)
+                    .unwrap_or_else(|| "receiver".to_string());
+                Err(format!(
+                    "`{callee}(...)` is ambiguous between {}; write the qualified form, for example `{}({{ {receiver_pin}: {}, ... }})`",
+                    quoted_list(&candidate_labels(many)),
+                    first.qualified,
+                    describe_expr(receiver)
+                ))
+            }
+        }
+    }
+
+    fn candidate_shape_fits(&self, call: &Call, candidate: &CallCandidate) -> bool {
+        match &candidate.kind {
+            CandidateKind::Catalog(indices) => call_shape_fits(
+                call,
+                &self.catalog.entries[indices[0]],
+                candidate.receiver_pin.as_deref(),
+            ),
+            CandidateKind::Function(name) => self.function_sigs.get(name).is_some_and(|sig| {
+                call_shape_fits(
+                    call,
+                    &function_shape_metadata(name, &sig.params, &sig.returns),
+                    candidate.receiver_pin.as_deref(),
+                )
+            }),
+        }
+    }
+
+    fn no_method_diagnostic(
+        &self,
+        call: &Call,
+        kind: &ReceiverKind,
+        function_param_class: Option<String>,
+    ) -> String {
+        let alias = call.display.as_str();
+        let mut classes: Vec<String> = Vec::new();
+        for idx in self.catalog.method_matches(alias) {
+            let class = match &self.catalog.names[*idx].class {
+                Some(ReceiverClass::Named(class)) => class.clone(),
+                Some(ReceiverClass::Universal) => "any".to_string(),
+                None => continue,
+            };
+            if !classes.contains(&class) {
+                classes.push(class);
+            }
+        }
+        if let Some(class) = function_param_class {
+            classes.push(format!("{class} (function `{alias}`)"));
+        }
+        let did_you_mean = {
+            let suggestions = closest_names(
+                alias,
+                self.catalog
+                    .names
+                    .iter()
+                    .filter(|names| names.class.is_some())
+                    .map(|names| names.alias.as_str())
+                    .chain(
+                        self.function_sigs
+                            .iter()
+                            .filter(|(_, sig)| !sig.params.is_empty())
+                            .map(|(name, _)| name.as_str()),
+                    ),
+            );
+            if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!("; did you mean {}?", quoted_list(&suggestions))
+            }
+        };
+        match kind.display() {
+            Some(class) if !classes.is_empty() => format!(
+                "no method `{alias}` on `{class}`; `{alias}` is a method of {}",
+                quoted_list(&classes)
+            ),
+            Some(class) => format!("no method `{alias}` on `{class}`{did_you_mean}"),
+            None => format!("`{alias}` is not a method of any type{did_you_mean}"),
+        }
+    }
+
+    fn resolve_bare_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        if self.function_sigs.contains_key(&call.display) {
+            return self.finish_function_call(call, &call.display, Vec::new(), Vec::new());
+        }
+        let display = call.display.as_str();
+        let flat = self.catalog.flat_matches(display);
+
+        let mut opened: Vec<OpenedGroup> = Vec::new();
+        for (glob, idx) in &self.use_scope.globs {
+            group_opened(
+                &mut opened,
+                &self.catalog,
+                self.catalog.qualified_matches(glob, display),
+                *idx,
+            );
+        }
+        if let Some((namespace, idx)) = self.use_scope.members.get(&display.to_lowercase()) {
+            group_opened(
+                &mut opened,
+                &self.catalog,
+                self.catalog.qualified_matches(namespace, display),
+                *idx,
+            );
+        }
+
+        if !flat.is_empty() {
+            let meta = self.catalog.one_match(display, flat)?;
+            let foreign: Vec<String> = opened
+                .iter()
+                .filter(|group| group.node_type != meta.name)
+                .map(|group| self.catalog.names[group.indices[0]].qualified.clone())
+                .collect();
+            if !foreign.is_empty() {
+                return Err(format!(
+                    "call `{display}` is ambiguous: it is the flat name of `{}` and the member {} opened by `use`; write the qualified form",
+                    catalog_names(&meta).qualified,
+                    quoted_list(&foreign)
+                ));
+            }
+            let used = opened
+                .iter()
+                .flat_map(|group| group.uses.iter().copied())
+                .collect();
+            return self.finish_catalog_call(call, meta, None, Vec::new(), used);
+        }
+
+        if !opened.is_empty() {
+            let qualified = |groups: &[OpenedGroup]| {
+                disambiguated_labels(
+                    &groups
+                        .iter()
+                        .map(|group| {
+                            (
+                                self.catalog.names[group.indices[0]].qualified.clone(),
+                                group.node_type.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let mut candidates = opened;
+            if candidates.len() > 1 {
+                let fitting: Vec<OpenedGroup> = candidates
+                    .iter()
+                    .filter(|group| {
+                        call_shape_fits(call, &self.catalog.entries[group.indices[0]], None)
+                    })
+                    .cloned()
+                    .collect();
+                if fitting.is_empty() {
+                    return Err(format!(
+                        "call `{display}` matches {} (opened by `use`), but none of them accepts the given arguments; write the qualified form with every argument named",
+                        quoted_list(&qualified(&candidates))
+                    ));
+                }
+                candidates = fitting;
+            }
+            return match candidates.as_slice() {
+                [group] => {
+                    let meta = self.catalog.one_match(display, &group.indices)?;
+                    self.finish_catalog_call(call, meta, None, Vec::new(), group.uses.clone())
+                }
+                many => {
+                    let names = qualified(many);
+                    Err(format!(
+                        "call `{display}` is ambiguous between {} (opened by `use`); write the qualified form, for example `{}(...)`",
+                        quoted_list(&names),
+                        names[0]
+                    ))
+                }
+            };
+        }
+
+        match self.catalog.resolve_call(call) {
+            Ok(meta) => self.finish_catalog_call(call, meta, None, Vec::new(), Vec::new()),
+            Err(original) => {
+                let indices = self.catalog.alias_matches(display);
+                let alternatives = self.catalog.qualified_names(indices);
+                if alternatives.is_empty() {
+                    return Err(original);
+                }
+                let namespace = self
+                    .catalog
+                    .names
+                    .get(indices[0])
+                    .map(|names| names.namespace.replace('.', "::"))
+                    .unwrap_or_default();
+                Err(format!(
+                    "FlowScript call `{display}` does not match a catalog declaration; did you mean {} (or add `use {namespace}::*` to call it bare)?",
+                    quoted_list(&alternatives)
+                ))
+            }
+        }
+    }
+
+    /// The class identity of a struct schema: its `title`, else the declared interface whose
+    /// generated schema it is (interface schemas carry no title of their own).
+    fn struct_class(&self, schema: &str) -> Option<String> {
+        flow_like_ast::schema_title(schema).or_else(|| {
+            flow_like_ast::interface_name_for_schema(&self.interfaces, schema).map(str::to_string)
+        })
+    }
+
+    /// The method class a pin contract (a parameter, variable or output) belongs to.
+    fn pin_class(&self, pin: &PinMetadata) -> Option<ReceiverClass> {
+        if pin.data_type == "Generic" && pin.value_type == "Normal" {
+            return Some(ReceiverClass::Universal);
+        }
+        let class = flow_like_ast::receiver_class(&pin.data_type, &pin.value_type)?;
+        if class == "struct"
+            && let Some(title) = pin
+                .schema
+                .as_deref()
+                .and_then(|schema| self.struct_class(schema))
+        {
+            return Some(ReceiverClass::Named(title));
+        }
+        Some(ReceiverClass::Named(class.to_string()))
+    }
+
+    fn receiver_kind(&self, hint: Option<&ReceiverHint>) -> ReceiverKind {
+        let Some(hint) = hint else {
+            return ReceiverKind::Unknown;
+        };
+        if hint.data_type == "Generic" && hint.value_type == "Normal" {
+            return ReceiverKind::Unknown;
+        }
+        match flow_like_ast::receiver_class(&hint.data_type, &hint.value_type) {
+            None => ReceiverKind::Unknown,
+            Some("struct") => ReceiverKind::Struct(
+                hint.schema
+                    .as_deref()
+                    .and_then(|schema| self.struct_class(schema)),
+            ),
+            Some(class) => ReceiverKind::Value(class.to_string()),
+        }
+    }
+
+    /// Type a receiver expression as a pin-like contract for method dispatch: literals,
+    /// declared variables/params, call outputs (with schema), and interface fields walked
+    /// through `a.b.c`. No diagnostics.
+    fn expr_receiver_hint(&self, expr: &Expr) -> Option<ReceiverHint> {
+        if let Some(value) = literal_expr_to_value(expr) {
+            return Some(literal_receiver_hint(&value));
+        }
+        match expr {
+            Expr::Ref(name) => self.symbol_receiver_hint(&self.lookup_symbol(name)?),
+            Expr::Call(call) => {
+                let meta = self.call_output_metadata(call)?;
+                let output = default_metadata_output_pin(&meta)?;
+                metadata_output_pin(&meta, &output).map(pin_receiver_hint)
+            }
+            Expr::Field { base, pin } => match base.as_ref() {
+                Expr::Call(call) => self
+                    .call_output_metadata(call)
+                    .and_then(|meta| metadata_output_pin(&meta, pin).map(pin_receiver_hint))
+                    .or_else(|| self.member_receiver_hint(base, pin)),
+                Expr::Ref(name) => {
+                    if let Some(SymbolValue::Source(source)) = self.lookup_symbol(name)
+                        && let Some(output) =
+                            self.resolve_entity_output_pin(&source.node, Some(pin))
+                    {
+                        return self
+                            .source_output_shape(&ValueSource {
+                                node: source.node,
+                                output_pin: Some(output),
+                            })
+                            .map(shape_receiver_hint);
+                    }
+                    self.member_receiver_hint(base, pin)
+                }
+                other => self.member_receiver_hint(other, pin),
+            },
+            Expr::Member { base, field } => self.member_receiver_hint(base, field),
+            Expr::Index { base, .. } => {
+                let base = self.expr_receiver_hint(base)?;
+                (base.value_type == "Array").then_some(ReceiverHint {
+                    data_type: base.data_type,
+                    value_type: "Normal".to_string(),
+                    schema: base.schema,
+                })
+            }
+            Expr::Ternary {
+                then, otherwise, ..
+            } => {
+                let then = self.expr_receiver_hint(then)?;
+                let otherwise = self.expr_receiver_hint(otherwise)?;
+                (then.data_type == otherwise.data_type && then.value_type == otherwise.value_type)
+                    .then_some(then)
+            }
+            Expr::Binary { .. } => self
+                .expr_data_type_hint(expr)
+                .map(|data_type| ReceiverHint {
+                    data_type,
+                    value_type: "Normal".to_string(),
+                    schema: None,
+                }),
+            Expr::Object(_) => Some(ReceiverHint {
+                data_type: "Struct".to_string(),
+                value_type: "Normal".to_string(),
+                schema: None,
+            }),
+            Expr::Array(_) => Some(ReceiverHint {
+                data_type: "Generic".to_string(),
+                value_type: "Array".to_string(),
+                schema: None,
+            }),
+            Expr::Template { .. } => Some(ReceiverHint {
+                data_type: "String".to_string(),
+                value_type: "Normal".to_string(),
+                schema: None,
+            }),
+            Expr::Literal(_) => None,
+        }
+    }
+
+    fn symbol_receiver_hint(&self, symbol: &SymbolValue) -> Option<ReceiverHint> {
+        match symbol {
+            SymbolValue::Source(source) => {
+                self.source_output_shape(source).map(shape_receiver_hint)
+            }
+            SymbolValue::Literal(value) => Some(literal_receiver_hint(value)),
+            SymbolValue::VariableRef { variable_id } => self
+                .variable_value_contract(variable_id, "value_ref")
+                .map(|contract| pin_receiver_hint(&contract)),
+        }
+    }
+
+    fn member_receiver_hint(&self, base: &Expr, field: &str) -> Option<ReceiverHint> {
+        let base = self.expr_receiver_hint(base)?;
+        if base.data_type != "Struct" || base.value_type != "Normal" {
+            return None;
+        }
+        schema_property_hint(base.schema.as_deref()?, field)
+    }
+
+    /// Whether an anchored call still names the live node it anchors to, in any accepted
+    /// spelling: exact `node_type`, flat name, friendly name, `::` path or member alias.
+    fn anchored_call_matches_node(&self, call: &Call, node: &Node, meta: &NodeMetadata) -> bool {
+        if !call.node_type.trim().is_empty() {
+            return call.node_type == node.name;
+        }
+        // The catalog's names for the type and the live node's own (possibly stale, derived)
+        // names are both the node: lower renders whichever the placed node carries.
+        let mut names = vec![catalog_names(meta)];
+        if let Some(catalog) = self.catalog.names_for_type(&node.name) {
+            names.push(catalog.clone());
+        }
+        if !call.path.is_empty() {
+            return self.expand_path(&call.path).ok().is_some_and(|(key, _)| {
+                names.iter().any(|names| {
+                    qualified_key(&key, &call.display)
+                        == qualified_key(&namespace_key(&names.namespace), &names.alias)
+                })
+            });
+        }
+        call_matches_node(call, node)
+            || names
+                .iter()
+                .any(|names| names.alias.eq_ignore_ascii_case(&call.display))
+    }
+
+    /// Camel-cased data outputs of an entity, for destructuring diagnostics.
+    fn entity_data_output_names(&self, entity: &NodeEntity) -> Vec<String> {
+        let mut names: Vec<String> = match entity {
+            NodeEntity::Existing(id) => find_board_node(self.existing, id)
+                .map(|node| {
+                    let mut pins: Vec<&Pin> = node
+                        .pins
+                        .values()
+                        .filter(|pin| pin.pin_type == PinType::Output && !is_exec_pin(pin))
+                        .collect();
+                    pins.sort_by_key(|pin| (pin.index, pin.name.clone()));
+                    pins.into_iter()
+                        .map(|pin| to_camel_case(&pin.name))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            NodeEntity::New { meta, .. } => meta
+                .outputs
+                .iter()
+                .filter(|pin| pin.data_type != "Execution")
+                .map(|pin| to_camel_case(&pin.name))
+                .collect(),
+            NodeEntity::Layer { pins, .. } => pins
+                .iter()
+                .filter(|pin| pin.pin_type == "Output" && pin.data_type != "Execution")
+                .map(|pin| to_camel_case(&pin.name))
+                .collect(),
+        };
+        names.dedup();
+        names
+    }
+}
+
 fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
     fn visit_event(event: &EventBlock, anchors: &mut HashSet<String>) {
         if let Some(anchor) = &event.anchor {
@@ -9470,6 +11791,7 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
                 Stmt::Loop { body, .. } => visit_block(body, anchors),
                 Stmt::Handler(event) => visit_event(event, anchors),
                 Stmt::Let { .. }
+                | Stmt::Destructure { .. }
                 | Stmt::Call { .. }
                 | Stmt::Assign { .. }
                 | Stmt::FieldAssign { .. }
@@ -9496,9 +11818,9 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
 fn first_existing_exec_body_node<'a>(board: &'a Board, block: &Block) -> Option<&'a Node> {
     for statement in &block.stmts {
         let anchor = match statement {
-            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                anchor.as_deref().or(call.anchor.as_deref())
-            }
+            Stmt::Let { call, anchor, .. }
+            | Stmt::Destructure { call, anchor, .. }
+            | Stmt::Call { call, anchor } => anchor.as_deref().or(call.anchor.as_deref()),
             Stmt::Branch { call, anchor, .. } | Stmt::Loop { call, anchor, .. } => {
                 anchor.as_deref().or(call.anchor.as_deref())
             }
@@ -9546,6 +11868,7 @@ fn block_has_no_executable_statements(block: &Block) -> bool {
         Stmt::Comment(_) | Stmt::Local(_) => true,
         Stmt::LocalAlias { value, .. } => !expr_has_unanchored_calls(value),
         Stmt::Let { .. }
+        | Stmt::Destructure { .. }
         | Stmt::Call { .. }
         | Stmt::Assign { .. }
         | Stmt::FieldAssign { .. }
@@ -9562,9 +11885,9 @@ fn block_has_unanchored_calls(block: &Block) -> bool {
 
 fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            anchor.is_none() || call_args_have_unanchored_calls(call)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => anchor.is_none() || call_args_have_unanchored_calls(call),
         Stmt::Branch {
             call,
             condition,
@@ -9578,10 +11901,15 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
                 || arms.iter().any(|arm| block_has_unanchored_calls(&arm.body))
         }
         Stmt::Loop {
-            call, body, anchor, ..
+            call,
+            iterable,
+            body,
+            anchor,
+            ..
         } => {
             anchor.is_none()
                 || call_args_have_unanchored_calls(call)
+                || iterable.as_ref().is_some_and(expr_has_unanchored_calls)
                 || block_has_unanchored_calls(body)
         }
         Stmt::Assign { value, anchor, .. }
@@ -9596,9 +11924,16 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
 }
 
 fn call_args_have_unanchored_calls(call: &Call) -> bool {
-    call.args
+    call_operands(call).any(expr_has_unanchored_calls)
+}
+
+/// Every expression a call evaluates: the method receiver, positional values and named values.
+fn call_operands(call: &Call) -> impl Iterator<Item = &Expr> {
+    call.receiver
         .iter()
-        .any(|arg| expr_has_unanchored_calls(&arg.value))
+        .map(|receiver| receiver.as_ref())
+        .chain(call.positional.iter())
+        .chain(call.args.iter().map(|arg| &arg.value))
 }
 
 fn expr_has_unanchored_calls(expr: &Expr) -> bool {
@@ -9622,7 +11957,64 @@ fn expr_has_unanchored_calls(expr: &Expr) -> bool {
         Expr::Binary { lhs, rhs, .. } => {
             expr_has_unanchored_calls(lhs) || expr_has_unanchored_calls(rhs)
         }
+        Expr::Template { parts } => template_exprs(parts).any(expr_has_unanchored_calls),
         Expr::Ref(_) | Expr::Literal(_) => false,
+    }
+}
+
+/// The interpolated expressions of a template literal, in source order.
+fn template_exprs(parts: &[TemplatePart]) -> impl Iterator<Item = &Expr> {
+    parts.iter().filter_map(|part| match part {
+        TemplatePart::Expr(expr) => Some(expr),
+        TemplatePart::Text(_) => None,
+    })
+}
+
+/// A loop statement normalized to the call it plans and the names its body binds.
+struct LoopHead {
+    call: Call,
+    bind: Option<String>,
+    element: Option<String>,
+    index: Option<String>,
+}
+
+/// Loop node outputs a sugared `for…of` binds by name.
+const LOOP_VALUE_OUTPUT: &str = "value";
+const LOOP_INDEX_OUTPUT: &str = "index";
+
+/// Exec outputs that make a node a loop for the planner: one opening the body and one
+/// continuing the chain (the same names `plan_stmt` wires a `Stmt::Loop` through).
+const LOOP_BODY_EXEC_PINS: &[&str] = &["exec_out", "loop", "body"];
+const LOOP_DONE_EXEC_PINS: &[&str] = &["done", "exec_done"];
+
+/// Whether a node's pin shape is that of a loop, independent of its catalog name: an exec
+/// input plus body and done exec outputs. Lets package/custom loop nodes keep the explicit
+/// `for (const h of loopCall(…))` handle form.
+fn metadata_is_loop_shaped(meta: &NodeMetadata) -> bool {
+    let has_exec_output = |names: &[&str]| {
+        meta.outputs
+            .iter()
+            .any(|pin| pin.data_type == "Execution" && names.contains(&pin.name.as_str()))
+    };
+    metadata_exec_input_pin(meta).is_some()
+        && has_exec_output(LOOP_BODY_EXEC_PINS)
+        && has_exec_output(LOOP_DONE_EXEC_PINS)
+}
+
+/// Synthesize the loop-node [`Call`] a sugared loop head lowers to:
+/// `controlForEach({ array: head })` / `controlParForEach(…)` / `controlWhileLoop({ condition: head })`.
+fn sugared_loop_call(node_type: &str, head: Expr, anchor: Option<&str>) -> Call {
+    Call {
+        node_type: node_type.to_string(),
+        display: to_camel_case(node_type),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
+        args: vec![Arg {
+            name: sugared_loop_head_pin(node_type).to_string(),
+            value: head,
+        }],
+        anchor: anchor.map(str::to_string),
     }
 }
 
@@ -9641,6 +12033,9 @@ fn field_assign_struct_set_call(
     Call {
         node_type: String::new(),
         display: "structSet".to_string(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: vec![
             Arg {
                 name: "structIn".to_string(),
@@ -9659,29 +12054,30 @@ fn field_assign_struct_set_call(
     }
 }
 
-/// Materialize the synthesized `struct_set` [`Call`] for every *anchored* `Stmt::FieldAssign` in
-/// `ast`, at any nesting depth. `FieldAssign` carries no `&Call`, so without this the config-edit
-/// (`new_calls`) and deletion (`visible`) collectors would never see a `base.path = value` write's
-/// underlying `struct_set` node. The returned owned calls back the `&Call` entries those maps key
-/// by anchor. Anchorless writes are fresh (handled by the structural planner) and are skipped.
-fn collect_anchored_field_assign_calls(ast: &BoardAst) -> Vec<Call> {
+/// Materialize the synthesized [`Call`] behind every *anchored* sugared statement in `ast`, at
+/// any nesting depth: the `struct_set` of a `base.path = value` write and the loop node of a
+/// `for (const item of xs)` / `while (cond)` head. Neither carries a `&Call` with arguments, so
+/// without this the config-edit (`new_calls`) and deletion (`visible`) collectors would never
+/// diff their literal inputs. The returned owned calls back the `&Call` entries those maps key by
+/// anchor. Anchorless statements are fresh (handled by the structural planner) and are skipped.
+fn collect_anchored_synthesized_calls(ast: &BoardAst) -> Vec<Call> {
     let mut out = Vec::new();
     for ev in &ast.events {
-        collect_field_assign_calls_in_block(&ev.body, &mut out);
+        collect_synthesized_calls_in_block(&ev.body, &mut out);
     }
     for f in &ast.functions {
-        collect_field_assign_calls_in_block(&f.body, &mut out);
+        collect_synthesized_calls_in_block(&f.body, &mut out);
     }
     out
 }
 
-fn collect_field_assign_calls_in_block(block: &Block, out: &mut Vec<Call>) {
+fn collect_synthesized_calls_in_block(block: &Block, out: &mut Vec<Call>) {
     for stmt in &block.stmts {
-        collect_field_assign_calls_in_stmt(stmt, out);
+        collect_synthesized_calls_in_stmt(stmt, out);
     }
 }
 
-fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
+fn collect_synthesized_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
     match stmt {
         Stmt::FieldAssign {
             base,
@@ -9696,11 +12092,24 @@ fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
         )),
         Stmt::Branch { arms, .. } => {
             for arm in arms {
-                collect_field_assign_calls_in_block(&arm.body, out);
+                collect_synthesized_calls_in_block(&arm.body, out);
             }
         }
-        Stmt::Loop { body, .. } => collect_field_assign_calls_in_block(body, out),
-        Stmt::Handler(event) => collect_field_assign_calls_in_block(&event.body, out),
+        Stmt::Loop {
+            keyword,
+            iterable,
+            body,
+            anchor,
+            ..
+        } => {
+            if let (Some(iterable), Some(anchor)) = (iterable, anchor)
+                && let Some(node_type) = sugared_loop_node_type(keyword)
+            {
+                out.push(sugared_loop_call(node_type, iterable.clone(), Some(anchor)));
+            }
+            collect_synthesized_calls_in_block(body, out);
+        }
+        Stmt::Handler(event) => collect_synthesized_calls_in_block(&event.body, out),
         _ => {}
     }
 }
@@ -9741,9 +12150,9 @@ fn collect_statement_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a C
 
 fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            collect_call_anchor_only(call, anchor.as_deref(), out)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => collect_call_anchor_only(call, anchor.as_deref(), out),
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
@@ -9797,9 +12206,9 @@ fn collect_call_anchor_only<'a>(
 
 fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            collect_call_with_anchor(call, anchor.as_deref(), out)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => collect_call_with_anchor(call, anchor.as_deref(), out),
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
@@ -9813,9 +12222,16 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             }
         }
         Stmt::Loop {
-            call, body, anchor, ..
+            call,
+            iterable,
+            body,
+            anchor,
+            ..
         } => {
             collect_call_with_anchor(call, anchor.as_deref(), out);
+            if let Some(iterable) = iterable {
+                collect_expr(iterable, out);
+            }
             collect_block(body, out);
         }
         Stmt::Assign { value, anchor, .. } => {
@@ -9860,8 +12276,8 @@ fn collect_call_with_anchor<'a>(
     if let Some(anchor) = call.anchor.as_deref().or(fallback_anchor) {
         out.insert(anchor.to_string(), call);
     }
-    for arg in &call.args {
-        collect_expr(&arg.value, out);
+    for operand in call_operands(call) {
+        collect_expr(operand, out);
     }
 }
 
@@ -9895,6 +12311,11 @@ fn collect_expr<'a>(expr: &'a Expr, out: &mut HashMap<String, &'a Call>) {
         Expr::Binary { lhs, rhs, .. } => {
             collect_expr(lhs, out);
             collect_expr(rhs, out);
+        }
+        Expr::Template { parts } => {
+            for part in template_exprs(parts) {
+                collect_expr(part, out);
+            }
         }
         Expr::Ref(_) | Expr::Literal(_) => {}
     }
@@ -9932,7 +12353,7 @@ fn assigned_call_expr(expr: &Expr) -> Option<(&Call, Option<&str>)> {
 }
 
 fn is_placeholder_call(call: &Call) -> bool {
-    call.node_type.is_empty() && call.display.is_empty() && call.args.is_empty()
+    call.is_placeholder()
 }
 
 fn promoted_local_aliases(block: &Block) -> HashSet<String> {
@@ -10177,6 +12598,69 @@ mod tests {
             "Struct",
             "Normal",
             Some("{\"title\":\"Bit\"}"),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn an_open_object_schema_never_constrains_an_enforcing_peer() {
+        // `Pin::set_open_schema()` declares "the shape is open", not a contract. On a pin whose
+        // name is outside the struct_in/struct_out/struct hatch — `rows` from a DataFusion query
+        // into a typed `body` — it must compare as an absent schema, the way it did before those
+        // pins carried any schema at all.
+        assert!(schema_constraints_are_compatible(
+            "body",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"RequestBody\"}"),
+            true,
+            "rows",
+            "Struct",
+            "Normal",
+            Some(crate::flow::pin::OPEN_OBJECT_SCHEMA),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn an_open_object_schema_is_recognized_through_a_ref() {
+        // Boards persist schemas as ref hashes, so the marker usually arrives indirected.
+        let mut refs = HashMap::new();
+        refs.insert(
+            "hash1".to_string(),
+            crate::flow::pin::OPEN_OBJECT_SCHEMA.to_string(),
+        );
+        assert!(schema_constraints_are_compatible(
+            "body",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"RequestBody\"}"),
+            true,
+            "rows",
+            "Struct",
+            "Normal",
+            Some("hash1"),
+            false,
+            &refs,
+        ));
+    }
+
+    #[test]
+    fn an_object_schema_with_properties_is_not_the_open_marker() {
+        // Only the bare two-key marker is a wildcard. An `additionalProperties` object that also
+        // declares fields is a real contract and must still be enforced.
+        assert!(!schema_constraints_are_compatible(
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            true,
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"type\":\"object\",\"additionalProperties\":true,\"properties\":{\"x\":{}}}"),
             false,
             &HashMap::new(),
         ));
@@ -10572,6 +13056,18 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+
+    /// Give a hand-built catalog the categories of the board's placed nodes, as a real catalog
+    /// (the source the nodes were placed from) carries them: lowered text names nodes by the
+    /// namespace derived from that category.
+    fn with_board_categories(mut catalog: Vec<NodeMetadata>, board: &Board) -> Vec<NodeMetadata> {
+        for meta in &mut catalog {
+            if let Some(node) = board.nodes.values().find(|node| node.name == meta.name) {
+                meta.category = Some(node.category.clone());
+            }
+        }
+        catalog
     }
 
     #[test]
@@ -11831,6 +14327,9 @@ simpleEvent() {   //@n:event
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 
@@ -12723,7 +15222,11 @@ eventsSimple() {
             result.commands
         );
 
-        let changed_text = text.replacen("greeting: string", "greeting: Date", 1);
+        let changed_text = text.replacen(
+            "const greeting = \"hi\"",
+            "const greeting: Date = \"hi\"",
+            1,
+        );
         assert_ne!(
             changed_text, text,
             "the lowered variable type must be editable"
@@ -13187,7 +15690,8 @@ eventsSimple() {
     fn catalog_required_input_accepts_retained_anchored_connection() {
         let board = board_with_anchored_required_sink(None, true);
         let text = anchored_text(&board);
-        let result = reconcile_text_with_catalog(&board, &text, &anchored_required_sink_catalog());
+        let catalog = with_board_categories(anchored_required_sink_catalog(), &board);
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
 
         assert!(
             result.diagnostics.is_empty(),
@@ -13249,6 +15753,9 @@ eventsSimple() {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -13327,6 +15834,9 @@ eventsSimple() {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -15041,6 +17551,9 @@ eventsSimple() {
         let call = Call {
             node_type: "date_sink".to_string(),
             display: "dateSink".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![Arg {
                 name: "date".to_string(),
                 value: Expr::Ref("existingValue".to_string()),
@@ -15393,18 +17906,23 @@ function constantFlag(): (flag: bool) {
         .expect("loop accumulator script applies");
         assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
 
-        // The lowerer names bindings after the node, not after the source that created it, so
-        // find the accumulator's rendered name instead of assuming the authored one survived.
+        // The lowerer names the destructured output after the pin, not after the binding the
+        // script authored, so find the accumulator's rendered name instead of assuming the
+        // authored one survived.
         let text = anchored_text(&board);
-        let binding = text
+        let local = text
             .lines()
             .find_map(|line| {
-                let (name, call) = line.trim().strip_prefix("const ")?.split_once(" = ")?;
-                call.starts_with("arrayPush(").then(|| name.to_string())
+                let (pattern, call) = line.trim().strip_prefix("const { ")?.split_once(" } = ")?;
+                if !call.starts_with("items.push(") {
+                    return None;
+                }
+                let (_, name) = pattern.split_once(": ").unwrap_or((pattern, pattern));
+                Some(name.to_string())
             })
-            .expect("the accumulator must lower as a binding inside the loop body");
+            .unwrap_or_else(|| panic!("the accumulator must lower as a destructured binding inside the loop body:\n{text}"));
         assert!(
-            text.contains(&format!("return {binding}.arrayOut")),
+            text.contains(&format!("return {local}")),
             "the lowered board must still read the loop-local accumulator:\n{text}"
         );
 
@@ -16165,6 +18683,9 @@ function second(): (result: int) {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -16259,6 +18780,9 @@ function second(): (result: int) {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -16881,10 +19405,10 @@ function brokenTwo(): (tag: string) {
         // The model binds the anchored call and returns the binding — the anchor keeps the
         // statement resolving to the LIVE node, so the return source is an Existing entity.
         let text = anchored_text(&board);
-        assert!(text.contains("    httpProbe()   //@n:"), "{text}");
+        assert!(text.contains("    web::httpProbe()   //@n:"), "{text}");
         let rebound = text.replace(
-            "    httpProbe()   //@n:",
-            "    const probe = httpProbe()   //@n:",
+            "    web::httpProbe()   //@n:",
+            "    const probe = web::httpProbe()   //@n:",
         );
         let insert_at = rebound.rfind("\n}").expect("function closing brace");
         let with_return = format!(
@@ -17348,6 +19872,9 @@ eventsSimple() {
         let call = Call {
             node_type: "shared_source".to_string(),
             display: "sharedSource".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -17378,6 +19905,9 @@ eventsSimple() {
         let schema_call = Call {
             node_type: "schema_source".to_string(),
             display: "schemaSource".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -17436,6 +19966,9 @@ eventsSimple() {
         let call = Call {
             node_type: "bool_or".to_string(),
             display: "boolOr".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![
                 Arg {
                     name: "boolean".to_string(),
@@ -18595,6 +21128,354 @@ eventsSimple() {
                     && from_pin == "result"
                     && to_node == branch
                     && to_pin == "condition"
+        )));
+    }
+
+    fn added_node_ref<'a>(result: &'a ReconcileResult, node_type: &str) -> Option<&'a str> {
+        result.commands.iter().find_map(|command| match command {
+            BoardCommand::AddNode {
+                node_type: added,
+                ref_id: Some(ref_id),
+                ..
+            } if added == node_type => Some(ref_id.as_str()),
+            _ => None,
+        })
+    }
+
+    fn phase0_operator_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_float",
+                "Log Float",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("value", "Float", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            // `string_concat` follows the repeatable-pin convention: both inputs share a name.
+            catalog_meta(
+                "string_concat",
+                "Concat Strings",
+                vec![
+                    pin_meta("string", "String", PinType::Input),
+                    pin_meta("string", "String", PinType::Input),
+                ],
+                vec![pin_meta("concatenated", "String", PinType::Output)],
+            ),
+            catalog_meta(
+                "int_subtract",
+                "Subtract Integers",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("difference", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "float_subtract",
+                "Subtract Floats",
+                vec![
+                    pin_meta("float1", "Float", PinType::Input),
+                    pin_meta("float2", "Float", PinType::Input),
+                ],
+                vec![pin_meta("difference", "Float", PinType::Output)],
+            ),
+            catalog_meta(
+                "int_equal",
+                "Integer Equal",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("equal", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "utils_types_select",
+                "Select",
+                vec![
+                    pin_meta("a", "Generic", PinType::Input),
+                    pin_meta("b", "Generic", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Generic", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn string_equality_tolerates_a_defaulted_trailing_input() {
+        let mut catalog = phase0_operator_catalog();
+        let mut ignore_case = pin_meta("ignore_case", "Boolean", PinType::Input);
+        ignore_case.default_value = Some("false".to_string());
+        catalog.push(catalog_meta(
+            "equal_string",
+            "Equal Strings",
+            vec![
+                pin_meta("string", "String", PinType::Input),
+                pin_meta("string", "String", PinType::Input),
+                ignore_case,
+            ],
+            vec![pin_meta("equal", "Boolean", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "float_equal",
+            "Equal Floats",
+            vec![
+                pin_meta("float1", "Float", PinType::Input),
+                pin_meta("float2", "Float", PinType::Input),
+                pin_meta("tolerance", "Float", PinType::Input),
+            ],
+            vec![pin_meta("equal", "Boolean", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "log_bool",
+            "Log Bool",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("value", "Boolean", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "run() {\n    logBool({ value: \"a\" == \"b\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let equal = added_node_ref(&result, "equal_string").expect("equal_string node");
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                    if node_id == equal && pin_id == "ignore_case"
+            )),
+            "the operator form must leave the defaulted trailing pin untouched: {:?}",
+            result.commands
+        );
+
+        let floats = reconcile_text_with_catalog(
+            &empty_board(),
+            "const a: float = 1.0\n\nrun() {\n    logBool({ value: a == 2.0 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            floats.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains(
+                    "binary operator `==` for `Float` has no suitable two-input catalog node",
+                )
+            }),
+            "a required trailing input disqualifies the operator form: {:?}",
+            floats.diagnostics
+        );
+    }
+
+    #[test]
+    fn string_plus_materializes_string_concat_with_occurrence_bound_pins() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const greeting: string = \"hi\"\n\nrun() {\n    log({ message: \"a\" + \"b\" })\n    log({ message: greeting + \"!\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let concats = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_concat" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [literal_concat, wired_concat] = concats.as_slice() else {
+            panic!("expected two string_concat nodes: {:?}", result.commands);
+        };
+        for (pin, text) in [("string[#1]", "a"), ("string[#2]", "b")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if node_id == literal_concat
+                            && pin_id == pin
+                            && value == &flow_like_types::Value::String(text.to_string())
+                )),
+                "literal operand must land on {pin}: {:?}",
+                result.commands
+            );
+        }
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == reader
+                    && from_pin == "value_ref"
+                    && to_node == wired_concat
+                    && to_pin == "string[#1]"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == wired_concat
+                    && pin_id == "string[#2]"
+                    && value == &flow_like_types::Value::String("!".to_string())
+        )));
+        let concat_to_log = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if concats.contains(&from_node.as_str())
+                            && from_pin == "concatenated"
+                            && to_pin == "message"
+                )
+            })
+            .count();
+        assert_eq!(concat_to_log, 2, "{:?}", result.commands);
+
+        let mixed = reconcile_text_with_catalog(
+            &empty_board(),
+            "run() {\n    log({ message: \"a\" + 1 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            mixed.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("incompatible operand types `String` and `Integer`")
+            }),
+            "{:?}",
+            mixed.diagnostics
+        );
+        assert!(added_node_ref(&mixed, "string_concat").is_none());
+    }
+
+    #[test]
+    fn unary_minus_on_a_float_variable_lowers_to_float_subtract() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const ratio: float = 1.5\n\nrun() {\n    logFloat({ value: -ratio })\n    logFloat({ value: 0 - ratio })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "int_subtract").is_none());
+
+        let subtractions = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "float_subtract" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(subtractions.len(), 2, "{:?}", result.commands);
+        for node in &subtractions {
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == node
+                        && pin_id == "float1"
+                        && value == &flow_like_types::Value::from(0)
+            )));
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_node, to_pin, .. }
+                    if from_pin == "value_ref" && to_node == node && to_pin == "float2"
+            )));
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                    if from_node == node && from_pin == "difference" && to_pin == "value"
+            )));
+        }
+
+        // Only a literal adopts the other side's type; typed operands stay strict.
+        let strict = reconcile_text_with_catalog(
+            &empty_board(),
+            "const ratio: float = 1.5\nconst n: int = 1\n\nrun() {\n    logFloat({ value: n - ratio })\n}\n",
+            &catalog,
+        );
+        assert!(
+            strict.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("incompatible operand types `Integer` and `Float`")
+            }),
+            "{:?}",
+            strict.diagnostics
+        );
+    }
+
+    #[test]
+    fn ternary_with_literal_arms_materializes_a_select_node() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const n: int = 1\n\nrun() {\n    log({ message: n == 1 ? \"one\" : \"other\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let select = added_node_ref(&result, "utils_types_select").expect("select node");
+        let comparator = added_node_ref(&result, "int_equal").expect("int_equal node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        for (pin, text) in [("a", "one"), ("b", "other")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if node_id == select
+                            && pin_id == pin
+                            && value == &flow_like_types::Value::String(text.to_string())
+                )),
+                "literal arm must land on `{pin}`: {:?}",
+                result.commands
+            );
+        }
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == comparator
+                    && from_pin == "equal"
+                    && to_node == select
+                    && to_pin == "condition"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == select
+                    && from_pin == "result"
+                    && to_node == log
+                    && to_pin == "message"
         )));
     }
 
@@ -20811,6 +23692,7 @@ eventsSimple() {
 
         if wired_field {
             let mut cuid = Node::new("cuid", "CUID v2", "", "std");
+            cuid.set_flowscript_name("random", "cuid");
             cuid.id = "cuid".to_string();
             let cuid_out = cuid
                 .add_output_pin("cuid", "CUID", "", VariableType::String)
@@ -20856,7 +23738,7 @@ eventsSimple() {
     #[test]
     fn explicit_null_struct_set_value_roundtrips_and_satisfies_required_input() {
         let board = board_with_null_struct_accumulator();
-        let catalog = required_struct_set_value_catalog();
+        let catalog = with_board_categories(required_struct_set_value_catalog(), &board);
         let anchored = super::super::board_to_flowscript(
             &board,
             &flow_like_ast::RenderOptions {
@@ -20920,7 +23802,7 @@ eventsSimple() {
         // Reconciling the rendered text against an empty board recreates the same struct_set shape:
         // a struct_set with a literal `field`, `struct_in` fed by the seed (base's prior source),
         // `struct_out` rebound into the consumer, and no self-connection.
-        let catalog = struct_accumulator_catalog();
+        let catalog = with_board_categories(struct_accumulator_catalog(), &board);
         let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(
@@ -20977,7 +23859,7 @@ eventsSimple() {
         // A wired (non-literal) `field` cannot be a `row.<field> = value` write, so lowering
         // conservatively keeps BOTH struct_sets in the explicit `structSet({…})` form.
         assert!(
-            text.contains("field: cuid()"),
+            text.contains("field: random::cuid()"),
             "a wired-field struct_set must keep its explicit call:\n{text}"
         );
         assert_eq!(
@@ -22579,5 +25461,2022 @@ eventsSimple() {
             flow_like_ast::normalize_schema(&second),
             "projection must be idempotent on its own output"
         );
+    }
+
+    // ---- Phase 2b: namespaces, `use`, method dispatch, positional args, destructuring ----
+
+    fn categorized(mut meta: NodeMetadata, category: &str) -> NodeMetadata {
+        meta.category = Some(category.to_string());
+        meta
+    }
+
+    fn named(mut meta: NodeMetadata, namespace: &str, alias: &str) -> NodeMetadata {
+        meta.namespace = Some(namespace.to_string());
+        meta.alias = Some(alias.to_string());
+        meta
+    }
+
+    const MAIL_SCHEMA: &str = r#"{"title":"Mail","type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"}}}"#;
+
+    /// A catalog mixing derived names (`category` only), explicit names, explicit receivers, a
+    /// universal method and a titled-struct method.
+    fn namespaced_catalog() -> Vec<NodeMetadata> {
+        let mut ignore_case = pin_meta("ignore_case", "Boolean", PinType::Input);
+        ignore_case.default_value = Some("false".to_string());
+        let mut mail = pin_meta("mail", "Struct", PinType::Input);
+        mail.schema = Some(MAIL_SCHEMA.to_string());
+        let mut is_null = named(
+            catalog_meta(
+                "types_is_null",
+                "Is Null",
+                vec![pin_meta("value", "Generic", PinType::Input)],
+                vec![pin_meta("is_null", "Boolean", PinType::Output)],
+            ),
+            "types",
+            "isNull",
+        );
+        is_null.receiver = Some("value".to_string());
+        let mut subject_of = named(
+            catalog_meta(
+                "email_subject_of",
+                "Subject Of",
+                vec![mail],
+                vec![pin_meta("subject", "String", PinType::Output)],
+            ),
+            "email",
+            "subjectOf",
+        );
+        subject_of.receiver = Some("mail".to_string());
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            categorized(
+                catalog_meta(
+                    "struct_get",
+                    "Get Field",
+                    vec![
+                        pin_meta("struct", "Struct", PinType::Input),
+                        pin_meta("field", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("value", "Generic", PinType::Output)],
+                ),
+                "Structs",
+            ),
+            categorized(
+                catalog_meta(
+                    "log",
+                    "Log",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("text", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Logging",
+            ),
+            categorized(
+                catalog_meta(
+                    "log_bool",
+                    "Log Bool",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("value", "Boolean", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Logging",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_trim",
+                    "Trim",
+                    vec![pin_meta("string", "String", PinType::Input)],
+                    vec![pin_meta("trimmed", "String", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            named(
+                catalog_meta(
+                    "string_to_upper",
+                    "Upper Case",
+                    vec![pin_meta("string", "String", PinType::Input)],
+                    vec![pin_meta("upper", "String", PinType::Output)],
+                ),
+                "string",
+                "toUpperCase",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_contains",
+                    "Contains",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("substring", "String", PinType::Input),
+                        ignore_case,
+                    ],
+                    vec![pin_meta("contains", "Boolean", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_concat",
+                    "Concat",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("concatenated", "String", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_say",
+                    "Say",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "equal_string",
+                    "Equal Strings",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("equal", "Boolean", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "int_equal",
+                    "Equal Integers",
+                    vec![
+                        pin_meta("integer1", "Integer", PinType::Input),
+                        pin_meta("integer2", "Integer", PinType::Input),
+                    ],
+                    vec![pin_meta("equal", "Boolean", PinType::Output)],
+                ),
+                "Math/Int",
+            ),
+            categorized(
+                catalog_meta(
+                    "array_contains",
+                    "Array Contains",
+                    vec![
+                        pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                        pin_meta("value", "Generic", PinType::Input),
+                    ],
+                    vec![pin_meta("contains", "Boolean", PinType::Output)],
+                ),
+                "Utils/Array",
+            ),
+            named(
+                catalog_meta(
+                    "ai_ml_read",
+                    "Read Model",
+                    vec![pin_meta("path", "String", PinType::Input)],
+                    vec![pin_meta("model", "Struct", PinType::Output)],
+                ),
+                "ai.ml",
+                "read",
+            ),
+            named(
+                catalog_meta(
+                    "ai_invoke",
+                    "Invoke",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("prompt", "String", PinType::Input),
+                    ],
+                    vec![
+                        pin_meta("exec_out", "Execution", PinType::Output),
+                        pin_meta("text", "String", PinType::Output),
+                        pin_meta("usage", "Struct", PinType::Output),
+                    ],
+                ),
+                "ai",
+                "invoke",
+            ),
+            is_null,
+            subject_of,
+        ]
+    }
+
+    fn connected(
+        result: &ReconcileResult,
+        from: &str,
+        from_pin: &str,
+        to: &str,
+        to_pin: &str,
+    ) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin: fp, to_node, to_pin: tp, .. }
+                    if from_node == from && fp == from_pin && to_node == to && tp == to_pin
+            )
+        })
+    }
+
+    fn pin_set_to(
+        result: &ReconcileResult,
+        node: &str,
+        pin: &str,
+        expected: flow_like_types::Value,
+    ) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == node && pin_id == pin && value == &expected
+            )
+        })
+    }
+
+    fn diagnostic_containing<'a>(result: &'a ReconcileResult, needle: &str) -> Option<&'a str> {
+        result
+            .diagnostics
+            .iter()
+            .map(String::as_str)
+            .find(|diagnostic| diagnostic.contains(needle))
+    }
+
+    const TRIMMED_VARIABLE: &str = "const s: string = \" x \"\n\n";
+
+    #[test]
+    fn path_call_resolves_the_qualified_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", trim, "string"));
+        assert!(connected(&result, trim, "trimmed", log, "text"));
+    }
+
+    #[test]
+    fn legacy_flat_name_still_resolves_the_same_node() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = stringTrim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+    }
+
+    #[test]
+    fn glob_use_opens_members_bare_and_counts_as_used() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::*\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert!(
+            result.corrections.is_empty(),
+            "a used glob must not be reported: {:?}",
+            result.corrections
+        );
+    }
+
+    #[test]
+    fn unused_use_is_a_correction_note_only() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result.corrections,
+            vec!["`use ai::ml` is unused.".to_string()]
+        );
+    }
+
+    #[test]
+    fn namespace_use_brings_the_last_segment_into_scope() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml\n\neventsSimple() {\n    const m = ml::read({ path: \"model.onnx\" })\n    log({ text: \"ok\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let read = added_node_ref(&result, "ai_ml_read").expect("ai_ml_read node");
+        assert!(pin_set_to(
+            &result,
+            read,
+            "path",
+            flow_like_types::Value::String("model.onnx".to_string())
+        ));
+        assert!(result.corrections.is_empty(), "{:?}", result.corrections);
+    }
+
+    #[test]
+    fn aliased_use_renames_the_namespace() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml as models\n\neventsSimple() {\n    const m = models::read({ path: \"p\" })\n    log({ text: \"ok\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "ai_ml_read").is_some());
+    }
+
+    #[test]
+    fn members_only_use_leaves_other_members_unresolved() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::{{ trim }}\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = trim({{ string: s }})\n    const u = toUpperCase({{ string: t }})\n    log({{ text: u }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert!(added_node_ref(&result, "string_to_upper").is_none());
+        let diagnostic = diagnostic_containing(
+            &result,
+            "FlowScript call `toUpperCase` does not match a catalog declaration",
+        )
+        .expect("unopened member diagnostic");
+        assert!(
+            diagnostic.contains(
+                "did you mean `string::toUpperCase` (or add `use string::*` to call it bare)?"
+            ),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn unknown_namespace_in_use_has_a_did_you_mean() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use strng::*\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        let diagnostic = diagnostic_containing(&result, "namespace `strng` is unknown")
+            .expect("unknown namespace diagnostic");
+        assert!(diagnostic.starts_with("`use strng::*`:"), "{diagnostic}");
+        assert!(diagnostic.contains("did you mean `string`"), "{diagnostic}");
+        assert!(
+            !result
+                .corrections
+                .iter()
+                .any(|note| note.contains("unused")),
+            "{:?}",
+            result.corrections
+        );
+    }
+
+    #[test]
+    fn unknown_path_call_has_a_did_you_mean() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = ai::ml::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        let diagnostic = diagnostic_containing(&result, "`ai::ml::trim` is not a function")
+            .expect("path miss diagnostic");
+        assert!(
+            diagnostic.contains("did you mean `string::trim`"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn use_name_collisions_and_keywords_are_diagnostics() {
+        let catalog = namespaced_catalog();
+        let duplicate = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::{ contains }\nuse array::{ contains }\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            duplicate.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use array::{ contains }`: `contains` is already imported by `use string::{ contains }`; remove one of them"),
+            "{:?}",
+            duplicate.diagnostics
+        );
+
+        let keyword = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml as if\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            keyword.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use ai::ml as if`: `if` is a FlowScript keyword and cannot be imported under that name"),
+            "{:?}",
+            keyword.diagnostics
+        );
+
+        let shadowed = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::{ trim }\n\nfunction trim(s: string): (out: string) {\n    return s\n}\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            shadowed.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use string::{ trim }`: `trim` is also a `function` declared in this file; rename one of them"),
+            "{:?}",
+            shadowed.diagnostics
+        );
+    }
+
+    #[test]
+    fn two_globs_sharing_a_member_resolve_by_argument_shape() {
+        let catalog = namespaced_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::*\nuse array::*\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: contains({{ string: s, substring: \"?\" }}) }})\n    logBool({{ value: contains({{ value: 1 }}) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_contains").is_some());
+        assert!(added_node_ref(&result, "array_contains").is_some());
+
+        let ambiguous = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::*\nuse array::*\n\neventsSimple() {\n    logBool({ value: contains() })\n}\n",
+            &catalog,
+        );
+        assert!(
+            ambiguous.diagnostics.iter().any(|diagnostic| diagnostic
+                == "call `contains` is ambiguous between `string::contains`, `array::contains` (opened by `use`); write the qualified form, for example `string::contains(...)`"),
+            "{:?}",
+            ambiguous.diagnostics
+        );
+    }
+
+    #[test]
+    fn method_call_on_a_string_variable_wires_the_receiver_pin() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", trim, "string"));
+        assert!(connected(&result, trim, "trimmed", log, "text"));
+    }
+
+    #[test]
+    fn method_call_with_unknown_receiver_type_resolves_a_unique_alias() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const v: any = \"x\"\n\neventsSimple() {\n    const t = v.trim()\n    log({ text: t })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+    }
+
+    #[test]
+    fn contains_on_an_unknown_receiver_is_ambiguous_until_a_use_breaks_the_tie() {
+        let catalog = namespaced_catalog();
+        let ambiguous = reconcile_text_with_catalog(
+            &empty_board(),
+            "const v: any = \"x\"\n\neventsSimple() {\n    logBool({ value: v.contains(\"?\") })\n}\n",
+            &catalog,
+        );
+        assert!(
+            ambiguous.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`v.contains(...)` is ambiguous between `string::contains`, `array::contains`; write the qualified form, for example `string::contains({ string: v, ... })`"),
+            "{:?}",
+            ambiguous.diagnostics
+        );
+        assert!(added_node_ref(&ambiguous, "string_contains").is_none());
+
+        let tied = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::*\n\nconst v: any = \"x\"\n\neventsSimple() {\n    logBool({ value: v.contains(\"?\") })\n}\n",
+            &catalog,
+        );
+        assert!(tied.diagnostics.is_empty(), "{:?}", tied.diagnostics);
+        let contains = added_node_ref(&tied, "string_contains").expect("string_contains node");
+        assert!(pin_set_to(
+            &tied,
+            contains,
+            "substring",
+            flow_like_types::Value::String("?".to_string())
+        ));
+    }
+
+    #[test]
+    fn typed_receiver_rejects_methods_of_other_classes() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\n\neventsSimple() {\n    const t = count.trim()\n    log({ text: t })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "no method `trim` on `int`; `trim` is a method of `string`"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn universal_methods_apply_to_every_class() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\nconst s: string = \"x\"\n\neventsSimple() {\n    logBool({ value: count.isNull() })\n    logBool({ value: s.isNull() })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "types_is_null"
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn titled_struct_receiver_dispatches_on_the_schema_title() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "interface Mail {\n    to: string\n    subject: string\n}\n\nconst draft: Mail = {}\n\neventsSimple() {\n    log({ text: draft.subjectOf() })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let subject = added_node_ref(&result, "email_subject_of").expect("email_subject_of node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", subject, "mail"));
+    }
+
+    #[test]
+    fn user_functions_join_the_method_tables() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const full: string = \"a b\"\n\nfunction parseName(name: string): (first: string) {\n    const t = name.trim()\n    return t\n}\n\neventsSimple() {\n    const n = full.parseName()\n    log({ text: n.first })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", call, "name"));
+        assert!(connected(&result, call, "first", log, "text"));
+        assert!(result.corrections.is_empty(), "{:?}", result.corrections);
+    }
+
+    #[test]
+    fn user_functions_shadow_catalog_methods_with_a_note() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}function trim(text: string): (out: string) {{\n    const u = text.toUpperCase()\n    return u\n}}\n\neventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_none());
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", call, "text"));
+        assert_eq!(
+            result.corrections,
+            vec![
+                "`s.trim(...)` calls function `trim`, which shadows catalog method `string::trim`."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn interface_typed_variable_is_a_receiver_for_user_functions() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "interface Mail {\n    to: string\n    subject: string\n}\n\nconst draft: Mail = {}\n\nfunction sendMail(mail: Mail) {\n    log({ text: mail.subject })\n}\n\neventsSimple() {\n    draft.sendMail()\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", call, "mail"));
+        let event = added_node_ref(&result, "events_simple").expect("event node");
+        assert!(connected(&result, event, "exec_out", call, "exec_in"));
+    }
+
+    #[test]
+    fn user_function_receiver_type_is_checked() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\n\nfunction parseName(name: string): (first: string) {\n    return name\n}\n\neventsSimple() {\n    const n = count.parseName()\n    log({ text: n.first })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "no method `parseName` on `int`; `parseName` is a method of `string (function `parseName`)`"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn positional_arguments_bind_in_pin_order() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    log(\"hi\")\n    logBool({{ value: s.contains(\"?\") }})\n    logBool({{ value: s.contains(\"!\", {{ ignoreCase: true }}) }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(pin_set_to(
+            &result,
+            log,
+            "text",
+            flow_like_types::Value::String("hi".to_string())
+        ));
+        let contains = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_contains" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = contains.as_slice() else {
+            panic!("expected two string_contains nodes: {:?}", result.commands);
+        };
+        assert!(pin_set_to(
+            &result,
+            first,
+            "substring",
+            flow_like_types::Value::String("?".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            second,
+            "substring",
+            flow_like_types::Value::String("!".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            second,
+            "ignore_case",
+            flow_like_types::Value::Bool(true)
+        ));
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", first, "string"));
+    }
+
+    #[test]
+    fn positional_arguments_on_repeated_pins_keep_occurrence_order() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    log({{ text: s.concat(\"!\") }})\n    log({{ text: string::concat(\"a\", \"b\") }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let concats = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_concat" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [method, positional] = concats.as_slice() else {
+            panic!("expected two string_concat nodes: {:?}", result.commands);
+        };
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(
+            &result,
+            reader,
+            "value_ref",
+            method,
+            "string[#1]"
+        ));
+        assert!(pin_set_to(
+            &result,
+            method,
+            "string[#2]",
+            flow_like_types::Value::String("!".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            positional,
+            "string[#1]",
+            flow_like_types::Value::String("a".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            positional,
+            "string[#2]",
+            flow_like_types::Value::String("b".to_string())
+        ));
+    }
+
+    #[test]
+    fn positional_argument_misuse_is_a_diagnostic() {
+        let catalog = namespaced_catalog();
+        let duplicate = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: s.contains(\"?\", {{ substring: \"x\" }}) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            duplicate.diagnostics.iter().any(|diagnostic| diagnostic
+                == "positional argument 1 of `s.contains(...)` fills `substring`, which is also given by name; remove one of them"),
+            "{:?}",
+            duplicate.diagnostics
+        );
+
+        let too_many = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: s.contains(\"?\", true, 1) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            too_many.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.contains(...)` has 3 positional arguments, but `string::contains` only has 2 data inputs to bind them to (substring, ignoreCase)"),
+            "{:?}",
+            too_many.diagnostics
+        );
+
+        let receiver_twice = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            receiver_twice.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.trim(...)` binds its receiver to `string`, which is also given as a named argument; remove one of them"),
+            "{:?}",
+            receiver_twice.diagnostics
+        );
+    }
+
+    #[test]
+    fn object_destructuring_binds_output_pins_by_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const { text, usage: u } = ai::invoke({ prompt: \"hi\" })\n    log({ text: text })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let invoke = added_node_ref(&result, "ai_invoke").expect("ai_invoke node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, invoke, "text", log, "text"));
+        assert!(connected(&result, invoke, "exec_out", log, "exec_in"));
+
+        let unknown = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const { text, tokens } = ai::invoke({ prompt: \"hi\" })\n    log({ text: text })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            unknown.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`ai::invoke` has no data output `tokens` to destructure; its outputs are `text`, `usage`"),
+            "{:?}",
+            unknown.diagnostics
+        );
+    }
+
+    #[test]
+    fn lenient_dotted_namespace_call_resolves_with_a_note() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string.trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert_eq!(
+            result.corrections,
+            vec!["Resolved `string.trim(...)` as the namespace call `string::trim(...)`; write `::` between namespace segments (`.` is the member/method operator).".to_string()]
+        );
+    }
+
+    #[test]
+    fn impure_method_call_in_statement_position_joins_the_exec_chain() {
+        let catalog = namespaced_catalog();
+        let method = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    s.say()\n    log({{ text: \"done\" }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(method.diagnostics.is_empty(), "{:?}", method.diagnostics);
+        let flat = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    stringSay({{ string: s }})\n    log({{ text: \"done\" }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(flat.diagnostics.is_empty(), "{:?}", flat.diagnostics);
+        let say = added_node_ref(&method, "string_say").expect("string_say node");
+        let event = added_node_ref(&method, "events_simple").expect("event node");
+        let log = added_node_ref(&method, "log").expect("log node");
+        let reader = added_node_ref(&method, "variable_get").expect("variable_get node");
+        assert!(connected(&method, event, "exec_out", say, "exec_in"));
+        assert!(connected(&method, say, "exec_out", log, "exec_in"));
+        assert!(connected(&method, reader, "value_ref", say, "string"));
+        assert_eq!(
+            format!("{:?}", method.commands),
+            format!("{:?}", flat.commands),
+            "the method form must plan exactly like the flat form"
+        );
+    }
+
+    #[test]
+    fn chained_method_calls_type_each_link() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const u = s.trim().toUpperCase()\n    log({{ text: u }})\n    logBool({{ value: s.trim() == s.trim() }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let upper = added_node_ref(&result, "string_to_upper").expect("string_to_upper node");
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        assert!(connected(&result, trim, "trimmed", upper, "string"));
+        assert!(
+            added_node_ref(&result, "equal_string").is_some(),
+            "`==` must pick the String operator from the method call's output type: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_key_mapping_to_two_node_types_fails_closed() {
+        let mut catalog = namespaced_catalog();
+        catalog.push(named(
+            catalog_meta(
+                "string_trim_legacy",
+                "Trim (legacy)",
+                vec![pin_meta("string", "String", PinType::Input)],
+                vec![pin_meta("trimmed", "String", PinType::Output)],
+            ),
+            "string",
+            "trim",
+        ));
+        let path = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            path.diagnostics.iter().any(|diagnostic| diagnostic
+                == "FlowScript call `string::trim` is ambiguous; matched string_trim, string_trim_legacy"),
+            "{:?}",
+            path.diagnostics
+        );
+        assert!(added_node_ref(&path, "string_trim").is_none());
+        assert!(added_node_ref(&path, "string_trim_legacy").is_none());
+
+        let method = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            method.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.trim(...)` is ambiguous between `string::trim (string_trim)`, `string::trim (string_trim_legacy)`; write the qualified form, for example `string::trim({ string: s, ... })`"),
+            "{:?}",
+            method.diagnostics
+        );
+
+        let flat = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = stringTrim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            flat.diagnostics.is_empty(),
+            "the flat spelling names one node type and stays unambiguous: {:?}",
+            flat.diagnostics
+        );
+    }
+
+    // ---- phase 3: sugared loops -------------------------------------------------------------
+
+    fn variable_get_meta() -> NodeMetadata {
+        catalog_meta(
+            "variable_get",
+            "Get Variable",
+            vec![pin_meta("var_ref", "String", PinType::Input)],
+            vec![pin_meta("value_ref", "Generic", PinType::Output)],
+        )
+    }
+
+    fn loop_sugar_catalog() -> Vec<NodeMetadata> {
+        let loop_outputs = || {
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("value", "Generic", PinType::Output),
+                pin_meta("index", "Integer", PinType::Output),
+                pin_meta("done", "Execution", PinType::Output),
+            ]
+        };
+        vec![
+            variable_get_meta(),
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_for_each",
+                "For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                ],
+                loop_outputs(),
+            ),
+            catalog_meta(
+                "control_par_for_each",
+                "Parallel For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                    pin_meta("max_concurrent", "Integer", PinType::Input),
+                ],
+                loop_outputs(),
+            ),
+            catalog_meta(
+                "control_while_loop",
+                "While Loop",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                    pin_meta("max_iter", "Integer", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("iter", "Integer", PinType::Output),
+                    pin_meta("done", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "int_less_than",
+                "Less Than",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("less_than", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "array_chunk",
+                "Chunk Array",
+                vec![
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                    pin_meta("size", "Integer", PinType::Input),
+                ],
+                vec![pin_meta_friendly(
+                    "chunks",
+                    "Chunks",
+                    "Generic",
+                    "Array",
+                    PinType::Output,
+                )],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    fn has_connection(result: &ReconcileResult, from: (&str, &str), to: (&str, &str)) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == from.0 && from_pin == from.1 && to_node == to.0 && to_pin == to.1
+            )
+        })
+    }
+
+    fn added_node_types(result: &ReconcileResult) -> Vec<String> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode { node_type, .. } => Some(node_type.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sugared_for_of_synthesizes_control_for_each_and_binds_the_element() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const item of items) {\n        log({ text: item })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(types.contains(&"control_for_each".to_string()), "{types:?}");
+        let loop_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "control_for_each" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("loop node");
+        let log_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "log" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("log node");
+        assert!(
+            has_connection(&result, (&loop_ref, "value"), (&log_ref, "text")),
+            "element binding must read the loop's `value` output: {:?}",
+            result.commands
+        );
+        assert!(
+            has_connection(&result, (&loop_ref, "exec_out"), (&log_ref, "exec_in")),
+            "body must hang off `exec_out`: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("variable_get")
+                        && from_pin == "value_ref"
+                        && to_node == &loop_ref
+                        && to_pin == "array"
+            )),
+            "the iterable must feed `array`: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn sugared_index_binding_and_parallel_decorator_pick_the_loop_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    @parallel\n    for (const [i, item] of items) {\n        log({ text: i })\n        log({ text: item })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_par_for_each".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            !types.contains(&"control_for_each".to_string()),
+            "{types:?}"
+        );
+        let loop_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "control_par_for_each" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("loop node");
+        let wired_outputs: Vec<&str> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_pin,
+                    ..
+                } if from_node == &loop_ref && to_pin == "text" => Some(from_pin.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            wired_outputs.contains(&"index") && wired_outputs.contains(&"value"),
+            "{wired_outputs:?}"
+        );
+    }
+
+    #[test]
+    fn sugared_while_wires_the_condition_into_control_while_loop() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const i: int = 0\n\neventsSimple() {\n    while (i < 3) {\n        log({ text: i })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_while_loop".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("int_less_than")
+                        && from_pin == "less_than"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("control_while_loop")
+                        && to_pin == "condition"
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn handle_form_over_a_non_loop_call_is_an_iterable() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const chunk of arrayChunk({ array: items, size: 2 })) {\n        log({ text: chunk })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_for_each".to_string())
+                && types.contains(&"array_chunk".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("array_chunk")
+                        && from_pin == "chunks"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("control_for_each")
+                        && to_pin == "array"
+            )),
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("control_for_each")
+                        && from_pin == "value"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("log")
+                        && to_pin == "text"
+            )),
+            "the handle of a non-loop head is the element: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn explicit_loop_call_head_keeps_the_handle_binding() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const h of controlForEach({ array: items })) {\n        log({ text: h.index })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            added_node_types(&result)
+                .iter()
+                .filter(|node_type| node_type.starts_with("control_"))
+                .count(),
+            1
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_pin, .. }
+                    if from_pin == "index" && to_pin == "text"
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn non_array_iterable_and_while_bindings_are_diagnosed() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const name: string = \"x\"\n\neventsSimple() {\n    for (const c of name) {\n        log({ text: c })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("not an array")),
+            "{:?}",
+            result.diagnostics
+        );
+
+        let mut ast = flow_like_ast::parse("eventsSimple() {\n    while (true) {\n    }\n}\n")
+            .expect("parses");
+        if let Some(Stmt::Loop { element, .. }) = ast.events[0].body.stmts.first_mut() {
+            *element = Some("item".to_string());
+        }
+        let result = reconcile_with_catalog(&board, &ast, &loop_sugar_catalog());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("`while` loop binds no element")),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    /// Lower a board with a `while` loop and a `for…of` whose handle is only read as
+    /// `value`/`index`, render anchored text, and reconcile it back: the sugared forms must be
+    /// a no-op against their own board.
+    #[test]
+    fn sugared_loops_round_trip_against_their_own_board() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut less = Node::new("int_less_than", "Less Than", "", "math");
+        less.id = "less".to_string();
+        less.add_input_pin("integer1", "A", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(1)));
+        less.add_input_pin("integer2", "B", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(3)));
+        let less_out = less
+            .add_output_pin("less_than", "Less", "", VariableType::Boolean)
+            .id
+            .clone();
+        board.nodes.insert(less.id.clone(), less);
+
+        let mut while_loop = Node::new("control_while_loop", "While Loop", "", "control");
+        while_loop.id = "while".to_string();
+        let while_in = while_loop
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let condition = while_loop
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .id
+            .clone();
+        while_loop
+            .add_input_pin("max_iter", "Max", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(15)));
+        let while_body = while_loop
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        while_loop.add_output_pin("iter", "Iter", "", VariableType::Integer);
+        let while_done = while_loop
+            .add_output_pin("done", "Done", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(while_loop.id.clone(), while_loop);
+
+        let mut for_each = Node::new("control_for_each", "For Each", "", "control");
+        for_each.id = "loop".to_string();
+        let for_in = for_each
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let array = for_each.add_input_pin("array", "Array", "", VariableType::Generic);
+        array.value_type = ValueType::Array;
+        array.default_value = Some(b"[1,2]".to_vec());
+        let for_body = for_each
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        let value = for_each
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        let index = for_each
+            .add_output_pin("index", "Index", "", VariableType::Integer)
+            .id
+            .clone();
+        for_each.add_output_pin("done", "Done", "", VariableType::Execution);
+        board.nodes.insert(for_each.id.clone(), for_each);
+
+        let mut log_value = Node::new("log", "Log", "", "debug");
+        log_value.id = "log_value".to_string();
+        let log_value_in = log_value
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let log_value_text = log_value
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        let log_value_out = log_value
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(log_value.id.clone(), log_value);
+
+        let mut log_index = Node::new("log", "Log", "", "debug");
+        log_index.id = "log_index".to_string();
+        let log_index_in = log_index
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let log_index_text = log_index
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        log_index.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log_index.id.clone(), log_index);
+
+        let mut log_while = Node::new("log", "Log", "", "debug");
+        log_while.id = "log_while".to_string();
+        let log_while_in = log_while
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log_while
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .set_default_value(Some(flow_like_types::json::json!("tick")));
+        log_while.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log_while.id.clone(), log_while);
+
+        connect(&mut board, "event", &event_out, "while", &while_in);
+        connect(&mut board, "less", &less_out, "while", &condition);
+        connect(&mut board, "while", &while_body, "log_while", &log_while_in);
+        connect(&mut board, "while", &while_done, "loop", &for_in);
+        connect(&mut board, "loop", &for_body, "log_value", &log_value_in);
+        connect(&mut board, "loop", &value, "log_value", &log_value_text);
+        connect(
+            &mut board,
+            "log_value",
+            &log_value_out,
+            "log_index",
+            &log_index_in,
+        );
+        connect(&mut board, "loop", &index, "log_index", &log_index_text);
+
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..flow_like_ast::RenderOptions::default()
+            },
+        );
+        assert!(
+            text.contains("while (1 < 3) {   //@n:while"),
+            "a wired condition with default max_iter renders as `while (cond)`:\n{text}"
+        );
+        assert!(
+            text.contains("for (const [index, item] of [1,2]) {   //@n:loop"),
+            "value+index reads render as the destructured head:\n{text}"
+        );
+        assert!(
+            text.contains("log({ text: item })") && text.contains("log({ text: index })"),
+            "{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "sugared loops must round-trip as a no-op: {:?}",
+            result.commands
+        );
+
+        // Editing the literal iterable on the anchored loop is a plain pin update.
+        let edited = text.replace("of [1,2]", "of [1,2,3]");
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                    if node_id == "loop" && pin_id == "array"
+            )),
+            "{:?}",
+            result.commands
+        );
+
+        // A non-default max_iter keeps the explicit call form.
+        let max_iter = board.nodes["while"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "max_iter")
+            .map(|pin| pin.id.clone())
+            .expect("max_iter");
+        board
+            .nodes
+            .get_mut("while")
+            .unwrap()
+            .pins
+            .get_mut(&max_iter)
+            .unwrap()
+            .default_value = Some(b"100".to_vec());
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("while (control::whileLoop({ condition: 1 < 3, maxIter: 100 })) {"),
+            "{text}"
+        );
+    }
+
+    // ---- phase 3: template literals ----------------------------------------------------------
+
+    fn template_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = string_format_dynamic_catalog();
+        catalog.push(variable_get_meta());
+        catalog.push(catalog_meta(
+            "events_simple",
+            "Simple Event",
+            Vec::new(),
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "make_data",
+            "Make Data",
+            vec![pin_meta("exec_in", "Execution", PinType::Input)],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("data", "Struct", PinType::Output),
+            ],
+        ));
+        catalog
+    }
+
+    #[test]
+    fn template_literal_lowers_to_one_string_format_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const label: string = \"\"\n\neventsSimple() {\n    const source = makeData()\n    log({ text: `Topic ${label}\nGoal: ${source.data} ${label}` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let formats: Vec<&BoardCommand> = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "string_format")
+            })
+            .collect();
+        assert_eq!(formats.len(), 1, "{:?}", result.commands);
+        let format_ref = match formats[0] {
+            BoardCommand::AddNode {
+                ref_id: Some(id), ..
+            } => id.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == &format_ref
+                        && pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Topic {label}\nGoal: {data} {label}".to_string())
+            )),
+            "{:?}",
+            result.commands
+        );
+        let placeholder_targets: Vec<&str> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    to_node, to_pin, ..
+                } if to_node == &format_ref => Some(to_pin.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            placeholder_targets,
+            vec!["label", "data"],
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                    if from_node == &format_ref && from_pin == "value" && to_pin == "text"
+            )),
+            "the template value feeds the consumer: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn template_literal_with_literal_placeholder_text_is_rejected() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    log({ text: `literal {name} braces` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("literal `{name}` inside a template literal")
+                    && diagnostic.contains("string::format({ formatString: … })")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !added_node_types(&result).contains(&"string_format".to_string()),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn zero_placeholder_template_still_creates_a_format_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    log({ text: `Successfully Added` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            added_node_types(&result).contains(&"string_format".to_string()),
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Successfully Added".to_string())
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    /// A `string_format` node renders as a template literal only when the template
+    /// re-synthesizes the same node; an unchanged document is then a no-op and a text edit of
+    /// the static part is a single pin update.
+    #[test]
+    fn string_format_template_round_trips_and_edits_in_place() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut producer = Node::new("make_data", "Make Data", "", "data");
+        producer.id = "producer".to_string();
+        let producer_in = producer
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let producer_out = producer
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let path_out = producer
+            .add_output_pin("path", "Path", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(producer.id.clone(), producer);
+
+        let mut format = Node::new("string_format", "Format String", "", "Utils/String");
+        format.id = "format".to_string();
+        format
+            .add_input_pin("format_string", "Input", "", VariableType::String)
+            .set_default_value(Some(flow_like_types::json::json!("Path {path} missing")));
+        let path_in = format
+            .add_input_pin("path", "path", "", VariableType::Generic)
+            .id
+            .clone();
+        let formatted = format
+            .add_output_pin("formatted_string", "Formatted", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(format.id.clone(), format);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "producer", &producer_in);
+        connect(&mut board, "producer", &producer_out, "log", &log_in);
+        connect(&mut board, "producer", &path_out, "format", &path_in);
+        connect(&mut board, "format", &formatted, "log", &text_in);
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..flow_like_ast::RenderOptions::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        assert!(
+            text.contains("const { path } = data::makeData()")
+                && text.contains("debug::log({ text: `Path ${path} missing` })"),
+            "{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+
+        let edited = text.replace("missing`", "not found`");
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1, "{:?}", result.commands);
+        assert!(
+            matches!(
+                &result.commands[0],
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "format"
+                        && pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Path {path} not found".to_string())
+            ),
+            "{:?}",
+            result.commands
+        );
+
+        // A placeholder whose pin name the template cannot reproduce keeps the call form.
+        let pin = board.nodes["format"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "format_string")
+            .map(|pin| pin.id.clone())
+            .expect("format_string");
+        board
+            .nodes
+            .get_mut("format")
+            .unwrap()
+            .pins
+            .get_mut(&pin)
+            .unwrap()
+            .default_value = Some(b"\"Path {p} missing\"".to_vec());
+        let renamed = board.nodes["format"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "path")
+            .map(|pin| pin.id.clone())
+            .expect("placeholder pin");
+        board
+            .nodes
+            .get_mut("format")
+            .unwrap()
+            .pins
+            .get_mut(&renamed)
+            .unwrap()
+            .name = "p".to_string();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("\"Path {p} missing\".format({ p: path })"),
+            "{text}"
+        );
+    }
+
+    /// `control_par_for_each` renders as `@parallel for (…)` only while `max_concurrent` holds
+    /// its catalog default; the sugared text reconciles back to the same node as a no-op.
+    #[test]
+    fn parallel_for_each_sugar_depends_on_the_default_concurrency() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut loop_node = Node::new("control_par_for_each", "Parallel For Each", "", "control");
+        loop_node.set_flowscript_name("control", "parallelForEach");
+        loop_node.id = "loop".to_string();
+        let loop_in = loop_node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let array = loop_node.add_input_pin("array", "Array", "", VariableType::Generic);
+        array.value_type = ValueType::Array;
+        array.default_value = Some(b"[\"a\"]".to_vec());
+        let max_concurrent = loop_node
+            .add_input_pin("max_concurrent", "Max", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(30)))
+            .id
+            .clone();
+        let body = loop_node
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        let value = loop_node
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        loop_node.add_output_pin("index", "Index", "", VariableType::Integer);
+        loop_node.add_output_pin("done", "Done", "", VariableType::Execution);
+        board.nodes.insert(loop_node.id.clone(), loop_node);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "loop", &loop_in);
+        connect(&mut board, "loop", &body, "log", &log_in);
+        connect(&mut board, "loop", &value, "log", &text_in);
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..flow_like_ast::RenderOptions::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        assert!(
+            text.contains("    @parallel\n    for (const item of [\"a\"]) {   //@n:loop\n        debug::log({ text: item })"),
+            "{text}"
+        );
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+
+        // Dropping `@parallel` on the anchored loop asks for a different node type.
+        let sequential = text.replace("    @parallel\n", "");
+        let result = reconcile_text_with_catalog(&board, &sequential, &catalog);
+        assert!(
+            result.diagnostics.iter().any(
+                |diagnostic| diagnostic.contains("declares exact node_type `control_for_each`")
+            ),
+            "{:?}",
+            result.diagnostics
+        );
+
+        board
+            .nodes
+            .get_mut("loop")
+            .unwrap()
+            .pins
+            .get_mut(&max_concurrent)
+            .unwrap()
+            .default_value = Some(b"15".to_vec());
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains(
+                "for (const parallelForEach of control::parallelForEach({ array: [\"a\"], maxConcurrent: 15 })) {\n        debug::log({ text: parallelForEach.value })"
+            ),
+            "{text}"
+        );
+    }
+
+    // ---- phase 4: stale placed nodes keep their derived spelling resolvable ----------------
+
+    fn delay_meta() -> NodeMetadata {
+        catalog_meta(
+            "rpa_delay",
+            "Delay",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("seconds", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )
+    }
+
+    fn renamed_delay_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            named(categorized(delay_meta(), "Automation/RPA"), "rpa", "wait"),
+        ]
+    }
+
+    /// A board whose placed `rpa_delay` predates the explicit `rpa::wait` name: it carries the
+    /// category but no `namespace`/`alias`, so it lowers with the derived spelling `rpa::delay`.
+    fn stale_delay_board() -> Board {
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Start", "", "Events");
+        event.id = "event".to_string();
+        event.start = Some(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+        let mut delay = Node::new("rpa_delay", "Delay", "", "Automation/RPA");
+        delay.id = "delay".to_string();
+        let delay_in = delay
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        delay
+            .add_input_pin("seconds", "Seconds", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(2)));
+        delay.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(delay.id.clone(), delay);
+        connect(&mut board, "event", &event_out, "delay", &delay_in);
+        board
+    }
+
+    #[test]
+    fn stale_placed_node_renders_and_resolves_its_derived_name() {
+        let board = stale_delay_board();
+        let catalog = renamed_delay_catalog();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("rpa::delay({ seconds: 2 })"),
+            "a placed node without explicit names lowers with the derived spelling:\n{text}"
+        );
+
+        let anchored = anchored_text(&board);
+        let roundtrip = reconcile_text_with_catalog(&board, &anchored, &catalog);
+        assert!(
+            roundtrip.diagnostics.is_empty(),
+            "{:?}",
+            roundtrip.diagnostics
+        );
+        assert!(roundtrip.commands.is_empty(), "{:?}", roundtrip.commands);
+
+        let recreated = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(
+            recreated.diagnostics.is_empty(),
+            "{:?}",
+            recreated.diagnostics
+        );
+        assert!(added_node_ref(&recreated, "rpa_delay").is_some());
+
+        let explicit = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    rpa::wait({ seconds: 2 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            explicit.diagnostics.is_empty(),
+            "{:?}",
+            explicit.diagnostics
+        );
+        assert!(added_node_ref(&explicit, "rpa_delay").is_some());
+    }
+
+    #[test]
+    fn derived_secondary_name_never_shadows_another_nodes_real_name() {
+        let mut catalog = renamed_delay_catalog();
+        let mut pause = catalog_meta(
+            "rpa_pause",
+            "Pause",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("seconds", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        );
+        pause.category = Some("Automation/RPA".to_string());
+        catalog.push(named(pause, "rpa", "delay"));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    rpa::delay({ seconds: 2 })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "rpa_pause").is_some());
+        assert!(added_node_ref(&result, "rpa_delay").is_none());
     }
 }

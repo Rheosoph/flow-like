@@ -40,6 +40,7 @@ impl NodeLogic for UpdateOverlay {
             "Set, push, or clear bounding boxes on a BoundingBoxOverlay element",
             "UI/Elements/Overlay",
         );
+        node.set_flowscript_name("ui", "updateOverlay");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

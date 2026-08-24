@@ -19,6 +19,16 @@ pub struct NodeMetadata {
     pub companion_nodes: Vec<String>,
     #[serde(default)]
     pub capability_tags: Vec<String>,
+    /// Effective FlowScript namespace (`string`, `http`, `utils.markdown`); explicit or derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Effective FlowScript member name inside `namespace` (`trim`, `fetch`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Data input pin bound to the value in method form (`s.trim()`). `Some("")` = static only
+    /// (explicit opt-out); `None` = the default rule (`flow_like_ast::default_receiver_pin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
 }
 
 impl NodeMetadata {

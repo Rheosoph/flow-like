@@ -29,6 +29,7 @@ impl NodeLogic for PptxDeleteSlideNode {
             "Remove a slide at the given index from a PPTX file",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "deleteSlide");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

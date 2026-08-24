@@ -34,6 +34,7 @@ impl NodeLogic for BuildAnthropicNode {
             "Prepares a Bit for Anthropic's Claude API using the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "anthropic");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

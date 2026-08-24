@@ -30,6 +30,7 @@ impl NodeLogic for SetButtonLabel {
             "Sets the label text of a button element",
             "UI/Elements/Button",
         );
+        node.set_flowscript_name("ui", "setButtonLabel");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

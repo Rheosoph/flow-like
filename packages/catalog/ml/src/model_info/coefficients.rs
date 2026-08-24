@@ -30,6 +30,8 @@ impl NodeLogic for GetLinearCoefficientsNode {
             "Extract coefficients and intercept from a trained Linear Regression model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "getLinearCoefficients");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -21,6 +21,7 @@ impl NodeLogic for FakeFirstName {
             "Generates a random first name for mocking data",
             "Utils/Faker/Name",
         );
+        node.set_flowscript_name("faker.name", "firstName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -64,6 +65,7 @@ impl NodeLogic for FakeLastName {
             "Generates a random last name for mocking data",
             "Utils/Faker/Name",
         );
+        node.set_flowscript_name("faker.name", "lastName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -107,6 +109,7 @@ impl NodeLogic for FakeFullName {
             "Generates a random full name for mocking data",
             "Utils/Faker/Name",
         );
+        node.set_flowscript_name("faker.name", "fullName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -150,6 +153,7 @@ impl NodeLogic for FakeTitle {
             "Generates a random name title (Mr., Mrs., Dr., etc.)",
             "Utils/Faker/Name",
         );
+        node.set_flowscript_name("faker.name", "title");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -415,6 +415,7 @@ impl NodeLogic for PiiMaskRegexNode {
             "Masks Personally Identifiable Information using regex patterns. Detects emails, phones, SSNs, credit cards, IBANs, addresses (US/DE/UK), and more. For names or contextual PII, use the AI-based node.",
             "Processing/Privacy",
         );
+        node.set_flowscript_name("ai.processing", "maskPiiRegex");
         node.add_icon("/flow/icons/shield.svg");
 
         node.set_scores(
