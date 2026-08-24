@@ -546,6 +546,7 @@ export function FlowScriptPanel({
 
 	// Restore the captured seat once the swapped-in text is in the model. Runs
 	// on every text change but is a no-op without a pending seat.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: text is the trigger — everything else resolves through refs
 	useEffect(() => {
 		const pending = pendingSeatRef.current;
 		if (!pending) return;
@@ -707,7 +708,6 @@ export function FlowScriptPanel({
 	// The initial value is swallowed so mount doesn't double-fetch alongside
 	// load(). Read-only/version-pinned panels never auto-reload.
 	const lastBoardUpdateRef = useRef<number | undefined>(undefined);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only board updates should trigger this
 	useEffect(() => {
 		if (typeof boardUpdatedAt === "undefined") return;
 		if (typeof lastBoardUpdateRef.current === "undefined") {
