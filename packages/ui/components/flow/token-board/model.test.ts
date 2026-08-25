@@ -9,6 +9,7 @@ import {
 	buildFolderTree,
 	buildUsageIndex,
 	folderPaths,
+	groupItemsByModule,
 	matchesFunction,
 	matchesVariable,
 	parseTokenQuery,
@@ -225,6 +226,75 @@ describe("matchesFunction", () => {
 		expect(
 			matchesFunction(layer, parseTokenQuery("type:string"), 4),
 		).toBeFalse();
+	});
+});
+
+describe("groupItemsByModule", () => {
+	const layer = (
+		id: string,
+		type: ILayerType,
+		parentId: string | null,
+	): ILayer =>
+		({ id, name: id, type, parent_id: parentId }) as unknown as ILayer;
+
+	const fn = (id: string): ITokenItem => ({
+		id,
+		name: id,
+		category: null,
+		kind: "function",
+		uses: 0,
+		scope: "board",
+	});
+
+	const layers: Record<string, ILayer> = {
+		checkout: layer("checkout", ILayerType.Module, null),
+		payments: layer("payments", ILayerType.Module, "checkout"),
+		"fn-global": layer("fn-global", ILayerType.Function, null),
+		"fn-checkout": layer("fn-checkout", ILayerType.Function, "checkout"),
+		"fn-payments": layer("fn-payments", ILayerType.Function, "payments"),
+		collapsed: layer("collapsed", ILayerType.Collapsed, "payments"),
+		"fn-nested": layer("fn-nested", ILayerType.Function, "collapsed"),
+	};
+
+	test("puts globals first, then the modules in the given order", () => {
+		const groups = groupItemsByModule(
+			[fn("fn-payments"), fn("fn-global"), fn("fn-checkout")],
+			layers,
+			["checkout", "payments"],
+		);
+
+		expect(groups.map((group) => group.moduleId)).toEqual([
+			null,
+			"checkout",
+			"payments",
+		]);
+		expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([
+			["fn-global"],
+			["fn-checkout"],
+			["fn-payments"],
+		]);
+	});
+
+	test("a module without functions is not a section", () => {
+		const groups = groupItemsByModule([fn("fn-checkout")], layers, [
+			"checkout",
+			"payments",
+		]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0].moduleId).toBe("checkout");
+	});
+
+	test("ownership follows the whole parent chain, not just the parent", () => {
+		const groups = groupItemsByModule([fn("fn-nested")], layers, [
+			"checkout",
+			"payments",
+		]);
+		expect(groups[0].moduleId).toBe("payments");
+	});
+
+	test("an unknown id is global rather than dropped", () => {
+		const groups = groupItemsByModule([fn("ghost")], layers, ["checkout"]);
+		expect(groups).toEqual([{ moduleId: null, items: [fn("ghost")] }]);
 	});
 });
 

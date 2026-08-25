@@ -1,6 +1,10 @@
+import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
 import { expect, test } from "vitest";
 import { parseWorkflowScreenshotArgs } from "../cli";
-import { buildWorkflowScreenshotPlan } from "../runner";
+import {
+	buildWorkflowScreenshotPlan,
+	resolveWorkflowScreenshotFocus,
+} from "../runner";
 
 test("keeps the function id in the route while waiting for its rendered boundary", () => {
 	const options = parseWorkflowScreenshotArgs([
@@ -24,4 +28,38 @@ test("keeps the function id in the route while waiting for its rendered boundary
 			selector: '.react-flow__node[data-id="function-layer-input"]',
 		}),
 	);
+});
+
+test("focuses the adjusted node unless an explicit focus overrides it", () => {
+	const board = {
+		nodes: {
+			adjusted: {
+				id: "adjusted",
+				name: "api_call",
+				friendly_name: "API Call",
+				pins: {},
+			},
+			other: {
+				id: "other",
+				name: "log",
+				friendly_name: "Write Log",
+				pins: {},
+			},
+		},
+		layers: {},
+		comments: {},
+	} as unknown as IBoard;
+	const adjustedTarget = {
+		id: "adjusted",
+		kind: "node" as const,
+		label: "API Call",
+		matchedBy: "name" as const,
+	};
+
+	expect(
+		resolveWorkflowScreenshotFocus(board, undefined, adjustedTarget),
+	).toEqual(adjustedTarget);
+	expect(
+		resolveWorkflowScreenshotFocus(board, "Write Log", adjustedTarget),
+	).toMatchObject({ id: "other", kind: "node" });
 });

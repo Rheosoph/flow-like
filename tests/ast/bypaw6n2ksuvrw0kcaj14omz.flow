@@ -263,9 +263,6 @@ eventsSimple clickLatestOverview() {
     navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })
 }
 
-variableSet setReportCreated(valueRef: bool) {
-}
-
 eventsSimple loadOverview() {
     const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
     const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
@@ -375,9 +372,6 @@ eventsSimple showBriefing() {
     }
 }
 
-notifyProjectUser(success: bool) {
-}
-
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {
     if (reportCreated) {
         return `Already created a report`
@@ -401,4 +395,12 @@ eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string
     filterSources({ hash: widgetInstanceId })
     saveConfig({ config: userConfiguration })
     loadConfigDashboard()
+}
+
+detached {
+    reportCreated = null
+}
+
+detached {
+    projectUser({ flowUserSub: "32a5a414-a001-70d1-7b23-570f65ba772b", title: "Notification", description: "", link: "/case" })
 }

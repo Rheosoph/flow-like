@@ -32,6 +32,8 @@ interface ExecuteCommandsOptions {
 	origin?: FlowScriptApplyOrigin;
 	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
 	scopeAnchors?: string[];
+	/** Module layer id whose file this FlowScript is; undefined for the root file (`main`). */
+	module?: string;
 }
 
 interface UseCommandExecutionProps {
@@ -321,6 +323,7 @@ export function useCommandExecution({
 					options.allowDeletions === true,
 					options.origin ?? "editor",
 					options.scopeAnchors,
+					options.module,
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(

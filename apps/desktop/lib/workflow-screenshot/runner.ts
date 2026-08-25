@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
 import type {
 	DocScreenshotPlan,
 	DocScreenshotResult,
@@ -20,12 +21,14 @@ import {
 	resolveWorkflowFocus,
 	workflowFocusSentinelId,
 } from "./focus";
+import { enableWorkflowErrorHandling } from "./handle-errors";
 import { autoLayoutWorkflowBoard } from "./layout";
 import { reconcileFlowScriptForScreenshot } from "./reconcile";
 import { type SubprocessStatus, subprocessFailureMessage } from "./subprocess";
 import {
 	WORKFLOW_NODE_LIST_SCHEMA,
 	WORKFLOW_SCREENSHOT_RESULT_SCHEMA,
+	type WorkflowFocusTarget,
 	type WorkflowNodeDescriptor,
 	type WorkflowScreenshotCliOptions,
 	type WorkflowScreenshotResult,
@@ -231,6 +234,15 @@ export function buildWorkflowScreenshotPlan(
 	};
 }
 
+export function resolveWorkflowScreenshotFocus(
+	board: IBoard,
+	focusNode?: string,
+	handleErrorsTarget?: WorkflowFocusTarget,
+): WorkflowFocusTarget | undefined {
+	if (focusNode) return resolveWorkflowFocus(board, focusNode);
+	return handleErrorsTarget ?? defaultWorkflowFocus(board);
+}
+
 export async function runWorkflowScreenshot(
 	options: WorkflowScreenshotCliOptions,
 ): Promise<WorkflowScreenshotResult | WorkflowNodeListResult> {
@@ -249,10 +261,15 @@ export async function runWorkflowScreenshot(
 	}
 	if (!options.output) throw new Error("A screenshot output path is required.");
 
+	const handleErrorsTarget = options.handleErrors
+		? enableWorkflowErrorHandling(renderData.board, options.handleErrors)
+		: undefined;
 	autoLayoutWorkflowBoard(renderData.board, options.layout);
-	const focus = options.focusNode
-		? resolveWorkflowFocus(renderData.board, options.focusNode)
-		: defaultWorkflowFocus(renderData.board);
+	const focus = resolveWorkflowScreenshotFocus(
+		renderData.board,
+		options.focusNode,
+		handleErrorsTarget,
+	);
 	const fixture = await buildWorkflowScreenshotFixture(
 		renderData.board,
 		renderData.catalog,

@@ -26,6 +26,17 @@ pub struct BoardAst {
     pub functions: Vec<FnDecl>,
     /// Exec entrypoints (start / event-callback nodes), each owning a block.
     pub events: Vec<EventBlock>,
+    /// `detached { … }` blocks: execution chains on the board that no trigger reaches.
+    ///
+    /// FlowScript has no top-level statement position, so an unreachable chain needs a container
+    /// to live in. It gets a neutral one rather than being spelled as an event: the chain's root
+    /// is an ordinary node, and rendering it as a block header would print a catalog node as an
+    /// entry type and drop every one of its input pins from the text.
+    ///
+    /// One block per chain. Consecutive statements in a block mean an execution chain, so two
+    /// independent roots sharing a block would be wired together on the way back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<Block>,
     /// Module blocks (from `LayerType::Module`), rendered last in the given order.
     #[serde(default)]
     pub modules: Vec<ModuleDecl>,
@@ -44,6 +55,9 @@ pub struct ModuleDecl {
     pub functions: Vec<FnDecl>,
     #[serde(default)]
     pub events: Vec<EventBlock>,
+    /// Unreachable execution chains filed under this module. See [`BoardAst::detached`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<Block>,
     #[serde(default)]
     pub modules: Vec<ModuleDecl>,
 }
@@ -244,6 +258,17 @@ pub struct Block {
     pub stmts: Vec<Stmt>,
 }
 
+impl Block {
+    /// The anchor of the first statement that carries one — the identity of the chain this block
+    /// opens.
+    ///
+    /// A `detached { … }` block has no header to anchor, so this stands in for one: it names the
+    /// board section a scoped apply is allowed to diff.
+    pub fn root_anchor(&self) -> Option<&str> {
+        self.stmts.iter().find_map(Stmt::anchor)
+    }
+}
+
 /// A single statement inside a block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Stmt {
@@ -342,6 +367,26 @@ pub enum Stmt {
     Handler(EventBlock),
     /// A free-standing comment line.
     Comment(String),
+}
+
+impl Stmt {
+    /// The statement's stable identity anchor (the node id it renders), when it has one.
+    pub fn anchor(&self) -> Option<&str> {
+        match self {
+            Stmt::Let { anchor, .. }
+            | Stmt::Destructure { anchor, .. }
+            | Stmt::Call { anchor, .. }
+            | Stmt::Branch { anchor, .. }
+            | Stmt::Loop { anchor, .. }
+            | Stmt::Assign { anchor, .. }
+            | Stmt::FieldAssign { anchor, .. }
+            | Stmt::LocalAlias { anchor, .. }
+            | Stmt::Return { anchor, .. } => anchor.as_deref(),
+            Stmt::Local(var) => var.anchor.as_deref(),
+            Stmt::Handler(event) => event.anchor.as_deref(),
+            Stmt::Comment(_) => None,
+        }
+    }
 }
 
 /// One binding of a [`Stmt::Destructure`]: `{ text }` → (`text`, `text`), `{ usage: u }` →

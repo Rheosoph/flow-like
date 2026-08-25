@@ -29,6 +29,7 @@ Workflow:
   --name <title>          Board title shown in Studio (default: input filename)
   --layout <style>        compact, balanced (default), or expanded
   --focus-node <selector> Focus an id, //@n:/@l: anchor, or unique node/layer name
+  --handle-errors <node>  Add Studio's error outputs; focus it unless overridden
   --list-nodes            Reconcile and print focusable ids without opening Chromium
 
 Rendering:

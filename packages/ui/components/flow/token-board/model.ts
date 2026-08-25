@@ -9,6 +9,7 @@
  * derived — nothing here is persisted on the board.
  */
 
+import { owningModuleId } from "../../../lib/layer-to-function";
 import type { IBoard, ILayer, IVariable } from "../../../lib/schema/flow/board";
 import { ILayerType } from "../../../lib/schema/flow/board";
 import { IVariableType } from "../../../lib/schema/flow/node";
@@ -410,6 +411,49 @@ export function groupFlat(
 			...group,
 			items: [...group.items].sort(compareByNameThenId),
 		}));
+}
+
+/* ── modules ───────────────────────────────────────────────────────────── */
+
+/** Items that share an owning module — `null` is the board root, `main.flow`. */
+export interface IModuleGroup {
+	moduleId: string | null;
+	items: ITokenItem[];
+}
+
+/**
+ * Splits items by the module that owns them, global first and then `moduleOrder`.
+ *
+ * A function is module-local when its parent chain reaches a Module layer, so the split is
+ * derived from the layer tree rather than stored on the item. Empty groups are dropped: a
+ * module without functions is a file, not a section.
+ */
+export function groupItemsByModule(
+	items: ITokenItem[],
+	layers: Record<string, ILayer> | undefined,
+	moduleOrder: readonly string[],
+): IModuleGroup[] {
+	const global: ITokenItem[] = [];
+	const owned = new Map<string, ITokenItem[]>();
+
+	for (const item of items) {
+		const moduleId = owningModuleId(layers, item.id);
+		if (!moduleId) {
+			global.push(item);
+			continue;
+		}
+		const bucket = owned.get(moduleId);
+		if (bucket) bucket.push(item);
+		else owned.set(moduleId, [item]);
+	}
+
+	const groups: IModuleGroup[] = [];
+	if (global.length > 0) groups.push({ moduleId: null, items: global });
+	for (const moduleId of moduleOrder) {
+		const bucket = owned.get(moduleId);
+		if (bucket?.length) groups.push({ moduleId, items: bucket });
+	}
+	return groups;
 }
 
 /* ── nested folders ────────────────────────────────────────────────────── */

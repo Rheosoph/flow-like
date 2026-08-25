@@ -28,6 +28,7 @@ export interface WorkflowScreenshotCliOptions {
 	name?: string;
 	layout: LayoutStyle;
 	focusNode?: string;
+	handleErrors?: string;
 	listNodes: boolean;
 	viewport: { width: number; height: number };
 	dpr: number;

@@ -155,6 +155,17 @@
 			},
 			"$ref": "#/$defs/RemoveLayerCommand",
 			"required": ["command_type"]
+		},
+		{
+			"type": "object",
+			"properties": {
+				"command_type": {
+					"type": "string",
+					"const": "MoveToLayer"
+				}
+			},
+			"$ref": "#/$defs/MoveToLayerCommand",
+			"required": ["command_type"]
 		}
 	],
 	"$defs": {
@@ -1320,6 +1331,28 @@
 				"nodes",
 				"preserve_nodes"
 			]
+		},
+		"MoveToLayerCommand": {
+			"type": "object",
+			"properties": {
+				"ids": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"target": {
+					"type": ["string", "null"]
+				},
+				"previous": {
+					"type": "object",
+					"additionalProperties": {
+						"type": ["string", "null"]
+					},
+					"default": {}
+				}
+			},
+			"required": ["ids"]
 		},
 		"LayerCache": {
 			"description": "Result caching for a layer invoked as a function.\n\nA hit replaces the whole call: the function body never runs, so its side effects do\nnot happen either. Only turn this on for layers whose outputs are a function of their\ninputs.",

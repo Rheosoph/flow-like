@@ -20,6 +20,7 @@ use crate::{
     credentials::CredentialsAccess,
     ensure_permission,
     error::ApiError,
+    execution::rejection,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::events::{
@@ -834,6 +835,48 @@ pub(crate) async fn rollback_action_event_changes(
     }
 }
 
+/// An action refused for its parameters is the clearest case of a workflow that
+/// never starts: the caller sent something the contract does not accept, and
+/// without a record the attempt is invisible to the app owner who has to
+/// explain it.
+async fn record_action_rejection(
+    state: &AppState,
+    action: &OntologyActionDef,
+    request: &InvokeOntologyActionRequest,
+    permission: &crate::middleware::jwt::AppPermissionResponse,
+    error: &ApiError,
+) {
+    let Some(event_id) = action.event_id.as_deref() else {
+        return;
+    };
+    let Some(reason) = error.public_message() else {
+        return;
+    };
+    let Some(context) = rejection::context_for_event(
+        state,
+        event_id,
+        rejection::RejectionStage::Payload,
+        reason.to_string(),
+    )
+    .await
+    else {
+        return;
+    };
+
+    let sub = permission.effective_user_id().ok();
+    let mut context = context
+        .with_payload(Some(request.parameters.clone()))
+        .with_actor(
+            sub.clone(),
+            permission.technical_user_id().map(ToOwned::to_owned),
+        );
+    if let Some(sub) = sub {
+        context = context.with_credential_subject(sub);
+    }
+
+    rejection::record(state, context).await;
+}
+
 fn validate_request(
     action: &OntologyActionDef,
     request: &InvokeOntologyActionRequest,
@@ -1039,7 +1082,13 @@ pub async fn invoke_ontology_action(
             "This ontology action is not exposed to connected projects",
         ));
     }
-    let ids = validate_request(&action, &request)?;
+    let ids = match validate_request(&action, &request) {
+        Ok(ids) => ids,
+        Err(error) => {
+            record_action_rejection(&state, &action, &request, &permission, &error).await;
+            return Err(error);
+        }
+    };
 
     let event_id = action.event_id.as_deref().ok_or_else(|| {
         ApiError::conflict(

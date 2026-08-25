@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Monaco } from "@monaco-editor/react";
+import type { FlowScriptBoardScope } from "../../../lib/flow-modules";
 import { loadFlowScriptNamesTable } from "../../../lib/flowscript/names";
 import type { INode, IPin } from "../../../lib/schema/flow/node";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../../../lib/schema/flow/pin";
 import {
 	FLOWSCRIPT_MONARCH,
+	catalogNamespaceRoots,
 	computeFlowScriptDiagnostics,
 	parseUseDeclarations,
 	registerFlowScriptProviders,
@@ -574,11 +576,15 @@ function signatureHelp(text: string) {
 	return result?.value;
 }
 
-function diagnosticMessages(text: string): string[] {
+function diagnosticMessages(
+	text: string,
+	board?: FlowScriptBoardScope,
+): string[] {
 	const { markers } = computeFlowScriptDiagnostics(
 		diagnosticMonaco,
 		text,
 		catalog,
+		board,
 	);
 	return (markers as { message: string }[]).map((marker) => marker.message);
 }
@@ -950,6 +956,172 @@ eventsSimple onLoad() {
 	const b = \`\${mystery()} and \${s.trim()}\`
 }`;
 		expect(diagnosticMessages(text)).toEqual([]);
+	});
+});
+
+describe("FlowScript modules", () => {
+	const board: FlowScriptBoardScope = {
+		modules: ["checkout", "checkout::payments"],
+		functionsByModule: {
+			"": ["rootHelper"],
+			checkout: ["total"],
+			"checkout::payments": ["capture"],
+		},
+	};
+
+	test("colours `module` as a keyword in header position only", () => {
+		expect(tokens("module checkout {")).toEqual([
+			"module=keyword",
+			"checkout=entity.name.namespace",
+			"{=delimiter.curly",
+		]);
+		// The same word elsewhere is an ordinary identifier — nothing else may be recoloured.
+		expect(tokens("logInfo({ message: module })")).toContain(
+			"module=identifier",
+		);
+		expect(tokens("const module = 1")).toContain("module=variable");
+	});
+
+	test("keeps module blocks and cross-file calls out of the diagnostics", () => {
+		const text = `module checkout {
+	function total(): (out: int) {
+		return 1
+	}
+
+	eventsGeneric onLoad(payload: Struct) {
+		const a = checkout::payments::capture("x")
+		const b = rootHelper()
+		const c = total()
+	}
+}`;
+		expect(diagnosticMessages(text, board)).toEqual([]);
+	});
+
+	test("still flags a path that is neither a catalog namespace nor a board module", () => {
+		const messages = diagnosticMessages("nope::thing()", board);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("Namespace 'nope' is not in the catalog");
+	});
+
+	test("without board context a module path is still an unknown namespace", () => {
+		const messages = diagnosticMessages("checkout::payments::capture('x')");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain(
+			"Namespace 'checkout::payments' is not in the catalog",
+		);
+	});
+
+	test("outlines module blocks with their sections nested inside", () => {
+		const text = `module checkout {
+	const fee = 1
+
+	interface Cart {
+		total: int;
+	}
+
+	function total(): (out: int) {
+		return 1
+	}
+
+	eventsGeneric onLoad(payload: Struct) {
+	}
+}
+
+function rootHelper(): (out: int) {
+	return 2
+}`;
+		const symbols = documentSymbols(text);
+		const module = symbols.find((symbol) => symbol.name === "checkout");
+		expect(module?.kind).toBe("namespace");
+		expect(module?.children.map((child) => child.name)).toEqual([
+			"fee",
+			"Cart",
+			"total",
+			"onLoad",
+		]);
+		// A module's sections are top level for the outline, not nested handlers.
+		expect(
+			module?.children.find((child) => child.name === "onLoad")?.kind,
+		).toBe("event");
+		expect(symbols.map((symbol) => symbol.name)).toContain("rootHelper");
+	});
+
+	test("folds a module block", () => {
+		const text = "module checkout {\n\tconst fee = 1\n}\n";
+		const providers = registerTestProviders();
+		const ranges = providers.folding()(testModel(text, editorPosition(text)));
+		providers.dispose();
+		expect(ranges.some((range) => range.start === 1 && range.end === 2)).toBe(
+			true,
+		);
+	});
+
+	test("exposes the catalog namespace roots module names must avoid", () => {
+		const roots = catalogNamespaceRoots(catalog);
+		expect(roots).toContain("string");
+		expect(roots).toContain("hash");
+		// Roots only — nested namespaces would never collide with a module's first segment.
+		expect(roots.every((root) => !root.includes("::"))).toBe(true);
+	});
+});
+
+describe("FlowScript detached blocks", () => {
+	test("colours `detached` as a keyword in header position only", () => {
+		expect(tokens("detached {")).toEqual([
+			"detached=keyword",
+			"{=delimiter.curly",
+		]);
+		// The header is the bare word before the brace; anything else keeps its ordinary colour.
+		expect(tokens("const detached = 1")).toContain("detached=variable");
+		expect(tokens("logInfo({ message: detached })")).toContain(
+			"detached=identifier",
+		);
+		expect(tokens("logInfo({ detached: 1 })")).toContain(
+			"detached=variable.parameter",
+		);
+		// `detached(…) { }` is still an event named `detached`, not a detached block.
+		expect(tokens("detached(payload: Struct) {")).toContain(
+			"detached=entity.name.function",
+		);
+	});
+
+	test("keeps a detached block out of the diagnostics", () => {
+		const text = `detached {
+	logInfo({ message: "keep me" })
+}`;
+		expect(diagnosticMessages(text)).toEqual([]);
+	});
+
+	test("treats a detached block's contents as statements, not declarations", () => {
+		const text = `const shipped = 1
+
+detached {
+	const fee = 2
+
+	interface Cart {
+		total: int;
+	}
+}`;
+		const semantic = decodeSemanticTokens(text);
+		const at = (word: string, line: number) =>
+			semantic.find((token) => token.word === word && token.line === line);
+		expect(at("shipped", 1)?.type).toBe("variable");
+		// Unlike `module`, a detached block is a chain of statements — its `const` is a local.
+		expect(at("fee", 4)?.type).toBe("local");
+		// Only the real top-level declaration is outlined: the block's `interface` is a statement.
+		expect(documentSymbols(text).map((symbol) => symbol.name)).toEqual([
+			"shipped",
+		]);
+	});
+
+	test("folds a detached block", () => {
+		const text = 'detached {\n\tlogInfo({ message: "x" })\n}\n';
+		const providers = registerTestProviders();
+		const ranges = providers.folding()(testModel(text, editorPosition(text)));
+		providers.dispose();
+		expect(ranges.some((range) => range.start === 1 && range.end === 2)).toBe(
+			true,
+		);
 	});
 });
 

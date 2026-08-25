@@ -52,6 +52,22 @@ When a document contains only function declarations, the renderer automatically 
 function by stable name/id order so the root's intentionally hidden function layers cannot produce
 an empty capture.
 
+## Show generic error handling
+
+`--handle-errors` adds the same `On Error` Execution output and `Error` String output as
+Studio's Handle Errors toggle. It accepts the same node ids, node anchors, catalog names, and
+friendly names as `--focus-node`; layers and pure nodes are rejected. The adjusted node is focused
+automatically unless `--focus-node` explicitly selects another target.
+
+```sh
+bun run workflow:screenshot -- path/to/workflow.flow \
+  --handle-errors "API Call" \
+  --output tmp/workflow-screenshots/api-error.webp
+```
+
+The outputs are added only to the ephemeral reconciled Board used for rendering. The FlowScript
+source and any real Flow-Like profile remain unchanged.
+
 ## Layout and image controls
 
 - `--layout compact|balanced|expanded` selects Studio's layout style. `balanced` is the
@@ -64,3 +80,7 @@ an empty capture.
   result on stdout. Progress and server logs stay on stderr.
 
 The default output is `tmp/workflow-screenshots/<input-name>.webp`.
+
+For repeated captures after building the helper once, set
+`FLOW_LIKE_FLOWSCRIPT_RENDER_DATA_BIN=target/debug/flowscript-render-data` to bypass Cargo's
+workspace lock and invoke that exact binary directly.

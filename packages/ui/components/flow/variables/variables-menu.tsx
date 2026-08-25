@@ -47,11 +47,18 @@ import {
 } from "../../../components/ui/tabs";
 import {
 	type IGenericCommand,
+	moveToLayerCommand,
 	removeLayerCommand,
 	removeVariableCommand,
 	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../../../lib";
+import {
+	MAIN_FILE_LABEL,
+	activeModuleId,
+	boardModules,
+} from "../../../lib/flow-modules";
+import { owningModuleId } from "../../../lib/layer-to-function";
 import type { IBoard, ILayer, IVariable } from "../../../lib/schema/flow/board";
 import { ILayerType } from "../../../lib/schema/flow/board";
 import { IVariableType } from "../../../lib/schema/flow/node";
@@ -72,13 +79,14 @@ import {
 	buildUsageIndex,
 	folderPaths,
 	functionLayers,
+	groupItemsByModule,
 	matchesFunction,
 	matchesVariable,
 	parseTokenQuery,
 	resolveVariableScope,
 } from "../token-board/model";
 import { FunctionToken, VariableToken } from "../token-board/token";
-import { TokenBoard } from "../token-board/token-board";
+import { type ITokenSection, TokenBoard } from "../token-board/token-board";
 import { typeToColor } from "../utils";
 import { NewVariableDialog } from "./new-variable-dialog";
 import { VariableOverlay } from "./variable-overlay";
@@ -97,6 +105,9 @@ const pinCount = (layer: ILayer, pinType: "Input" | "Output") =>
 /**
  * Creates a function layer. The name is asked for up front — the old button
  * dropped a silent "New Function" layer on the canvas and left you to find it.
+ *
+ * `moduleId` files the function inside a module, which is what makes it local to
+ * that file instead of a board global.
  */
 export function useCreateFunction(
 	executeCommand: (
@@ -105,7 +116,8 @@ export function useCreateFunction(
 	) => Promise<unknown>,
 ) {
 	return useCallback(
-		async (name: string, category?: string) => {
+		async (name: string, category?: string, moduleId?: string | null) => {
+			const parentId = moduleId ?? null;
 			const layer: ILayer = {
 				id: createId(),
 				name,
@@ -115,13 +127,23 @@ export function useCreateFunction(
 				pins: {},
 				variables: {},
 				comments: {},
-				parent_id: null,
+				// The backend takes the parent of a *new* layer from `current_layer`;
+				// `parent_id` is what every local reader goes by. Both, or the function
+				// lands somewhere else than the file it was created from.
+				parent_id: parentId,
 				color: null,
 				comment: null,
 				error: null,
 				category: normalizeCategory(category) ?? null,
 			};
-			await executeCommand(upsertLayerCommand({ layer, node_ids: [] }), false);
+			await executeCommand(
+				upsertLayerCommand({
+					layer,
+					node_ids: [],
+					current_layer: parentId,
+				}),
+				false,
+			);
 			return layer;
 		},
 		[executeCommand],
@@ -172,6 +194,13 @@ export function VariablesMenu({
 		return layer;
 	}, [currentLayerId, board.layers]);
 
+	const modules = useMemo(() => boardModules(board.layers), [board.layers]);
+	// The file the canvas is standing in — what a new function is filed into.
+	const currentModuleId = useMemo(
+		() => activeModuleId(undefined, currentLayerId, board.layers),
+		[currentLayerId, board.layers],
+	);
+
 	/* ── commands ──────────────────────────────────────────────────────── */
 
 	const upsertVariable = useCallback(
@@ -216,6 +245,17 @@ export function VariablesMenu({
 	const upsertFunction = useCallback(
 		async (layer: ILayer) => {
 			await executeCommand(upsertLayerCommand({ layer, node_ids: [] }), false);
+		},
+		[executeCommand],
+	);
+
+	/** Re-files a function into another module — or into `main.flow`, which is no module. */
+	const moveFunctionToModule = useCallback(
+		async (layerId: string, target: string | null) => {
+			await executeCommand(
+				moveToLayerCommand({ ids: [layerId], target }),
+				false,
+			);
 		},
 		[executeCommand],
 	);
@@ -279,6 +319,33 @@ export function VariablesMenu({
 				scope: "board" as const,
 			}));
 	}, [board, query, usage]);
+
+	/**
+	 * Functions grouped by the file they live in: globals first, then one section per
+	 * module that owns at least one. A board whose functions are all global has a single
+	 * group, and a single group is no grouping — it renders as it always did.
+	 */
+	const functionSections = useMemo<ITokenSection[] | undefined>(() => {
+		if (modules.length === 0) return undefined;
+		const labelOf = new Map(
+			modules.map((module) => [module.id, module.pathLabel]),
+		);
+		const groups = groupItemsByModule(
+			functionItems,
+			board.layers,
+			modules.map((module) => module.id),
+		);
+		if (groups.length === 0) return undefined;
+		if (groups.length === 1 && groups[0].moduleId === null) return undefined;
+		return groups.map((group) => ({
+			key: group.moduleId ?? "global",
+			label:
+				group.moduleId === null
+					? t("global", "Global")
+					: (labelOf.get(group.moduleId) ?? group.moduleId),
+			items: group.items,
+		}));
+	}, [board.layers, functionItems, modules, t]);
 
 	const localItems = useMemo(
 		() =>
@@ -456,105 +523,134 @@ export function VariablesMenu({
 			setDraftFunction(null);
 			return;
 		}
-		const layer = await createFunction(name);
+		const layer = await createFunction(name, undefined, currentModuleId);
 		setDraftFunction(null);
 		setEditingFunction(layer);
-	}, [createFunction, draftFunction]);
+	}, [createFunction, currentModuleId, draftFunction]);
 
 	/* ── rendering ─────────────────────────────────────────────────────── */
 
 	const folders = tab === "variables" ? variableFolders : functionFolders;
 
-	const renderMenu = (item: ITokenItem) => (
-		<ContextMenuContent className="w-56">
-			{item.kind === "variable" ? (
-				<>
-					<ContextMenuItem onClick={() => insertNode(item, "get")}>
-						{t("insertGetNode", "Insert Get node")}
-					</ContextMenuItem>
-					<ContextMenuItem onClick={() => insertNode(item, "set")}>
-						{t("insertSetNode", "Insert Set node")}
-					</ContextMenuItem>
-				</>
-			) : (
-				<>
-					<ContextMenuItem onClick={() => insertNode(item, "get")}>
-						{t("insertCallNode", "Insert Call node")}
-					</ContextMenuItem>
-					<ContextMenuItem
-						onClick={() => item.layer && void openFunction(item.layer)}
-					>
-						{t("openLayer", "Open layer")}
-					</ContextMenuItem>
-				</>
-			)}
-			<ContextMenuSeparator />
-			<ContextMenuItem
-				onClick={() =>
-					item.kind === "function"
-						? setEditingFunction(item.layer ?? null)
-						: setEditingVariable(item.variable ?? null)
-				}
-			>
-				{t("editEllipsis", "Edit…")}
-			</ContextMenuItem>
-			{item.kind === "variable" && item.variable?.editable && (
+	const renderMenu = (item: ITokenItem) => {
+		const itemModuleId =
+			item.kind === "function" ? owningModuleId(board.layers, item.id) : null;
+
+		return (
+			<ContextMenuContent className="w-56">
+				{item.kind === "variable" ? (
+					<>
+						<ContextMenuItem onClick={() => insertNode(item, "get")}>
+							{t("insertGetNode", "Insert Get node")}
+						</ContextMenuItem>
+						<ContextMenuItem onClick={() => insertNode(item, "set")}>
+							{t("insertSetNode", "Insert Set node")}
+						</ContextMenuItem>
+					</>
+				) : (
+					<>
+						<ContextMenuItem onClick={() => insertNode(item, "get")}>
+							{t("insertCallNode", "Insert Call node")}
+						</ContextMenuItem>
+						<ContextMenuItem
+							onClick={() => item.layer && void openFunction(item.layer)}
+						>
+							{t("openLayer", "Open layer")}
+						</ContextMenuItem>
+					</>
+				)}
+				<ContextMenuSeparator />
 				<ContextMenuItem
 					onClick={() =>
-						item.variable &&
-						void saveVariable(
-							{ ...item.variable, exposed: !item.variable.exposed },
-							item.scope,
-						)
+						item.kind === "function"
+							? setEditingFunction(item.layer ?? null)
+							: setEditingVariable(item.variable ?? null)
 					}
 				>
-					{item.variable.exposed
-						? t("stopExposing", "Stop exposing")
-						: t("exposeInAppConfig", "Expose in app config")}
+					{t("editEllipsis", "Edit…")}
 				</ContextMenuItem>
-			)}
-			<ContextMenuSub>
-				<ContextMenuSubTrigger>
-					{t("moveToFolder", "Move to folder")}
-				</ContextMenuSubTrigger>
-				<ContextMenuSubContent className="max-h-64 overflow-y-auto">
-					<ContextMenuItem onClick={() => void moveItem(item, null)}>
-						{t("topLevel", "Top level")}
+				{item.kind === "variable" && item.variable?.editable && (
+					<ContextMenuItem
+						onClick={() =>
+							item.variable &&
+							void saveVariable(
+								{ ...item.variable, exposed: !item.variable.exposed },
+								item.scope,
+							)
+						}
+					>
+						{item.variable.exposed
+							? t("stopExposing", "Stop exposing")
+							: t("exposeInAppConfig", "Expose in app config")}
 					</ContextMenuItem>
-					{folders.map((path) => (
-						<ContextMenuItem
-							key={path}
-							onClick={() => void moveItem(item, path)}
-						>
-							{path}
+				)}
+				<ContextMenuSub>
+					<ContextMenuSubTrigger>
+						{t("moveToFolder", "Move to folder")}
+					</ContextMenuSubTrigger>
+					<ContextMenuSubContent className="max-h-64 overflow-y-auto">
+						<ContextMenuItem onClick={() => void moveItem(item, null)}>
+							{t("topLevel", "Top level")}
 						</ContextMenuItem>
-					))}
-				</ContextMenuSubContent>
-			</ContextMenuSub>
-			{item.kind === "variable" && (
-				<ContextMenuItem onClick={() => void duplicateVariable(item)}>
-					{t("duplicate", "Duplicate")}
+						{folders.map((path) => (
+							<ContextMenuItem
+								key={path}
+								onClick={() => void moveItem(item, path)}
+							>
+								{path}
+							</ContextMenuItem>
+						))}
+					</ContextMenuSubContent>
+				</ContextMenuSub>
+				{item.kind === "function" && modules.length > 0 && (
+					<ContextMenuSub>
+						<ContextMenuSubTrigger>
+							{t("moveToModule", "Move to module")}
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent className="max-h-64 overflow-y-auto">
+							<ContextMenuItem
+								disabled={itemModuleId === null}
+								onClick={() => void moveFunctionToModule(item.id, null)}
+							>
+								{MAIN_FILE_LABEL}
+							</ContextMenuItem>
+							{modules.map((module) => (
+								<ContextMenuItem
+									key={module.id}
+									disabled={itemModuleId === module.id}
+									onClick={() => void moveFunctionToModule(item.id, module.id)}
+								>
+									{module.pathLabel}
+								</ContextMenuItem>
+							))}
+						</ContextMenuSubContent>
+					</ContextMenuSub>
+				)}
+				{item.kind === "variable" && (
+					<ContextMenuItem onClick={() => void duplicateVariable(item)}>
+						{t("duplicate", "Duplicate")}
+					</ContextMenuItem>
+				)}
+				<ContextMenuItem
+					onClick={() => void navigator.clipboard?.writeText(item.name)}
+				>
+					{t("copyName", "Copy name")}
 				</ContextMenuItem>
-			)}
-			<ContextMenuItem
-				onClick={() => void navigator.clipboard?.writeText(item.name)}
-			>
-				{t("copyName", "Copy name")}
-			</ContextMenuItem>
-			<ContextMenuSeparator />
-			<ContextMenuItem
-				variant="destructive"
-				disabled={item.kind === "variable" && !item.variable?.editable}
-				onClick={() =>
-					item.kind === "function"
-						? item.layer && void deleteFunction(item.layer)
-						: item.variable && void deleteVariable(item.variable, item.scope)
-				}
-			>
-				{t("delete", "Delete")}
-			</ContextMenuItem>
-		</ContextMenuContent>
-	);
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					variant="destructive"
+					disabled={item.kind === "variable" && !item.variable?.editable}
+					onClick={() =>
+						item.kind === "function"
+							? item.layer && void deleteFunction(item.layer)
+							: item.variable && void deleteVariable(item.variable, item.scope)
+					}
+				>
+					{t("delete", "Delete")}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		);
+	};
 
 	const renderToken = (item: ITokenItem, focused: boolean): ReactNode => (
 		<ContextMenu key={item.id}>
@@ -793,6 +889,7 @@ export function VariablesMenu({
 							}
 						: undefined
 				}
+				sections={tab === "functions" ? functionSections : undefined}
 				group={group}
 				query={query}
 				renderToken={renderToken}

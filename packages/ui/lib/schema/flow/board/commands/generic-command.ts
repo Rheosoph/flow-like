@@ -35,6 +35,9 @@ export interface IGenericCommand {
 	layers?: ILayer[];
 	nodes?: INode[];
 	preserve_nodes?: boolean;
+	ids?: string[];
+	target?: null | string;
+	previous?: { [key: string]: null | string };
 	[property: string]: any;
 }
 
@@ -44,6 +47,7 @@ export enum ICommandType {
 	CopyPaste = "CopyPaste",
 	DisconnectPin = "DisconnectPin",
 	MoveNode = "MoveNode",
+	MoveToLayer = "MoveToLayer",
 	RemoveComment = "RemoveComment",
 	RemoveLayer = "RemoveLayer",
 	RemoveNode = "RemoveNode",

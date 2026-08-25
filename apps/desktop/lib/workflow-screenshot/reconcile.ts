@@ -38,19 +38,22 @@ export async function reconcileFlowScriptForScreenshot(
 	input: string,
 	name?: string,
 ): Promise<WorkflowRenderData> {
-	const args = [
-		"run",
-		"--quiet",
-		"-p",
-		"flowscript-render-data",
-		"--",
-		input,
-		"--board-id",
-		WORKFLOW_SCREENSHOT_BOARD_ID,
-	];
+	const prebuiltHelper = process.env.FLOW_LIKE_FLOWSCRIPT_RENDER_DATA_BIN;
+	const args = prebuiltHelper
+		? [input, "--board-id", WORKFLOW_SCREENSHOT_BOARD_ID]
+		: [
+				"run",
+				"--quiet",
+				"-p",
+				"flowscript-render-data",
+				"--",
+				input,
+				"--board-id",
+				WORKFLOW_SCREENSHOT_BOARD_ID,
+			];
 	if (name) args.push("--name", name);
 
-	const child = spawn("cargo", args, {
+	const child = spawn(prebuiltHelper ?? "cargo", args, {
 		cwd: repositoryRoot,
 		stdio: ["ignore", "pipe", "pipe"],
 	});

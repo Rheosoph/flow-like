@@ -312,6 +312,123 @@ pub fn lower_board_scoped(board: &Board, node_ids: &[String]) -> ScopedBoardAst 
     }
 }
 
+/// One virtual FlowScript file of a board: the module layers are the board's "files".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowScriptFile {
+    /// `main.flow`: everything owning no module, plus the board's shared context.
+    Main,
+    /// One module's own file, addressed by its `LayerType::Module` layer id.
+    Module(String),
+}
+
+/// Lower a single virtual file of `board` (see [`FlowScriptFile`]).
+///
+/// A module file is the module UNWRAPPED — the file *is* the module, so its own functions and
+/// events sit at the document's top level with no `module` block around them, exactly as
+/// `main.flow` carries the root sections. Nested modules are their own files and are therefore
+/// absent, and no function is pulled in for being called: a call to a global or other-module
+/// function renders bare/qualified (per the caller's module) and stays undeclared.
+///
+/// Shared context follows ownership: variables are board globals and live in `main.flow` only,
+/// while interfaces are pure type context and are kept in every file. As in
+/// [`lower_board_scoped`], the derived `use` lines are recomputed over the kept sections and the
+/// board is lowered twice when a minted name collides with what those lines open.
+pub fn lower_board_file(
+    board: &Board,
+    file: &FlowScriptFile,
+) -> flow_like_types::Result<ScopedBoardAst> {
+    if let FlowScriptFile::Module(module_id) = file {
+        match board.layers.get(module_id.as_str()) {
+            None => {
+                return Err(flow_like_types::anyhow!(
+                    "FlowScript file `{module_id}` does not name a layer on board `{}`",
+                    board.id
+                ));
+            }
+            Some(layer) if !matches!(layer.r#type, LayerType::Module) => {
+                return Err(flow_like_types::anyhow!(
+                    "Layer `{module_id}` is a {:?} layer, not a module: only module layers are FlowScript files",
+                    layer.r#type
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+
+    let reserved = declared_names(board);
+    let mut lowering = Lowering::new(board, reserved.clone());
+    let scoped = filter_ast_to_file(lowering.run(), file)?;
+    let opened = derive_uses(&scoped.ast, board);
+    let minted = lowering.minted_names();
+    if opened.reserved.is_disjoint(&minted) {
+        return Ok(ScopedBoardAst {
+            ast: apply_uses(scoped.ast, opened),
+            scope_anchors: scoped.scope_anchors,
+        });
+    }
+    let mut reserved = reserved;
+    reserved.extend(opened.reserved);
+    let mut lowering = Lowering::new(board, reserved);
+    let scoped = filter_ast_to_file(lowering.run(), file)?;
+    let opened = derive_uses(&scoped.ast, board);
+    Ok(ScopedBoardAst {
+        ast: apply_uses(scoped.ast, opened),
+        scope_anchors: scoped.scope_anchors,
+    })
+}
+
+/// Cut one file out of a fully lowered document: `Main` drops the module blocks, a module file
+/// hoists that module's OWN sections to the top level and drops everything the other files own.
+fn filter_ast_to_file(
+    mut ast: BoardAst,
+    file: &FlowScriptFile,
+) -> flow_like_types::Result<ScopedBoardAst> {
+    match file {
+        FlowScriptFile::Main => ast.modules.clear(),
+        FlowScriptFile::Module(module_id) => {
+            let Some(module) = take_module_decl(&mut ast.modules, module_id) else {
+                return Err(flow_like_types::anyhow!(
+                    "Module layer `{module_id}` did not lower into a module block"
+                ));
+            };
+            ast.functions = module.functions;
+            ast.events = module.events;
+            ast.detached = module.detached;
+            ast.modules.clear();
+            // Board variables are globals declared once, in `main.flow`.
+            ast.variables.clear();
+        }
+    }
+
+    // A `detached` block has no header of its own, so its chain root stands in as the anchor a
+    // scoped apply diffs it by.
+    let scope_anchors = ast
+        .functions
+        .iter()
+        .filter_map(|function| function.anchor.clone())
+        .chain(ast.events.iter().filter_map(|event| event.anchor.clone()))
+        .chain(
+            ast.detached
+                .iter()
+                .filter_map(|block| block.root_anchor().map(str::to_string)),
+        )
+        .collect();
+    Ok(ScopedBoardAst { ast, scope_anchors })
+}
+
+/// Remove and return the module block anchored at `module_id`, at any nesting depth.
+fn take_module_decl(modules: &mut Vec<ModuleDecl>, module_id: &str) -> Option<ModuleDecl> {
+    if let Some(index) = modules
+        .iter()
+        .position(|module| module.anchor.as_deref() == Some(module_id))
+    {
+        return Some(modules.remove(index));
+    }
+    modules
+        .iter_mut()
+        .find_map(|module| take_module_decl(&mut module.modules, module_id))
+}
+
 /// The selected node ids plus, for every id living inside a layer (or naming a layer directly),
 /// the layer ancestry — so selecting a node nested in a presentational sub-layer of a function
 /// still matches that function's anchor (its layer id).
@@ -349,71 +466,160 @@ fn expand_selection(board: &Board, node_ids: &[String]) -> HashSet<String> {
 }
 
 fn filter_ast_to_selection(mut ast: BoardAst, selection: &HashSet<String>) -> ScopedBoardAst {
-    let keep_event: Vec<bool> = ast
-        .events
-        .iter()
-        .map(|event| section_matches_selection(event.anchor.as_deref(), &event.body, selection))
-        .collect();
-    let mut keep_function: Vec<bool> = ast
-        .functions
-        .iter()
-        .map(|function| {
-            section_matches_selection(function.anchor.as_deref(), &function.body, selection)
-        })
-        .collect();
+    let keep = {
+        let mut sections: Vec<SectionRef> = Vec::new();
+        collect_sections(
+            &ast.functions,
+            &ast.events,
+            &ast.detached,
+            &ast.modules,
+            &mut sections,
+        );
+        let mut keep: Vec<bool> = sections
+            .iter()
+            .map(|section| section_matches_selection(section.anchor, section.body, selection))
+            .collect();
 
-    // Transitive closure over function references from kept sections.
-    let function_index: HashMap<String, usize> = ast
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(index, function)| (function.name.to_lowercase(), index))
-        .collect();
-    loop {
-        let mut referenced: HashSet<String> = HashSet::new();
-        for (event, keep) in ast.events.iter().zip(&keep_event) {
-            if *keep {
-                collect_referenced_function_names(&event.body, &mut referenced);
+        // Transitive closure over function references from kept sections. Names repeat across
+        // modules, so a reference keeps every same-named function: a scoped render may carry a
+        // function too many, never one too few.
+        let mut function_index: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (index, section) in sections.iter().enumerate() {
+            if let Some(name) = &section.name {
+                function_index.entry(name.as_str()).or_default().push(index);
             }
         }
-        for (function, keep) in ast.functions.iter().zip(&keep_function) {
-            if *keep {
-                collect_referenced_function_names(&function.body, &mut referenced);
+        loop {
+            let mut referenced: HashSet<String> = HashSet::new();
+            for (section, kept) in sections.iter().zip(&keep) {
+                if *kept {
+                    collect_referenced_function_names(section.body, &mut referenced);
+                }
+            }
+            let mut changed = false;
+            for name in &referenced {
+                for &index in function_index
+                    .get(name.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    if !keep[index] {
+                        keep[index] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
             }
         }
-        let mut changed = false;
-        for name in &referenced {
-            if let Some(&index) = function_index.get(name)
-                && !keep_function[index]
-            {
-                keep_function[index] = true;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+        keep
+    };
 
     let mut scope_anchors: Vec<String> = Vec::new();
-    let mut keep = keep_function.iter();
-    ast.functions.retain(|function| {
-        let kept = *keep.next().unwrap_or(&false);
-        if kept && let Some(anchor) = function.anchor.as_deref() {
-            scope_anchors.push(anchor.to_string());
-        }
-        kept
-    });
-    let mut keep = keep_event.iter();
-    ast.events.retain(|event| {
-        let kept = *keep.next().unwrap_or(&false);
-        if kept && let Some(anchor) = event.anchor.as_deref() {
-            scope_anchors.push(anchor.to_string());
-        }
-        kept
-    });
+    let mut cursor = 0usize;
+    prune_sections(
+        &mut ast.functions,
+        &mut ast.events,
+        &mut ast.detached,
+        &mut ast.modules,
+        &keep,
+        &mut cursor,
+        &mut scope_anchors,
+    );
 
     ScopedBoardAst { ast, scope_anchors }
+}
+
+/// One lowered section as the scoped filter sees it: the anchor and body that decide selection,
+/// plus the lowercased `function` name a reference can pull it in by (`None` for events).
+struct SectionRef<'a> {
+    anchor: Option<&'a str>,
+    name: Option<String>,
+    body: &'a Block,
+}
+
+/// Flatten every section of a document depth-first in the fixed order
+/// `functions, events, detached, nested modules`. [`prune_sections`] walks the SAME order to
+/// consume the keep flags — the two traversals must stay in lockstep.
+fn collect_sections<'a>(
+    functions: &'a [FnDecl],
+    events: &'a [EventBlock],
+    detached: &'a [Block],
+    modules: &'a [ModuleDecl],
+    out: &mut Vec<SectionRef<'a>>,
+) {
+    for function in functions {
+        out.push(SectionRef {
+            anchor: function.anchor.as_deref(),
+            name: Some(function.name.to_lowercase()),
+            body: &function.body,
+        });
+    }
+    for event in events {
+        out.push(SectionRef {
+            anchor: event.anchor.as_deref(),
+            name: None,
+            body: &event.body,
+        });
+    }
+    for block in detached {
+        out.push(SectionRef {
+            anchor: block.root_anchor(),
+            name: None,
+            body: block,
+        });
+    }
+    for module in modules {
+        collect_sections(
+            &module.functions,
+            &module.events,
+            &module.detached,
+            &module.modules,
+            out,
+        );
+    }
+}
+
+/// Drop every section whose flag is unset, collecting the anchors of the kept ones. A module left
+/// with nothing in it is dropped too — an empty block only makes sense in a full render.
+fn prune_sections(
+    functions: &mut Vec<FnDecl>,
+    events: &mut Vec<EventBlock>,
+    detached: &mut Vec<Block>,
+    modules: &mut Vec<ModuleDecl>,
+    keep: &[bool],
+    cursor: &mut usize,
+    anchors: &mut Vec<String>,
+) {
+    let take = |anchor: Option<&str>, cursor: &mut usize, anchors: &mut Vec<String>| {
+        let kept = keep.get(*cursor).copied().unwrap_or(false);
+        *cursor += 1;
+        if kept && let Some(anchor) = anchor {
+            anchors.push(anchor.to_string());
+        }
+        kept
+    };
+    functions.retain(|function| take(function.anchor.as_deref(), cursor, anchors));
+    events.retain(|event| take(event.anchor.as_deref(), cursor, anchors));
+    detached.retain(|block| take(block.root_anchor(), cursor, anchors));
+    for module in modules.iter_mut() {
+        prune_sections(
+            &mut module.functions,
+            &mut module.events,
+            &mut module.detached,
+            &mut module.modules,
+            keep,
+            cursor,
+            anchors,
+        );
+    }
+    modules.retain(|module| {
+        !module.functions.is_empty()
+            || !module.events.is_empty()
+            || !module.detached.is_empty()
+            || !module.modules.is_empty()
+    });
 }
 
 /// Whether a top-level section is part of the selection: its own anchor is selected, or any
@@ -562,7 +768,11 @@ fn collect_referenced_function_names(body: &Block, out: &mut HashSet<String>) {
     let mut calls = Vec::new();
     collect_calls_in_block_with(body, &mut calls, true);
     for call in calls {
-        if call.receiver.is_none() && call.path.is_empty() && !call.display.is_empty() {
+        // A cross-module call is spelled with a module path, so `path.is_empty()` alone no longer
+        // recognizes every function call — the node type does.
+        let names_a_function = is_function_call(call)
+            || (call.receiver.is_none() && call.path.is_empty() && !call.display.is_empty());
+        if names_a_function && !call.display.is_empty() {
             out.insert(call.display.to_lowercase());
         }
         for arg in &call.args {
@@ -628,7 +838,115 @@ fn declared_names(board: &Board) -> HashSet<String> {
             );
         }
     }
+    names.extend(module_root_names(board));
     names
+}
+
+/// The nearest `LayerType::Module` ancestor of `start_layer`, the layer itself included. `None`
+/// means the layer has no module ancestor — the root ("main") scope.
+///
+/// Cycle-guarded: a corrupt self-referential ancestry must not hang FlowScript lowering (and with
+/// it every reconcile, which lowers the existing board first).
+pub(crate) fn owning_module(board: &Board, start_layer: Option<&str>) -> Option<String> {
+    let mut current = start_layer?;
+    let mut seen: HashSet<&str> = HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+        let layer = board.layers.get(current)?;
+        if matches!(layer.r#type, LayerType::Module) {
+            return Some(layer.id.clone());
+        }
+        current = layer.parent_id.as_deref()?;
+    }
+}
+
+/// The `::` namespace path of a module layer: one camelCase segment per module, from the root
+/// module down to `module_id` (`["checkout", "payments"]`). Cycle-guarded; empty when `module_id`
+/// does not name a module layer.
+pub(crate) fn module_path(board: &Board, module_id: &str) -> Vec<String> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = Some(module_id);
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            break;
+        }
+        let Some(layer) = board.layers.get(id) else {
+            break;
+        };
+        // A module's parent is only ever another module; anything else ends the path.
+        if !matches!(layer.r#type, LayerType::Module) {
+            break;
+        }
+        segments.push(util::to_camel_case(&layer.name));
+        current = layer.parent_id.as_deref();
+    }
+    segments.reverse();
+    segments
+}
+
+/// Sibling module layers render in (camelCase name, layer id) order.
+fn sort_module_layers(layers: &mut [&Layer]) {
+    layers.sort_by(|left, right| {
+        util::to_camel_case(&left.name)
+            .cmp(&util::to_camel_case(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+/// One lowered `detached` chain plus the module its root node was walked in. A `Block` has no
+/// header to carry identity, so the module travels alongside it until [`partition_modules`] files
+/// the chain under its block.
+struct DetachedChain {
+    module: Option<String>,
+    body: Block,
+}
+
+/// Assemble the `module` blocks for one sibling list, moving each module's sections into its
+/// block and recursing into the modules nested below it. `emitted` records what was rendered,
+/// which also stops a corrupt cyclic nesting from recursing forever.
+fn build_module_decls<'a>(
+    siblings: &[&'a Layer],
+    children: &HashMap<String, Vec<&'a Layer>>,
+    functions: &mut HashMap<String, Vec<FnDecl>>,
+    events: &mut HashMap<String, Vec<EventBlock>>,
+    detached: &mut HashMap<String, Vec<Block>>,
+    emitted: &mut HashSet<String>,
+) -> Vec<ModuleDecl> {
+    let mut decls = Vec::new();
+    for layer in siblings {
+        if !emitted.insert(layer.id.clone()) {
+            continue;
+        }
+        let nested = children
+            .get(layer.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        decls.push(ModuleDecl {
+            name: util::to_camel_case(&layer.name),
+            anchor: Some(layer.id.clone()),
+            functions: functions.remove(&layer.id).unwrap_or_default(),
+            events: events.remove(&layer.id).unwrap_or_default(),
+            detached: detached.remove(&layer.id).unwrap_or_default(),
+            modules: build_module_decls(nested, children, functions, events, detached, emitted),
+        });
+    }
+    decls
+}
+
+/// camelCase names of the top-level module layers. These are the roots of the module namespace,
+/// so they are names lowering must not mint for a binding and names a derived `use ns::*` must
+/// not shadow with an opened member.
+fn module_root_names(board: &Board) -> Vec<String> {
+    board
+        .layers
+        .values()
+        .filter(|layer| matches!(layer.r#type, LayerType::Module))
+        .filter(|layer| owning_module(board, layer.parent_id.as_deref()).is_none())
+        .map(|layer| util::to_camel_case(&layer.name))
+        .collect()
 }
 
 /// Lowercase `::`-joined key of a call path (`["ai", "ML"]` → `ai::ml`).
@@ -662,7 +980,9 @@ fn derive_uses(ast: &BoardAst, board: &Board) -> OpenedNamespaces {
     let mut sites: BTreeMap<String, Sites> = BTreeMap::new();
     let mut roots: HashSet<String> = HashSet::new();
     for call in collect_calls_in_ast(ast) {
-        if call.receiver.is_some() || call.path.is_empty() {
+        // A cross-module call carries a MODULE path, not a catalog namespace: it is never a
+        // static site and must never be opened by a `use` line.
+        if call.receiver.is_some() || call.path.is_empty() || is_function_call(call) {
             continue;
         }
         roots.insert(call.path[0].to_lowercase());
@@ -679,13 +999,16 @@ fn derive_uses(ast: &BoardAst, board: &Board) -> OpenedNamespaces {
         entry.count += 1;
     }
 
-    // A bare member must not resolve to anything else: a `function`, the flat name of a
-    // DIFFERENT node type placed on the board, or a member another namespace already opens.
-    let mut taken: HashSet<String> = ast
-        .functions
-        .iter()
-        .map(|function| function.name.to_lowercase())
-        .collect();
+    // A bare member must not resolve to anything else: a `function` (at any module depth), a
+    // module namespace root, the flat name of a DIFFERENT node type placed on the board, or a
+    // member another namespace already opens.
+    let mut taken: HashSet<String> = HashSet::new();
+    collect_function_names(&ast.functions, &ast.modules, &mut taken);
+    taken.extend(
+        module_root_names(board)
+            .iter()
+            .map(|name| name.to_lowercase()),
+    );
     let mut flat_owners: HashMap<String, HashSet<String>> = HashMap::new();
     for indexed in canonical_board_nodes(board) {
         flat_owners
@@ -716,13 +1039,28 @@ fn derive_uses(ast: &BoardAst, board: &Board) -> OpenedNamespaces {
     OpenedNamespaces { globs, reserved }
 }
 
+/// Lowercased names of every `function` a document declares, module blocks at any depth included.
+fn collect_function_names(functions: &[FnDecl], modules: &[ModuleDecl], out: &mut HashSet<String>) {
+    out.extend(
+        functions
+            .iter()
+            .map(|function| function.name.to_lowercase()),
+    );
+    for module in modules {
+        collect_function_names(&module.functions, &module.modules, out);
+    }
+}
+
 /// Emit the derived `use` lines and render the calls they open bare.
 fn apply_uses(mut ast: BoardAst, opened: OpenedNamespaces) -> BoardAst {
     if opened.globs.is_empty() {
         return ast;
     }
     for_each_call_mut(&mut ast, &mut |call| {
-        if call.receiver.is_none() && opened.globs.contains_key(&path_key(&call.path)) {
+        if call.receiver.is_none()
+            && !is_function_call(call)
+            && opened.globs.contains_key(&path_key(&call.path))
+        {
             call.path.clear();
         }
     });
@@ -820,6 +1158,16 @@ struct Lowering<'a> {
     var_names: HashMap<&'a str, String>,
     /// function-layer id -> camelCase function name (for `fnRef`/`functionLayerId` sugar).
     fn_names: HashMap<&'a str, String>,
+    /// function-layer id -> the `Module` layer owning it (the nearest module ancestor of the
+    /// layer's PARENT — a function layer is not its own module). Absent = a global function.
+    module_of_function: HashMap<&'a str, String>,
+    /// node id -> the `Module` layer owning it. Absent = the root ("main") scope.
+    module_of_node: HashMap<&'a str, String>,
+    /// module layer id -> its `::` namespace path from the root module.
+    module_paths: HashMap<&'a str, Vec<String>>,
+    /// The module owning the section being lowered right now. Cross-module calls out of this
+    /// section render fully qualified; everything else stays bare.
+    current_module: Option<String>,
     /// node id -> stable `const` binding name (impure nodes with consumed outputs).
     bindings: HashMap<String, String>,
     /// node id -> element/index bindings of a loop rendered in its sugared `for…of`/`while`
@@ -858,8 +1206,12 @@ impl<'a> Lowering<'a> {
                 pins.insert(pin.id.as_str(), pin);
             }
         };
+        let mut module_of_node = HashMap::new();
         for indexed in canonical_board_nodes(board) {
             index(indexed.node);
+            if let Some(module) = owning_module(board, indexed.layer) {
+                module_of_node.insert(indexed.node.id.as_str(), module);
+            }
         }
 
         // Map function-layer boundary input pins to their parameter names so nodes inside the
@@ -907,9 +1259,20 @@ impl<'a> Lowering<'a> {
             }
         }
         let mut fn_names = HashMap::new();
+        let mut module_of_function = HashMap::new();
+        let mut module_paths = HashMap::new();
         for layer in board.layers.values() {
-            if matches!(layer.r#type, LayerType::Function) {
-                fn_names.insert(layer.id.as_str(), util::to_camel_case(&layer.name));
+            match layer.r#type {
+                LayerType::Function => {
+                    fn_names.insert(layer.id.as_str(), util::to_camel_case(&layer.name));
+                    if let Some(module) = owning_module(board, layer.parent_id.as_deref()) {
+                        module_of_function.insert(layer.id.as_str(), module);
+                    }
+                }
+                LayerType::Module => {
+                    module_paths.insert(layer.id.as_str(), module_path(board, &layer.id));
+                }
+                _ => {}
             }
         }
 
@@ -926,6 +1289,10 @@ impl<'a> Lowering<'a> {
             event_params: HashMap::new(),
             var_names,
             fn_names,
+            module_of_function,
+            module_of_node,
+            module_paths,
+            current_module: None,
             bindings: HashMap::new(),
             loop_sugar: HashMap::new(),
             loop_bindings: HashMap::new(),
@@ -971,7 +1338,9 @@ impl<'a> Lowering<'a> {
             functions.push(self.lower_function(layer, &nodes));
         }
 
-        let events = self.lower_events(&root_nodes);
+        let (events, detached) = self.lower_events(&root_nodes);
+        let (functions, events, detached, modules) =
+            self.partition_modules(functions, events, detached);
 
         BoardAst {
             board_id: self.board.id.clone(),
@@ -980,8 +1349,118 @@ impl<'a> Lowering<'a> {
             variables,
             functions,
             events,
-            modules: Vec::new(),
+            detached,
+            modules,
         }
+    }
+
+    /// Split the lowered sections into the top-level document and the `module` blocks that own
+    /// them. A section's module is its nodes' nearest `Module` ancestor (for a function, the
+    /// nearest module above its own layer); sections with none stay top-level, exactly as before
+    /// modules existed — a board with no module layer therefore renders byte-identically.
+    ///
+    /// Every module layer produces a block even when nothing is filed under it, so the rendered
+    /// document keeps the board's organization intact.
+    #[allow(clippy::type_complexity)]
+    fn partition_modules(
+        &self,
+        functions: Vec<FnDecl>,
+        events: Vec<EventBlock>,
+        detached: Vec<DetachedChain>,
+    ) -> (Vec<FnDecl>, Vec<EventBlock>, Vec<Block>, Vec<ModuleDecl>) {
+        if self.module_paths.is_empty() {
+            let detached = detached.into_iter().map(|chain| chain.body).collect();
+            return (functions, events, detached, Vec::new());
+        }
+
+        let mut root_functions: Vec<FnDecl> = Vec::new();
+        let mut module_functions: HashMap<String, Vec<FnDecl>> = HashMap::new();
+        for function in functions {
+            match function
+                .anchor
+                .as_deref()
+                .and_then(|layer_id| self.module_of_function.get(layer_id))
+            {
+                Some(module) => module_functions
+                    .entry(module.clone())
+                    .or_default()
+                    .push(function),
+                None => root_functions.push(function),
+            }
+        }
+
+        let mut root_events: Vec<EventBlock> = Vec::new();
+        let mut module_events: HashMap<String, Vec<EventBlock>> = HashMap::new();
+        for event in events {
+            match event
+                .anchor
+                .as_deref()
+                .and_then(|node_id| self.module_of_node.get(node_id))
+            {
+                Some(module) => module_events.entry(module.clone()).or_default().push(event),
+                None => root_events.push(event),
+            }
+        }
+
+        // A detached chain has no header to read a module off, so it carries the module its root
+        // node was walked in.
+        let mut root_detached: Vec<Block> = Vec::new();
+        let mut module_detached: HashMap<String, Vec<Block>> = HashMap::new();
+        for chain in detached {
+            match chain.module {
+                Some(module) => module_detached.entry(module).or_default().push(chain.body),
+                None => root_detached.push(chain.body),
+            }
+        }
+
+        // Sibling modules render in (name, id) order; ids break ties so two same-named layers
+        // stay stable across lowerings.
+        let mut roots: Vec<&Layer> = Vec::new();
+        let mut children: HashMap<String, Vec<&Layer>> = HashMap::new();
+        for layer in self.board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Module) {
+                continue;
+            }
+            match owning_module(self.board, layer.parent_id.as_deref()) {
+                Some(parent) => children.entry(parent).or_default().push(layer),
+                None => roots.push(layer),
+            }
+        }
+        sort_module_layers(&mut roots);
+        for siblings in children.values_mut() {
+            sort_module_layers(siblings);
+        }
+
+        let mut emitted: HashSet<String> = HashSet::new();
+        let mut modules = build_module_decls(
+            &roots,
+            &children,
+            &mut module_functions,
+            &mut module_events,
+            &mut module_detached,
+            &mut emitted,
+        );
+
+        // A corrupt board can nest modules in a cycle, leaving them unreachable from any root.
+        // Render them at the top level rather than dropping their sections on the floor.
+        let mut orphans: Vec<&Layer> = self
+            .board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Module))
+            .filter(|layer| !emitted.contains(&layer.id))
+            .collect();
+        sort_module_layers(&mut orphans);
+        modules.extend(build_module_decls(
+            &orphans,
+            &children,
+            &mut module_functions,
+            &mut module_events,
+            &mut module_detached,
+            &mut emitted,
+        ));
+
+        (root_functions, root_events, root_detached, modules)
     }
 
     /// Group every node by the function layer it ultimately belongs to (or the root scope).
@@ -1058,8 +1537,13 @@ impl<'a> Lowering<'a> {
             if self.assign_loop_sugar(node, &mut used_names) {
                 continue;
             }
+            // Read consumption from both directions, as `assign_destructures` does: an edge a
+            // board records only on the reader's `depends_on` still needs a name to read, and
+            // without one the read falls back to an undeclared bare reference.
             let produces_consumed_output = node.pins.values().any(|p| {
-                p.pin_type == PinType::Output && !is_exec(p) && !p.connected_to.is_empty()
+                p.pin_type == PinType::Output
+                    && !is_exec(p)
+                    && (!p.connected_to.is_empty() || !self.downstream_pins(p).is_empty())
             });
             if !produces_consumed_output {
                 continue;
@@ -1103,10 +1587,12 @@ impl<'a> Lowering<'a> {
             }
         }
 
+        // Only a trigger becomes a block header; every other scope entry is walked as a statement
+        // (into a `detached` block at root) and destructures like the identical node one exec edge
+        // away would.
         let mut headers: HashSet<&str> = HashSet::new();
-        let root_ids: HashSet<&str> = root_nodes.iter().map(|n| n.id.as_str()).collect();
         for node in root_nodes {
-            if is_impure(node) && self.is_scope_entry(node, &root_ids) {
+            if is_trigger_entry(node) {
                 headers.insert(node.id.as_str());
             }
         }
@@ -1403,6 +1889,10 @@ impl<'a> Lowering<'a> {
     }
 
     fn lower_function(&mut self, layer: &'a Layer, nodes: &[&'a Node]) -> FnDecl {
+        let outer_module = std::mem::replace(
+            &mut self.current_module,
+            self.module_of_function.get(layer.id.as_str()).cloned(),
+        );
         let mut params = Vec::new();
         let mut returns = Vec::new();
         let mut boundary: Vec<&Pin> = layer.pins.values().filter(|p| !is_exec(p)).collect();
@@ -1439,6 +1929,7 @@ impl<'a> Lowering<'a> {
             .collect();
         body.stmts.splice(0..0, local_stmts);
         body.stmts.extend(return_stmt);
+        self.current_module = outer_module;
 
         FnDecl {
             name: fn_name,
@@ -1582,7 +2073,13 @@ impl<'a> Lowering<'a> {
         true
     }
 
-    fn lower_events(&mut self, scope: &[&'a Node]) -> Vec<EventBlock> {
+    /// Lower a trigger-less scope into its event blocks plus the chains no trigger reaches.
+    ///
+    /// Only a trigger becomes a block header. Any other scope entry is an ordinary node that
+    /// simply has nothing wired into its execution input, so it is walked as a statement and
+    /// filed under a `detached` block — spelling it as a header would print a catalog node as an
+    /// entry type and, because a header surfaces only output pins, drop every input it carries.
+    fn lower_events(&mut self, scope: &[&'a Node]) -> (Vec<EventBlock>, Vec<DetachedChain>) {
         let scope_ids: HashSet<&str> = scope.iter().map(|n| n.id.as_str()).collect();
         let mut entries: Vec<&Node> = scope
             .iter()
@@ -1593,34 +2090,50 @@ impl<'a> Lowering<'a> {
 
         // First pass: surface each event's data output pins as a typed parameter list and register
         // the pin -> bare parameter mapping so body references resolve to the declared names rather
-        // than `eventName.field`.
+        // than `eventName.field`. Detached roots are statements and use the ordinary binding path.
         let mut params_by_entry: HashMap<&str, Vec<Param>> = HashMap::new();
         for entry in &entries {
-            if self.visited.contains(&entry.id) {
-                continue;
+            if is_trigger_entry(entry) && !self.visited.contains(&entry.id) {
+                params_by_entry.insert(entry.id.as_str(), self.event_params_of(entry));
             }
-            params_by_entry.insert(entry.id.as_str(), self.event_params_of(entry));
         }
 
+        // One loop, one order: events and detached chains are interleaved here so a node reachable
+        // from both keeps the owner it has today. Splitting them into two passes would hand every
+        // shared node to whichever pass ran first.
         let mut events = Vec::new();
+        let mut detached = Vec::new();
         for entry in entries {
             if self.visited.contains(&entry.id) {
                 continue;
             }
-            let params = params_by_entry
-                .remove(entry.id.as_str())
-                .unwrap_or_default();
-            let body = self.walk_entry_body(entry);
-            events.push(EventBlock {
-                name: event_type_name(entry),
-                node_type: entry.name.clone(),
-                event_name: event_alias(entry),
-                params,
-                body,
-                anchor: Some(entry.id.clone()),
-            });
+            let outer_module = std::mem::replace(
+                &mut self.current_module,
+                self.module_of_node.get(entry.id.as_str()).cloned(),
+            );
+            if is_trigger_entry(entry) {
+                let params = params_by_entry
+                    .remove(entry.id.as_str())
+                    .unwrap_or_default();
+                let body = self.walk_entry_body(entry);
+                events.push(EventBlock {
+                    name: event_type_name(entry),
+                    node_type: entry.name.clone(),
+                    event_name: event_alias(entry),
+                    params,
+                    body,
+                    anchor: Some(entry.id.clone()),
+                });
+            } else {
+                let body = self.walk_from(&entry.id);
+                detached.push(DetachedChain {
+                    module: self.current_module.clone(),
+                    body,
+                });
+            }
+            self.current_module = outer_module;
         }
-        self.nest_root_agent_tool_handlers(events)
+        (self.nest_root_agent_tool_handlers(events), detached)
     }
 
     /// Root-level tool entry nodes are stored beside their owning app event on the board, even
@@ -2369,7 +2882,7 @@ impl<'a> Lowering<'a> {
             return Call {
                 node_type: node.name.clone(),
                 display,
-                path: Vec::new(),
+                path: self.function_call_path(node),
                 receiver: None,
                 positional: Vec::new(),
                 args,
@@ -2433,6 +2946,46 @@ impl<'a> Lowering<'a> {
             args,
             anchor: Some(node.id.clone()),
         }
+    }
+
+    /// The `::` module path a call to a FlowScript `function` renders with.
+    ///
+    /// Bare (empty path) when the target is a global function or lives in the caller's own
+    /// module; otherwise the FULL path from the root module — siblings, parents and children of
+    /// the calling module included — so one spelling always means one function no matter where it
+    /// is written.
+    ///
+    /// v1 name contract: a module-local function name must not collide (case-insensitively) with
+    /// a global function's name; reconcile diagnoses a board that breaks it. A corrupt board that
+    /// does still lowers, rendering the global call bare — the module-local function wins on
+    /// read-back. Degraded but deterministic, never a panic.
+    fn function_call_path(&self, node: &'a Node) -> Vec<String> {
+        if node.name != CALL_FUNCTION {
+            return Vec::new();
+        }
+        // Only a statically configured target can be qualified: a wired `function_layer_id`
+        // carries whatever the graph produces, and the stored default is then stale.
+        let Some(pin) = node
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == FUNCTION_LAYER_ID_PIN)
+            .filter(|pin| pin.depends_on.is_empty())
+        else {
+            return Vec::new();
+        };
+        let Some(layer_id) = self.pin_literal_string(node, pin.name.as_str()) else {
+            return Vec::new();
+        };
+        let Some(target) = self.module_of_function.get(layer_id.as_str()) else {
+            return Vec::new();
+        };
+        if self.current_module.as_deref() == Some(target.as_str()) {
+            return Vec::new();
+        }
+        self.module_paths
+            .get(target.as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The expression a data input carries in text: its wired source, else its configured
@@ -3280,16 +3833,49 @@ fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
     collect_calls_in_block_with(block, calls, false);
 }
 
-/// Every call in the document, nested handlers and function bodies included.
+/// Every call in the document, nested handlers, function bodies and module blocks included.
 fn collect_calls_in_ast(ast: &BoardAst) -> Vec<&Call> {
+    fn sections<'a>(
+        functions: &'a [FnDecl],
+        events: &'a [EventBlock],
+        detached: &'a [Block],
+        modules: &'a [ModuleDecl],
+        calls: &mut Vec<&'a Call>,
+    ) {
+        for function in functions {
+            collect_calls_in_block_with(&function.body, calls, true);
+        }
+        for event in events {
+            collect_calls_in_block_with(&event.body, calls, true);
+        }
+        for block in detached {
+            collect_calls_in_block_with(block, calls, true);
+        }
+        for module in modules {
+            sections(
+                &module.functions,
+                &module.events,
+                &module.detached,
+                &module.modules,
+                calls,
+            );
+        }
+    }
     let mut calls = Vec::new();
-    for function in &ast.functions {
-        collect_calls_in_block_with(&function.body, &mut calls, true);
-    }
-    for event in &ast.events {
-        collect_calls_in_block_with(&event.body, &mut calls, true);
-    }
+    sections(
+        &ast.functions,
+        &ast.events,
+        &ast.detached,
+        &ast.modules,
+        &mut calls,
+    );
     calls
+}
+
+/// Whether a call renders as an invocation of a FlowScript `function` declaration rather than a
+/// catalog node. Its `path` (when present) is a MODULE path, so namespace machinery must skip it.
+fn is_function_call(call: &Call) -> bool {
+    call.node_type == CALL_FUNCTION
 }
 
 fn collect_calls_in_block_with<'a>(
@@ -3503,12 +4089,39 @@ fn for_each_call_mut(ast: &mut BoardAst, visit: &mut dyn FnMut(&mut Call)) {
             Expr::Ref(_) | Expr::Literal(_) => {}
         }
     }
-    for function in &mut ast.functions {
-        block(&mut function.body, visit);
+    fn sections(
+        functions: &mut [FnDecl],
+        events: &mut [EventBlock],
+        detached: &mut [Block],
+        modules: &mut [ModuleDecl],
+        visit: &mut dyn FnMut(&mut Call),
+    ) {
+        for function in functions {
+            block(&mut function.body, visit);
+        }
+        for event in events {
+            block(&mut event.body, visit);
+        }
+        for body in detached {
+            block(body, visit);
+        }
+        for module in modules {
+            sections(
+                &mut module.functions,
+                &mut module.events,
+                &mut module.detached,
+                &mut module.modules,
+                visit,
+            );
+        }
     }
-    for event in &mut ast.events {
-        block(&mut event.body, visit);
-    }
+    sections(
+        &mut ast.functions,
+        &mut ast.events,
+        &mut ast.detached,
+        &mut ast.modules,
+        visit,
+    );
 }
 
 fn is_impure(node: &Node) -> bool {
@@ -3557,10 +4170,20 @@ fn is_materialized_return_name(variable_name: &str, fn_name: &str, pin_name: &st
 
 /// A trigger entry is a `start` node — an independent entry point (e.g. a generic event used as
 /// an agent tool) whose data outputs are its payload. Unlike `event_callback` nodes (which run
-/// inline as steps of the surrounding flow), a trigger never has an incoming exec edge, so inside
-/// a function scope it is rendered as its own nested handler rather than part of the linear chain.
+/// inline as steps of the surrounding flow), a trigger never has an incoming exec edge, so it is
+/// rendered as its own block header rather than as part of a linear chain.
+///
+/// An impure node with no execution input is accepted as a trigger even without the flag: the two
+/// properties coincide across the catalog, and taking the shape too keeps a board snapshot that
+/// predates a node's `start` metadata rendering as the event it is.
 fn is_trigger_entry(node: &Node) -> bool {
-    node.start == Some(true)
+    node.start == Some(true) || (is_impure(node) && !has_exec_input(node))
+}
+
+fn has_exec_input(node: &Node) -> bool {
+    node.pins
+        .values()
+        .any(|pin| pin.pin_type == PinType::Input && is_exec(pin))
 }
 
 fn exec_output_pins(node: &Node) -> Vec<&Pin> {
@@ -4380,5 +5003,133 @@ mod rendering_tests {
             text.contains("const info2 = agent::registerFunctionTools()"),
             "a binding named like the opened member `info` is renamed:\n{text}"
         );
+    }
+
+    /// An impure node no trigger reaches is still a node: it renders as the call it is, inside a
+    /// neutral container. Spelling it as a block header printed a catalog type as an entry and
+    /// dropped every input it carried, because a header surfaces only output pins.
+    fn detached_log_board(message: &str) -> Board {
+        let mut board = board();
+        let mut orphan = log("orphan");
+        orphan
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "message")
+            .unwrap()
+            .set_default_value(Some(json!(message)));
+        orphan.friendly_name = "Orphan Log".to_string();
+        add(&mut board, orphan);
+        board
+    }
+
+    #[test]
+    fn orphan_node_renders_as_a_call_in_a_detached_block() {
+        let board = detached_log_board("keep me");
+        let text = text(&board);
+        assert!(
+            text.contains("detached {"),
+            "an unreachable chain needs a container:\n{text}"
+        );
+        assert!(
+            !text.contains("logInfo orphanLog("),
+            "a catalog node must not be spelled as an event entry:\n{text}"
+        );
+        assert!(
+            text.contains("\"keep me\""),
+            "the node's inputs must survive:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn orphan_call_reference_renders_as_the_call_it_targets() {
+        let mut board = board();
+        add(&mut board, event("tool", &[]));
+        board.nodes.get_mut("tool").unwrap().friendly_name = "TestCall".to_string();
+
+        let mut call = Node::new(
+            "control_call_reference",
+            "Call Reference",
+            "",
+            "Control/Call",
+        );
+        call.id = "call".to_string();
+        call.friendly_name = "Call TestCall".to_string();
+        call.set_flowscript_name("control", "callReference");
+        call.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        call.add_input_pin("fn_ref", "Function Reference", "", VariableType::String)
+            .set_default_value(Some(json!("tool")));
+        call.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        add(&mut board, call);
+
+        let text = text(&board);
+        assert!(
+            text.contains("testCall()"),
+            "a call reference renders as a call to its target:\n{text}"
+        );
+        assert!(
+            !text.contains("controlCallReference"),
+            "the opaque node type must not surface as an entry type:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    /// Consecutive statements in a block are an execution chain, so two unrelated roots sharing a
+    /// block would be wired together on the way back.
+    #[test]
+    fn independent_orphan_roots_get_one_block_each() {
+        let mut board = detached_log_board("first");
+        let mut second = log("second");
+        second
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "message")
+            .unwrap()
+            .set_default_value(Some(json!("second")));
+        add(&mut board, second);
+
+        let text = text(&board);
+        assert_eq!(
+            text.matches("detached {").count(),
+            2,
+            "each unreachable chain owns a block:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    /// A chain (not just a lone node) keeps its statement order inside one block, and replaying the
+    /// board's own text neither deletes nor re-adds any of it.
+    #[test]
+    fn orphan_chain_roundtrips_without_commands() {
+        let mut board = detached_log_board("head");
+        add(&mut board, log("tail"));
+        wire(&mut board, ("orphan", "exec_out"), ("tail", "exec_in"));
+
+        let text = text(&board);
+        assert_eq!(
+            text.matches("detached {").count(),
+            1,
+            "one chain is one block:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn a_trigger_still_renders_as_an_event_block() {
+        let mut board = board();
+        add(&mut board, event("start", &[]));
+        add(&mut board, log("sink"));
+        wire(&mut board, ("start", "exec_out"), ("sink", "exec_in"));
+
+        let text = text(&board);
+        assert!(
+            text.contains("eventsGeneric genericEvent() {"),
+            "start nodes keep the event form:\n{text}"
+        );
+        assert!(
+            !text.contains("detached {"),
+            "a reachable chain is not detached:\n{text}"
+        );
+        assert_roundtrip(&board);
     }
 }

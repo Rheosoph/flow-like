@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { planLayerToFunction } from "./layer-to-function";
+import { owningModuleId, planLayerToFunction } from "./layer-to-function";
 import { type IBoard, type ILayer, ILayerType } from "./schema/flow/board";
 import {
 	ICommandType,
@@ -262,8 +262,62 @@ describe("planLayerToFunction", () => {
 			(result.plan.commands[0] as unknown as { current_layer?: string })
 				.current_layer,
 		).toBe("parent");
-		// Functions live at board level, not inside the layer they came from.
+		// "parent" isn't a Module, so the function has no owning module.
 		expect(result.plan.layer.parent_id).toBeNull();
+	});
+
+	test("owns up to the nearest enclosing Module, however deep it's nested", () => {
+		const { board, layer } = fixture();
+		const module: ILayer = {
+			...layer,
+			id: "module",
+			type: ILayerType.Module,
+			parent_id: null,
+		};
+		const wrapper: ILayer = {
+			...layer,
+			id: "wrapper",
+			type: ILayerType.Collapsed,
+			parent_id: module.id,
+		};
+		const nested: ILayer = { ...layer, parent_id: wrapper.id };
+
+		const result = planLayerToFunction({
+			board: {
+				...board,
+				layers: { layer: nested, module, wrapper },
+			} as IBoard,
+			layer: nested,
+			callFunctionTemplate,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		// The call node still lands where the layer visually was, inside "wrapper".
+		expect(
+			(result.plan.commands[0] as unknown as { current_layer?: string })
+				.current_layer,
+		).toBe("wrapper");
+		// The function layer itself records the module that owns it.
+		expect(result.plan.layer.parent_id).toBe("module");
+	});
+
+	test("a root-level layer converts to a global function", () => {
+		const { board, layer } = fixture();
+		const result = planLayerToFunction({ board, layer, callFunctionTemplate });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.plan.layer.parent_id).toBeNull();
+	});
+
+	test("owningModuleId is cycle-guarded", () => {
+		const layers: IBoard["layers"] = {
+			a: { ...fixture().layer, id: "a", parent_id: "b" },
+			b: { ...fixture().layer, id: "b", parent_id: "a" },
+		};
+
+		expect(owningModuleId(layers, "a")).toBeNull();
 	});
 
 	test("renames colliding boundary names so each parameter mirrors separately", () => {

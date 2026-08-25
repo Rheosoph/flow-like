@@ -30,6 +30,7 @@ import {
 	LoadingScreen,
 	type QueryClient,
 	isAzureBlobStorageUrl,
+	useAuthStatusStore,
 	useBackendStore,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
@@ -149,6 +150,9 @@ export class WebBackend implements IBackendState {
 	pushAuthContext(auth: AuthContextProps) {
 		this.auth = auth;
 		this.backendRef.auth = auth;
+		useAuthStatusStore
+			.getState()
+			.setSignedIn(Boolean(auth.isAuthenticated && auth.user?.access_token));
 	}
 
 	pushQueryClient(queryClient: QueryClient) {

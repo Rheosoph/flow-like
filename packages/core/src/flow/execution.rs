@@ -47,6 +47,7 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+pub mod rejection;
 pub mod trace;
 pub mod user_context;
 

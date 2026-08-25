@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::{
     flow::{
+        ast::{FlowScriptFile, ReconcileOptions},
         board::{
             Board, Comment, CommentType, Layer, LayerType,
             commands::{
@@ -130,6 +131,37 @@ pub async fn apply_flowscript_to_board_scoped(
     allow_deletions: bool,
     scope_anchors: Option<&[String]>,
 ) -> flow_like_types::Result<ApplyFlowScriptResult> {
+    apply_flowscript_to_board_file(
+        board,
+        flowscript,
+        catalog_nodes,
+        state,
+        current_layer,
+        allow_deletions,
+        scope_anchors,
+        None,
+    )
+    .await
+}
+
+/// Like [`apply_flowscript_to_board_scoped`] but says which virtual FlowScript file the text is
+/// (see [`FlowScriptFile`]).
+///
+/// A [`FlowScriptFile::Module`] document's top-level sections belong to that module: new events
+/// and chains land there, new function layers are created inside it, calls resolve in its scope,
+/// and its (absent) variables are never mistaken for deletions. Pass the same module id as
+/// `current_layer` so placement of anything the reconciler leaves unplaced agrees.
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_flowscript_to_board_file(
+    board: &mut Board,
+    flowscript: &str,
+    catalog_nodes: &[Node],
+    state: Arc<FlowLikeState>,
+    current_layer: Option<String>,
+    allow_deletions: bool,
+    scope_anchors: Option<&[String]>,
+    file: Option<FlowScriptFile>,
+) -> flow_like_types::Result<ApplyFlowScriptResult> {
     let catalog_metadata = catalog_nodes
         .iter()
         .map(node_to_metadata)
@@ -210,20 +242,22 @@ pub async fn apply_flowscript_to_board_scoped(
         ))
     };
 
+    let options = ReconcileOptions {
+        scope_anchors,
+        file,
+        ..ReconcileOptions::default()
+    };
     let mut reconcile = match &enricher {
-        Some(enricher) => super::reconcile_text_with_catalog_enriched_scoped(
+        Some(enricher) => super::reconcile_text_with_catalog_enriched_opts(
             board,
             flowscript,
             &catalog_metadata,
             enricher,
-            scope_anchors,
+            &options,
         ),
-        None => super::reconcile_text_with_catalog_scoped(
-            board,
-            flowscript,
-            &catalog_metadata,
-            scope_anchors,
-        ),
+        None => {
+            super::reconcile_text_with_catalog_opts(board, flowscript, &catalog_metadata, &options)
+        }
     };
 
     let corrections = std::mem::take(&mut reconcile.corrections);
@@ -265,6 +299,175 @@ pub async fn apply_flowscript_to_board_scoped(
     .await?;
     applied.corrections = corrections;
     Ok(applied)
+}
+
+/// Validate the `module` FlowScript apply/reconcile parameters, independent of board state and of
+/// any particular error type — shared by every caller (API route, Tauri commands) so the three
+/// module-file rules can never drift between them.
+///
+/// Returns the module layer id to apply/reconcile against, or `None` for a whole-board / already
+/// selection-scoped apply. Checking that the id actually names a live `LayerType::Module` layer on
+/// the board requires the board itself and is the caller's job, once it is loaded — do that check
+/// before reconciling, since an unknown/non-module id would otherwise only surface as a soft
+/// reconcile diagnostic instead of a hard rejection.
+pub fn validate_module_apply_params<'a>(
+    module: Option<&'a str>,
+    current_layer: Option<&str>,
+    scope_anchors: Option<&[String]>,
+) -> Result<Option<&'a str>, String> {
+    let Some(module_id) = module else {
+        return Ok(None);
+    };
+    if module_id == "main" {
+        return Err(
+            "`module` must be a module layer id; `main` needs no `module` param — omit it \
+             entirely"
+                .to_string(),
+        );
+    }
+    if scope_anchors.is_none() {
+        return Err(format!(
+            "Applying module `{module_id}` requires the `scope_anchors` from the render being edited (an empty list is fine for an empty module); without them the document would be diffed as the whole board and everything it does not render would look deleted"
+        ));
+    }
+    if let Some(current_layer) = current_layer
+        && current_layer != module_id
+    {
+        return Err(format!(
+            "`current_layer` must be omitted or equal to the module id `{module_id}`, got `{current_layer}`"
+        ));
+    }
+    Ok(Some(module_id))
+}
+
+/// Board-side half of module-apply/reconcile validation: `module_id` must name a live
+/// `LayerType::Module` layer on `board`. Pure `Result<(), String>`, shared by every caller (API
+/// route, Tauri commands) so this check is identical everywhere. Run it before reconciling — an
+/// unknown/non-module id would otherwise only surface as a soft reconcile diagnostic (see
+/// `reconcile::resolve_modules`'s `base` handling), not a hard rejection.
+pub fn ensure_module_layer(board: &Board, module_id: &str) -> Result<(), String> {
+    match board.layers.get(module_id) {
+        Some(layer) if matches!(layer.r#type, LayerType::Module) => Ok(()),
+        Some(layer) => Err(format!(
+            "Layer `{module_id}` is a {:?} layer, not a module: only module layers are FlowScript files",
+            layer.r#type
+        )),
+        None => Err(format!(
+            "FlowScript file `{module_id}` does not name a layer on board `{}`",
+            board.id
+        )),
+    }
+}
+
+#[cfg(test)]
+mod ensure_module_layer_tests {
+    use super::ensure_module_layer;
+    use crate::flow::board::{Board, Layer, LayerType};
+
+    fn test_board() -> Board {
+        Board::new_detached(
+            Some("board".to_string()),
+            flow_like_storage::Path::from("/test"),
+        )
+    }
+
+    #[test]
+    fn unknown_layer_id_is_rejected() {
+        let board = test_board();
+        let error = ensure_module_layer(&board, "missing-layer").unwrap_err();
+        assert!(error.contains("missing-layer"), "{error}");
+    }
+
+    #[test]
+    fn non_module_layer_is_rejected() {
+        let mut board = test_board();
+        board.layers.insert(
+            "collapsed-layer".to_string(),
+            Layer::new(
+                "collapsed-layer".to_string(),
+                "Collapsed".to_string(),
+                LayerType::Collapsed,
+            ),
+        );
+        let error = ensure_module_layer(&board, "collapsed-layer").unwrap_err();
+        assert!(error.contains("Collapsed"), "{error}");
+    }
+
+    #[test]
+    fn module_layer_is_accepted() {
+        let mut board = test_board();
+        board.layers.insert(
+            "module-layer".to_string(),
+            Layer::new(
+                "module-layer".to_string(),
+                "Checkout".to_string(),
+                LayerType::Module,
+            ),
+        );
+        ensure_module_layer(&board, "module-layer").expect("module layer accepted");
+    }
+}
+
+#[cfg(test)]
+mod validate_module_apply_params_tests {
+    use super::validate_module_apply_params;
+
+    #[test]
+    fn no_module_is_a_noop() {
+        assert_eq!(validate_module_apply_params(None, None, None), Ok(None));
+        let anchors = vec!["a".to_string()];
+        assert_eq!(
+            validate_module_apply_params(None, Some("layer"), Some(&anchors)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn main_is_rejected_as_a_module_id() {
+        let err = validate_module_apply_params(Some("main"), None, None).unwrap_err();
+        assert!(err.contains("main"), "{err}");
+    }
+
+    #[test]
+    fn module_without_scope_anchors_is_rejected() {
+        let err = validate_module_apply_params(Some("mod-1"), None, None).unwrap_err();
+        assert!(err.contains("scope_anchors"), "{err}");
+    }
+
+    #[test]
+    fn module_with_empty_scope_anchors_is_accepted() {
+        let anchors: Vec<String> = Vec::new();
+        assert_eq!(
+            validate_module_apply_params(Some("mod-1"), None, Some(&anchors)),
+            Ok(Some("mod-1"))
+        );
+    }
+
+    #[test]
+    fn mismatched_current_layer_is_rejected() {
+        let anchors = vec!["a".to_string()];
+        let err =
+            validate_module_apply_params(Some("mod-1"), Some("mod-2"), Some(&anchors)).unwrap_err();
+        assert!(err.contains("current_layer"), "{err}");
+    }
+
+    #[test]
+    fn matching_current_layer_is_accepted() {
+        let anchors = vec!["a".to_string()];
+        assert_eq!(
+            validate_module_apply_params(Some("mod-1"), Some("mod-1"), Some(&anchors)),
+            Ok(Some("mod-1"))
+        );
+    }
+
+    #[test]
+    fn absent_current_layer_is_accepted() {
+        let anchors = vec!["a".to_string()];
+        assert_eq!(
+            validate_module_apply_params(Some("mod-1"), None, Some(&anchors)),
+            Ok(Some("mod-1"))
+        );
+    }
 }
 
 /// Apply an exact, already-validated [`BoardCommand`] batch without reconciling FlowScript again.
@@ -359,6 +562,12 @@ struct FlowScriptApplyPlanner {
     ambiguous_node_refs: HashSet<String>,
     staged_nodes: HashMap<String, Node>,
     staged_layers: HashMap<String, Layer>,
+    /// camelCase spelling of a live node/layer name → its id, consulted only when nothing matched
+    /// exactly. FlowScript writes `localHelper` where a hand-created layer is named
+    /// "Local Helper", and a `tools:` reference to a function this document never declared has no
+    /// other way back to it.
+    normalized_node_refs: HashMap<String, String>,
+    ambiguous_normalized_refs: HashSet<String>,
     current_layer: Option<String>,
     base_x: f32,
     base_y: f32,
@@ -381,6 +590,8 @@ impl FlowScriptApplyPlanner {
             ambiguous_node_refs: HashSet::new(),
             staged_nodes: HashMap::new(),
             staged_layers: HashMap::new(),
+            normalized_node_refs: HashMap::new(),
+            ambiguous_normalized_refs: HashSet::new(),
             current_layer,
             base_x: 100.0,
             base_y: 100.0,
@@ -408,6 +619,10 @@ impl FlowScriptApplyPlanner {
                 &[Some(layer.id.as_str()), Some(layer.name.as_str())],
                 &layer.id,
             );
+            planner.register_normalized_alias(&layer.name, &layer.id);
+        }
+        for node in board.nodes.values() {
+            planner.register_normalized_alias(&node.friendly_name, &node.id);
         }
         for (name, node_id) in &board.refs {
             if crate::flow::board::is_internal_board_ref(name) {
@@ -1180,6 +1395,26 @@ impl FlowScriptApplyPlanner {
         }
     }
 
+    /// Register the camelCase spelling of a live name as a LAST-RESORT alias. Kept in its own map
+    /// so it can never shadow (or make ambiguous) an exact name that already resolves.
+    fn register_normalized_alias(&mut self, name: &str, node_id: &str) {
+        let normalized = to_camel_case(name);
+        if normalized.trim().is_empty() || self.ambiguous_normalized_refs.contains(&normalized) {
+            return;
+        }
+        match self.normalized_node_refs.get(&normalized) {
+            Some(existing) if existing == node_id => {}
+            Some(_) => {
+                self.normalized_node_refs.remove(&normalized);
+                self.ambiguous_normalized_refs.insert(normalized);
+            }
+            None => {
+                self.normalized_node_refs
+                    .insert(normalized, node_id.to_string());
+            }
+        }
+    }
+
     fn resolve_node_id(&self, board: &Board, node_ref: &str) -> flow_like_types::Result<String> {
         if board.nodes.contains_key(node_ref)
             || board.layers.contains_key(node_ref)
@@ -1193,8 +1428,17 @@ impl FlowScriptApplyPlanner {
                 "Node reference `{node_ref}` is ambiguous"
             ));
         }
-        self.node_refs
-            .get(node_ref)
+        if let Some(node_id) = self.node_refs.get(node_ref) {
+            return Ok(node_id.clone());
+        }
+        let normalized = to_camel_case(node_ref);
+        if self.ambiguous_normalized_refs.contains(&normalized) {
+            return Err(flow_like_types::anyhow!(
+                "Node reference `{node_ref}` is ambiguous"
+            ));
+        }
+        self.normalized_node_refs
+            .get(&normalized)
             .cloned()
             .ok_or_else(|| flow_like_types::anyhow!("Node reference `{node_ref}` not found"))
     }
@@ -2286,6 +2530,144 @@ mod tests {
             updated.and_then(|node| node.layer.as_deref()),
             Some(layer_id.as_str()),
             "pin-update staging must not clear function-layer membership"
+        );
+    }
+
+    fn simple_event_catalog_node() -> Node {
+        let mut node = Node::new("events_simple", "Simple Event", "", "events");
+        node.set_start(true);
+        node.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        node
+    }
+
+    fn log_catalog_node() -> Node {
+        let mut node = Node::new("log_info", "Log Info", "", "debug");
+        node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        node.add_input_pin("message", "Message", "", VariableType::String);
+        node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        node
+    }
+
+    fn board_with_module(id: &str, name: &str, parent: Option<&str>) -> Board {
+        let mut board = empty_board();
+        let mut module = Layer::new(id.to_string(), name.to_string(), LayerType::Module);
+        module.parent_id = parent.map(str::to_string);
+        board.layers.insert(module.id.clone(), module);
+        board
+    }
+
+    #[tokio::test]
+    async fn a_new_event_in_a_module_file_lands_in_that_module() {
+        let mut board = board_with_module("mod-m", "Checkout", None);
+        let catalog = vec![simple_event_catalog_node(), log_catalog_node()];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+
+        let result = apply_flowscript_to_board_file(
+            &mut board,
+            "eventsSimple run() {\n    logInfo({ message: \"hello\" })\n}\n",
+            &catalog,
+            state,
+            Some("mod-m".to_string()),
+            false,
+            Some(&[] as &[String]),
+            Some(FlowScriptFile::Module("mod-m".to_string())),
+        )
+        .await
+        .expect("a module file applies");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(board.nodes.len(), 2, "{:?}", board.nodes.keys());
+        assert!(
+            board
+                .nodes
+                .values()
+                .all(|node| node.layer.as_deref() == Some("mod-m")),
+            "every node of a module file's event belongs to that module: {:?}",
+            board
+                .nodes
+                .values()
+                .map(|node| (node.name.clone(), node.layer.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_module_block_in_a_module_file_applies_one_level_down() {
+        let mut board = board_with_module("mod-m", "Checkout", None);
+        let catalog = vec![simple_event_catalog_node(), log_catalog_node()];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+
+        let result = apply_flowscript_to_board_file(
+            &mut board,
+            "module inner {\n    function innerHelper() {\n        logInfo({ message: \"inner\" })\n    }\n}\n",
+            &catalog,
+            state,
+            Some("mod-m".to_string()),
+            false,
+            Some(&[] as &[String]),
+            Some(FlowScriptFile::Module("mod-m".to_string())),
+        )
+        .await
+        .expect("a nested module block applies");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let inner = board
+            .layers
+            .values()
+            .find(|layer| matches!(layer.r#type, LayerType::Module) && layer.name == "inner")
+            .expect("the block created a module layer");
+        assert_eq!(
+            inner.parent_id.as_deref(),
+            Some("mod-m"),
+            "a block inside a module file is a child of that file's module"
+        );
+        let helper = board
+            .layers
+            .values()
+            .find(|layer| matches!(layer.r#type, LayerType::Function))
+            .expect("the block's function became a layer");
+        assert_eq!(helper.parent_id.as_deref(), Some(inner.id.as_str()));
+    }
+
+    #[test]
+    fn a_reference_resolves_to_an_undeclared_board_function_by_its_flowscript_spelling() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "layer-local".to_string(),
+            "Local Helper".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        let mut sibling = Node::new("log_info", "Log Info", "", "debug");
+        sibling.id = "sibling".to_string();
+        sibling.friendly_name = "Report Issue".to_string();
+        board.nodes.insert(sibling.id.clone(), sibling);
+
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+
+        assert_eq!(
+            planner
+                .resolve_node_id(&board, "localHelper")
+                .expect("FlowScript writes the camelCase spelling of a live layer name"),
+            "layer-local"
+        );
+        assert_eq!(
+            planner
+                .resolve_node_id(&board, "reportIssue")
+                .expect("the same holds for a referenceable node's friendly name"),
+            "sibling"
+        );
+        assert_eq!(
+            planner
+                .resolve_node_id(&board, "Local Helper")
+                .expect("the exact name keeps resolving"),
+            "layer-local"
         );
     }
 

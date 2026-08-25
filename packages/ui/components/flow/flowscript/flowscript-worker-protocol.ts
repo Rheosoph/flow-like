@@ -16,6 +16,7 @@ import type { FlowScriptNamesTable } from "../../../lib/flowscript/names";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
 	type DocumentSymbols,
+	type FlowScriptBoardScope,
 	type FlowScriptIndex,
 	type FlowScriptRawDiagnostic,
 	type Span,
@@ -154,7 +155,11 @@ interface DocRequestBase {
 }
 
 export type FlowScriptWorkerDocRequest =
-	| ({ kind: "diagnostics" } & DocRequestBase)
+	/**
+	 * `board` rides along per request instead of with the catalog: it changes when a module is
+	 * created or renamed, which must not cost a catalog rebuild in the worker.
+	 */
+	| ({ kind: "diagnostics"; board?: FlowScriptBoardScope } & DocRequestBase)
 	| ({ kind: "semantic-tokens" } & DocRequestBase)
 	| ({ kind: "folding" } & DocRequestBase)
 	| ({ kind: "document-symbols" } & DocRequestBase)
@@ -266,7 +271,11 @@ export function handleFlowScriptWorkerMessage(
 					id: request.id,
 					result: {
 						kind: "diagnostics",
-						markers: computeFlowScriptRawDiagnostics(text, index),
+						markers: computeFlowScriptRawDiagnostics(
+							text,
+							index,
+							request.board,
+						),
 					},
 				};
 			case "semantic-tokens":

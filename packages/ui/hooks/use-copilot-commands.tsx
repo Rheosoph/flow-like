@@ -610,6 +610,85 @@ export function useCopilotCommands({
 								removeMappedNode(command.layer.id);
 							}
 							break;
+						case "MoveToLayer": {
+							const moveIds = command.ids ?? [];
+							const moveTarget = command.target ?? undefined;
+							if (moveIds.length === 0) break;
+
+							const targetsAModule = moveTarget
+								? latestBoardLayers[moveTarget]?.type === ILayerType.Module
+								: true;
+							if (!targetsAModule) {
+								console.warn(
+									`[FlowPilot] MoveToLayer target ${moveTarget} is not an existing Module layer, skipping the move`,
+								);
+								break;
+							}
+
+							const isLayerAncestor = (
+								ancestorId: string,
+								descendantId: string,
+							): boolean => {
+								let current =
+									latestBoardLayers[descendantId]?.parent_id ?? undefined;
+								const seen = new Set<string>();
+								while (current) {
+									if (current === ancestorId) return true;
+									if (seen.has(current)) return false;
+									seen.add(current);
+									current = latestBoardLayers[current]?.parent_id ?? undefined;
+								}
+								return false;
+							};
+
+							for (const id of moveIds) {
+								const node = latestBoardNodes[id];
+								if (node) {
+									const movedNode = { ...node, layer: moveTarget ?? null };
+									latestBoardNodes[id] = movedNode;
+									replaceMappedNode(movedNode);
+									continue;
+								}
+
+								const comment = latestBoardComments[id];
+								if (comment) {
+									latestBoardComments[id] = {
+										...comment,
+										layer: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								const layer = latestBoardLayers[id];
+								if (layer) {
+									if (layer.type === ILayerType.Module) {
+										console.warn(
+											`[FlowPilot] MoveToLayer skipping layer ${id} — moving modules is not supported`,
+										);
+										continue;
+									}
+									if (
+										moveTarget &&
+										(moveTarget === id || isLayerAncestor(id, moveTarget))
+									) {
+										console.warn(
+											`[FlowPilot] MoveToLayer skipping layer ${id} — moving it under ${moveTarget} would create a cycle`,
+										);
+										continue;
+									}
+									latestBoardLayers[id] = {
+										...layer,
+										parent_id: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								console.warn(
+									`[FlowPilot] MoveToLayer skipping unknown id ${id}`,
+								);
+							}
+							break;
+						}
 						case "UpsertVariable":
 							if (command.variable) {
 								latestBoardVariables[command.variable.id] = command.variable;

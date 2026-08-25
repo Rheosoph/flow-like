@@ -26,7 +26,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
-use super::lower::{WHILE_LOOP, loop_node_keyword, sugared_loop_head_pin, sugared_loop_node_type};
+use super::lower::{
+    FlowScriptFile, WHILE_LOOP, loop_node_keyword, module_path, owning_module,
+    sugared_loop_head_pin, sugared_loop_node_type,
+};
 use super::template::{STRING_FORMAT_NODE_TYPE, template_format_call};
 use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
@@ -62,6 +65,39 @@ pub enum ReconcileMode {
     Additive,
 }
 
+/// Everything a reconcile needs to know about the document it is given beyond the AST itself.
+///
+/// The default is a whole-document [`ReconcileMode::Replace`] with no scope and no file, which is
+/// exactly what the historical `reconcile_*` entry points do.
+#[derive(Debug, Default, Clone)]
+pub struct ReconcileOptions<'a> {
+    pub mode: ReconcileMode,
+    /// Anchors (event entry node id / function layer id) the deletion diff is limited to. `None`
+    /// means the document represents the whole visible board.
+    pub scope_anchors: Option<&'a [String]>,
+    /// Which virtual FlowScript file this document is (see [`FlowScriptFile`]). `None` and
+    /// [`FlowScriptFile::Main`] both mean "top-level sections own no module"; a
+    /// [`FlowScriptFile::Module`] makes that module the context of every top-level section and
+    /// turns variable declarations into create/update-only board globals.
+    pub file: Option<FlowScriptFile>,
+}
+
+impl ReconcileOptions<'_> {
+    /// The module layer this document's top-level sections belong to.
+    fn base_module(&self) -> Option<&str> {
+        match &self.file {
+            Some(FlowScriptFile::Module(module_id)) => Some(module_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// A module file carries no variables of its own: its declarations create/update board
+    /// globals, and the ones it omits are simply owned by another file.
+    fn is_module_file(&self) -> bool {
+        self.base_module().is_some()
+    }
+}
+
 /// Diff a parsed FlowScript AST against `existing` and emit the minimal `BoardCommand`s.
 ///
 /// Only nodes carrying a stable anchor (`//@n:<id>`) are eligible for in-place edits or removal,
@@ -69,7 +105,7 @@ pub enum ReconcileMode {
 /// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
 /// absent from the text. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
-    reconcile_inner(existing, new, None, None, ReconcileMode::Replace, None)
+    reconcile_inner(existing, new, None, None, &ReconcileOptions::default())
 }
 
 /// Diff a parsed FlowScript AST against `existing`, using catalog metadata to turn unanchored
@@ -88,8 +124,7 @@ pub fn reconcile_with_catalog(
         new,
         Some(catalog),
         None,
-        ReconcileMode::Replace,
-        None,
+        &ReconcileOptions::default(),
     )
 }
 
@@ -108,8 +143,10 @@ pub fn reconcile_with_catalog_scoped(
         new,
         Some(catalog),
         None,
-        ReconcileMode::Replace,
-        scope_anchors,
+        &ReconcileOptions {
+            scope_anchors,
+            ..ReconcileOptions::default()
+        },
     )
 }
 
@@ -120,7 +157,16 @@ pub fn reconcile_with_catalog_mode(
     catalog: &[NodeMetadata],
     mode: ReconcileMode,
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None, mode, None)
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        &ReconcileOptions {
+            mode,
+            ..ReconcileOptions::default()
+        },
+    )
 }
 
 /// Like [`reconcile_with_catalog`] but runs `enricher` to materialize each new node's dynamic
@@ -137,8 +183,7 @@ pub fn reconcile_with_catalog_enriched(
         new,
         Some(catalog),
         Some(enricher),
-        ReconcileMode::Replace,
-        None,
+        &ReconcileOptions::default(),
     )
 }
 
@@ -152,25 +197,398 @@ pub type MetadataEnricher = Box<
         + Sync,
 >;
 
+/// One `module name { … }` block on the path to a section.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ModuleBlockRef {
+    name: String,
+    /// `//@l:<layer id>` identity anchor, when the block carries one.
+    anchor: Option<String>,
+}
+
+/// Where a document section lives: the module file it was submitted in, plus the chain of
+/// `module` blocks written around it (outermost first).
+///
+/// Block nesting is always relative to the enclosing context, so one value describes a full
+/// document (`base: None`, top-level blocks are root modules) and a module file (`base` is that
+/// module, blocks nest one level below it) with the same rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+struct ModulePath {
+    base: Option<String>,
+    blocks: Vec<ModuleBlockRef>,
+}
+
+impl ModulePath {
+    fn child(&self, module: &ModuleDecl) -> Self {
+        let mut blocks = self.blocks.clone();
+        blocks.push(ModuleBlockRef {
+            name: module.name.clone(),
+            anchor: module
+                .anchor
+                .as_deref()
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty())
+                .map(str::to_string),
+        });
+        Self {
+            base: self.base.clone(),
+            blocks,
+        }
+    }
+
+    /// Human-readable scope for a diagnostic.
+    fn label(&self) -> String {
+        if !self.blocks.is_empty() {
+            return format!(
+                "in module `{}`",
+                self.blocks
+                    .iter()
+                    .map(|block| block.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::")
+            );
+        }
+        match &self.base {
+            Some(_) => "in this module file".to_string(),
+            None => "at the top level".to_string(),
+        }
+    }
+}
+
+/// A document with its `module` blocks hoisted to the top level.
+///
+/// Every diff/collector phase works on one flat section list — module content is ordinary
+/// content — while `function_scopes`/`event_scopes`/`detached_scopes` (index-aligned with
+/// `ast.functions` / `ast.events` / `ast.detached`) keep the module each section was declared in.
+struct FlatDocument {
+    ast: BoardAst,
+    function_scopes: Vec<ModulePath>,
+    event_scopes: Vec<ModulePath>,
+    detached_scopes: Vec<ModulePath>,
+    /// Every `module` block in the document, outermost first, in declaration order.
+    module_blocks: Vec<ModulePath>,
+}
+
+impl FlatDocument {
+    /// Flatten `ast` as the given virtual file: the file's own module becomes the base scope of
+    /// every top-level section.
+    fn new(ast: &BoardAst, base_module: Option<&str>) -> Self {
+        let root = ModulePath {
+            base: base_module.map(str::to_string),
+            blocks: Vec::new(),
+        };
+        let mut flat = Self {
+            function_scopes: vec![root.clone(); ast.functions.len()],
+            event_scopes: vec![root.clone(); ast.events.len()],
+            detached_scopes: vec![root.clone(); ast.detached.len()],
+            module_blocks: Vec::new(),
+            ast: BoardAst {
+                modules: Vec::new(),
+                ..ast.clone()
+            },
+        };
+        flat.hoist(&ast.modules, &root);
+        flat
+    }
+
+    fn hoist(&mut self, modules: &[ModuleDecl], parent: &ModulePath) {
+        for module in modules {
+            let scope = parent.child(module);
+            self.module_blocks.push(scope.clone());
+            for function in &module.functions {
+                self.ast.functions.push(function.clone());
+                self.function_scopes.push(scope.clone());
+            }
+            for event in &module.events {
+                self.ast.events.push(event.clone());
+                self.event_scopes.push(scope.clone());
+            }
+            for block in &module.detached {
+                self.ast.detached.push(block.clone());
+                self.detached_scopes.push(scope.clone());
+            }
+            self.hoist(&module.modules, &scope);
+        }
+    }
+}
+
+/// Hoist every `module` block's sections to the top level in place, dropping the block structure.
+/// Used for the board's own lowered AST, where only the sections matter.
+fn flatten_board_sections(ast: &mut BoardAst) {
+    fn drain(
+        modules: Vec<ModuleDecl>,
+        functions: &mut Vec<FnDecl>,
+        events: &mut Vec<EventBlock>,
+        detached: &mut Vec<Block>,
+    ) {
+        for module in modules {
+            functions.extend(module.functions);
+            events.extend(module.events);
+            detached.extend(module.detached);
+            drain(module.modules, functions, events, detached);
+        }
+    }
+    let modules = std::mem::take(&mut ast.modules);
+    drain(
+        modules,
+        &mut ast.functions,
+        &mut ast.events,
+        &mut ast.detached,
+    );
+}
+
+/// What a `module` block resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModuleTarget {
+    /// The board root — "main" is not a layer.
+    Root,
+    Existing(String),
+    /// A module this document has to create, indexed into [`ModuleResolution::created`].
+    New(usize),
+}
+
+/// A module the document declares that does not exist on the board yet.
+#[derive(Debug, Clone)]
+struct CreatedModule {
+    name: String,
+    parent: ModuleTarget,
+    /// Lowercase `::` path from the root module, for qualified call resolution.
+    path: Vec<String>,
+}
+
+/// Every `module` block of a document mapped onto the board's module tree.
+#[derive(Debug, Default)]
+struct ModuleResolution {
+    scopes: HashMap<ModulePath, ModuleTarget>,
+    created: Vec<CreatedModule>,
+    /// Lowercase `::` path of every module layer on the board plus every module this document
+    /// creates, keyed by layer id (existing) — new modules carry their path in `created`.
+    board_paths: HashMap<String, Vec<String>>,
+    corrections: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+impl ModuleResolution {
+    fn target(&self, scope: &ModulePath) -> ModuleTarget {
+        self.scopes
+            .get(scope)
+            .cloned()
+            .unwrap_or(ModuleTarget::Root)
+    }
+
+    /// The module a scope names as it exists ON THE BOARD: `Some(None)` is the board root,
+    /// `Some(Some(id))` an existing module layer, and `None` a module this document still has to
+    /// create — which nothing on the board can belong to yet.
+    fn board_module(&self, scope: &ModulePath) -> Option<Option<String>> {
+        match self.target(scope) {
+            ModuleTarget::Root => Some(None),
+            ModuleTarget::Existing(id) => Some(Some(id)),
+            ModuleTarget::New(_) => None,
+        }
+    }
+}
+
+/// Map every `module` block of `doc` onto the board's module tree, deciding for each whether it
+/// names an existing module layer or one this document has to create.
+///
+/// An anchored block always wins over its written nesting position (the anchor is identity; the
+/// position is presentation), and a corrupt/cyclic module ancestry is diagnosed rather than
+/// trusted.
+fn resolve_modules(board: &Board, doc: &FlatDocument, base: Option<&str>) -> ModuleResolution {
+    let mut resolution = ModuleResolution {
+        board_paths: board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Module))
+            .map(|layer| {
+                (
+                    layer.id.clone(),
+                    module_path(board, &layer.id)
+                        .into_iter()
+                        .map(|segment| segment.to_lowercase())
+                        .collect(),
+                )
+            })
+            .collect(),
+        ..ModuleResolution::default()
+    };
+
+    if let Some(base) = base {
+        match board.layers.get(base) {
+            Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                if module_path(board, base).is_empty() {
+                    resolution.diagnostics.push(format!(
+                        "module layer `{base}` has a cyclic parent chain; the board's module tree must be repaired before FlowScript can be applied to it"
+                    ));
+                }
+            }
+            Some(layer) => resolution.diagnostics.push(format!(
+                "FlowScript file `{base}` is a {:?} layer, not a module",
+                layer.r#type
+            )),
+            None => resolution.diagnostics.push(format!(
+                "FlowScript file `{base}` does not name a layer on this board"
+            )),
+        }
+    }
+
+    let root = ModulePath {
+        base: base.map(str::to_string),
+        blocks: Vec::new(),
+    };
+    resolution.scopes.insert(
+        root,
+        match base {
+            Some(base) => ModuleTarget::Existing(base.to_string()),
+            None => ModuleTarget::Root,
+        },
+    );
+
+    for scope in &doc.module_blocks {
+        resolve_module_scope(board, scope, &mut resolution);
+    }
+    resolution
+}
+
+fn resolve_module_scope(
+    board: &Board,
+    scope: &ModulePath,
+    resolution: &mut ModuleResolution,
+) -> ModuleTarget {
+    if let Some(known) = resolution.scopes.get(scope) {
+        return known.clone();
+    }
+    let Some((block, prefix)) = scope.blocks.split_last() else {
+        return ModuleTarget::Root;
+    };
+    let parent = resolve_module_scope(
+        board,
+        &ModulePath {
+            base: scope.base.clone(),
+            blocks: prefix.to_vec(),
+        },
+        resolution,
+    );
+    let target = resolve_module_block(board, block, &parent, resolution);
+    resolution.scopes.insert(scope.clone(), target.clone());
+    target
+}
+
+fn resolve_module_block(
+    board: &Board,
+    block: &ModuleBlockRef,
+    parent: &ModuleTarget,
+    resolution: &mut ModuleResolution,
+) -> ModuleTarget {
+    let parent_layer = match parent {
+        ModuleTarget::Existing(id) => Some(id.as_str()),
+        ModuleTarget::Root | ModuleTarget::New(_) => None,
+    };
+
+    if let Some(anchor) = block.anchor.as_deref() {
+        return match board.layers.get(anchor) {
+            Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                let actual_parent = owning_module(board, layer.parent_id.as_deref());
+                if module_path(board, anchor).is_empty() {
+                    resolution.diagnostics.push(format!(
+                        "module `{}` anchors to `{anchor}`, whose parent chain is cyclic; the board's module tree must be repaired first",
+                        block.name
+                    ));
+                } else if actual_parent.as_deref() != parent_layer
+                    || matches!(parent, ModuleTarget::New(_))
+                {
+                    resolution.corrections.push(format!(
+                        "module `{}` keeps its `//@l:{anchor}` identity and stays where it is on the board; the block's written nesting position was ignored.",
+                        block.name
+                    ));
+                }
+                ModuleTarget::Existing(anchor.to_string())
+            }
+            Some(layer) => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` anchors to `{anchor}`, which is a {:?} layer, not a module",
+                    block.name, layer.r#type
+                ));
+                ModuleTarget::Root
+            }
+            None => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` anchors to `{anchor}`, which no longer exists on the board; remove the anchor to create a new module",
+                    block.name
+                ));
+                ModuleTarget::Root
+            }
+        };
+    }
+
+    let normalized = to_camel_case(&block.name);
+    if !matches!(parent, ModuleTarget::New(_)) {
+        let mut matches = board
+            .layers
+            .values()
+            .filter(|layer| {
+                matches!(layer.r#type, LayerType::Module)
+                    && to_camel_case(&layer.name) == normalized
+                    && owning_module(board, layer.parent_id.as_deref()).as_deref() == parent_layer
+            })
+            .map(|layer| layer.id.clone())
+            .collect::<Vec<_>>();
+        matches.sort();
+        match matches.as_slice() {
+            [only] => return ModuleTarget::Existing(only.clone()),
+            [] => {}
+            many => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` matches {} module layers by name ({}); anchor the block with `//@l:<layer id>` to say which one it is",
+                    block.name,
+                    many.len(),
+                    quoted_list(many)
+                ));
+                return ModuleTarget::Root;
+            }
+        }
+    }
+
+    let mut path = match parent {
+        ModuleTarget::Root => Vec::new(),
+        ModuleTarget::Existing(id) => resolution.board_paths.get(id).cloned().unwrap_or_default(),
+        ModuleTarget::New(index) => resolution.created[*index].path.clone(),
+    };
+    path.push(normalized.to_lowercase());
+    resolution.created.push(CreatedModule {
+        name: block.name.clone(),
+        parent: parent.clone(),
+        path,
+    });
+    ModuleTarget::New(resolution.created.len() - 1)
+}
+
 fn reconcile_inner(
     existing: &Board,
     new: &BoardAst,
     catalog: Option<&[NodeMetadata]>,
     enricher: Option<&MetadataEnricher>,
-    mode: ReconcileMode,
-    scope_anchors: Option<&[String]>,
+    opts: &ReconcileOptions,
 ) -> ReconcileResult {
     // Selection-scoped applies see only the board sections their document rendered. Out-of-scope
     // events/functions are excluded from the deletion diff below (`visible`), which is the ONLY
     // place reconcile plans node removals — so a scoped document can never delete content it did
     // not render. Everything else (variables, catalog resolution, structural planning) keeps the
     // full board as context.
-    let scope: Option<HashSet<&str>> =
-        scope_anchors.map(|anchors| anchors.iter().map(String::as_str).collect());
+    let mode = opts.mode;
+    let scope: Option<HashSet<&str>> = opts
+        .scope_anchors
+        .map(|anchors| anchors.iter().map(String::as_str).collect());
     let scope = scope.as_ref();
     let mut result = ReconcileResult::default();
-    let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(new);
-    let duplicate_anchors = duplicate_ast_anchors(new);
+
+    // `module` blocks are organization, not content: hoist every section they hold to the top
+    // level and remember which module it came from. Every phase below then diffs one flat section
+    // list, exactly as it did before modules existed.
+    let mut submitted = FlatDocument::new(new, opts.base_module());
+    let modules = resolve_modules(existing, &submitted, opts.base_module());
+
+    let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(&submitted);
+    let duplicate_anchors = duplicate_ast_anchors(&submitted.ast);
     preflight_diagnostics.extend(duplicate_anchors.into_iter().map(|anchor| {
             format!(
                 "duplicate FlowScript anchor `{anchor}` identifies more than one entity; no commands were derived"
@@ -182,10 +600,21 @@ fn reconcile_inner(
         result.diagnostics = preflight_diagnostics;
         return result;
     }
-    let board_ast = super::lower_to_ast(existing);
+    result
+        .diagnostics
+        .extend(modules.diagnostics.iter().cloned());
+    result
+        .corrections
+        .extend(modules.corrections.iter().cloned());
+
+    let mut board_ast = super::lower_to_ast(existing);
+    flatten_board_sections(&mut board_ast);
     let variable_refs = VariableRefLookup::from_board_and_ast(existing, new);
 
-    let variable_changes = reconcile_variables(existing, &board_ast, new, mode);
+    // A module file carries no variables of its own, so an omission there is never a deletion.
+    // Its declarations still create/update board globals — they simply render in `main.flow`.
+    let variable_changes =
+        reconcile_variables(existing, &board_ast, new, mode, !opts.is_module_file());
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
@@ -194,20 +623,28 @@ fn reconcile_inner(
     // explicit: an active live cache becomes `cache: None` on the layer.
     result
         .commands
-        .extend(reconcile_function_caches(existing, new));
+        .extend(reconcile_function_caches(existing, &submitted, &modules));
+
+    // Variable REFERENCES resolve against the live board even in a file that declares none, so
+    // the planning document carries the board's own (anchored) declarations under the submitted
+    // ones. The diffs above already ran against the submitted document.
+    if opts.is_module_file() {
+        merge_live_variables(&mut submitted.ast, &board_ast);
+    }
+    let submitted = submitted;
 
     // Anchored `base.path = value` writes and sugared loop heads carry no `&Call` with their
     // arguments, so synthesize the equivalent `struct_set`/loop-node calls the anchor-keyed
     // collectors below diff against / delete. These arenas own the calls and must outlive the
     // `new_calls`/`visible` maps that borrow them, so build them in full up front — pushing to the
     // Vec later would reallocate and invalidate the references.
-    let new_synthesized_calls = collect_anchored_synthesized_calls(new, None);
+    let new_synthesized_calls = collect_anchored_synthesized_calls(&submitted.ast, None);
     let board_synthesized_calls = collect_anchored_synthesized_calls(&board_ast, scope);
 
     // 1. Index every anchored call in the new AST by node id. A synthesized call replaces the
     //    argument-less placeholder a sugared loop statement registered for the same anchor.
     let mut new_calls: HashMap<String, &Call> = HashMap::new();
-    collect_calls(new, &mut new_calls);
+    collect_calls(&submitted.ast, &mut new_calls);
     for call in &new_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
             new_calls.insert(anchor.to_string(), call);
@@ -233,8 +670,16 @@ fn reconcile_inner(
                     folded = call;
                     &folded
                 }
+                // A call that cannot bind here is not a configuration edit of THIS node: an
+                // assignment renders only its statement anchor, so an inlined value call is
+                // keyed by the `variable_set`/`struct_set` node it feeds, and a stale anchor
+                // names a node the call never was. Both belong to the structural planner, which
+                // reports them against the right node; reporting the bind failure here would
+                // preempt that with advice about the wrong one.
                 Err(diagnostic) => {
-                    result.diagnostics.push(diagnostic);
+                    if call_matches_node(call, node) {
+                        result.diagnostics.push(diagnostic);
+                    }
                     continue;
                 }
             }
@@ -381,7 +826,8 @@ fn reconcile_inner(
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
     //    text. Translate those to the same command format the UI already reviews/applies.
     if let Some(catalog) = catalog {
-        let structural = StructuralPlanner::new(existing, catalog, enricher).plan(new);
+        let structural =
+            StructuralPlanner::new(existing, catalog, enricher).plan(&submitted, &modules);
         if !structural.commands.is_empty() {
             let anchored_edits = std::mem::take(&mut result.commands);
             result.commands = structural.commands;
@@ -389,7 +835,7 @@ fn reconcile_inner(
         }
         result.corrections.extend(structural.corrections);
         result.diagnostics.extend(structural.diagnostics);
-    } else if ast_has_unanchored_calls(new) {
+    } else if ast_has_unanchored_calls(&submitted.ast) {
         result.diagnostics.push(
             "FlowScript contains new unanchored calls; catalog metadata is required to turn them into board commands."
                 .to_string(),
@@ -446,7 +892,14 @@ fn function_cache_to_layer_cache(cache: &FunctionCache) -> LayerCache {
     }
 }
 
-fn matching_function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a Layer> {
+/// The board layer a `function` declaration identifies. Its anchor is authoritative; an
+/// unanchored declaration is matched by name WITHIN ITS OWN MODULE, so two modules may each own a
+/// `helper` without either claiming the other's layer.
+fn matching_function_layer<'a>(
+    existing: &'a Board,
+    func: &FnDecl,
+    module: Option<&str>,
+) -> Option<&'a Layer> {
     if let Some(anchor) = func.anchor.as_deref() {
         return existing.layers.get(anchor).filter(|layer| {
             matches!(layer.r#type, LayerType::Function)
@@ -456,17 +909,26 @@ fn matching_function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a
 
     let normalized_name = to_camel_case(&func.name);
     let mut matches = existing.layers.values().filter(|layer| {
-        matches!(layer.r#type, LayerType::Function) && to_camel_case(&layer.name) == normalized_name
+        matches!(layer.r#type, LayerType::Function)
+            && to_camel_case(&layer.name) == normalized_name
+            && owning_module(existing, layer.parent_id.as_deref()).as_deref() == module
     });
     let only = matches.next()?;
     matches.next().is_none().then_some(only)
 }
 
-fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardCommand> {
-    ast.functions
+fn reconcile_function_caches(
+    existing: &Board,
+    doc: &FlatDocument,
+    modules: &ModuleResolution,
+) -> Vec<BoardCommand> {
+    doc.ast
+        .functions
         .iter()
-        .filter_map(|func| {
-            let layer = matching_function_layer(existing, func)?;
+        .enumerate()
+        .filter_map(|(index, func)| {
+            let module = modules.board_module(&doc.function_scopes[index])?;
+            let layer = matching_function_layer(existing, func, module.as_deref())?;
             let desired = func.cache.as_ref().map(function_cache_to_layer_cache);
             // Disabled cache records are equivalent to an absent decorator. Preserve those dormant
             // settings unless FlowScript explicitly enables caching, avoiding a no-op rewrite.
@@ -500,7 +962,8 @@ fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardComma
 /// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
 /// Reconcile is atomic, so an ambiguous document must produce diagnostics and zero commands rather
 /// than creating duplicate variables or an orphan Function layer before a later declaration wins.
-fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
+fn duplicate_ast_declaration_diagnostics(doc: &FlatDocument) -> Vec<String> {
+    let ast = &doc.ast;
     fn register_duplicates<'a>(
         names: impl IntoIterator<Item = &'a str>,
         noun: &str,
@@ -598,12 +1061,56 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         "at the top level",
         &mut diagnostics,
     );
-    register_duplicates(
-        ast.functions.iter().map(|function| function.name.as_str()),
-        "function declaration",
-        "at the top level",
-        &mut diagnostics,
-    );
+    // Function names are unique PER MODULE: `checkout::helper` and `payments::helper` are two
+    // different functions, but one module may not declare `helper` twice.
+    let mut by_scope: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    let mut scope_order: Vec<&ModulePath> = Vec::new();
+    for (index, function) in ast.functions.iter().enumerate() {
+        let scope = &doc.function_scopes[index];
+        let slot = match scope_order.iter().position(|known| *known == scope) {
+            Some(slot) => slot,
+            None => {
+                scope_order.push(scope);
+                scope_order.len() - 1
+            }
+        };
+        by_scope
+            .entry(slot)
+            .or_default()
+            .push(function.name.as_str());
+    }
+    for (slot, names) in by_scope {
+        register_duplicates(
+            names,
+            "function declaration",
+            &scope_order[slot].label(),
+            &mut diagnostics,
+        );
+    }
+    // Two `module` blocks with the same name in the same place are one module written twice.
+    let mut modules_by_parent: BTreeMap<Vec<String>, Vec<&str>> = BTreeMap::new();
+    for scope in &doc.module_blocks {
+        let Some((block, prefix)) = scope.blocks.split_last() else {
+            continue;
+        };
+        modules_by_parent
+            .entry(
+                prefix
+                    .iter()
+                    .map(|block| to_camel_case(&block.name))
+                    .collect(),
+            )
+            .or_default()
+            .push(block.name.as_str());
+    }
+    for (prefix, names) in modules_by_parent {
+        let scope = if prefix.is_empty() {
+            "at the top level".to_string()
+        } else {
+            format!("in module `{}`", prefix.join("::"))
+        };
+        register_duplicates(names, "module declaration", &scope, &mut diagnostics);
+    }
     // Named events and functions are both registered as same-batch aliases by the apply planner.
     // Two named events (even of different catalog types), or a function and named event sharing a
     // name, therefore make `SetNodeFunctionRefs` resolution ambiguous. Reject that document here
@@ -756,6 +1263,10 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
     for (index, event) in ast.events.iter().enumerate() {
         let scope = format!("in event `{}` #{}", event.name, index + 1);
         visit_event(event, &scope, &mut diagnostics);
+    }
+    for (index, block) in ast.detached.iter().enumerate() {
+        let scope = format!("in detached block #{}", index + 1);
+        visit_block(block, &scope, &mut diagnostics);
     }
 
     diagnostics.sort();
@@ -972,6 +1483,11 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
     for event in &ast.events {
         visit_event(event, &mut seen, &mut duplicate);
     }
+    // A `detached` block has no header anchor of its own, so it gets no entry/arm-routing
+    // exemption: every anchor inside it must be unique like any other statement's.
+    for block in &ast.detached {
+        visit_block(block, &mut seen, &mut duplicate);
+    }
     let mut duplicate = duplicate.into_iter().collect::<Vec<_>>();
     duplicate.sort();
     duplicate
@@ -1116,6 +1632,15 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
         *counts.entry(layer.clone()).or_default() += 1;
     }
 
+    // Module layers are FILES, not frames: their content is a document of its own, so the
+    // per-frame budget that keeps a function readable does not apply to them.
+    let mut exempt: HashSet<String> = existing
+        .layers
+        .values()
+        .filter(|layer| matches!(layer.r#type, LayerType::Module))
+        .map(|layer| layer.id.clone())
+        .collect();
+
     let mut net_added: HashMap<Option<String>, i64> = HashMap::new();
     for command in commands {
         match command {
@@ -1126,9 +1651,13 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
             BoardCommand::CreateLayer {
                 ref_id: Some(ref_id),
                 name,
+                layer_type,
                 ..
             } => {
                 layer_names.insert(ref_id.clone(), name.clone());
+                if matches!(layer_type.as_deref(), Some("Module") | Some("module")) {
+                    exempt.insert(ref_id.clone());
+                }
             }
             BoardCommand::RemoveNode { node_id, .. } => {
                 if let Some(layer) = node_layers.get(node_id) {
@@ -1148,6 +1677,7 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
         .filter(|(layer, count)| {
             **count > MAX_NODES_PER_LAYER as i64
                 && net_added.get(*layer).copied().unwrap_or_default() > 0
+                && !layer.as_deref().is_some_and(|id| exempt.contains(id))
         })
         .map(|(layer, count)| {
             let scope = match layer {
@@ -1202,11 +1732,30 @@ fn literal_to_value(lit: &Literal) -> flow_like_types::Value {
     }
 }
 
+/// Carry the board's own variable declarations (with their `//@v` anchors) into a document that
+/// declares none of its own, so `myVar` in a module file still resolves to the board global.
+/// Declarations the document DID write win — they are the create/update the author asked for.
+fn merge_live_variables(planning: &mut BoardAst, board_ast: &BoardAst) {
+    let declared: HashSet<&str> = planning
+        .variables
+        .iter()
+        .map(|var| var.name.as_str())
+        .collect();
+    let inherited = board_ast
+        .variables
+        .iter()
+        .filter(|var| !declared.contains(var.name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    planning.variables.extend(inherited);
+}
+
 fn reconcile_variables(
     live_board: &Board,
     existing: &BoardAst,
     new: &BoardAst,
     mode: ReconcileMode,
+    remove_missing: bool,
 ) -> ReconcileResult {
     let mut result = ReconcileResult::default();
     let mut existing_by_anchor: HashMap<&str, &VarDecl> = HashMap::new();
@@ -1277,7 +1826,7 @@ fn reconcile_variables(
         }
     }
 
-    if mode == ReconcileMode::Replace {
+    if mode == ReconcileMode::Replace && remove_missing {
         for var in &existing.variables {
             let Some(anchor) = var.anchor.as_deref() else {
                 continue;
@@ -1765,6 +2314,64 @@ fn param_output_pin_def(
         value_type: Some(type_ref_value_type(&param.ty).to_string()),
         schema: schema.clone(),
         enforce_schema: schema.is_some(),
+    }
+}
+
+/// Scope-qualified identity of a FlowScript `function`: the module that owns it (`None` = the
+/// board root, "main") plus its declared name. Names are unique per module, never board-wide.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FnKey {
+    /// Module layer id, or the same-batch `$ref` of a module this document creates.
+    module: Option<String>,
+    name: String,
+}
+
+impl FnKey {
+    fn global(name: &str) -> Self {
+        Self {
+            module: None,
+            name: name.to_string(),
+        }
+    }
+
+    fn in_module(module: Option<&str>, name: &str) -> Self {
+        Self {
+            module: module.map(str::to_string),
+            name: name.to_string(),
+        }
+    }
+
+    /// Recursion-guard identity for the purity / resolution prescans.
+    fn seen_id(&self) -> String {
+        format!("{}::{}", self.module.as_deref().unwrap_or(""), self.name)
+    }
+}
+
+/// The boundary contract of a Function layer that lives on the board: its data parameters and
+/// returns in pin order, and whether it carries an execution boundary (an impure function).
+fn existing_function_layer_contract(layer: &Layer) -> (Vec<PinMetadata>, Vec<PinMetadata>, bool) {
+    let boundary = |pin_type: PinType| {
+        let mut pins = layer
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == pin_type && pin.data_type != VariableType::Execution)
+            .collect::<Vec<_>>();
+        pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        pins.into_iter().map(boundary_pin_metadata).collect()
+    };
+    let impure = layer
+        .pins
+        .values()
+        .any(|pin| pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution);
+    (boundary(PinType::Input), boundary(PinType::Output), impure)
+}
+
+/// The layer id (or same-batch `$ref`) a resolved module target names; `None` is the board root.
+fn module_target_id(target: &ModuleTarget, created: &[String]) -> Option<String> {
+    match target {
+        ModuleTarget::Root => None,
+        ModuleTarget::Existing(id) => Some(id.clone()),
+        ModuleTarget::New(index) => created.get(*index).cloned(),
     }
 }
 
@@ -4014,8 +4621,8 @@ fn render_use_decl(decl: &UseDecl) -> String {
 #[derive(Debug, Clone)]
 enum CallTarget {
     Catalog(NodeMetadata),
-    /// A declared FlowScript `function`, by name.
-    Function(String),
+    /// A FlowScript `function`, by its (module, name) identity.
+    Function(FnKey),
 }
 
 /// A resolved call: its target plus the call rewritten so the receiver and positional
@@ -4034,7 +4641,7 @@ struct ResolvedCall {
 enum CandidateKind {
     /// Every catalog entry of one node type.
     Catalog(Vec<usize>),
-    Function(String),
+    Function(FnKey),
 }
 
 /// One candidate of a method or opened-member lookup before narrowing.
@@ -4941,13 +5548,26 @@ struct StructuralPlanner<'a> {
     /// nodes. Held separately so they emit after the add/connect commands (the applier resolves the
     /// referenced targets — function layers, events — once those nodes exist).
     fn_ref_commands: Vec<BoardCommand>,
-    /// Declared FlowScript functions by camelCase name, pre-created before events/bodies are
-    /// planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
-    planned_functions: HashMap<String, PlannedFunction>,
-    /// Every declared function's boundary by name, available from the start of planning (the
-    /// impurity prescan runs before `planned_functions` is filled) and replaced by the live
-    /// layer contract once a function is planned.
-    function_sigs: HashMap<String, FunctionSig>,
+    /// Declared FlowScript functions by (module, camelCase name), pre-created before events/bodies
+    /// are planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
+    /// Also holds the board's OWN function layers that this document does not declare, so a
+    /// module file can call a global helper it never had to reproduce.
+    planned_functions: HashMap<FnKey, PlannedFunction>,
+    /// Every callable function's boundary, available from the start of planning (the impurity
+    /// prescan runs before `planned_functions` is filled) and replaced by the live layer contract
+    /// once a function is planned.
+    function_sigs: HashMap<FnKey, FunctionSig>,
+    /// Index into the flattened document's `functions` for each DECLARED function, so the purity
+    /// and resolution prescans can walk a callee's body.
+    function_decl_index: HashMap<FnKey, usize>,
+    /// Lowercase `a::b::name` → the functions reachable under that absolute module path.
+    functions_by_qualified: HashMap<String, Vec<FnKey>>,
+    /// The module owning the section currently being planned; `None` is the board root.
+    current_module: Option<String>,
+    /// Module layer id (or same-batch `$ref`) for every `module` scope of this document.
+    module_layers: HashMap<ModulePath, Option<String>>,
+    /// Lowercase `::` path of every module, keyed by layer id / `$ref`.
+    module_name_paths: HashMap<String, Vec<String>>,
     /// The document's interface declarations (with generated schemas), the class identity of
     /// struct receivers whose schema carries no title.
     interfaces: Vec<InterfaceDecl>,
@@ -5002,6 +5622,11 @@ impl<'a> StructuralPlanner<'a> {
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
             function_sigs: HashMap::new(),
+            function_decl_index: HashMap::new(),
+            functions_by_qualified: HashMap::new(),
+            current_module: None,
+            module_layers: HashMap::new(),
+            module_name_paths: HashMap::new(),
             interfaces: Vec::new(),
             use_scope: UseScope::default(),
             use_hits: HashSet::new(),
@@ -5036,11 +5661,19 @@ impl<'a> StructuralPlanner<'a> {
         enricher(&meta, &literal_args, self.existing).unwrap_or(meta)
     }
 
-    fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
+    fn plan(mut self, doc: &FlatDocument, modules: &ModuleResolution) -> ReconcileResult {
+        let ast = &doc.ast;
         self.interface_schemas = interface_schema_map(ast);
         self.interfaces = ast.interfaces.clone();
         self.prepare_uses(ast);
-        self.prepare_function_sigs(ast);
+        // Modules are the outermost context: every later phase (which layer a section plans into,
+        // which functions a bare name can see) is decided relative to them.
+        self.prepare_modules(modules);
+        self.prepare_function_sigs(doc);
+        // A call may target a function this document never declares — a global helper called from
+        // a module file, or any function outside a selection-scoped render.
+        self.seed_existing_function_signatures();
+        self.index_qualified_functions();
         // Reserve every still-live explicit event anchor before planning. A stale declaration that
         // appears earlier in the document must not steal the entry owned by a later declaration.
         self.reserve_declared_event_entries(ast);
@@ -5048,13 +5681,23 @@ impl<'a> StructuralPlanner<'a> {
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
         // events and other functions resolve regardless of declaration order.
-        self.prepare_functions(ast);
-        for event in &ast.events {
-            self.plan_event(event, None);
+        self.prepare_functions(doc);
+        for (index, event) in ast.events.iter().enumerate() {
+            self.current_module = self.scope_module(&doc.event_scopes[index]);
+            let target_layer = self.current_module.clone();
+            self.plan_event(event, target_layer);
         }
-        for func in &ast.functions {
-            self.plan_function_body(func);
+        for (index, func) in ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            self.current_module = key.module.clone();
+            self.plan_function_body(func, &key);
         }
+        for (index, block) in ast.detached.iter().enumerate() {
+            self.current_module = self.scope_module(&doc.detached_scopes[index]);
+            let target_layer = self.current_module.clone();
+            self.plan_detached(block, target_layer);
+        }
+        self.current_module = None;
         self.pop_scope();
 
         self.check_new_function_structure();
@@ -5087,33 +5730,47 @@ impl<'a> StructuralPlanner<'a> {
         self.result
     }
 
-    fn prepare_functions(&mut self, ast: &BoardAst) {
-        for func in &ast.functions {
+    fn prepare_functions(&mut self, doc: &FlatDocument) {
+        let ast = &doc.ast;
+        for (index, func) in ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            if func.anchor.is_some() && self.scope_module(&doc.function_scopes[index]) != key.module
+            {
+                self.result.corrections.push(format!(
+                    "function `{}` keeps its identity anchor and stays in the module it lives in on the board; the module it was written in was ignored.",
+                    func.name
+                ));
+            }
+            self.current_module = key.module.clone();
             let mut seen = HashSet::new();
-            seen.insert(func.name.clone());
+            seen.insert(key.seen_id());
             let impure = self.function_body_is_impure(ast, &func.body, &mut seen);
             let mut resolution_seen = HashSet::new();
-            resolution_seen.insert(func.name.clone());
+            resolution_seen.insert(key.seen_id());
             let has_unresolved_calls =
                 self.function_body_has_unresolved_calls(ast, &func.body, &mut resolution_seen);
-            let Some(entity) = self.function_layer_entity(func, impure) else {
-                self.function_sigs.remove(&func.name);
+            let Some(entity) = self.function_layer_entity(func, impure, key.module.as_deref())
+            else {
+                self.function_sigs.remove(&key);
                 continue;
             };
             let Some((params, returns)) = self.function_contract_metadata(func, &entity, impure)
             else {
-                self.function_sigs.remove(&func.name);
+                self.function_sigs.remove(&key);
                 continue;
             };
+            if matches!(entity, NodeEntity::Layer { .. }) {
+                self.check_introduced_function_shadow(&key);
+            }
             self.function_sigs.insert(
-                func.name.clone(),
+                key.clone(),
                 FunctionSig {
                     params: params.clone(),
                     returns: returns.clone(),
                 },
             );
             self.planned_functions.insert(
-                func.name.clone(),
+                key,
                 PlannedFunction {
                     entity,
                     impure,
@@ -5123,6 +5780,49 @@ impl<'a> StructuralPlanner<'a> {
                 },
             );
         }
+        self.current_module = None;
+        self.index_qualified_functions();
+    }
+
+    /// A module-local function silently wins over a global of the same name on read-back, so a
+    /// document may keep a shadow the board already has, but must never introduce one.
+    fn check_introduced_function_shadow(&mut self, key: &FnKey) {
+        let normalized = to_camel_case(&key.name);
+        let shadowed = self
+            .function_sigs
+            .keys()
+            .filter(|other| {
+                to_camel_case(&other.name) == normalized
+                    && other.module != key.module
+                    && (other.module.is_none() || key.module.is_none())
+            })
+            .filter_map(|other| match &other.module {
+                Some(module) => self
+                    .module_name_paths
+                    .get(module)
+                    .map(|path| format!("`{}::{}`", path.join("::"), other.name)),
+                None => Some(format!("the global function `{}`", other.name)),
+            })
+            .collect::<Vec<_>>();
+        if shadowed.is_empty() {
+            return;
+        }
+        let mut shadowed = shadowed;
+        shadowed.sort();
+        shadowed.dedup();
+        let scope = match key
+            .module
+            .as_deref()
+            .and_then(|module| self.module_name_paths.get(module))
+        {
+            Some(path) => format!("module `{}`", path.join("::")),
+            None => "the board root".to_string(),
+        };
+        self.result.diagnostics.push(format!(
+            "new function `{}` in {scope} shadows {}; a module-local function always wins on read-back, so the shadowed call sites would silently retarget. Rename one of them",
+            key.name,
+            shadowed.join(" and ")
+        ));
     }
 
     fn function_contract_metadata(
@@ -5271,14 +5971,22 @@ impl<'a> StructuralPlanner<'a> {
             .resolve_call_target(call)
             .map(|resolved| resolved.target)
         {
-            Ok(CallTarget::Function(name)) => ast
-                .functions
-                .iter()
-                .find(|func| func.name == name)
+            Ok(CallTarget::Function(key)) => {
+                self
+                .function_decl_index
+                .get(&key)
+                .and_then(|index| ast.functions.get(*index))
                 .is_some_and(|func| {
-                    seen.insert(func.name.clone())
-                        && self.function_body_is_impure(ast, &func.body, seen)
-                }),
+                    seen.insert(key.seen_id()) && self.function_body_is_impure(ast, &func.body, seen)
+                })
+                // A function this document does not declare is already on the board: its live
+                // boundary pins say whether calling it needs an execution chain.
+                || (!self.function_decl_index.contains_key(&key)
+                    && self
+                        .planned_functions
+                        .get(&key)
+                        .is_some_and(|planned| planned.impure))
+            }
             Ok(CallTarget::Catalog(meta)) => metadata_exec_input_pin(&meta).is_some(),
             // An unresolvable call (e.g. conflicting same-type declarations in a board-derived
             // catalog, or a method call whose receiver type the prescan cannot see) must not
@@ -5407,14 +6115,14 @@ impl<'a> StructuralPlanner<'a> {
             return true;
         };
         match resolved.target {
-            CallTarget::Function(name) => {
+            CallTarget::Function(key) => {
                 args_unresolved
-                    || ast
-                        .functions
-                        .iter()
-                        .find(|function| function.name == name)
+                    || self
+                        .function_decl_index
+                        .get(&key)
+                        .and_then(|index| ast.functions.get(*index))
                         .is_some_and(|function| {
-                            seen.insert(function.name.clone())
+                            seen.insert(key.seen_id())
                                 && self.function_body_has_unresolved_calls(
                                     ast,
                                     &function.body,
@@ -5814,8 +6522,25 @@ impl<'a> StructuralPlanner<'a> {
         self.pop_scope();
     }
 
-    fn plan_function_body(&mut self, func: &FnDecl) {
-        let Some(planned) = self.planned_functions.get(&func.name).cloned() else {
+    /// Plan a `detached { … }` block: an execution chain with no entry to drive it.
+    ///
+    /// There is no cursor to seed from, exactly as for a pure function body, which is also what
+    /// exempts the first statement from the dangling-execution check — `plan_block` keys that
+    /// exemption on having no execution predecessor. The chain tail is discarded: nothing closes
+    /// onto it. `function_return_targets` is taken for the same reason a handler body takes it:
+    /// a `return` here is the event-return sugar, never a return of some enclosing function.
+    fn plan_detached(&mut self, block: &Block, target_layer: Option<String>) {
+        self.push_scope();
+        let enclosing_function_returns = std::mem::take(&mut self.function_return_targets);
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
+        self.plan_block(block, None, target_layer);
+        self.function_return_targets = enclosing_function_returns;
+        self.closed_block_symbols = enclosing_blocks;
+        self.pop_scope();
+    }
+
+    fn plan_function_body(&mut self, func: &FnDecl, key: &FnKey) {
+        let Some(planned) = self.planned_functions.get(key).cloned() else {
             return;
         };
         if func.anchor.is_none() {
@@ -5865,9 +6590,9 @@ impl<'a> StructuralPlanner<'a> {
         let new_functions = self
             .planned_functions
             .iter()
-            .filter_map(|(name, planned)| match &planned.entity {
+            .filter_map(|(key, planned)| match &planned.entity {
                 NodeEntity::Layer { ref_id, pins } => Some((
-                    name.clone(),
+                    key.name.clone(),
                     ref_id.clone(),
                     pins.clone(),
                     planned.has_unresolved_calls,
@@ -5973,12 +6698,15 @@ impl<'a> StructuralPlanner<'a> {
                 _ => None,
             })
             .flatten()
-            .filter_map(
-                |name| match self.planned_functions.get(&name).map(|p| &p.entity) {
+            .filter_map(|name| {
+                match self
+                    .any_planned_function(&name)
+                    .map(|planned| &planned.entity)
+                {
                     Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
                     _ => None,
-                },
-            )
+                }
+            })
             .collect();
 
         for (name, layer_ref) in new_layer_targets {
@@ -6736,7 +7464,12 @@ impl<'a> StructuralPlanner<'a> {
         self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
     }
 
-    fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> Option<NodeEntity> {
+    fn function_layer_entity(
+        &mut self,
+        func: &FnDecl,
+        impure: bool,
+        module: Option<&str>,
+    ) -> Option<NodeEntity> {
         if let Some(anchor) = &func.anchor {
             let Some(existing) = self
                 .existing
@@ -6760,11 +7493,13 @@ impl<'a> StructuralPlanner<'a> {
             return Some(NodeEntity::Existing(anchor.clone()));
         }
 
-        // An unanchored declaration still has a stable identity: its name. FlowScript forbids two
-        // top-level functions sharing one name, so a same-named Function layer IS this function.
-        // Without this, a fresh full-document draft (a repair, or any run that did not carry the
-        // `//@n` anchors) re-creates every layer, and the board's own canonical readback then holds
-        // duplicate declarations that no longer reconcile — the board stops round-tripping.
+        // An unanchored declaration still has a stable identity: its name IN ITS MODULE.
+        // FlowScript forbids two functions of one module sharing a name, so a same-named Function
+        // layer of that module IS this function. Without this, a fresh full-document draft (a
+        // repair, or any run that did not carry the `//@n` anchors) re-creates every layer, and
+        // the board's own canonical readback then holds duplicate declarations that no longer
+        // reconcile — the board stops round-tripping. The match never crosses a module boundary:
+        // two modules may each own a `helper`.
         let normalized_name = to_camel_case(&func.name);
         let existing_by_name: Vec<String> = self
             .existing
@@ -6773,6 +7508,7 @@ impl<'a> StructuralPlanner<'a> {
             .filter(|(_, layer)| {
                 matches!(layer.r#type, LayerType::Function)
                     && to_camel_case(&layer.name) == normalized_name
+                    && owning_module(self.existing, layer.parent_id.as_deref()).as_deref() == module
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -6805,7 +7541,9 @@ impl<'a> StructuralPlanner<'a> {
             ),
             position: Some(position),
             color: None,
-            target_layer: None,
+            // A module-local function is created INSIDE its module; a global one keeps falling
+            // back to the caller's current layer.
+            target_layer: module.map(str::to_string),
             cache: func.cache.as_ref().map(function_cache_to_layer_cache),
             summary: Some(format!("Create function {}", func.name)),
         });
@@ -7242,8 +7980,9 @@ impl<'a> StructuralPlanner<'a> {
             let planned_function_target = call
                 .path
                 .is_empty()
-                .then(|| self.planned_functions.get(&call.display))
+                .then(|| self.lookup_bare_function(&call.display))
                 .flatten()
+                .and_then(|key| self.planned_functions.get(&key))
                 .map(|planned| planned.entity.node_ref());
             let expected_node_type = if planned_function_target.is_some() {
                 CALL_FUNCTION_NODE_TYPE
@@ -7454,8 +8193,8 @@ impl<'a> StructuralPlanner<'a> {
         // `control_call_function` node targeting that function's layer instead of resolving
         // against the catalog.
         let meta = match &resolved.target {
-            CallTarget::Function(name) => {
-                return self.add_function_call_node(name, call, target_layer);
+            CallTarget::Function(key) => {
+                return self.add_function_call_node(key, call, target_layer);
             }
             CallTarget::Catalog(meta) => meta.clone(),
         };
@@ -7733,13 +8472,14 @@ impl<'a> StructuralPlanner<'a> {
     /// the pins that will exist at apply time.
     fn add_function_call_node(
         &mut self,
-        name: &str,
+        key: &FnKey,
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
-        let Some(planned) = self.planned_functions.get(name).cloned() else {
+        let Some(planned) = self.planned_functions.get(key).cloned() else {
             self.result.diagnostics.push(format!(
-                "cannot call function `{name}`: its declaration did not plan"
+                "cannot call function `{}`: its declaration did not plan",
+                key.name
             ));
             return None;
         };
@@ -8675,11 +9415,11 @@ impl<'a> StructuralPlanner<'a> {
         let live = node_to_metadata(source_node);
         let (meta, call) = match &resolved {
             Some(ResolvedCall {
-                target: CallTarget::Function(name),
+                target: CallTarget::Function(key),
                 call: folded,
                 ..
             }) if source_node.name == CALL_FUNCTION_NODE_TYPE
-                && self.planned_functions.get(name).is_some_and(|planned| {
+                && self.planned_functions.get(key).is_some_and(|planned| {
                     node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
                         .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
                 }) =>
@@ -11013,28 +11753,217 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
-    fn prepare_function_sigs(&mut self, ast: &BoardAst) {
-        self.function_sigs = ast
-            .functions
-            .iter()
-            .map(|func| {
-                (
-                    func.name.clone(),
-                    FunctionSig {
-                        params: func
-                            .params
-                            .iter()
-                            .map(|param| param_pin_metadata(param, &self.interface_schemas))
-                            .collect(),
-                        returns: func
-                            .returns
-                            .iter()
-                            .map(|param| param_pin_metadata(param, &self.interface_schemas))
-                            .collect(),
-                    },
-                )
+    fn prepare_function_sigs(&mut self, doc: &FlatDocument) {
+        self.function_sigs.clear();
+        self.function_decl_index.clear();
+        for (index, func) in doc.ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            self.function_sigs.insert(
+                key.clone(),
+                FunctionSig {
+                    params: func
+                        .params
+                        .iter()
+                        .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                        .collect(),
+                    returns: func
+                        .returns
+                        .iter()
+                        .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                        .collect(),
+                },
+            );
+            self.function_decl_index.insert(key, index);
+        }
+    }
+
+    /// Resolve this document's `module` blocks to board layers, creating the ones that do not
+    /// exist yet. Runs before anything that needs a module context.
+    fn prepare_modules(&mut self, modules: &ModuleResolution) {
+        self.module_name_paths = modules.board_paths.clone();
+        let mut created: Vec<String> = Vec::new();
+        for module in &modules.created {
+            let parent = module_target_id(&module.parent, &created);
+            let ref_id = format!("${}", self.next_ref);
+            self.next_ref += 1;
+            let position = self.next_position(None);
+            self.add_commands.push(BoardCommand::CreateLayer {
+                name: module.name.clone(),
+                ref_id: Some(ref_id.clone()),
+                layer_type: Some("Module".to_string()),
+                node_ids: Vec::new(),
+                pins: None,
+                position: Some(position),
+                color: None,
+                target_layer: parent,
+                cache: None,
+                summary: Some(format!("Create module {}", module.name)),
+            });
+            self.module_name_paths
+                .insert(ref_id.clone(), module.path.clone());
+            created.push(ref_id);
+        }
+        for (scope, target) in &modules.scopes {
+            self.module_layers
+                .insert(scope.clone(), module_target_id(target, &created));
+        }
+    }
+
+    /// The module layer a document scope plans into.
+    fn scope_module(&self, scope: &ModulePath) -> Option<String> {
+        self.module_layers.get(scope).cloned().flatten()
+    }
+
+    /// Identity of the `function` at `index` of the flattened document: its name in the module it
+    /// was written in — or, when it keeps an identity anchor, in the module the anchored layer
+    /// actually lives in. The anchor is identity; a block position is presentation.
+    fn declared_function_key(&self, doc: &FlatDocument, index: usize) -> FnKey {
+        let func = &doc.ast.functions[index];
+        let written = self.scope_module(&doc.function_scopes[index]);
+        let module = func
+            .anchor
+            .as_deref()
+            .and_then(|anchor| self.existing.layers.get(anchor))
+            .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            .map(|layer| owning_module(self.existing, layer.parent_id.as_deref()))
+            .unwrap_or(written);
+        FnKey {
+            module,
+            name: func.name.clone(),
+        }
+    }
+
+    /// Make the board's own Function layers callable even when this document does not declare
+    /// them: a module file is a partial view of the board, and a call to a helper it never had to
+    /// reproduce is not an unknown name.
+    fn seed_existing_function_signatures(&mut self) {
+        let board = self.existing;
+        let declared = self
+            .function_sigs
+            .keys()
+            .map(|key| (key.module.clone(), to_camel_case(&key.name)))
+            .collect::<HashSet<_>>();
+        let mut layers = board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            .collect::<Vec<_>>();
+        layers.sort_by(|left, right| left.id.cmp(&right.id));
+        for layer in layers {
+            let module = owning_module(board, layer.parent_id.as_deref());
+            let name = to_camel_case(&layer.name);
+            if declared.contains(&(module.clone(), name.clone())) {
+                continue;
+            }
+            let key = FnKey { module, name };
+            if self.function_sigs.contains_key(&key) {
+                continue;
+            }
+            let (params, returns, impure) = existing_function_layer_contract(layer);
+            self.function_sigs.insert(
+                key.clone(),
+                FunctionSig {
+                    params: params.clone(),
+                    returns: returns.clone(),
+                },
+            );
+            self.planned_functions.insert(
+                key,
+                PlannedFunction {
+                    entity: NodeEntity::Existing(layer.id.clone()),
+                    impure,
+                    has_unresolved_calls: false,
+                    params,
+                    returns,
+                },
+            );
+        }
+    }
+
+    /// Index every callable function by its ABSOLUTE `::` path, so `checkout::payments::helper()`
+    /// resolves the same from any file.
+    fn index_qualified_functions(&mut self) {
+        self.functions_by_qualified.clear();
+        let keys = self.function_sigs.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let Some(module) = key.module.as_deref() else {
+                continue;
+            };
+            let Some(path) = self.module_name_paths.get(module) else {
+                continue;
+            };
+            let qualified = format!("{}::{}", path.join("::"), key.name.to_lowercase());
+            self.functions_by_qualified
+                .entry(qualified)
+                .or_default()
+                .push(key);
+        }
+        for keys in self.functions_by_qualified.values_mut() {
+            keys.sort_by_key(|key| key.seen_id());
+        }
+    }
+
+    /// The function a BARE name refers to from the current module: the current module's own
+    /// declaration/layer first, then a global one. A bare name never crosses into another module
+    /// — that always needs the qualified spelling.
+    fn lookup_bare_function(&self, name: &str) -> Option<FnKey> {
+        let local = FnKey::in_module(self.current_module.as_deref(), name);
+        if self.function_sigs.contains_key(&local) {
+            return Some(local);
+        }
+        let global = FnKey::global(name);
+        (self.current_module.is_some() && self.function_sigs.contains_key(&global))
+            .then_some(global)
+    }
+
+    /// The qualified spellings of a name that is only reachable from ANOTHER module.
+    fn foreign_function_spellings(&self, name: &str) -> Vec<String> {
+        let mut spellings = self
+            .function_sigs
+            .keys()
+            .filter(|key| key.name == name && key.module != self.current_module)
+            .filter_map(|key| {
+                let path = self.module_name_paths.get(key.module.as_deref()?)?;
+                Some(format!("{}::{}", path.join("::"), key.name))
             })
-            .collect();
+            .collect::<Vec<_>>();
+        spellings.sort();
+        spellings.dedup();
+        spellings
+    }
+
+    /// The function an absolute `a::b::name` path names, if any.
+    fn lookup_qualified_function(&self, path: &[String], name: &str) -> Option<FnKey> {
+        let key = format!(
+            "{}::{}",
+            path.iter()
+                .map(|segment| segment.to_lowercase())
+                .collect::<Vec<_>>()
+                .join("::"),
+            name.to_lowercase()
+        );
+        self.functions_by_qualified.get(&key)?.first().cloned()
+    }
+
+    /// Any planned function with this name, preferring a global one. Used where the module context
+    /// is not carried (a `tools:`/`fnRefs:` reference name).
+    fn any_planned_function(&self, name: &str) -> Option<&PlannedFunction> {
+        self.planned_functions
+            .get(&FnKey::global(name))
+            .or_else(|| {
+                self.planned_functions
+                    .get(&FnKey::in_module(self.current_module.as_deref(), name))
+            })
+            .or_else(|| {
+                let mut keys = self
+                    .planned_functions
+                    .keys()
+                    .filter(|key| key.name == name)
+                    .collect::<Vec<_>>();
+                keys.sort_by_key(|key| key.seen_id());
+                keys.first()
+                    .and_then(|key| self.planned_functions.get(*key))
+            })
     }
 
     /// Record the side effects of a resolution the planner committed to.
@@ -11051,9 +11980,9 @@ impl<'a> StructuralPlanner<'a> {
     fn resolve_call_target(&self, call: &Call) -> Result<ResolvedCall, String> {
         if call.path.is_empty()
             && call.receiver.is_none()
-            && self.function_sigs.contains_key(&call.display)
+            && let Some(key) = self.lookup_bare_function(&call.display)
         {
-            return self.finish_function_call(call, &call.display, Vec::new(), Vec::new());
+            return self.finish_function_call(call, &key, Vec::new(), Vec::new());
         }
         if !call.node_type.trim().is_empty() {
             let meta = self
@@ -11088,10 +12017,10 @@ impl<'a> StructuralPlanner<'a> {
     fn call_output_metadata(&self, call: &Call) -> Option<NodeMetadata> {
         match self.resolve_call_target(call).ok()?.target {
             CallTarget::Catalog(meta) => Some(meta),
-            CallTarget::Function(name) => self
+            CallTarget::Function(key) => self
                 .function_sigs
-                .get(&name)
-                .map(|sig| function_shape_metadata(&name, &sig.params, &sig.returns)),
+                .get(&key)
+                .map(|sig| function_shape_metadata(&key.name, &sig.params, &sig.returns)),
         }
     }
 
@@ -11115,11 +12044,12 @@ impl<'a> StructuralPlanner<'a> {
     fn finish_function_call(
         &self,
         call: &Call,
-        name: &str,
+        key: &FnKey,
         corrections: Vec<String>,
         used_uses: Vec<usize>,
     ) -> Result<ResolvedCall, String> {
-        let Some(sig) = self.function_sigs.get(name) else {
+        let name = key.name.as_str();
+        let Some(sig) = self.function_sigs.get(key) else {
             return Err(format!(
                 "cannot call function `{name}`: its declaration did not plan"
             ));
@@ -11131,7 +12061,7 @@ impl<'a> StructuralPlanner<'a> {
             .and_then(|_| sig.params.first().map(|param| param.name.clone()));
         let folded = fold_call_arguments(call, &shape, receiver_pin.as_deref())?;
         Ok(ResolvedCall {
-            target: CallTarget::Function(name.to_string()),
+            target: CallTarget::Function(key.clone()),
             call: folded,
             corrections,
             used_uses,
@@ -11206,7 +12136,30 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// A `::` path is EITHER a catalog namespace OR an absolute module path. Try both and fail
+    /// closed when it is both: one spelling must never silently mean two different things.
     fn resolve_path_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        let module_target = self.lookup_qualified_function(&call.path, &call.display);
+        let catalog = self.resolve_catalog_path_call(call);
+        match (module_target, catalog) {
+            (Some(key), Ok(resolved)) => Err(format!(
+                "call `{}` is ambiguous: it names the function `{}` in module `{}` and the catalog node `{}`; rename the module or the function so one spelling means one thing",
+                call_callee(call),
+                key.name,
+                call.path.join("::"),
+                match &resolved.target {
+                    CallTarget::Catalog(meta) => {
+                        format!("{} (`{}`)", catalog_names(meta).qualified, meta.name)
+                    }
+                    CallTarget::Function(other) => other.name.clone(),
+                }
+            )),
+            (Some(key), Err(_)) => self.finish_function_call(call, &key, Vec::new(), Vec::new()),
+            (None, catalog) => catalog,
+        }
+    }
+
+    fn resolve_catalog_path_call(&self, call: &Call) -> Result<ResolvedCall, String> {
         let (key, used) = self.expand_path(&call.path)?;
         let matches = self.catalog.qualified_matches(&key, &call.display);
         if matches.is_empty() {
@@ -11271,7 +12224,7 @@ impl<'a> StructuralPlanner<'a> {
     ) -> Option<Result<ResolvedCall, String>> {
         let chain = identifier_chain(receiver)?;
         let root = chain.first()?;
-        if self.lookup_symbol(root).is_some() || self.function_sigs.contains_key(root) {
+        if self.lookup_symbol(root).is_some() || self.lookup_bare_function(root).is_some() {
             return None;
         }
         let (key, used) = self.expand_path(&chain).ok()?;
@@ -11345,15 +12298,16 @@ impl<'a> StructuralPlanner<'a> {
 
         let mut corrections = Vec::new();
         let mut function_param_class = None;
-        let function = self
-            .function_sigs
-            .get(alias)
+        let function_key = self.lookup_bare_function(alias);
+        let function = function_key
+            .as_ref()
+            .and_then(|key| self.function_sigs.get(key))
             .and_then(|sig| sig.params.first())
             .and_then(|first| {
                 let class = self.pin_class(first);
                 if kind.accepts(class.as_ref()) {
                     return Some(CallCandidate {
-                        kind: CandidateKind::Function(alias.to_string()),
+                        kind: CandidateKind::Function(function_key.clone()?),
                         receiver_pin: Some(first.name.clone()),
                         qualified: format!("function `{alias}`"),
                         node_type: CALL_FUNCTION_NODE_TYPE.to_string(),
@@ -11432,10 +12386,10 @@ impl<'a> StructuralPlanner<'a> {
                 &self.catalog.entries[indices[0]],
                 candidate.receiver_pin.as_deref(),
             ),
-            CandidateKind::Function(name) => self.function_sigs.get(name).is_some_and(|sig| {
+            CandidateKind::Function(key) => self.function_sigs.get(key).is_some_and(|sig| {
                 call_shape_fits(
                     call,
-                    &function_shape_metadata(name, &sig.params, &sig.returns),
+                    &function_shape_metadata(&key.name, &sig.params, &sig.returns),
                     candidate.receiver_pin.as_deref(),
                 )
             }),
@@ -11475,7 +12429,7 @@ impl<'a> StructuralPlanner<'a> {
                         self.function_sigs
                             .iter()
                             .filter(|(_, sig)| !sig.params.is_empty())
-                            .map(|(name, _)| name.as_str()),
+                            .map(|(key, _)| key.name.as_str()),
                     ),
             );
             if suggestions.is_empty() {
@@ -11495,8 +12449,8 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn resolve_bare_call(&self, call: &Call) -> Result<ResolvedCall, String> {
-        if self.function_sigs.contains_key(&call.display) {
-            return self.finish_function_call(call, &call.display, Vec::new(), Vec::new());
+        if let Some(key) = self.lookup_bare_function(&call.display) {
+            return self.finish_function_call(call, &key, Vec::new(), Vec::new());
         }
         let display = call.display.as_str();
         let flat = self.catalog.flat_matches(display);
@@ -11590,6 +12544,20 @@ impl<'a> StructuralPlanner<'a> {
         match self.catalog.resolve_call(call) {
             Ok(meta) => self.finish_catalog_call(call, meta, None, Vec::new(), Vec::new()),
             Err(original) => {
+                // A bare name never crosses a module boundary. Say so with the spelling that
+                // does, instead of reporting the function as an unknown catalog node.
+                let foreign = self.foreign_function_spellings(display);
+                if !foreign.is_empty() {
+                    return Err(format!(
+                        "call `{display}` does not name a function of this module or a global one; `{display}` is declared in another module — write the qualified form {}",
+                        quoted_list(
+                            &foreign
+                                .iter()
+                                .map(|spelling| format!("{spelling}(...)"))
+                                .collect::<Vec<_>>()
+                        )
+                    ));
+                }
                 let indices = self.catalog.alias_matches(display);
                 let alternatives = self.catalog.qualified_names(indices);
                 if alternatives.is_empty() {
@@ -11847,6 +12815,9 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
     for function in &ast.functions {
         visit_block(&function.body, &mut anchors);
     }
+    for block in &ast.detached {
+        visit_block(block, &mut anchors);
+    }
     anchors
 }
 
@@ -11891,6 +12862,11 @@ fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
             return true;
         }
         if block_has_unanchored_calls(&f.body) {
+            return true;
+        }
+    }
+    for block in &ast.detached {
+        if block_has_unanchored_calls(block) {
             return true;
         }
     }
@@ -12111,12 +13087,19 @@ fn collect_anchored_synthesized_calls(ast: &BoardAst, scope: Option<&HashSet<&st
         }
         collect_synthesized_calls_in_block(&f.body, &mut out);
     }
+    for block in &ast.detached {
+        if !section_in_scope(scope, block.root_anchor()) {
+            continue;
+        }
+        collect_synthesized_calls_in_block(block, &mut out);
+    }
     out
 }
 
-/// Whether a top-level event/function belongs to the reconcile scope. `None` (whole-document
-/// semantics) admits every section; an explicit scope admits only sections whose anchor is listed,
-/// so an anchor-less section can never be mistaken for in-scope content and deleted.
+/// Whether a top-level event/function/detached section belongs to the reconcile scope. `None`
+/// (whole-document semantics) admits every section; an explicit scope admits only sections whose
+/// anchor is listed, so an anchor-less section can never be mistaken for in-scope content and
+/// deleted.
 fn section_in_scope(scope: Option<&HashSet<&str>>, anchor: Option<&str>) -> bool {
     match scope {
         None => true,
@@ -12175,6 +13158,9 @@ fn collect_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
     for f in &ast.functions {
         collect_block(&f.body, out);
     }
+    for block in &ast.detached {
+        collect_block(block, out);
+    }
 }
 
 fn collect_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
@@ -12202,6 +13188,12 @@ fn collect_statement_calls<'a>(
             continue;
         }
         collect_statement_block(&f.body, out);
+    }
+    for block in &ast.detached {
+        if !section_in_scope(scope, block.root_anchor()) {
+            continue;
+        }
+        collect_statement_block(block, out);
     }
 }
 
@@ -12542,15 +13534,27 @@ pub fn reconcile_text_with_catalog_scoped(
     catalog: &[NodeMetadata],
     scope_anchors: Option<&[String]>,
 ) -> ReconcileResult {
-    match flow_like_ast::parse(text) {
-        Ok(ast) => reconcile_inner(
-            existing,
-            &ast,
-            Some(catalog),
-            None,
-            ReconcileMode::Replace,
+    reconcile_text_with_catalog_opts(
+        existing,
+        text,
+        catalog,
+        &ReconcileOptions {
             scope_anchors,
-        ),
+            ..ReconcileOptions::default()
+        },
+    )
+}
+
+/// Parse FlowScript text and reconcile it with catalog metadata under explicit document options
+/// (scope, mode, and which virtual file the text is — see [`ReconcileOptions`]).
+pub fn reconcile_text_with_catalog_opts(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    opts: &ReconcileOptions,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_inner(existing, &ast, Some(catalog), None, opts),
         Err(err) => parse_error_result(&err),
     }
 }
@@ -12577,15 +13581,28 @@ pub fn reconcile_text_with_catalog_enriched_scoped(
     enricher: &MetadataEnricher,
     scope_anchors: Option<&[String]>,
 ) -> ReconcileResult {
-    match flow_like_ast::parse(text) {
-        Ok(ast) => reconcile_inner(
-            existing,
-            &ast,
-            Some(catalog),
-            Some(enricher),
-            ReconcileMode::Replace,
+    reconcile_text_with_catalog_enriched_opts(
+        existing,
+        text,
+        catalog,
+        enricher,
+        &ReconcileOptions {
             scope_anchors,
-        ),
+            ..ReconcileOptions::default()
+        },
+    )
+}
+
+/// Enriched text reconcile under explicit document options (see [`ReconcileOptions`]).
+pub fn reconcile_text_with_catalog_enriched_opts(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+    opts: &ReconcileOptions,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_inner(existing, &ast, Some(catalog), Some(enricher), opts),
         Err(err) => parse_error_result(&err),
     }
 }
@@ -13973,7 +14990,7 @@ eventTimer event() {   //@n:event_b
         )
         .expect("parse");
 
-        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        let diagnostics = duplicate_ast_declaration_diagnostics(&FlatDocument::new(&ast, None));
         assert!(
             diagnostics.is_empty(),
             "persisted entries may share a friendly alias when no new callable must resolve it: {diagnostics:?}"
@@ -14025,7 +15042,7 @@ eventsWidgetAction deleteAdventureCard(widgetInstanceId: string) {
         )
         .expect("parse");
 
-        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        let diagnostics = duplicate_ast_declaration_diagnostics(&FlatDocument::new(&ast, None));
         assert!(
             diagnostics.is_empty(),
             "unique callable names must remain valid: {diagnostics:?}"
@@ -14347,6 +15364,98 @@ simpleEvent() {   //@n:event
             .collect();
 
         assert_eq!(removed, vec!["log"], "absent text-visible node is removed");
+    }
+
+    /// `board_with_log` minus the event: the log node is left as an unreachable chain, which
+    /// lowers into a `detached` block.
+    fn board_with_orphan_log(text_default: &str) -> Board {
+        let mut board = board_with_log(text_default);
+        board.nodes.remove("event");
+        for pin in board
+            .nodes
+            .get_mut("log")
+            .expect("log node")
+            .pins
+            .values_mut()
+        {
+            pin.depends_on.clear();
+        }
+        board
+    }
+
+    #[test]
+    fn detached_block_roundtrip_derives_no_commands() {
+        let board = board_with_orphan_log("hello");
+        let ast = super::super::lower_to_ast(&board);
+        assert_eq!(ast.detached.len(), 1, "the orphan chain lowers as detached");
+        assert!(ast.events.is_empty(), "a catalog node is not an entry");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    /// The deletion diff and the config diff must learn about `detached` together: if only one
+    /// does, an unchanged round-trip deletes every unreachable node.
+    #[test]
+    fn deleting_a_detached_statement_removes_its_node() {
+        let board = board_with_orphan_log("hello");
+        let mut ast = super::super::lower_to_ast(&board);
+        for block in &mut ast.detached {
+            block.stmts.retain(
+                |s| !matches!(s, Stmt::Call { call, .. } if call.anchor.as_deref() == Some("log")),
+            );
+        }
+
+        let result = reconcile(&board, &ast);
+
+        let removed: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::RemoveNode { node_id, .. } => Some(node_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, vec!["log"], "{:?}", result.commands);
+    }
+
+    #[test]
+    fn detached_literal_edit_emits_update_pin() {
+        let board = board_with_orphan_log("hello");
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+        .replace("\"hello\"", "\"world\"");
+
+        let result = reconcile_text(&board, &text);
+
+        assert_eq!(result.commands.len(), 1, "{:?}", result.commands);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "log"
+                    && pin_id == "text"
+                    && value == &flow_like_types::Value::String("world".to_string())
+        ));
+    }
+
+    #[test]
+    fn duplicate_anchor_inside_a_detached_block_fails_closed() {
+        let source = concat!(
+            "detached {\n",
+            "    logInfo({ message: \"a\" })   //@n:same\n",
+            "    logInfo({ message: \"b\" })   //@n:same\n",
+            "}\n",
+        );
+        let ast = flow_like_ast::parse(source).expect("parse");
+
+        assert_eq!(duplicate_ast_anchors(&ast), vec!["same".to_string()]);
     }
 
     #[test]
@@ -18236,6 +19345,158 @@ function constantFlag(): (flag: bool) {
         assert!(
             result.commands.is_empty(),
             "promoted-local roundtrip must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
+    async fn variable_assignment_from_method_call_roundtrips() {
+        use crate::flow::pin::ValueType;
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "Variable");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_get.set_flowscript_name("variable", "get");
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "Variable");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_set.set_flowscript_name("variable", "set");
+
+        let mut set_to_array = Node::new("set_to_array", "Set to Array", "", "Utils/Set");
+        set_to_array
+            .add_input_pin("set_in", "Set", "", VariableType::Generic)
+            .set_value_type(ValueType::HashSet);
+        set_to_array
+            .add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .set_value_type(ValueType::Array);
+        set_to_array.set_flowscript_name("set", "toArray");
+        set_to_array.set_receiver("set_in");
+
+        let catalog_nodes = vec![variable_get, variable_set, set_to_array];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"let links: Set<string> = []
+let urls: string[] = []
+
+function collect() {
+    urls = links.toArray()
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("method-call assignment applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let text = anchored_text(&board);
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "the board's own lowered script must keep applying:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "method-call assignment roundtrip must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
+    async fn variable_assignment_from_method_call_with_selected_output_applies() {
+        use crate::flow::pin::ValueType;
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "Variable");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_get.set_flowscript_name("variable", "get");
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "Variable");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_set.set_flowscript_name("variable", "set");
+
+        let mut set_to_array = Node::new("set_to_array", "Set to Array", "", "Utils/Set");
+        set_to_array
+            .add_input_pin("set_in", "Set", "", VariableType::Generic)
+            .set_value_type(ValueType::HashSet);
+        set_to_array
+            .add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .set_value_type(ValueType::Array);
+        set_to_array.set_flowscript_name("set", "toArray");
+        set_to_array.set_receiver("set_in");
+
+        let catalog_nodes = vec![variable_get, variable_set, set_to_array];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"let links: Set<string> = []
+let urls: string[] = []
+
+function collect() {
+    urls = links.toArray()
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("method-call assignment applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // Selecting the sole output pin explicitly is a legal spelling; the assignment still
+        // renders with only the `variable_set` statement anchor, so the inlined value call is
+        // keyed by an anchor that identifies a DIFFERENT node.
+        let text = anchored_text(&board).replace("links.toArray()", "links.toArray().arrayOut");
+        assert!(
+            text.contains("links.toArray().arrayOut"),
+            "probe must patch the lowered assignment:\n{text}"
+        );
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "an explicit output selection must not be folded against the variable_set anchor:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::AddNode { .. })),
+            "the value call must reuse the wired node instead of adding a second one:\n{text}\n{:?}",
             result.commands
         );
     }

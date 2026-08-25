@@ -12,6 +12,7 @@ import type { Monaco } from "@monaco-editor/react";
 import { getFlowScriptNamesTable } from "../../../lib/flowscript/names";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
+	type FlowScriptBoardScope,
 	type FlowScriptRawDiagnostic,
 	computeFlowScriptDiagnostics,
 	flowScriptMarkersFromRaw,
@@ -249,13 +250,16 @@ function mapOutcome<K extends FlowScriptWorkerResult["kind"], T>(
 export function requestFlowScriptWorkerDiagnostics(
 	model: FlowScriptWorkerModelLike,
 	nodes: INode[] | undefined,
+	board?: FlowScriptBoardScope,
 	token?: CancellationTokenLike,
 ): Promise<FlowScriptWorkerOutcome<FlowScriptRawDiagnostic[]>> | null {
+	// Passed as `extra` so a board change (module created/renamed) also invalidates the
+	// coalescing key — a stale request for the same text must not answer the new question.
 	const request = requestFromWorker(
 		"diagnostics",
 		model,
 		nodes,
-		undefined,
+		board ? { board } : undefined,
 		token,
 	);
 	return request && mapOutcome(request, "diagnostics", (r) => r.markers);
@@ -347,16 +351,17 @@ export function computeFlowScriptMarkersPreferWorker(
 	monaco: Monaco,
 	model: FlowScriptWorkerModelLike,
 	nodes: INode[] | undefined,
+	board?: FlowScriptBoardScope,
 ): unknown[] | Promise<unknown[]> {
-	const request = requestFlowScriptWorkerDiagnostics(model, nodes);
+	const request = requestFlowScriptWorkerDiagnostics(model, nodes, board);
 	if (!request)
-		return computeFlowScriptDiagnostics(monaco, model.getValue(), nodes)
+		return computeFlowScriptDiagnostics(monaco, model.getValue(), nodes, board)
 			.markers;
 	return request.then((outcome) => {
 		if (outcome.status === "ok")
 			return flowScriptMarkersFromRaw(monaco, outcome.value);
 		if (outcome.status === "cancelled") return [];
-		return computeFlowScriptDiagnostics(monaco, model.getValue(), nodes)
+		return computeFlowScriptDiagnostics(monaco, model.getValue(), nodes, board)
 			.markers;
 	});
 }

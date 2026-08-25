@@ -2694,6 +2694,12 @@ pub fn profile_flowscript_candidate(source: &str) -> FlowScriptCandidateProfile 
                 }
                 profile_flowscript_block(&event.body, &mut profile);
             }
+            // A detached chain is unreachable, not absent. Its nodes are still board scope the
+            // shrink detector has to weigh, or an edit that leaves work detached reads as a
+            // collapse to an empty draft.
+            for block in &ast.detached {
+                profile_flowscript_block(block, &mut profile);
+            }
             profile
         }
         Err(_) => profile_flowscript_candidate_lexically(source),
@@ -2968,11 +2974,17 @@ fn profile_flowscript_candidate_lexically(source: &str) -> FlowScriptCandidatePr
     let mut profile = FlowScriptCandidateProfile::default();
     for line in source.lines() {
         let trimmed = line.trim();
+        // Every other block header names a board object this profile records separately.
+        // `detached {` names nothing — it has no node and therefore no anchor — so it is
+        // punctuation like the brace lines above it, and only the chain inside it counts.
         if trimmed.is_empty()
             || trimmed == "{"
             || trimmed == "}"
             || trimmed.starts_with("//")
             || trimmed.starts_with('@')
+            || trimmed
+                .strip_prefix("detached")
+                .is_some_and(|rest| rest.trim() == "{")
         {
             continue;
         }
@@ -4543,6 +4555,40 @@ eventsGeneric(payload: Struct) {
         assert_eq!(profile.event_entries, 2);
         assert_eq!(profile.top_level_variables.len(), 2);
         assert_eq!(profile.events_calling_helpers, 2);
+    }
+
+    #[test]
+    fn detached_chains_count_as_workflow_scope_in_both_profile_paths() {
+        let detached = r#"detached {
+    logInfo({ message: "keep me" })
+}
+
+detached {
+    emailSmtpConnect({ host: "smtp.example.com" })
+}
+"#;
+
+        let profile = profile_flowscript_candidate(detached);
+        assert_eq!(profile.call_sites, 2);
+        assert_eq!(profile.meaningful_statements, 2);
+
+        // The container is punctuation, not a statement, so a draft that fails to parse and falls
+        // back to the lexical estimate measures the same shape.
+        let lexical = profile_flowscript_candidate_lexically(detached);
+        assert_eq!(lexical.call_sites, profile.call_sites);
+        assert_eq!(lexical.meaningful_statements, profile.meaningful_statements);
+
+        // `detached` only opens a container immediately before `{`; anywhere else it is an
+        // ordinary identifier the lexical estimate must keep counting.
+        assert_eq!(
+            profile_flowscript_candidate_lexically("detachedFoo {\n}\n").meaningful_statements,
+            1
+        );
+        assert_eq!(
+            profile_flowscript_candidate_lexically("detached(payload: Struct) {\n}\n")
+                .meaningful_statements,
+            1
+        );
     }
 
     #[test]

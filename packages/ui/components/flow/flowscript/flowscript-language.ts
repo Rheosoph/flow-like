@@ -1,8 +1,12 @@
 import type { Monaco } from "@monaco-editor/react";
+// Type-only: the board scope is defined next to the module helpers that build it, and erases at
+// build time, so the language worker never pulls the board/layer modules in.
+import type { FlowScriptBoardScope } from "../../../lib/flow-modules";
 import {
 	type FlowScriptNamesTable,
 	getFlowScriptNamesTable,
 	loadFlowScriptNamesTable,
+	namespaceSegments,
 	resolveFlowScriptNames,
 } from "../../../lib/flowscript/names";
 import type { INode, IPin } from "../../../lib/schema/flow/node";
@@ -16,6 +20,8 @@ import {
 	type CancellationTokenLike,
 	requestFlowScriptWorkerEnvDoc,
 } from "./flowscript-worker-client";
+
+export type { FlowScriptBoardScope };
 
 export const FLOWSCRIPT_LANGUAGE_ID = "flowscript";
 export const FLOWSCRIPT_THEME_DARK = "flowscript-dark";
@@ -66,7 +72,27 @@ const TYPE_KEYWORDS = [
 
 const CONSTANTS = ["true", "false", "null"];
 
-export const KEYWORD_SET = new Set([...STORAGE_KEYWORDS, ...CONTROL_KEYWORDS]);
+/**
+ * `module <name> { … }` groups a board's sections into a namespace. It is a keyword in header
+ * position only, so it is deliberately NOT in `STORAGE_KEYWORDS` (which the tokenizer colors
+ * wherever the word appears); Monarch matches the header shape instead.
+ */
+export const MODULE_KEYWORD = "module";
+
+/**
+ * `detached { … }` holds the execution chains lowering found unreachable; the block names no node,
+ * so its header is the bare word before the brace. Like `module` it is a keyword in header
+ * position only — `detached(…) { }` is still an event named `detached` — so it is deliberately NOT
+ * in `STORAGE_KEYWORDS`; Monarch matches the header shape instead.
+ */
+export const DETACHED_KEYWORD = "detached";
+
+export const KEYWORD_SET = new Set([
+	...STORAGE_KEYWORDS,
+	...CONTROL_KEYWORDS,
+	MODULE_KEYWORD,
+	DETACHED_KEYWORD,
+]);
 
 /** Every word with reserved meaning: keywords, type names and literal constants. */
 export const RESERVED_WORDS: ReadonlySet<string> = new Set([
@@ -74,6 +100,8 @@ export const RESERVED_WORDS: ReadonlySet<string> = new Set([
 	...CONTROL_KEYWORDS,
 	...TYPE_KEYWORDS,
 	...CONSTANTS,
+	MODULE_KEYWORD,
+	DETACHED_KEYWORD,
 ]);
 
 /** Method class of receivers whose pin type is `Generic`: listed for every class. */
@@ -481,6 +509,49 @@ export function getFlowScriptIndex(
 	return cachedIndex;
 }
 
+/** Root segments of the board's modules — the names a `::` path may legitimately start with. */
+export function boardModuleRoots(
+	board: FlowScriptBoardScope | undefined,
+): ReadonlySet<string> {
+	const roots = new Set<string>();
+	for (const key of board?.modules ?? []) {
+		const root = key.split("::")[0]?.trim();
+		if (root) roots.add(root);
+	}
+	return roots;
+}
+
+/** Every function/event the board declares, in any file. */
+export function boardFunctionNames(
+	board: FlowScriptBoardScope | undefined,
+): ReadonlySet<string> {
+	const names = new Set<string>();
+	for (const list of Object.values(board?.functionsByModule ?? {})) {
+		for (const name of list) names.add(name);
+	}
+	return names;
+}
+
+/**
+ * Top-level catalog namespaces (`string`, `ai`, `hash`, …). A module named after one would make
+ * every qualified call inside it ambiguous, so module-name validation reserves them.
+ *
+ * One pass over the nodes: it neither builds the catalog index nor forces the generated names
+ * snapshot to load, so a board that never opens FlowScript pays nothing. Until the snapshot is
+ * in, only nodes carrying an explicit namespace contribute — call
+ * {@link loadFlowScriptNamesTable} and recompute when it resolves to get the complete set.
+ */
+export function catalogNamespaceRoots(nodes: INode[] | undefined): string[] {
+	const names = getFlowScriptNamesTable();
+	const roots = new Set<string>();
+	for (const node of nodes ?? []) {
+		const namespace = node.namespace?.trim() || names?.[node.name]?.namespace;
+		const root = namespace ? namespaceSegments(namespace)[0] : undefined;
+		if (root) roots.add(root);
+	}
+	return [...roots];
+}
+
 export function displayName(info: FlowScriptNodeInfo): string {
 	return info.qualified ?? info.identifier;
 }
@@ -635,6 +706,14 @@ export const FLOWSCRIPT_MONARCH: MonarchLanguage = {
 			// Decorators / annotations (@category, @secret, @readonly, @parallel, …).
 			[/@[A-Za-z_][\w]*/, "annotation"],
 			// Declaration heads: keyword + declared name.
+			// `module` is a keyword only in header position (`module name {`); Monarch matches the
+			// rest of the line, not from its start, so the trailing brace is what marks the header.
+			[
+				/\b(module)\b(\s+)([A-Za-z_$][\w$]*)(?=\s*\{)/,
+				["keyword", "white", "entity.name.namespace"],
+			],
+			// `detached` has no declared name, so the brace alone marks its header.
+			[/\bdetached\b(?=\s*\{)/, "keyword"],
 			[
 				/\b(interface|struct)\b(\s+)([A-Za-z_$][\w$]*)/,
 				["keyword", "white", "type.identifier"],
@@ -3653,16 +3732,23 @@ export interface FlowScriptRawDiagnostic {
  * confidently known, skipping anything it cannot model to avoid false positives on valid syntax;
  * the authoritative parser runs server-side in the studio.
  *
+ * A `board` scope keeps a modular board's cross-file calls quiet: paths rooted in one of the
+ * board's modules are not catalog namespaces, and functions declared in another file of the same
+ * board are not undeclared. Without it (single-file board, or no board context) nothing changes.
+ *
  * Pure (no Monaco): also runs inside the FlowScript web worker.
  */
 export function computeFlowScriptRawDiagnostics(
 	text: string,
 	index: FlowScriptIndex,
+	board?: FlowScriptBoardScope,
 ): FlowScriptRawDiagnostic[] {
 	if (index.names.length === 0) return [];
 
 	const { masked, templateExprs, env } = getFlowScriptEnvDoc(text, index);
 	const declared = collectDeclaredNames(text);
+	const moduleRoots = boardModuleRoots(board);
+	const boardFunctions = boardFunctionNames(board);
 	const raw: RawMarker[] = [];
 	const skipSpans: Span[] = [...templateExprs];
 
@@ -3679,6 +3765,7 @@ export function computeFlowScriptRawDiagnostics(
 			continue;
 		}
 		if (index.namespaces.size === 0) continue;
+		if (moduleRoots.has(use.path[0])) continue;
 		const path = expandPath(use.path, env.scope);
 		const ns = index.namespaces.get(namespaceKey(path));
 		if (!ns) {
@@ -3723,6 +3810,10 @@ export function computeFlowScriptRawDiagnostics(
 		const info = resolution.info;
 		if (!info) {
 			if (head.kind === "bare" && declared.has(head.member)) continue;
+			// Cross-file calls on a modular board: `checkout::payments::helper()` is a module path,
+			// not a catalog namespace, and `helper()` may be declared in another file of this board.
+			if (head.kind === "path" && moduleRoots.has(head.path[0])) continue;
+			if (head.kind === "bare" && boardFunctions.has(head.member)) continue;
 			let message: string;
 			if (head.kind === "path") {
 				message = resolution.namespaceKnown
@@ -3924,8 +4015,13 @@ export function computeFlowScriptDiagnostics(
 	monaco: Monaco,
 	text: string,
 	nodes: INode[] | undefined,
+	board?: FlowScriptBoardScope,
 ): { markers: unknown[] } {
-	const raw = computeFlowScriptRawDiagnostics(text, getFlowScriptIndex(nodes));
+	const raw = computeFlowScriptRawDiagnostics(
+		text,
+		getFlowScriptIndex(nodes),
+		board,
+	);
 	return { markers: flowScriptMarkersFromRaw(monaco, raw) };
 }
 

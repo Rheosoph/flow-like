@@ -441,6 +441,12 @@ impl Parser<'_> {
                     }
                     ast.modules.push(self.module_decl()?);
                 }
+                Tok::Ident(_) if self.at_detached_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on `detached` blocks are not supported"));
+                    }
+                    ast.detached.push(self.detached_block()?);
+                }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
                         return Err(self.err("decorators on events are not yet supported"));
@@ -676,7 +682,31 @@ impl Parser<'_> {
                 self.toks.get(self.pos + 1).map(|t| &t.tok),
                 Some(Tok::Ident(_))
             )
-            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::LBrace))
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::LBrace)
+            )
+    }
+
+    /// Whether the cursor opens a `detached` block.
+    ///
+    /// Contextual like `module`: only the exact shape `detached {` at a declaration position
+    /// claims the word. An event block always has a parameter list, so `detached(…) { }` still
+    /// parses as an event named `detached`.
+    fn at_detached_header(&self) -> bool {
+        self.is_ident("detached")
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::LBrace)
+            )
+    }
+
+    /// `detached { … }` — assumes [`Self::at_detached_header`] just returned true. The container
+    /// has no node behind it, so it takes no anchor of its own.
+    fn detached_block(&mut self) -> Result<Block, ParseError> {
+        self.bump(); // detached
+        self.expect(&Tok::LBrace)?;
+        self.block_body()
     }
 
     /// `module name { … }` — assumes [`Self::at_module_header`] just returned true.
@@ -690,6 +720,7 @@ impl Parser<'_> {
             anchor,
             functions: Vec::new(),
             events: Vec::new(),
+            detached: Vec::new(),
             modules: Vec::new(),
         };
         self.module_body(&mut decl)?;
@@ -742,6 +773,12 @@ impl Parser<'_> {
                     }
                     decl.modules.push(self.module_decl()?);
                 }
+                Tok::Ident(_) if self.at_detached_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on `detached` blocks are not supported"));
+                    }
+                    decl.detached.push(self.detached_block()?);
+                }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
                         return Err(self.err("decorators on events are not yet supported"));
@@ -750,9 +787,9 @@ impl Parser<'_> {
                 }
                 Tok::Comment(_) => {
                     if !decorators.is_empty() {
-                        return Err(self.err(
-                            "decorators must be immediately followed by a declaration",
-                        ));
+                        return Err(
+                            self.err("decorators must be immediately followed by a declaration")
+                        );
                     }
                     // Stray comment inside a module body (no AST slot): skip.
                     self.bump();

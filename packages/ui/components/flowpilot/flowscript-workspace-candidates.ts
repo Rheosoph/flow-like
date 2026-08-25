@@ -94,6 +94,13 @@ const TRIVIAL_SMOKE_CALLS = new Set([
 
 const CONTROL_CALL_NAMES = new Set(["if", "for", "while", "switch"]);
 
+/**
+ * Opening line of a `detached { … }` container. Every other block header names a board object
+ * this profile records separately; this one has no node behind it — hence no anchor — so it is
+ * punctuation like a bare brace and only the chain inside it counts as workflow.
+ */
+const DETACHED_CONTAINER_LINE = /^detached\s*\{$/;
+
 function normalizedSymbol(value: string) {
 	return value.trim().toLowerCase();
 }
@@ -203,7 +210,8 @@ export function profileFlowScriptCandidate(
 			line === "{" ||
 			line === "}" ||
 			line.startsWith("//") ||
-			line.startsWith("@")
+			line.startsWith("@") ||
+			DETACHED_CONTAINER_LINE.test(line)
 		) {
 			depth += braceDelta(rawLine);
 			if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;

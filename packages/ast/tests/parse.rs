@@ -1961,3 +1961,91 @@ fn unterminated_module_block_names_the_module() {
         err.message
     );
 }
+
+#[test]
+fn roundtrip_detached_blocks() {
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    logInfo({ message: \"reachable\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"first\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"second\" })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(
+        ast.detached.len(),
+        2,
+        "each chain keeps its own block rather than merging into one"
+    );
+    assert_eq!(ast.detached[0].stmts.len(), 1);
+}
+
+#[test]
+fn detached_renders_after_events_and_before_modules() {
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    logInfo({ message: \"e\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"d\" })\n",
+        "}\n",
+        "\n",
+        "module checkout {\n",
+        "    detached {\n",
+        "        logInfo({ message: \"m\" })\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(ast.detached.len(), 1);
+    assert_eq!(ast.modules[0].detached.len(), 1);
+}
+
+#[test]
+fn detached_statement_anchors_survive_a_round_trip() {
+    let text = "detached {\n    logInfo({ message: \"x\" })   //@n:orphan\n}\n";
+    assert_idempotent(text, &anchored_opts());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(ast.detached[0].root_anchor(), Some("orphan"));
+}
+
+#[test]
+fn detached_is_a_contextual_keyword() {
+    // `detached` opens a block only in the exact `detached {` shape; an event block always has a
+    // parameter list, so both spellings stay reachable.
+    let ast =
+        parse("detached() {\n    logInfo({ message: \"x\" })\n}\n").expect("event `detached`");
+    assert!(ast.detached.is_empty());
+    assert_eq!(ast.events[0].name, "detached");
+
+    let ast = parse("eventsSimple detached() {\n    logInfo({ message: \"x\" })\n}\n")
+        .expect("event named `detached`");
+    assert!(ast.detached.is_empty());
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("detached"));
+
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    const detached = loadThing({ name: \"a\" })\n",
+        "    logInfo({ message: detached, detached: detached.id })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+    assert!(
+        parse(text)
+            .expect("`detached` as a binding parses")
+            .detached
+            .is_empty()
+    );
+}

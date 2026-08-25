@@ -3101,6 +3101,7 @@ export class BoardState implements IBoardState {
 		allowDeletions = false,
 		origin: FlowScriptApplyOrigin = "editor",
 		scopeAnchors?: string[],
+		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
@@ -3117,6 +3118,7 @@ export class BoardState implements IBoardState {
 					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
 					allowDeletions,
 					scopeAnchors,
+					module,
 				});
 			} catch (error) {
 				void this.reportFlowScriptApplyFailure({
@@ -3307,6 +3309,43 @@ export class BoardState implements IBoardState {
 		}
 	}
 
+	async getFlowScriptFile(
+		appId: string,
+		boardId: string,
+		file: string,
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_file", {
+				appId,
+				boardId,
+				file,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("file", file);
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
 	async formatFlowScript(
 		_appId: string,
 		_boardId: string,
@@ -3330,10 +3369,11 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		flowscript: string,
 		scopeAnchors?: string[],
+		module?: string,
 	): Promise<ICheckFlowScriptReconcileResponse> {
 		return await invoke<ICheckFlowScriptReconcileResponse>(
 			"check_flowscript_reconcile",
-			{ appId, boardId, flowscript, scopeAnchors },
+			{ appId, boardId, flowscript, scopeAnchors, module },
 		);
 	}
 

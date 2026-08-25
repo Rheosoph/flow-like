@@ -583,6 +583,34 @@ impl FlowLikeState {
         builder.session(self.lance_session.clone())
     }
 
+    /// Persist a trigger that never became a run, so it still shows up in the
+    /// board's run history with the reason attached.
+    #[cfg(feature = "flow-runtime")]
+    pub async fn record_rejected_run(
+        &self,
+        rejection: &crate::flow::execution::rejection::RejectedRun,
+    ) -> flow_like_types::Result<LogMeta> {
+        use flow_like_types::anyhow;
+
+        let (db_fn, write_options) = {
+            let guard = self.config.read().await;
+            (
+                guard.callbacks.build_logs_database.clone(),
+                guard.callbacks.lance_write_options.clone(),
+            )
+        };
+
+        let db_fn = db_fn.ok_or_else(|| anyhow!("No log database configured"))?;
+        let base_path = rejection.base_path()?;
+        let db = self
+            .with_lance_session(db_fn(base_path.clone()))
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to open log database: {}, {:?}", base_path, e))?;
+
+        rejection.write(db, write_options.as_ref()).await
+    }
+
     pub fn for_execution_run(&self) -> Self {
         FlowLikeState {
             config: self.config.clone(),

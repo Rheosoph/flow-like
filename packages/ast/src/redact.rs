@@ -528,6 +528,28 @@ mod tests {
     }
 
     #[test]
+    fn detached_blocks_are_redacted_like_an_event_body() {
+        // A `detached` container has no node behind it, so it carries no value to drop and no
+        // anchor of its own; the statements inside it are redacted exactly as an event body's are.
+        let prompt = "p".repeat(MAX_LITERAL_CHARS + 1);
+        let source = format!(
+            "detached {{\n    let note: string = \"internal only\"   //@n:orphan1\n    const answer = ai::invoke({{ model: \"gpt-4\", prompt: \"{prompt}\" }})   //@n:orphan2\n}}\n\ndetached {{\n    log::info({{ message: \"keep me\" }})   //@n:orphan3\n}}"
+        );
+        let redacted = redact_flowscript(&source);
+        assert_eq!(
+            redacted.text,
+            format!(
+                "detached {{\n    let note: string //@n:orphan1\n    const answer = ai::invoke({{ model: \"gpt-4\", prompt: \"<str:{}>\" }})   //@n:orphan2\n}}\n\ndetached {{\n    log::info({{ message: \"keep me\" }})   //@n:orphan3\n}}",
+                MAX_LITERAL_CHARS + 1
+            )
+        );
+        assert_eq!(redacted.dropped_values, 1);
+        assert_eq!(redacted.redacted_literals, 1);
+        assert_eq!(redacted.text.lines().count(), source.lines().count());
+        assert_eq!(redact_flowscript(&redacted.text).text, redacted.text);
+    }
+
+    #[test]
     fn short_template_literals_survive_and_long_ones_generalize() {
         let source = "call({ text: `hello ${name}` })";
         let redacted = redact_flowscript(source);

@@ -131,6 +131,8 @@ function FolderSection({
 	onToggle,
 	renderToken,
 	focusedId,
+	keyPrefix,
+	baseDepth,
 }: Readonly<{
 	node: IFolderNode;
 	kind: string;
@@ -139,16 +141,21 @@ function FolderSection({
 	onToggle: (key: string) => void;
 	renderToken: (item: ITokenItem, focused: boolean) => ReactNode;
 	focusedId: string | null;
+	/** Namespaces the collapse state, so the same folder in two sections toggles apart. */
+	keyPrefix: string;
+	/** Levels the section header above this tree already occupies. */
+	baseDepth: number;
 }>) {
-	const key = `folder:${node.path}`;
+	const key = `${keyPrefix}folder:${node.path}`;
 	const open = forceOpen || !collapsed[key];
+	const depth = node.depth + baseDepth;
 
 	return (
 		<section>
 			<GroupHeader
 				label={node.name}
 				count={node.total}
-				depth={node.depth}
+				depth={depth}
 				open={open}
 				dropPath={node.path}
 				kind={kind}
@@ -158,7 +165,7 @@ function FolderSection({
 				<>
 					<TokenRow
 						items={node.items}
-						depth={node.depth}
+						depth={depth}
 						renderToken={renderToken}
 						focusedId={focusedId}
 					/>
@@ -172,6 +179,8 @@ function FolderSection({
 							onToggle={onToggle}
 							renderToken={renderToken}
 							focusedId={focusedId}
+							keyPrefix={keyPrefix}
+							baseDepth={baseDepth}
 						/>
 					))}
 				</>
@@ -180,56 +189,35 @@ function FolderSection({
 	);
 }
 
-export interface ITokenBoardProps {
-	items: ITokenItem[];
-	/** Droppable namespace — `variables`, `local-variables` or `functions`. */
-	kind: string;
-	group: IGroupMode;
-	query: ITokenQuery;
-	renderToken: (item: ITokenItem, focused: boolean) => ReactNode;
-	/** Shown when nothing matches. */
-	empty: ReactNode;
-	/**
-	 * A section pinned above the groups — the local scope of the function you are
-	 * standing in, which must not be filed into the board's folder tree.
-	 */
-	lead?: { label: string; items: ITokenItem[] };
-	/** Rendered above the groups, inside the same scroller. */
-	children?: ReactNode;
-}
-
 /**
- * The wrapping board of typed tokens.
- *
- * Folders nest properly: each level is an independently sticky header stacked at
- * `depth * HEADER_H`, so scrolling deep into `Feedback/State/Filters` keeps every
- * ancestor pinned above you, and the body indents by a rail instead of a box.
- * While a filter is active every group force-opens — a collapsed folder must
- * never hide a match.
+ * The grouped body of the board — the folder tree, or the flat buckets of every other
+ * grouping mode. Sectioning renders one of these per section, which is why it takes a
+ * collapse-key prefix and a depth to start at instead of assuming it owns the scroller.
  */
-export function TokenBoard({
+function TokenGroups({
 	items,
 	kind,
 	group,
-	query,
+	filtering,
+	collapsed,
+	onToggle,
 	renderToken,
-	empty,
-	lead,
-	children,
-}: Readonly<ITokenBoardProps>) {
+	focusedId,
+	keyPrefix,
+	baseDepth,
+}: Readonly<{
+	items: ITokenItem[];
+	kind: string;
+	group: IGroupMode;
+	filtering: boolean;
+	collapsed: Record<string, boolean>;
+	onToggle: (key: string) => void;
+	renderToken: (item: ITokenItem, focused: boolean) => ReactNode;
+	focusedId: string | null;
+	keyPrefix: string;
+	baseDepth: number;
+}>) {
 	const { t } = useTranslation("flow");
-	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-	const [focusedId, setFocusedId] = useState<string | null>(null);
-	const boardRef = useRef<HTMLDivElement | null>(null);
-
-	const filtering = !isQueryEmpty(query);
-	const { setNodeRef: setRootRef, isOver: isOverRoot } = useDroppable({
-		id: folderDroppableId(kind, ""),
-	});
-
-	const toggle = useCallback((key: string) => {
-		setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
-	}, []);
 
 	const tree = useMemo(
 		() => (group === "folder" ? buildFolderTree(items) : null),
@@ -255,6 +243,131 @@ export function TokenBoard({
 		() => (tree ? [...tree.items].sort(compareByNameThenId) : []),
 		[tree],
 	);
+
+	if (tree) {
+		return (
+			<>
+				<TokenRow
+					items={rootItems}
+					depth={baseDepth}
+					renderToken={renderToken}
+					focusedId={focusedId}
+				/>
+				{tree.children.map((child) => (
+					<FolderSection
+						key={child.path}
+						node={child}
+						kind={kind}
+						collapsed={collapsed}
+						forceOpen={filtering}
+						onToggle={onToggle}
+						renderToken={renderToken}
+						focusedId={focusedId}
+						keyPrefix={keyPrefix}
+						baseDepth={baseDepth}
+					/>
+				))}
+			</>
+		);
+	}
+
+	return (
+		<>
+			{flatGroups.map((bucket) => {
+				const key = `${keyPrefix}${bucket.key}`;
+				const open = filtering || !collapsed[key];
+				return (
+					<section key={bucket.key}>
+						<GroupHeader
+							label={bucket.label}
+							count={bucket.items.length}
+							depth={baseDepth}
+							open={open}
+							dropPath={bucket.dropPath}
+							kind={kind}
+							tone={bucket.tone}
+							onToggle={() => onToggle(key)}
+						/>
+						{open && (
+							<TokenRow
+								items={bucket.items}
+								depth={baseDepth}
+								renderToken={renderToken}
+								focusedId={focusedId}
+							/>
+						)}
+					</section>
+				);
+			})}
+		</>
+	);
+}
+
+/**
+ * A labelled slice of {@link ITokenBoardProps.items} — the file a group of functions lives
+ * in. Each one gets the full grouping UI underneath its own header.
+ */
+export interface ITokenSection {
+	key: string;
+	label: string;
+	items: ITokenItem[];
+}
+
+export interface ITokenBoardProps {
+	items: ITokenItem[];
+	/** Droppable namespace — `variables`, `local-variables` or `functions`. */
+	kind: string;
+	group: IGroupMode;
+	query: ITokenQuery;
+	renderToken: (item: ITokenItem, focused: boolean) => ReactNode;
+	/** Shown when nothing matches. */
+	empty: ReactNode;
+	/**
+	 * A section pinned above the groups — the local scope of the function you are
+	 * standing in, which must not be filed into the board's folder tree.
+	 */
+	lead?: { label: string; items: ITokenItem[] };
+	/**
+	 * Splits {@link ITokenBoardProps.items} into headed sections instead of one tree.
+	 * Left out — the single-group case — the board renders exactly as it always has.
+	 */
+	sections?: ITokenSection[];
+	/** Rendered above the groups, inside the same scroller. */
+	children?: ReactNode;
+}
+
+/**
+ * The wrapping board of typed tokens.
+ *
+ * Folders nest properly: each level is an independently sticky header stacked at
+ * `depth * HEADER_H`, so scrolling deep into `Feedback/State/Filters` keeps every
+ * ancestor pinned above you, and the body indents by a rail instead of a box.
+ * While a filter is active every group force-opens — a collapsed folder must
+ * never hide a match.
+ */
+export function TokenBoard({
+	items,
+	kind,
+	group,
+	query,
+	renderToken,
+	empty,
+	lead,
+	sections,
+	children,
+}: Readonly<ITokenBoardProps>) {
+	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+	const [focusedId, setFocusedId] = useState<string | null>(null);
+	const boardRef = useRef<HTMLDivElement | null>(null);
+
+	const filtering = !isQueryEmpty(query);
+	const { setNodeRef: setRootRef, isOver: isOverRoot } = useDroppable({
+		id: folderDroppableId(kind, ""),
+	});
+
+	const toggle = useCallback((key: string) => {
+		setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+	}, []);
 
 	/** Arrow keys roam the board; the wrap means up/down has to be geometric. */
 	const onKeyDown = useCallback((event: React.KeyboardEvent) => {
@@ -304,10 +417,8 @@ export function TokenBoard({
 		next.querySelector<HTMLElement>("button")?.focus();
 	}, []);
 
-	const isEmpty =
-		items.length === 0 &&
-		!lead?.items.length &&
-		(group !== "folder" || (rootItems.length === 0 && !tree?.children.length));
+	const isEmpty = items.length === 0 && !lead?.items.length;
+	const sectioned = sections && sections.length > 0 ? sections : null;
 
 	return (
 		<div
@@ -345,53 +456,51 @@ export function TokenBoard({
 			)}
 			{isEmpty ? (
 				empty
-			) : group === "folder" && tree ? (
-				<>
-					<TokenRow
-						items={rootItems}
-						depth={0}
-						renderToken={renderToken}
-						focusedId={focusedId}
-					/>
-					{tree.children.map((child) => (
-						<FolderSection
-							key={child.path}
-							node={child}
-							kind={kind}
-							collapsed={collapsed}
-							forceOpen={filtering}
-							onToggle={toggle}
-							renderToken={renderToken}
-							focusedId={focusedId}
-						/>
-					))}
-				</>
-			) : (
-				flatGroups.map((bucket) => {
-					const open = filtering || !collapsed[bucket.key];
+			) : sectioned ? (
+				sectioned.map((section) => {
+					const key = `section:${section.key}`;
+					const open = filtering || !collapsed[key];
 					return (
-						<section key={bucket.key}>
+						<section key={section.key}>
 							<GroupHeader
-								label={bucket.label}
-								count={bucket.items.length}
+								label={section.label}
+								count={section.items.length}
 								depth={0}
 								open={open}
-								dropPath={bucket.dropPath}
+								dropPath={null}
 								kind={kind}
-								tone={bucket.tone}
-								onToggle={() => toggle(bucket.key)}
+								onToggle={() => toggle(key)}
 							/>
 							{open && (
-								<TokenRow
-									items={bucket.items}
-									depth={0}
+								<TokenGroups
+									items={section.items}
+									kind={kind}
+									group={group}
+									filtering={filtering}
+									collapsed={collapsed}
+									onToggle={toggle}
 									renderToken={renderToken}
 									focusedId={focusedId}
+									keyPrefix={`${key}/`}
+									baseDepth={1}
 								/>
 							)}
 						</section>
 					);
 				})
+			) : (
+				<TokenGroups
+					items={items}
+					kind={kind}
+					group={group}
+					filtering={filtering}
+					collapsed={collapsed}
+					onToggle={toggle}
+					renderToken={renderToken}
+					focusedId={focusedId}
+					keyPrefix=""
+					baseDepth={0}
+				/>
 			)}
 			<div className="h-16" />
 		</div>

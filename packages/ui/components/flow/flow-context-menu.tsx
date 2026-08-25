@@ -2,6 +2,7 @@ import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	FileCode2Icon,
+	FolderInputIcon,
 	MessageCircleDashedIcon,
 	PlayCircleIcon,
 	VariableIcon,
@@ -13,9 +14,13 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "../../components/ui/context-menu";
 import { type IBoard, doPinsMatch } from "../../lib";
+import { MAIN_FILE_LABEL, boardModules } from "../../lib/flow-modules";
 import { type ILayer, ILayerType } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
@@ -115,11 +120,13 @@ export function FlowContextMenu({
 	droppedPin,
 	currentLayerId,
 	selectionCount = 0,
+	movableSelectionCount = 0,
 	onPlaceholder,
 	onNodePlace,
 	onCommentPlace,
 	onCreateVariable,
 	onEditSelectionAsFlowScript,
+	onMoveSelectionToModule,
 	onClose,
 }: Readonly<{
 	nodes: INode[];
@@ -130,12 +137,16 @@ export function FlowContextMenu({
 	currentLayerId?: string;
 	/** Selected flow nodes on the canvas; gates the scoped-FlowScript action. */
 	selectionCount?: number;
+	/** Selected nodes *and* comments — what a move to another file would carry. */
+	movableSelectionCount?: number;
 	onPlaceholder: (name: string) => void;
 	onNodePlace: (node: INode) => void;
 	onCommentPlace: () => void;
 	onCreateVariable?: (variable: IVariable) => void;
 	/** Present only when the backend supports selection-scoped FlowScript editing. */
 	onEditSelectionAsFlowScript?: () => void;
+	/** Absent while a board version is being viewed — a read-only board takes no edits. */
+	onMoveSelectionToModule?: (target: string | null) => void;
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("flow");
@@ -221,6 +232,15 @@ export function FlowContextMenu({
 		[board, currentLayerId],
 	);
 	const menuInputs = useStableByKey(rawMenuInputs, menuInputsKey);
+
+	const modules = useMemo(() => boardModules(board?.layers), [board?.layers]);
+	// The selection lives on the layer the canvas is showing, so moving it there is the
+	// only entry that would do nothing.
+	const currentFileId = currentLayerId ?? null;
+	const canMoveSelection =
+		Boolean(onMoveSelectionToModule) &&
+		movableSelectionCount > 0 &&
+		modules.length > 0;
 
 	const handleNodePlace = useCallback(
 		async (node: INode) => {
@@ -583,6 +603,47 @@ export function FlowContextMenu({
 								<FileCode2Icon className="w-4 h-4" />
 								{t("editSelectionAsFlowscript", "Edit selection as FlowScript")}
 							</ContextMenuItem>
+						)}
+						{/* Which file an event belongs to follows its ENTRY node: moving part of a
+						    chain changes where those nodes are drawn, not the event's file. */}
+						{canMoveSelection && (
+							<ContextMenuSub>
+								<ContextMenuSubTrigger className="flex flex-row gap-1 items-center">
+									<FolderInputIcon className="w-4 h-4" />
+									{t("moveToModule", "Move to module")}
+								</ContextMenuSubTrigger>
+								<ContextMenuSubContent className="max-h-64 overflow-y-auto">
+									<ContextMenuItem
+										disabled={currentFileId === null}
+										onSelect={(event) => {
+											if (menuBlockedRef.current) {
+												event.preventDefault();
+												return;
+											}
+											onMoveSelectionToModule?.(null);
+											onClose();
+										}}
+									>
+										{MAIN_FILE_LABEL}
+									</ContextMenuItem>
+									{modules.map((module) => (
+										<ContextMenuItem
+											key={module.id}
+											disabled={currentFileId === module.id}
+											onSelect={(event) => {
+												if (menuBlockedRef.current) {
+													event.preventDefault();
+													return;
+												}
+												onMoveSelectionToModule?.(module.id);
+												onClose();
+											}}
+										>
+											{module.pathLabel}
+										</ContextMenuItem>
+									))}
+								</ContextMenuSubContent>
+							</ContextMenuSub>
 						)}
 						{/* TODO: create the get node if input, set node if output! */}
 						{droppedPin &&

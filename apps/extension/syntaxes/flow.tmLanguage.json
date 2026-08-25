@@ -66,6 +66,12 @@
 						"1": { "name": "storage.type.function.flow" },
 						"2": { "name": "entity.name.function.flow" }
 					}
+				},
+				{
+					"match": "\\b(detached)\\s*(?=\\{)",
+					"captures": {
+						"1": { "name": "storage.type.detached.flow" }
+					}
 				}
 			]
 		},

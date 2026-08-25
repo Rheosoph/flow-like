@@ -78,6 +78,7 @@ export interface FlowScriptBinding {
 }
 
 export type FlowScriptDeclarationKind =
+	| "module"
 	| "interface"
 	| "variable"
 	| "function"
@@ -445,6 +446,44 @@ function computeAnalysis(
 	const bindings: FlowScriptBinding[] = [];
 	const declarations: FlowScriptDeclaration[] = [];
 
+	// `module <name> { … }` groups a board's sections into a namespace. It nests everything one
+	// brace deeper without being a scope of its own, so "top level" means brace depth minus the
+	// module blocks around the offset — otherwise every section of a modular document would read
+	// as a nested handler and every global as a local.
+	const moduleBlocks: {
+		name: string;
+		nameSpan: Span;
+		span: Span;
+		bodySpan: Span;
+	}[] = [];
+	const moduleRe = new RegExp(
+		`(^|[\\n;])[ \\t]*module\\s+(${IDENT})\\s*\\{`,
+		"g",
+	);
+	for (let m = moduleRe.exec(masked); m; m = moduleRe.exec(masked)) {
+		const declStart = m.index + m[1].length;
+		const bodyOpen = m.index + m[0].length - 1;
+		const close = matchBracket(masked, bodyOpen);
+		if (close < 0) continue;
+		let nameEnd = bodyOpen;
+		while (nameEnd > 0 && WS_RE.test(masked[nameEnd - 1])) nameEnd--;
+		moduleBlocks.push({
+			name: m[2],
+			nameSpan: { start: nameEnd - m[2].length, end: nameEnd },
+			span: { start: declStart, end: close + 1 },
+			bodySpan: { start: bodyOpen, end: close + 1 },
+		});
+	}
+	const moduleDepthAt = (offset: number) => {
+		let depth = 0;
+		for (const block of moduleBlocks) {
+			if (offset > block.bodySpan.start && offset < block.bodySpan.end) depth++;
+		}
+		return depth;
+	};
+	const isTopLevel = (offset: number) =>
+		braceDepth[offset] === moduleDepthAt(offset);
+
 	const scopeFor = (offset: number, nameStart: number): Span => {
 		const brace = enclosingBrace(pairs, offset);
 		return brace
@@ -464,7 +503,7 @@ function computeAnalysis(
 			while (q >= 0 && /[\w$]/.test(masked[q])) q--;
 			if (masked.slice(q + 1, word.index + 1) === "for") isLoop = true;
 		}
-		const depth0 = braceDepth[kwStart] === 0;
+		const depth0 = isTopLevel(kwStart);
 		const i = skipWs(masked, kwStart + m[1].length);
 
 		if (isLoop) {
@@ -625,7 +664,7 @@ function computeAnalysis(
 	);
 	for (let m = ifaceRe.exec(masked); m; m = ifaceRe.exec(masked)) {
 		const declStart = m.index + m[1].length;
-		if (braceDepth[declStart] !== 0) continue;
+		if (!isTopLevel(declStart)) continue;
 		const nameStart = m.index + m[0].length - m[2].length;
 		const nameSpan = { start: nameStart, end: nameStart + m[2].length };
 		let end = nameSpan.end;
@@ -739,7 +778,7 @@ function computeAnalysis(
 			: { start: declStart, end: declStart + m[3].length };
 		const params = parseParams(masked, parenOpen, parenClose);
 		pushCallable({
-			kind: braceDepth[declStart] === 0 ? "event" : "handler",
+			kind: isTopLevel(declStart) ? "event" : "handler",
 			name,
 			eventType: m[4] ? m[3] : undefined,
 			detail: `(${params
@@ -769,6 +808,37 @@ function computeAnalysis(
 	}
 	declarations.push(...roots);
 	declarations.sort((a, b) => a.span.start - b.span.start);
+
+	// Modules own everything inside their braces (nested modules included), so the outline shows
+	// the document's file structure instead of one flat list.
+	if (moduleBlocks.length > 0) {
+		const moduleDecls: FlowScriptDeclaration[] = moduleBlocks.map((block) => ({
+			kind: "module",
+			name: block.name,
+			nameSpan: block.nameSpan,
+			span: block.span,
+			bodySpan: block.bodySpan,
+			params: [],
+			children: [],
+		}));
+		const ordered = [...declarations, ...moduleDecls].sort(
+			(a, b) => a.span.start - b.span.start,
+		);
+		const topLevel: FlowScriptDeclaration[] = [];
+		const open: FlowScriptDeclaration[] = [];
+		for (const decl of ordered) {
+			while (open.length > 0) {
+				const body = open[open.length - 1].bodySpan;
+				if (body && decl.span.start < body.end) break;
+				open.pop();
+			}
+			if (open.length > 0) open[open.length - 1].children.push(decl);
+			else topLevel.push(decl);
+			if (decl.kind === "module") open.push(decl);
+		}
+		declarations.length = 0;
+		declarations.push(...topLevel);
+	}
 
 	// Call sites.
 	const calls: FlowScriptCallSite[] = [];
@@ -1901,15 +1971,19 @@ export function buildFlowScriptDocumentSymbols(
 		detail:
 			decl.kind === "event" || decl.kind === "handler"
 				? [decl.eventType, decl.detail].filter(Boolean).join(" ")
-				: (decl.detail ?? ""),
+				: decl.kind === "module"
+					? "module"
+					: (decl.detail ?? ""),
 		kind:
-			decl.kind === "interface"
-				? "interface"
-				: decl.kind === "variable"
-					? "variable"
-					: decl.kind === "function"
-						? "function"
-						: "event",
+			decl.kind === "module"
+				? "namespace"
+				: decl.kind === "interface"
+					? "interface"
+					: decl.kind === "variable"
+						? "variable"
+						: decl.kind === "function"
+							? "function"
+							: "event",
 		range: rangeOfSpan(analysis, decl.span),
 		selectionRange: rangeOfSpan(analysis, decl.nameSpan),
 		children: decl.children.map(declSymbol),

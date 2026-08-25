@@ -16,8 +16,9 @@ mod types;
 
 pub use apply::{
     ApplyFlowScriptResult, apply_board_commands_to_board, apply_flowscript_to_board,
-    apply_flowscript_to_board_scoped, blocked_destructive_flowscript_message,
-    destructive_flowscript_command_summaries,
+    apply_flowscript_to_board_file, apply_flowscript_to_board_scoped,
+    blocked_destructive_flowscript_message, destructive_flowscript_command_summaries,
+    ensure_module_layer, validate_module_apply_params,
 };
 pub use diagnostics::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
@@ -31,14 +32,15 @@ pub use flow_like_ast::{
     render, schema_sidecar,
 };
 pub use lower::{
-    ScopedBoardAst, binary_operator_node_types, lower_board, lower_board_scoped,
-    pin_is_untouched_default,
+    FlowScriptFile, ScopedBoardAst, binary_operator_node_types, lower_board, lower_board_file,
+    lower_board_scoped, pin_is_untouched_default,
 };
 pub use reconcile::{
-    MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileResult, reconcile,
-    reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
-    reconcile_text_with_catalog_enriched_scoped, reconcile_text_with_catalog_scoped,
-    reconcile_with_catalog, reconcile_with_catalog_mode, reconcile_with_catalog_scoped,
+    MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileOptions, ReconcileResult,
+    reconcile, reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
+    reconcile_text_with_catalog_enriched_opts, reconcile_text_with_catalog_enriched_scoped,
+    reconcile_text_with_catalog_opts, reconcile_text_with_catalog_scoped, reconcile_with_catalog,
+    reconcile_with_catalog_mode, reconcile_with_catalog_scoped,
 };
 pub(crate) use reconcile::{catalog_names, parse_pin_occurrence_ref, pin_occurrence_ref};
 pub(crate) use reconcile::{
@@ -82,6 +84,24 @@ pub fn board_to_flowscript_scoped(
         text: render(&scoped.ast, opts),
         scope_anchors: scoped.scope_anchors,
     }
+}
+
+/// Render one virtual FlowScript file of `board`: [`FlowScriptFile::Main`] for the sections owning
+/// no module (plus the board's variables), or [`FlowScriptFile::Module`] for one module layer's own
+/// file — its functions and events unwrapped, with no `module` block around them and none of its
+/// nested modules, which are files of their own. Interfaces are kept in every file as type context.
+/// Apply the edited text back with `scope_anchors` so the reconciler never treats the other files
+/// as deleted.
+pub fn board_to_flowscript_file(
+    board: &Board,
+    file: &FlowScriptFile,
+    opts: &RenderOptions,
+) -> flow_like_types::Result<ScopedFlowScript> {
+    let scoped = lower::lower_board_file(board, file)?;
+    Ok(ScopedFlowScript {
+        text: render(&scoped.ast, opts),
+        scope_anchors: scoped.scope_anchors,
+    })
 }
 
 /// Canonically format FlowScript text: parse it, then re-render the AST. Pure text-domain — no
@@ -856,7 +876,7 @@ mod lower_tests {
     use std::collections::HashMap;
     use std::time::SystemTime;
 
-    fn empty_board() -> Board {
+    pub(super) fn empty_board() -> Board {
         Board {
             id: "board".to_string(),
             name: "Board".to_string(),
@@ -884,14 +904,20 @@ mod lower_tests {
         }
     }
 
-    fn connect(board: &mut Board, from_node: &str, from_pin: &str, to_node: &str, to_pin: &str) {
+    pub(super) fn connect(
+        board: &mut Board,
+        from_node: &str,
+        from_pin: &str,
+        to_node: &str,
+        to_pin: &str,
+    ) {
         crate::flow::board::commands::pins::connect_pins::connect_pins(
             board, from_node, from_pin, to_node, to_pin,
         )
         .expect("connect pins");
     }
 
-    fn exec_log(id: &str, layer: Option<&str>, message: &str) -> (Node, String, String) {
+    pub(super) fn exec_log(id: &str, layer: Option<&str>, message: &str) -> (Node, String, String) {
         let mut log = Node::new("log_info", "Log Info", "", "debug");
         log.id = id.to_string();
         log.layer = layer.map(str::to_string);
@@ -1684,6 +1710,1383 @@ mod lower_tests {
         assert_eq!(ast.events.len(), 1);
         assert_eq!(ast.events[0].anchor.as_deref(), Some("cycle-event"));
         assert!(ast.functions.is_empty());
+    }
+
+    fn layer(id: &str, name: &str, kind: LayerType, parent: Option<&str>) -> Layer {
+        let mut layer = Layer::new(id.to_string(), name.to_string(), kind);
+        layer.parent_id = parent.map(str::to_string);
+        layer
+    }
+
+    pub(super) fn add_layer(
+        board: &mut Board,
+        id: &str,
+        name: &str,
+        kind: LayerType,
+        parent: Option<&str>,
+    ) {
+        let layer = layer(id, name, kind, parent);
+        board.layers.insert(layer.id.clone(), layer);
+    }
+
+    pub(super) fn start_event(id: &str, layer: Option<&str>) -> (Node, String) {
+        let mut event = Node::new("events_simple", "Run", "", "events");
+        event.id = id.to_string();
+        event.layer = layer.map(str::to_string);
+        event.set_start(true);
+        let exec_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        (event, exec_out)
+    }
+
+    /// A `control_call_function` node targeting `target_layer` through its stored pin default.
+    pub(super) fn call_function(
+        id: &str,
+        layer: Option<&str>,
+        target_layer: &str,
+    ) -> (Node, String, String) {
+        let mut node = Node::new("control_call_function", "Call Function", "", "control");
+        node.id = id.to_string();
+        node.layer = layer.map(str::to_string);
+        let exec_in = node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        node.add_input_pin("function_layer_id", "Function", "", VariableType::String)
+            .set_default_value(Some(Value::String(target_layer.to_string())));
+        let exec_out = node
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        (node, exec_in, exec_out)
+    }
+
+    pub(super) fn add_node(board: &mut Board, node: Node) {
+        board.nodes.insert(node.id.clone(), node);
+    }
+
+    /// Event → one log, so the event owns a body statement. Returns the log's exec output pin id,
+    /// the tail a test can chain further statements onto.
+    pub(super) fn event_with_log(
+        board: &mut Board,
+        id: &str,
+        layer: Option<&str>,
+        message: &str,
+    ) -> String {
+        let (event, exec_out) = start_event(id, layer);
+        add_node(board, event);
+        let log_id = format!("{id}-log");
+        let (log, log_in, log_out) = exec_log(&log_id, layer, message);
+        add_node(board, log);
+        connect(board, id, &exec_out, &log_id, &log_in);
+        log_out
+    }
+
+    fn anchored(board: &Board) -> String {
+        board_to_flowscript(
+            board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Global function + global event, module `checkout` (event + local function) and the module
+    /// `checkout::payments` nested inside it (function). Returns the board plus the exec tails of
+    /// the root and module event bodies.
+    pub(super) fn module_board() -> (Board, String, String) {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        add_layer(
+            &mut board,
+            "mod-p",
+            "Payments",
+            LayerType::Module,
+            Some("mod-m"),
+        );
+        add_layer(
+            &mut board,
+            "fn-global",
+            "Global Helper",
+            LayerType::Function,
+            None,
+        );
+        add_layer(
+            &mut board,
+            "fn-local",
+            "Local Helper",
+            LayerType::Function,
+            Some("mod-m"),
+        );
+        add_layer(
+            &mut board,
+            "fn-nested",
+            "Nested Helper",
+            LayerType::Function,
+            Some("mod-p"),
+        );
+
+        for (id, layer) in [
+            ("global-body", "fn-global"),
+            ("local-body", "fn-local"),
+            ("nested-body", "fn-nested"),
+        ] {
+            let (log, ..) = exec_log(id, Some(layer), id);
+            add_node(&mut board, log);
+        }
+
+        let root_tail = event_with_log(&mut board, "root-event", None, "root");
+        let module_tail = event_with_log(&mut board, "module-event", Some("mod-m"), "in module");
+        (board, root_tail, module_tail)
+    }
+
+    #[test]
+    fn module_layers_partition_sections_into_nested_blocks() {
+        let (board, ..) = module_board();
+        let ast = lower_to_ast(&board);
+
+        assert_eq!(
+            ast.functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["globalHelper"],
+            "only a function with no module ancestor stays top-level"
+        );
+        assert_eq!(
+            ast.events
+                .iter()
+                .filter_map(|event| event.anchor.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["root-event"]
+        );
+
+        assert_eq!(ast.modules.len(), 1);
+        let checkout = &ast.modules[0];
+        assert_eq!(checkout.name, "checkout");
+        assert_eq!(checkout.anchor.as_deref(), Some("mod-m"));
+        assert_eq!(
+            checkout
+                .functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["localHelper"]
+        );
+        assert_eq!(
+            checkout
+                .events
+                .iter()
+                .filter_map(|event| event.anchor.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["module-event"]
+        );
+
+        assert_eq!(checkout.modules.len(), 1);
+        let payments = &checkout.modules[0];
+        assert_eq!(payments.name, "payments");
+        assert_eq!(payments.anchor.as_deref(), Some("mod-p"));
+        assert_eq!(
+            payments
+                .functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nestedHelper"]
+        );
+        assert!(payments.events.is_empty());
+        assert!(payments.modules.is_empty());
+
+        let text = anchored(&board);
+        assert!(text.contains("function globalHelper()"), "{text}");
+        assert!(text.contains("module checkout {   //@l:mod-m\n"), "{text}");
+        assert!(
+            text.contains("    module payments {   //@l:mod-p\n"),
+            "nested module blocks indent one level:\n{text}"
+        );
+        assert!(
+            text.contains("        function nestedHelper()"),
+            "a function inside a nested module indents twice:\n{text}"
+        );
+        // The module blocks come after every top-level section.
+        let root_function = text.find("function globalHelper").expect("global function");
+        let module_block = text.find("module checkout").expect("module block");
+        assert!(root_function < module_block, "{text}");
+
+        assert_eq!(
+            format_flowscript(&text, true).expect("a rendered module document must parse"),
+            text,
+            "module blocks must round-trip through parse/render unchanged"
+        );
+    }
+
+    /// A `detached` chain is filed under the module its root node lives in, not hoisted to the
+    /// root — the block carries no anchor of its own, so ownership travels with the chain.
+    #[test]
+    fn detached_chains_stay_in_their_own_module_block() {
+        let (mut board, ..) = module_board();
+        let (orphan, ..) = exec_log("module-orphan", Some("mod-m"), "unreachable");
+        add_node(&mut board, orphan);
+
+        let ast = lower_to_ast(&board);
+        assert!(ast.detached.is_empty(), "the chain belongs to the module");
+        assert_eq!(ast.modules[0].detached.len(), 1);
+        assert_eq!(
+            ast.modules[0].detached[0].root_anchor(),
+            Some("module-orphan")
+        );
+
+        let text = anchored(&board);
+        assert!(
+            text.contains("    detached {\n"),
+            "a module's detached block indents one level:\n{text}"
+        );
+        assert_eq!(
+            format_flowscript(&text, true).expect("a rendered detached block must parse"),
+            text,
+            "detached blocks must round-trip through parse/render unchanged"
+        );
+
+        let catalog: Vec<_> = board
+            .nodes
+            .values()
+            .map(crate::flow::copilot::node_to_metadata)
+            .collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
+    fn cross_module_calls_render_the_full_path_from_the_root_module() {
+        let (mut board, root_tail, module_tail) = module_board();
+
+        // The module's own event calls into the module NESTED below it: a parent→child call is
+        // still cross-module, so it spells the whole path rather than the relative `payments::`.
+        let (call, call_in, _) = call_function("call-down", Some("mod-m"), "fn-nested");
+        add_node(&mut board, call);
+        connect(
+            &mut board,
+            "module-event-log",
+            &module_tail,
+            "call-down",
+            &call_in,
+        );
+
+        // The root event calls the same nested function.
+        let (root_call, root_call_in, _) = call_function("call-root", None, "fn-nested");
+        add_node(&mut board, root_call);
+        connect(
+            &mut board,
+            "root-event-log",
+            &root_tail,
+            "call-root",
+            &root_call_in,
+        );
+
+        let text = anchored(&board);
+        assert_eq!(
+            text.matches("checkout::payments::nestedHelper()").count(),
+            2,
+            "a cross-module call always spells the full path from the root module:\n{text}"
+        );
+        assert_eq!(
+            format_flowscript(&text, true).expect("a qualified call must parse"),
+            text,
+            "qualified cross-module calls must round-trip through parse/render unchanged"
+        );
+    }
+
+    #[test]
+    fn same_module_and_global_targets_stay_bare() {
+        let (mut board, _, module_tail) = module_board();
+
+        // Module event → local function of the same module, then the global function.
+        let (same, same_in, same_out) = call_function("call-same", Some("mod-m"), "fn-local");
+        add_node(&mut board, same);
+        let (global, global_in, _) = call_function("call-global", Some("mod-m"), "fn-global");
+        add_node(&mut board, global);
+        connect(
+            &mut board,
+            "module-event-log",
+            &module_tail,
+            "call-same",
+            &same_in,
+        );
+        connect(
+            &mut board,
+            "call-same",
+            &same_out,
+            "call-global",
+            &global_in,
+        );
+
+        let text = anchored(&board);
+        assert!(
+            text.contains("localHelper()") && !text.contains("checkout::localHelper()"),
+            "a call inside the owning module stays bare:\n{text}"
+        );
+        assert!(
+            text.contains("globalHelper()") && !text.contains("::globalHelper()"),
+            "a global function is bare from anywhere:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_collapsed_layer_under_a_module_lowers_into_that_module() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        add_layer(
+            &mut board,
+            "collapsed",
+            "Grouped",
+            LayerType::Collapsed,
+            Some("mod-m"),
+        );
+        let _ = event_with_log(&mut board, "grouped-event", Some("collapsed"), "grouped");
+
+        let ast = lower_to_ast(&board);
+        assert!(
+            ast.events.is_empty(),
+            "a collapsed layer is transparent: its event belongs to the module"
+        );
+        assert_eq!(ast.modules.len(), 1);
+        assert_eq!(
+            ast.modules[0]
+                .events
+                .iter()
+                .filter_map(|event| event.anchor.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["grouped-event"]
+        );
+    }
+
+    #[test]
+    fn use_derivation_counts_call_sites_inside_module_blocks() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        let (event, exec_out) = start_event("module-event", Some("mod-m"));
+        add_node(&mut board, event);
+        let (first, first_in, first_out) = exec_log("first", Some("mod-m"), "one");
+        add_node(&mut board, first);
+        let (second, second_in, _) = exec_log("second", Some("mod-m"), "two");
+        add_node(&mut board, second);
+        connect(&mut board, "module-event", &exec_out, "first", &first_in);
+        connect(&mut board, "first", &first_out, "second", &second_in);
+
+        let text = board_to_flowscript(&board, &RenderOptions::default());
+        assert!(
+            text.starts_with("use debug::*\n"),
+            "two static sites inside a module block still open the namespace:\n{text}"
+        );
+        assert!(
+            text.contains("        logInfo({ message: \"one\" })"),
+            "the opened members render bare inside the module block:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_empty_module_still_renders_its_block() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        add_layer(
+            &mut board,
+            "mod-p",
+            "Payments",
+            LayerType::Module,
+            Some("mod-m"),
+        );
+
+        let ast = lower_to_ast(&board);
+        assert_eq!(ast.modules.len(), 1);
+        assert_eq!(ast.modules[0].modules.len(), 1);
+
+        let text = anchored(&board);
+        assert_eq!(
+            text, "module checkout {   //@l:mod-m\n    module payments {   //@l:mod-p\n    }\n}\n",
+            "an empty module keeps its block so the board's organization survives:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_scoped_render_keeps_only_the_selected_module_section() {
+        let (board, ..) = module_board();
+        let scoped = board_to_flowscript_scoped(
+            &board,
+            &["module-event-log".to_string()],
+            &RenderOptions::default(),
+        );
+
+        assert!(scoped.text.contains("module checkout {"), "{}", scoped.text);
+        assert!(
+            !scoped.text.contains("module payments"),
+            "a module left with nothing selected is dropped:\n{}",
+            scoped.text
+        );
+        assert!(
+            !scoped.text.contains("globalHelper") && !scoped.text.contains("localHelper"),
+            "{}",
+            scoped.text
+        );
+        assert_eq!(scoped.scope_anchors, vec!["module-event".to_string()]);
+    }
+
+    #[test]
+    fn a_scoped_render_follows_a_qualified_cross_module_reference() {
+        let (mut board, root_tail, _) = module_board();
+        let (root_call, root_call_in, _) = call_function("call-root", None, "fn-nested");
+        add_node(&mut board, root_call);
+        connect(
+            &mut board,
+            "root-event-log",
+            &root_tail,
+            "call-root",
+            &root_call_in,
+        );
+
+        let scoped = board_to_flowscript_scoped(
+            &board,
+            &["call-root".to_string()],
+            &RenderOptions::default(),
+        );
+
+        assert!(
+            scoped.text.contains("checkout::payments::nestedHelper()"),
+            "{}",
+            scoped.text
+        );
+        assert!(
+            scoped.text.contains("function nestedHelper()"),
+            "a qualified reference must keep its target declared:\n{}",
+            scoped.text
+        );
+        assert!(
+            scoped.scope_anchors.contains(&"fn-nested".to_string())
+                && scoped.scope_anchors.contains(&"root-event".to_string()),
+            "{:?}",
+            scoped.scope_anchors
+        );
+        assert!(!scoped.text.contains("localHelper"), "{}", scoped.text);
+    }
+
+    /// Render one virtual file with anchors on, so the assertions can name the kept sections.
+    fn file_text(board: &Board, file: FlowScriptFile) -> ScopedFlowScript {
+        board_to_flowscript_file(
+            board,
+            &file,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+        .expect("a valid file must render")
+    }
+
+    /// A struct variable: a `const` in `main.flow` plus an `interface` every file keeps as the
+    /// shared type context.
+    fn add_record_variable(board: &mut Board) {
+        use crate::flow::pin::ValueType;
+        use crate::flow::variable::Variable;
+        let mut variable = Variable::new("record", VariableType::Struct, ValueType::Normal);
+        variable.id = "var-record".to_string();
+        variable.schema = Some(
+            r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"Record","type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#
+                .to_string(),
+        );
+        variable.set_default_value(Value::Object(Default::default()));
+        board.variables.insert(variable.id.clone(), variable);
+    }
+
+    #[test]
+    fn the_main_file_holds_only_the_sections_owning_no_module() {
+        let (mut board, ..) = module_board();
+        add_record_variable(&mut board);
+
+        let main = file_text(&board, FlowScriptFile::Main);
+
+        assert!(
+            main.text.contains("function globalHelper()") && main.text.contains("\"root\""),
+            "the root function and event stay in main.flow:\n{}",
+            main.text
+        );
+        assert!(
+            !main.text.contains("module "),
+            "modules are files of their own, never blocks of main.flow:\n{}",
+            main.text
+        );
+        assert!(
+            !main.text.contains("localHelper")
+                && !main.text.contains("nestedHelper")
+                && !main.text.contains("in module"),
+            "no module content leaks into main.flow:\n{}",
+            main.text
+        );
+        assert!(
+            main.text.contains("interface Record") && main.text.contains("const record"),
+            "main.flow owns the board's variables and the shared interfaces:\n{}",
+            main.text
+        );
+        assert_eq!(
+            main.scope_anchors,
+            vec!["fn-global".to_string(), "root-event".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_module_file_is_the_module_unwrapped() {
+        let (mut board, ..) = module_board();
+        add_record_variable(&mut board);
+
+        let module = file_text(&board, FlowScriptFile::Module("mod-m".to_string()));
+
+        assert!(
+            module.text.contains("function localHelper()") && module.text.contains("\"in module\""),
+            "the module's own sections sit at the top level:\n{}",
+            module.text
+        );
+        assert!(
+            !module.text.contains("module "),
+            "the file IS the module — no wrapper, and no block for the nested file:\n{}",
+            module.text
+        );
+        assert!(
+            !module.text.contains("nestedHelper") && !module.text.contains("globalHelper"),
+            "neither the nested module's nor the root's sections belong here:\n{}",
+            module.text
+        );
+        assert!(
+            !module.text.contains("const record"),
+            "board variables are globals declared once, in main.flow:\n{}",
+            module.text
+        );
+        assert!(
+            module.text.contains("interface Record"),
+            "interfaces are pure type context and stay in every file:\n{}",
+            module.text
+        );
+        assert_eq!(
+            module.scope_anchors,
+            vec!["fn-local".to_string(), "module-event".to_string()]
+        );
+        assert_eq!(
+            format_flowscript(&module.text, true).expect("a module file must parse"),
+            module.text,
+            "a hoisted module file must round-trip through parse/render unchanged"
+        );
+    }
+
+    #[test]
+    fn a_module_file_keeps_call_paths_of_its_own_scope_without_declaring_the_targets() {
+        let (mut board, _, module_tail) = module_board();
+
+        // The module event calls the global function, then the nested module's function.
+        let (global, global_in, global_out) =
+            call_function("call-global", Some("mod-m"), "fn-global");
+        add_node(&mut board, global);
+        let (down, down_in, _) = call_function("call-down", Some("mod-m"), "fn-nested");
+        add_node(&mut board, down);
+        connect(
+            &mut board,
+            "module-event-log",
+            &module_tail,
+            "call-global",
+            &global_in,
+        );
+        connect(
+            &mut board,
+            "call-global",
+            &global_out,
+            "call-down",
+            &down_in,
+        );
+
+        let module = file_text(&board, FlowScriptFile::Module("mod-m".to_string()));
+
+        assert!(
+            module.text.contains("globalHelper()") && !module.text.contains("::globalHelper()"),
+            "a global target is bare from the module file:\n{}",
+            module.text
+        );
+        assert!(
+            module.text.contains("checkout::payments::nestedHelper()"),
+            "a cross-module target keeps the full path from the root module:\n{}",
+            module.text
+        );
+        assert!(
+            !module.text.contains("function globalHelper")
+                && !module.text.contains("function nestedHelper"),
+            "a call never pulls another file's declaration in:\n{}",
+            module.text
+        );
+    }
+
+    #[test]
+    fn a_nested_module_is_its_own_file() {
+        let (board, ..) = module_board();
+
+        let nested = file_text(&board, FlowScriptFile::Module("mod-p".to_string()));
+
+        assert!(
+            nested.text.contains("function nestedHelper()") && !nested.text.contains("module "),
+            "the nested module's file is just its own sections:\n{}",
+            nested.text
+        );
+        assert_eq!(nested.scope_anchors, vec!["fn-nested".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_module_file_is_empty() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        add_layer(
+            &mut board,
+            "mod-p",
+            "Payments",
+            LayerType::Module,
+            Some("mod-m"),
+        );
+
+        let module = file_text(&board, FlowScriptFile::Module("mod-m".to_string()));
+        assert_eq!(
+            module.text, "",
+            "an empty module's file has nothing in it — its child module is a file of its own"
+        );
+        assert!(module.scope_anchors.is_empty());
+    }
+
+    #[test]
+    fn only_a_module_layer_names_a_file() {
+        let (board, ..) = module_board();
+
+        assert!(
+            board_to_flowscript_file(
+                &board,
+                &FlowScriptFile::Module("nope".to_string()),
+                &RenderOptions::default(),
+            )
+            .is_err(),
+            "an unknown layer id is not a file"
+        );
+        assert!(
+            board_to_flowscript_file(
+                &board,
+                &FlowScriptFile::Module("fn-global".to_string()),
+                &RenderOptions::default(),
+            )
+            .is_err(),
+            "a function layer is not a file"
+        );
+    }
+
+    #[test]
+    fn a_board_without_modules_renders_its_whole_document_as_main() {
+        let board = fetch_body_board(None);
+        let main =
+            board_to_flowscript_file(&board, &FlowScriptFile::Main, &RenderOptions::default())
+                .expect("main always renders");
+
+        assert_eq!(
+            main.text,
+            board_to_flowscript(&board, &RenderOptions::default()),
+            "with no module layer, main.flow IS the full document"
+        );
+        assert_eq!(main.scope_anchors, vec!["event".to_string()]);
+    }
+
+    /// event → fetch → log, with `fetch.body` feeding the log message: lowering mints a local
+    /// named after the `body` output pin. `module_name` adds a root module of that name.
+    fn fetch_body_board(module_name: Option<&str>) -> Board {
+        let mut board = empty_board();
+        if let Some(name) = module_name {
+            add_layer(&mut board, "mod-m", name, LayerType::Module, None);
+        }
+
+        let (event, exec_out) = start_event("event", None);
+        add_node(&mut board, event);
+
+        let mut fetch = Node::new("http_fetch", "Fetch", "", "web");
+        fetch.id = "fetch".to_string();
+        let fetch_in = fetch
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let fetch_out = fetch
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let body = fetch
+            .add_output_pin("body", "Body", "", VariableType::String)
+            .id
+            .clone();
+        add_node(&mut board, fetch);
+
+        let (log, log_in, _) = exec_log("log", None, "hello");
+        add_node(&mut board, log);
+        let message = board.nodes["log"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "message")
+            .expect("message pin")
+            .id
+            .clone();
+
+        connect(&mut board, "event", &exec_out, "fetch", &fetch_in);
+        connect(&mut board, "fetch", &fetch_out, "log", &log_in);
+        connect(&mut board, "fetch", &body, "log", &message);
+        board
+    }
+
+    #[test]
+    fn module_roots_are_never_minted_as_binding_names() {
+        let baseline = board_to_flowscript(&fetch_body_board(None), &RenderOptions::default());
+        assert!(
+            baseline.contains("const body ="),
+            "control: without the module the pin name is free:\n{baseline}"
+        );
+
+        // A module named exactly like the local lowering would otherwise mint for `fetch.body`.
+        let text = board_to_flowscript(&fetch_body_board(Some("Body")), &RenderOptions::default());
+        assert!(
+            text.contains("const body2 ="),
+            "a minted binding must not shadow a module namespace root:\n{text}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod module_reconcile_tests {
+    use super::lower_tests::{
+        add_layer, add_node, call_function, connect, empty_board, event_with_log, exec_log,
+        start_event,
+    };
+    use super::*;
+    use crate::flow::board::{Board, LayerType};
+    use crate::flow::copilot::{BoardCommand, NodeMetadata, node_to_metadata};
+    use crate::flow::node::Node;
+    use crate::flow::variable::VariableType;
+    use flow_like_types::Value;
+
+    /// A Function layer shaped the way an applied `function` is: an execution boundary whose
+    /// `exec_in` drives one impure body statement and whose `exec_out` is driven by its tail.
+    fn add_function(board: &mut Board, id: &str, name: &str, parent: Option<&str>, message: &str) {
+        use crate::flow::board::Layer;
+        let mut layer = Layer::new(id.to_string(), name.to_string(), LayerType::Function);
+        layer.parent_id = parent.map(str::to_string);
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let exec_in = template
+            .add_input_pin("exec_in", "Exec In", "", VariableType::Execution)
+            .clone();
+        let exec_out = template
+            .add_output_pin("exec_out", "Exec Out", "", VariableType::Execution)
+            .clone();
+        layer.pins.insert(exec_in.id.clone(), exec_in.clone());
+        layer.pins.insert(exec_out.id.clone(), exec_out.clone());
+        board.layers.insert(layer.id.clone(), layer);
+
+        let body = format!("{id}-body");
+        let (log, log_in, log_out) = exec_log(&body, Some(id), message);
+        add_node(board, log);
+        connect(board, id, &exec_in.id, &body, &log_in);
+        connect(board, &body, &log_out, id, &exec_out.id);
+    }
+
+    /// `module_board`'s shape with reconcile-valid function layers: a global function and event,
+    /// module `checkout` (event + local function) and `checkout::payments` nested in it.
+    fn module_test_board() -> Board {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-m", "Checkout", LayerType::Module, None);
+        add_layer(
+            &mut board,
+            "mod-p",
+            "Payments",
+            LayerType::Module,
+            Some("mod-m"),
+        );
+        add_function(&mut board, "fn-global", "Global Helper", None, "global");
+        add_function(
+            &mut board,
+            "fn-local",
+            "Local Helper",
+            Some("mod-m"),
+            "local",
+        );
+        add_function(
+            &mut board,
+            "fn-nested",
+            "Nested Helper",
+            Some("mod-p"),
+            "nested",
+        );
+        event_with_log(&mut board, "root-event", None, "root");
+        event_with_log(&mut board, "module-event", Some("mod-m"), "in module");
+        board
+    }
+
+    fn anchored() -> RenderOptions {
+        RenderOptions {
+            anchors: true,
+            ..Default::default()
+        }
+    }
+
+    /// One catalog entry per node type the board places, plus the `control_call_function` node a
+    /// new call needs. Instance defaults are dropped so the entries are pure type declarations.
+    fn board_catalog(board: &Board) -> Vec<NodeMetadata> {
+        let (call, ..) = call_function("catalog-call", None, "");
+        let mut seen = std::collections::HashSet::new();
+        let mut catalog = board
+            .nodes
+            .values()
+            .chain(std::iter::once(&call))
+            .filter(|node| seen.insert(node.name.clone()))
+            .map(|node| {
+                let mut meta = node_to_metadata(node);
+                for pin in &mut meta.inputs {
+                    pin.default_value = None;
+                }
+                meta
+            })
+            .collect::<Vec<_>>();
+        catalog.sort_by(|left, right| left.name.cmp(&right.name));
+        catalog
+    }
+
+    fn file(board: &Board, file: FlowScriptFile) -> ScopedFlowScript {
+        board_to_flowscript_file(board, &file, &anchored()).expect("a valid file must render")
+    }
+
+    fn reconcile_file(
+        board: &Board,
+        text: &str,
+        scope_anchors: &[String],
+        file: FlowScriptFile,
+    ) -> ReconcileResult {
+        reconcile_text_with_catalog_opts(
+            board,
+            text,
+            &board_catalog(board),
+            &ReconcileOptions {
+                scope_anchors: Some(scope_anchors),
+                file: Some(file),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Append a statement to the LAST block of a rendered document.
+    fn append_to_last_block(text: &str, statement: &str) -> String {
+        let index = text.rfind("\n}").expect("a block to extend");
+        format!("{}\n    {statement}{}", &text[..index], &text[index..])
+    }
+
+    fn added_node_types(result: &ReconcileResult) -> Vec<&str> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode { node_type, .. } => Some(node_type.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn created_layers(result: &ReconcileResult) -> Vec<(&str, Option<&str>, Option<&str>)> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    name,
+                    layer_type,
+                    target_layer,
+                    ..
+                } => Some((
+                    name.as_str(),
+                    layer_type.as_deref(),
+                    target_layer.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_noop(result: &ReconcileResult, what: &str) {
+        assert!(
+            result.diagnostics.is_empty(),
+            "{what} must not diagnose: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "{what} must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_full_document_of_a_module_board_round_trips_without_commands() {
+        let board = module_test_board();
+        let text = board_to_flowscript(&board, &anchored());
+        let result = reconcile_text_with_catalog(&board, &text, &board_catalog(&board));
+        assert_noop(&result, "a full document with nested modules");
+    }
+
+    #[test]
+    fn every_virtual_file_of_a_module_board_round_trips_without_commands() {
+        let board = module_test_board();
+        for target in [
+            FlowScriptFile::Main,
+            FlowScriptFile::Module("mod-m".to_string()),
+            FlowScriptFile::Module("mod-p".to_string()),
+        ] {
+            let rendered = file(&board, target.clone());
+            let result = reconcile_file(&board, &rendered.text, &rendered.scope_anchors, target);
+            assert_noop(&result, &format!("file {:?}", rendered.scope_anchors));
+        }
+    }
+
+    #[test]
+    fn a_selection_scoped_render_of_a_module_board_round_trips_without_commands() {
+        let board = module_test_board();
+        // The selection path renders module blocks inline and carries no file, so the blocks
+        // themselves have to map back onto the board's module tree.
+        let scoped =
+            board_to_flowscript_scoped(&board, &["module-event-log".to_string()], &anchored());
+        assert!(scoped.text.contains("module checkout {"), "{}", scoped.text);
+
+        let result = reconcile_text_with_catalog_scoped(
+            &board,
+            &scoped.text,
+            &board_catalog(&board),
+            Some(&scoped.scope_anchors),
+        );
+        assert_noop(&result, "a selection-scoped render of a module board");
+    }
+
+    #[test]
+    fn an_empty_module_file_is_never_a_delete_everything() {
+        let mut board = module_test_board();
+        add_layer(&mut board, "mod-empty", "Empty", LayerType::Module, None);
+
+        let rendered = file(&board, FlowScriptFile::Module("mod-empty".to_string()));
+        assert_eq!(rendered.text, "");
+        let result = reconcile_file(
+            &board,
+            &rendered.text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-empty".to_string()),
+        );
+        assert_noop(&result, "an empty module file");
+    }
+
+    #[test]
+    fn a_module_file_claims_its_own_events_entry_and_never_mains() {
+        let mut board = module_test_board();
+        // Both events drive the module's first body node, so ONLY the module context tells the
+        // two candidate entries apart.
+        let root_out = board.nodes["root-event"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_out")
+            .expect("event output")
+            .id
+            .clone();
+        let log_in = board.nodes["module-event-log"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_in")
+            .expect("log input")
+            .id
+            .clone();
+        connect(
+            &mut board,
+            "root-event",
+            &root_out,
+            "module-event-log",
+            &log_in,
+        );
+
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = rendered.text.replace("   //@n:module-event\n", "\n");
+        assert!(!text.contains("//@n:module-event\n"), "{text}");
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            added_node_types(&result).is_empty(),
+            "the module's own live entry is rebound instead of duplicated: {:?}",
+            result.commands
+        );
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("module-event")),
+            "{:?}",
+            result.corrections
+        );
+    }
+
+    #[test]
+    fn a_module_file_calls_an_undeclared_global_function() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = append_to_last_block(&rendered.text, "globalHelper()");
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(added_node_types(&result), vec!["control_call_function"]);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "function_layer_id"
+                        && value == &Value::String("fn-global".to_string())
+            )),
+            "the call must target the existing global layer: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn main_reaches_a_nested_module_function_through_its_absolute_path() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Main);
+        let text = append_to_last_block(&rendered.text, "checkout::payments::nestedHelper()");
+
+        let result = reconcile_file(&board, &text, &rendered.scope_anchors, FlowScriptFile::Main);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(added_node_types(&result), vec!["control_call_function"]);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "function_layer_id"
+                        && value == &Value::String("fn-nested".to_string())
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_bare_name_never_crosses_a_module_boundary() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Main);
+        let text = append_to_last_block(&rendered.text, "nestedHelper()");
+
+        let result = reconcile_file(&board, &text, &rendered.scope_anchors, FlowScriptFile::Main);
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("checkout::payments::nestedHelper")),
+            "the diagnostic must name the qualified spelling: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_path_that_is_both_a_module_and_a_catalog_namespace_fails_closed() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-string", "String", LayerType::Module, None);
+        add_function(&mut board, "fn-trim", "Trim", Some("mod-string"), "trim");
+        let (event, exec_out) = start_event("root-event", None);
+        add_node(&mut board, event);
+        let (log, log_in, _) = exec_log("root-log", None, "root");
+        add_node(&mut board, log);
+        connect(&mut board, "root-event", &exec_out, "root-log", &log_in);
+
+        let mut trim = Node::new("string_trim", "Trim String", "", "Utils/String");
+        trim.set_flowscript_name("string", "trim");
+        trim.add_input_pin("string", "String", "", VariableType::String);
+        trim.add_output_pin("result", "Result", "", VariableType::String);
+        let mut catalog = board_catalog(&board);
+        catalog.push(node_to_metadata(&trim));
+
+        let rendered = file(&board, FlowScriptFile::Main);
+        let text = append_to_last_block(&rendered.text, "string::trim({ string: \"a\" })");
+        let result = reconcile_text_with_catalog_opts(
+            &board,
+            &text,
+            &catalog,
+            &ReconcileOptions {
+                scope_anchors: Some(&rendered.scope_anchors),
+                file: Some(FlowScriptFile::Main),
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("ambiguous")
+                    && diagnostic.contains("module `string`")
+                    && diagnostic.contains("string_trim")
+            }),
+            "a path that names both a module and a catalog namespace must fail closed: {:?}",
+            result.diagnostics
+        );
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
+    fn a_new_function_in_a_module_file_is_created_inside_that_module() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = format!(
+            "{}\nfunction newHelper() {{\n    logInfo({{ message: \"fresh\" }})\n}}\n",
+            rendered.text
+        );
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            created_layers(&result),
+            vec![("newHelper", Some("Function"), Some("mod-m"))]
+        );
+    }
+
+    #[test]
+    fn a_nested_module_block_in_a_module_file_lands_one_level_down() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = format!(
+            "{}\nmodule inner {{\n    function innerHelper() {{\n        logInfo({{ message: \"inner\" }})\n    }}\n}}\n",
+            rendered.text
+        );
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let layers = created_layers(&result);
+        assert_eq!(layers.len(), 2, "{layers:?}");
+        assert_eq!(layers[0], ("inner", Some("Module"), Some("mod-m")));
+        assert_eq!(layers[1].0, "innerHelper");
+        assert_eq!(layers[1].1, Some("Function"));
+        assert_eq!(
+            layers[1].2,
+            Some("$0"),
+            "the function is parented to the module created in this same batch"
+        );
+    }
+
+    #[test]
+    fn introducing_a_module_local_shadow_of_a_global_function_is_rejected() {
+        let board = module_test_board();
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = format!(
+            "{}\nfunction globalHelper() {{\n    logInfo({{ message: \"shadow\" }})\n}}\n",
+            rendered.text
+        );
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("shadows")),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_shadow_the_board_already_has_still_round_trips() {
+        let mut board = module_test_board();
+        add_function(
+            &mut board,
+            "fn-shadow",
+            "Global Helper",
+            Some("mod-m"),
+            "shadow",
+        );
+
+        let text = board_to_flowscript(&board, &anchored());
+        let result = reconcile_text_with_catalog(&board, &text, &board_catalog(&board));
+        assert_noop(&result, "a pre-existing shadow");
+    }
+
+    #[test]
+    fn two_modules_may_each_own_a_function_of_the_same_name() {
+        let mut board = empty_board();
+        add_layer(&mut board, "mod-a", "Alpha", LayerType::Module, None);
+        add_layer(&mut board, "mod-b", "Beta", LayerType::Module, None);
+        for (module, layer, message) in [
+            ("mod-a", "fn-a", "alpha helper"),
+            ("mod-b", "fn-b", "beta helper"),
+        ] {
+            add_function(&mut board, layer, "Helper", Some(module), message);
+        }
+        let (event, exec_out) = start_event("root-event", None);
+        add_node(&mut board, event);
+        let (log, log_in, _) = exec_log("root-log", None, "root");
+        add_node(&mut board, log);
+        connect(&mut board, "root-event", &exec_out, "root-log", &log_in);
+
+        assert_noop(
+            &reconcile_text_with_catalog(
+                &board,
+                &board_to_flowscript(&board, &anchored()),
+                &board_catalog(&board),
+            ),
+            "same-named functions in two modules",
+        );
+
+        // Module blocks render last, so exercise the call sites from `main.flow` — the file whose
+        // last block IS the root event.
+        let main = file(&board, FlowScriptFile::Main);
+        for (path, layer) in [("alpha::helper", "fn-a"), ("beta::helper", "fn-b")] {
+            let called = append_to_last_block(&main.text, &format!("{path}()"));
+            let result = reconcile_text_with_catalog(&board, &called, &board_catalog(&board));
+            assert!(
+                result.diagnostics.is_empty(),
+                "{path}: {:?}",
+                result.diagnostics
+            );
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { pin_id, value, .. }
+                        if pin_id == "function_layer_id"
+                            && value == &Value::String(layer.to_string())
+                )),
+                "{path} must resolve to {layer}: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn a_module_file_never_removes_a_board_variable_and_may_declare_one() {
+        use crate::flow::pin::ValueType;
+        use crate::flow::variable::Variable;
+        let mut board = module_test_board();
+        let mut kept = Variable::new("kept", VariableType::String, ValueType::Normal);
+        kept.id = "var-kept".to_string();
+        kept.set_default_value(Value::String("keep me".to_string()));
+        board.variables.insert(kept.id.clone(), kept);
+
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        assert!(!rendered.text.contains("kept"), "{}", rendered.text);
+        let text = format!("const declaredHere: string = \"a\"\n\n{}", rendered.text);
+
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::RemoveVariable { .. })),
+            "a module file declares no variables, so it can never delete one: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::CreateVariable { name, .. } if name == "declaredHere"
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_variable_declared_in_a_module_file_renders_in_main_afterwards() {
+        use crate::flow::pin::ValueType;
+        use crate::flow::variable::Variable;
+        let mut board = module_test_board();
+        let mut declared = Variable::new("declaredHere", VariableType::String, ValueType::Normal);
+        declared.id = "var-declared".to_string();
+        declared.set_default_value(Value::String("a".to_string()));
+        board.variables.insert(declared.id.clone(), declared);
+
+        let main = file(&board, FlowScriptFile::Main);
+        assert!(
+            main.text.contains("declaredHere"),
+            "a board global always renders in main.flow:\n{}",
+            main.text
+        );
+        let module = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        assert!(!module.text.contains("declaredHere"), "{}", module.text);
+    }
+
+    #[test]
+    fn a_module_is_a_file_and_therefore_exempt_from_the_layer_node_cap() {
+        let mut board = module_test_board();
+        let mut tail_node = "module-event-log".to_string();
+        let mut tail_pin = board.nodes["module-event-log"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_out")
+            .expect("log tail")
+            .id
+            .clone();
+        for index in 0..MAX_NODES_PER_LAYER + 5 {
+            let id = format!("filler-{index}");
+            let (log, log_in, log_out) = exec_log(&id, Some("mod-m"), &id);
+            add_node(&mut board, log);
+            connect(&mut board, &tail_node, &tail_pin, &id, &log_in);
+            tail_node = id;
+            tail_pin = log_out;
+        }
+
+        let rendered = file(&board, FlowScriptFile::Module("mod-m".to_string()));
+        let text = append_to_last_block(&rendered.text, "globalHelper()");
+        let result = reconcile_file(
+            &board,
+            &text,
+            &rendered.scope_anchors,
+            FlowScriptFile::Module("mod-m".to_string()),
+        );
+
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("nodes (max")),
+            "a module holds a whole file's worth of nodes: {:?}",
+            result.diagnostics
+        );
     }
 }
 

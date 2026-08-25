@@ -9,7 +9,9 @@ use flow_like::{
     app::{App, AppVisibility},
     flow::{
         ast::{
-            ApplyFlowScriptResult, RenderOptions, board_to_flowscript, board_to_flowscript_scoped,
+            ApplyFlowScriptResult, FlowScriptFile, RenderOptions, apply_flowscript_to_board_file,
+            board_to_flowscript, board_to_flowscript_file, board_to_flowscript_scoped,
+            ensure_module_layer, validate_module_apply_params,
         },
         board::{
             Board, VersionType,
@@ -323,6 +325,50 @@ pub async fn get_flowscript_scoped(
     })
 }
 
+/// Render exactly one virtual FlowScript file of the board: `"main"` (the root — globals,
+/// interfaces and every root-level event/function) or a module layer id (that module's own
+/// sections, unwrapped, with no `module` block around them). Mirrors
+/// `GET .../flowscript?file=` on the API, including its errors: an unknown id or a non-module
+/// layer id fails the command.
+#[tauri::command(async)]
+pub async fn get_flowscript_file(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    file: String,
+    version: Option<(u32, u32, u32)>,
+    anchors: Option<bool>,
+) -> Result<ScopedFlowScriptResponse, TauriFunctionError> {
+    let render_options = RenderOptions {
+        anchors: anchors.unwrap_or(true),
+        ..RenderOptions::default()
+    };
+
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?;
+            app.open_board(board_id, Some(true), version)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?
+        }
+    };
+    let board = board.lock().await;
+    let file = if file == "main" {
+        FlowScriptFile::Main
+    } else {
+        FlowScriptFile::Module(file)
+    };
+    let scoped = board_to_flowscript_file(&board, &file, &render_options)?;
+    Ok(ScopedFlowScriptResponse {
+        flowscript: scoped.text,
+        scope_anchors: scoped.scope_anchors,
+    })
+}
+
 /// A positioned FlowScript diagnostic produced by the authoritative Rust parser.
 #[derive(serde::Serialize)]
 pub struct FlowScriptDiagnostic {
@@ -423,7 +469,13 @@ pub async fn check_flowscript_reconcile(
     board_id: String,
     flowscript: String,
     scope_anchors: Option<Vec<String>>,
+    module: Option<String>,
 ) -> Result<CheckFlowScriptReconcileResult, TauriFunctionError> {
+    // This command carries no `current_layer` of its own — always `None`, so the shared rule
+    // only ever enforces "omitted", never a mismatch.
+    let module_id = validate_module_apply_params(module.as_deref(), None, scope_anchors.as_deref())
+        .map_err(|error| TauriFunctionError::new(&error))?;
+
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let app = App::load(app_id.clone(), flow_like_state.clone()).await?;
     if !app.boards.contains(&board_id) {
@@ -469,17 +521,40 @@ pub async fn check_flowscript_reconcile(
     // Run the exact Apply compiler (including dynamic-pin enrichment) on an in-memory clone. The
     // authoritative board, its undo history, and its persistence store are never touched.
     let mut scratch = board.lock().await.clone();
-    let result = match flow_like::flow::ast::apply_flowscript_to_board_scoped(
-        &mut scratch,
-        &flowscript,
-        &catalog_nodes,
-        flow_like_state,
-        None,
-        true,
-        scope_anchors.as_deref(),
-    )
-    .await
-    {
+
+    if let Some(module_id) = module_id {
+        ensure_module_layer(&scratch, module_id)
+            .map_err(|error| TauriFunctionError::new(&error))?;
+    }
+
+    let result = match module_id {
+        Some(module_id) => {
+            apply_flowscript_to_board_file(
+                &mut scratch,
+                &flowscript,
+                &catalog_nodes,
+                flow_like_state,
+                Some(module_id.to_string()),
+                true,
+                scope_anchors.as_deref(),
+                Some(FlowScriptFile::Module(module_id.to_string())),
+            )
+            .await
+        }
+        None => {
+            flow_like::flow::ast::apply_flowscript_to_board_scoped(
+                &mut scratch,
+                &flowscript,
+                &catalog_nodes,
+                flow_like_state,
+                None,
+                true,
+                scope_anchors.as_deref(),
+            )
+            .await
+        }
+    };
+    let result = match result {
         Ok(result) => result,
         Err(error) => {
             return Ok(CheckFlowScriptReconcileResult {
@@ -730,7 +805,15 @@ pub async fn apply_flowscript(
     catalog_nodes: Option<Vec<Node>>,
     allow_deletions: Option<bool>,
     scope_anchors: Option<Vec<String>>,
+    module: Option<String>,
 ) -> Result<ApplyFlowScriptResult, TauriFunctionError> {
+    let module_id = validate_module_apply_params(
+        module.as_deref(),
+        current_layer.as_deref(),
+        scope_anchors.as_deref(),
+    )
+    .map_err(|error| TauriFunctionError::new(&error))?;
+
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let board = flow_like_state.get_board(&board_id, None)?;
@@ -764,6 +847,9 @@ pub async fn apply_flowscript(
 
     let requires_remote_delivery = !matches!(app.visibility, AppVisibility::Offline);
     let mut board = board.lock().await;
+    if let Some(module_id) = module_id {
+        ensure_module_layer(&board, module_id).map_err(|error| TauriFunctionError::new(&error))?;
+    }
     crate::functions::ai::copilot::ensure_board_mutation_not_reserved_by_flowpilot(
         &app_id, &board_id,
     )
@@ -772,17 +858,34 @@ pub async fn apply_flowscript(
     // unexpectedly large executed/undo receipt can be rejected without leaving the native board
     // ahead of Hub (or falling back to setup/connection chunks).
     let original_board = requires_remote_delivery.then(|| board.clone());
-    let result = match flow_like::flow::ast::apply_flowscript_to_board_scoped(
-        &mut board,
-        &flowscript,
-        &catalog_nodes_for_app,
-        flow_like_state,
-        current_layer,
-        allow_deletions.unwrap_or(false),
-        scope_anchors.as_deref(),
-    )
-    .await
-    {
+    let apply_result = match module_id {
+        Some(module_id) => {
+            apply_flowscript_to_board_file(
+                &mut board,
+                &flowscript,
+                &catalog_nodes_for_app,
+                flow_like_state,
+                Some(module_id.to_string()),
+                allow_deletions.unwrap_or(false),
+                scope_anchors.as_deref(),
+                Some(FlowScriptFile::Module(module_id.to_string())),
+            )
+            .await
+        }
+        None => {
+            flow_like::flow::ast::apply_flowscript_to_board_scoped(
+                &mut board,
+                &flowscript,
+                &catalog_nodes_for_app,
+                flow_like_state,
+                current_layer,
+                allow_deletions.unwrap_or(false),
+                scope_anchors.as_deref(),
+            )
+            .await
+        }
+    };
+    let result = match apply_result {
         Ok(result) => result,
         Err(error) => {
             if let Some(original_board) = original_board {

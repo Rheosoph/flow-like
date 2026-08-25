@@ -1,0 +1,586 @@
+"use client";
+
+import { useTranslation } from "@flow-like/locales";
+import { createId } from "@paralleldrive/cuid2";
+import {
+	ChevronDownIcon,
+	ChevronRightIcon,
+	ExternalLinkIcon,
+	FileCode2Icon,
+	FolderInputIcon,
+	LayoutTemplateIcon,
+	LockIcon,
+	PencilLineIcon,
+	PlusIcon,
+	Trash2Icon,
+} from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useInvoke } from "../../../hooks";
+import type { IGenericCommand } from "../../../lib";
+import {
+	FLOWSCRIPT_KEYWORDS,
+	type IModuleNameError,
+	MAIN_FILE_ID,
+	MAIN_FILE_LABEL,
+	MODULE_FILE_EXTENSION,
+	validateModuleName,
+} from "../../../lib/flow-modules";
+import { owningModuleId } from "../../../lib/layer-to-function";
+import {
+	type IBoard,
+	type ILayer,
+	ILayerType,
+} from "../../../lib/schema/flow/board";
+import { cn } from "../../../lib/utils";
+import { useBackend } from "../../../state/backend-state";
+import { Button } from "../../ui/button";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
+	ContextMenuTrigger,
+} from "../../ui/context-menu";
+import { Input } from "../../ui/input";
+import { useModuleCommands } from "../use-module-commands";
+
+interface ModuleNode {
+	layer: ILayer;
+	children: ModuleNode[];
+}
+
+/** Module layers nest by their nearest *module* ancestor, which is what their path label reflects. */
+function buildModuleTree(layers: Record<string, ILayer> | undefined): {
+	roots: ModuleNode[];
+	all: ILayer[];
+} {
+	const modules = Object.values(layers ?? {}).filter(
+		(layer) => layer.type === ILayerType.Module,
+	);
+	const nodes = new Map<string, ModuleNode>(
+		modules.map((layer) => [layer.id, { layer, children: [] }]),
+	);
+	const roots: ModuleNode[] = [];
+
+	for (const layer of modules) {
+		const parentId = owningModuleId(layers, layer.id);
+		const parent = parentId ? nodes.get(parentId) : undefined;
+		const node = nodes.get(layer.id);
+		if (!node) continue;
+		if (parent) parent.children.push(node);
+		else roots.push(node);
+	}
+
+	const sort = (list: ModuleNode[]) => {
+		list.sort((a, b) => a.layer.name.localeCompare(b.layer.name));
+		for (const child of list) sort(child.children);
+	};
+	sort(roots);
+
+	return { roots, all: modules };
+}
+
+function TreeRow({
+	depth,
+	icon,
+	label,
+	active,
+	muted,
+	trailing,
+	expander,
+	onSelect,
+}: Readonly<{
+	depth: number;
+	icon: React.ReactNode;
+	label: string;
+	active?: boolean;
+	muted?: boolean;
+	trailing?: React.ReactNode;
+	expander?: React.ReactNode;
+	onSelect?: () => void;
+}>) {
+	return (
+		<div
+			className={cn(
+				"group/row flex items-center gap-1 rounded-sm pr-1 text-xs",
+				active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+			)}
+			style={{ paddingLeft: `${depth * 12 + 4}px` }}
+		>
+			<span className="flex size-4 shrink-0 items-center justify-center">
+				{expander}
+			</span>
+			<button
+				type="button"
+				onClick={onSelect}
+				className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+			>
+				<span
+					className={cn(
+						"shrink-0 [&>svg]:size-3.5",
+						muted ? "text-muted-foreground" : "text-primary",
+					)}
+				>
+					{icon}
+				</span>
+				<span className="truncate font-mono">{label}</span>
+			</button>
+			{trailing}
+		</div>
+	);
+}
+
+function SectionHeader({
+	label,
+	action,
+}: Readonly<{ label: string; action?: React.ReactNode }>) {
+	return (
+		<div className="flex items-center gap-1 px-1 pb-0.5 pt-2">
+			<h3 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+				{label}
+			</h3>
+			<span className="flex-1" />
+			{action}
+		</div>
+	);
+}
+
+/**
+ * The board's two trees.
+ *
+ * `Flow` is the files the canvas and FlowScript open — `main.flow` plus one node
+ * per module layer, nested by module, which is what makes a module a folder.
+ * `UI` is the pages the board actually has, each a jump into the page builder.
+ * Everything the tab strip can do to a file it can do here too, and here it can
+ * also be reparented.
+ */
+export function BoardExplorer({
+	appId,
+	boardId,
+	board,
+	currentFileId,
+	onSelectFile,
+	onOpenPage,
+	executeCommand,
+	readOnly,
+	reservedRoots = FLOWSCRIPT_KEYWORDS,
+}: Readonly<{
+	appId: string;
+	boardId: string;
+	board?: IBoard;
+	/** `main` or a module layer id. */
+	currentFileId: string;
+	onSelectFile: (moduleId: string | null) => void;
+	onOpenPage: (pageId: string, boardId: string) => void;
+	executeCommand: (
+		command: IGenericCommand,
+		append: boolean,
+	) => Promise<unknown>;
+	readOnly: boolean;
+	reservedRoots?: readonly string[];
+}>) {
+	const { t } = useTranslation("flow");
+	const backend = useBackend();
+	const { createModule, renameModule, moveModule, deleteModule } =
+		useModuleCommands(executeCommand);
+
+	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	const [renaming, setRenaming] = useState<string | null>(null);
+	const [draftParent, setDraftParent] = useState<string | null | undefined>();
+	const [creatingPage, setCreatingPage] = useState(false);
+
+	const { roots, all } = useMemo(
+		() => buildModuleTree(board?.layers),
+		[board?.layers],
+	);
+
+	const pages = useInvoke(
+		backend.pageState.getPages,
+		backend.pageState,
+		[appId, boardId],
+		Boolean(appId && boardId),
+		[appId, boardId],
+	);
+
+	const nameErrorText = useCallback(
+		(error: IModuleNameError | null) => {
+			if (!error) return null;
+			switch (error) {
+				case "empty":
+					return t("nameIsRequired", "Name is required");
+				case "reserved":
+					return t("thatNameIsReserved", "That name is reserved");
+				case "duplicate":
+					return t("thatNameIsAlreadyTaken", "That name is already taken");
+				default:
+					return t("useALetterOrDigitName", "Use a letter or digit name");
+			}
+		},
+		[t],
+	);
+
+	const commitCreate = useCallback(
+		async (name: string, parentId: string | null) => {
+			setDraftParent(undefined);
+			const layer = await createModule(name, parentId);
+			onSelectFile(layer.id);
+		},
+		[createModule, onSelectFile],
+	);
+
+	const commitRename = useCallback(
+		async (id: string, name: string) => {
+			const layer = board?.layers?.[id];
+			setRenaming(null);
+			if (layer) await renameModule(layer, name);
+		},
+		[board?.layers, renameModule],
+	);
+
+	const createPage = useCallback(async () => {
+		setCreatingPage(true);
+		try {
+			const name = t("newPage", "New page");
+			await backend.pageState.createPage(
+				appId,
+				createId(),
+				name,
+				`/${name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`,
+				boardId,
+			);
+			await pages.refetch();
+		} catch (error) {
+			console.error("Failed to create page", error);
+			toast.error(t("failedToCreatePage", "Failed to create page"));
+		} finally {
+			setCreatingPage(false);
+		}
+	}, [appId, boardId, backend.pageState, pages, t]);
+
+	const deletePage = useCallback(
+		async (pageId: string) => {
+			try {
+				await backend.pageState.deletePage(appId, pageId, boardId);
+				await pages.refetch();
+			} catch (error) {
+				console.error("Failed to delete page", error);
+				toast.error(t("failedToDeletePage", "Failed to delete page"));
+			}
+		},
+		[appId, boardId, backend.pageState, pages, t],
+	);
+
+	const toggle = useCallback((id: string) => {
+		setCollapsed((old) => {
+			const next = new Set(old);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}, []);
+
+	const renderNameField = (
+		initial: string,
+		parentId: string | null,
+		excludeId: string | undefined,
+		depth: number,
+		onSubmit: (name: string) => void,
+		onCancel: () => void,
+	) => (
+		<NameField
+			key={excludeId ?? `new-${parentId ?? "root"}`}
+			initial={initial}
+			depth={depth}
+			validate={(value) =>
+				nameErrorText(
+					validateModuleName(
+						value,
+						board?.layers,
+						parentId,
+						reservedRoots,
+						excludeId,
+					),
+				)
+			}
+			onSubmit={onSubmit}
+			onCancel={onCancel}
+		/>
+	);
+
+	const renderModule = (node: ModuleNode, depth: number): React.ReactNode => {
+		const { layer, children } = node;
+		if (renaming === layer.id) {
+			return renderNameField(
+				layer.name,
+				owningModuleId(board?.layers, layer.id),
+				layer.id,
+				depth,
+				(name) => void commitRename(layer.id, name),
+				() => setRenaming(null),
+			);
+		}
+
+		const isOpen = !collapsed.has(layer.id);
+		const row = (
+			<TreeRow
+				depth={depth}
+				icon={<FileCode2Icon />}
+				label={`${layer.name}${MODULE_FILE_EXTENSION}`}
+				active={currentFileId === layer.id}
+				onSelect={() => onSelectFile(layer.id)}
+				expander={
+					children.length > 0 ? (
+						<button
+							type="button"
+							aria-label={layer.name}
+							onClick={() => toggle(layer.id)}
+							className="text-muted-foreground"
+						>
+							{isOpen ? (
+								<ChevronDownIcon className="size-3" />
+							) : (
+								<ChevronRightIcon className="size-3" />
+							)}
+						</button>
+					) : undefined
+				}
+			/>
+		);
+
+		return (
+			<div key={layer.id}>
+				{readOnly ? (
+					row
+				) : (
+					<ContextMenu>
+						<ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+						<ContextMenuContent className="w-56">
+							<ContextMenuItem onSelect={() => setRenaming(layer.id)}>
+								<PencilLineIcon className="size-3.5" />
+								{t("rename", "Rename")}
+							</ContextMenuItem>
+							<ContextMenuItem onSelect={() => setDraftParent(layer.id)}>
+								<PlusIcon className="size-3.5" />
+								{t("newModuleInside", "New module inside")}
+							</ContextMenuItem>
+							<ContextMenuSub>
+								<ContextMenuSubTrigger>
+									<FolderInputIcon className="size-3.5" />
+									{t("moveTo", "Move to")}
+								</ContextMenuSubTrigger>
+								<ContextMenuSubContent className="w-56">
+									<ContextMenuItem
+										disabled={owningModuleId(board?.layers, layer.id) === null}
+										onSelect={() => void moveModule(layer, null)}
+									>
+										{MAIN_FILE_LABEL}
+									</ContextMenuItem>
+									{all
+										.filter(
+											(candidate) =>
+												candidate.id !== layer.id &&
+												!isDescendant(board?.layers, candidate.id, layer.id),
+										)
+										.map((candidate) => (
+											<ContextMenuItem
+												key={candidate.id}
+												onSelect={() => void moveModule(layer, candidate.id)}
+											>
+												{candidate.name}
+											</ContextMenuItem>
+										))}
+								</ContextMenuSubContent>
+							</ContextMenuSub>
+							<ContextMenuSeparator />
+							<ContextMenuItem
+								variant="destructive"
+								onSelect={() => void deleteModule(layer, true)}
+							>
+								<Trash2Icon className="size-3.5" />
+								{t("deleteModule", "Delete module")}
+							</ContextMenuItem>
+						</ContextMenuContent>
+					</ContextMenu>
+				)}
+				{isOpen && children.map((child) => renderModule(child, depth + 1))}
+				{draftParent === layer.id &&
+					renderNameField(
+						"",
+						layer.id,
+						undefined,
+						depth + 1,
+						(name) => void commitCreate(name, layer.id),
+						() => setDraftParent(undefined),
+					)}
+			</div>
+		);
+	};
+
+	return (
+		<div className="flex flex-col gap-0.5 p-1">
+			<SectionHeader
+				label={t("flow", "Flow")}
+				action={
+					!readOnly && (
+						<Button
+							size="icon"
+							variant="ghost"
+							className="size-5 text-muted-foreground"
+							title={t("newModule", "New module")}
+							aria-label={t("newModule", "New module")}
+							onClick={() => setDraftParent(null)}
+						>
+							<PlusIcon className="size-3.5" />
+						</Button>
+					)
+				}
+			/>
+
+			<TreeRow
+				depth={0}
+				icon={<FileCode2Icon />}
+				label={MAIN_FILE_LABEL}
+				active={currentFileId === MAIN_FILE_ID}
+				onSelect={() => onSelectFile(null)}
+				trailing={
+					<LockIcon
+						className="size-3 shrink-0 text-muted-foreground/50"
+						aria-label={t(
+							"theRootFileCannotBeChanged",
+							"The root file cannot be changed",
+						)}
+					/>
+				}
+			/>
+			{roots.map((node) => renderModule(node, 0))}
+			{draftParent === null &&
+				renderNameField(
+					"",
+					null,
+					undefined,
+					0,
+					(name) => void commitCreate(name, null),
+					() => setDraftParent(undefined),
+				)}
+
+			<SectionHeader
+				label={t("ui", "UI")}
+				action={
+					!readOnly && (
+						<Button
+							size="icon"
+							variant="ghost"
+							className="size-5 text-muted-foreground"
+							title={t("createPage", "Create Page")}
+							aria-label={t("createPage", "Create Page")}
+							disabled={creatingPage}
+							onClick={() => void createPage()}
+						>
+							<PlusIcon className="size-3.5" />
+						</Button>
+					)
+				}
+			/>
+
+			{(pages.data?.length ?? 0) === 0 && (
+				<p className="px-2 py-1 text-[11px] text-muted-foreground">
+					{t("noPagesYet", "No pages yet")}
+				</p>
+			)}
+			{pages.data?.map((page) => {
+				const row = (
+					<TreeRow
+						key={page.pageId}
+						depth={0}
+						icon={<LayoutTemplateIcon />}
+						label={page.name}
+						muted
+						onSelect={() => onOpenPage(page.pageId, boardId)}
+						trailing={
+							<ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100" />
+						}
+					/>
+				);
+				if (readOnly) return row;
+				return (
+					<ContextMenu key={page.pageId}>
+						<ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+						<ContextMenuContent className="w-56">
+							<ContextMenuItem
+								onSelect={() => onOpenPage(page.pageId, boardId)}
+							>
+								<ExternalLinkIcon className="size-3.5" />
+								{t("openInBuilder", "Open in Builder")}
+							</ContextMenuItem>
+							<ContextMenuSeparator />
+							<ContextMenuItem
+								variant="destructive"
+								onSelect={() => void deletePage(page.pageId)}
+							>
+								<Trash2Icon className="size-3.5" />
+								{t("deletePage", "Delete Page")}
+							</ContextMenuItem>
+						</ContextMenuContent>
+					</ContextMenu>
+				);
+			})}
+		</div>
+	);
+}
+
+/** A module may not be moved inside its own subtree. */
+function isDescendant(
+	layers: Record<string, ILayer> | undefined,
+	candidateId: string,
+	ancestorId: string,
+): boolean {
+	let current: string | null = candidateId;
+	for (let depth = 0; current && depth < 40; depth += 1) {
+		if (current === ancestorId) return true;
+		current = owningModuleId(layers, current);
+	}
+	return false;
+}
+
+function NameField({
+	initial,
+	depth,
+	validate,
+	onSubmit,
+	onCancel,
+}: Readonly<{
+	initial: string;
+	depth: number;
+	validate: (value: string) => string | null;
+	onSubmit: (name: string) => void;
+	onCancel: () => void;
+}>) {
+	const [value, setValue] = useState(initial);
+	const error = value.trim() ? validate(value) : null;
+	const canSubmit = Boolean(value.trim()) && !error;
+
+	return (
+		<div
+			className="flex flex-col gap-0.5 py-0.5"
+			style={{ paddingLeft: `${depth * 12 + 24}px` }}
+		>
+			<Input
+				autoFocus
+				value={value}
+				aria-invalid={Boolean(error)}
+				className="h-6 px-1.5 font-mono text-xs"
+				onChange={(event) => setValue(event.target.value)}
+				onBlur={() => canSubmit && onSubmit(value.trim())}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && canSubmit) onSubmit(value.trim());
+					if (event.key === "Escape") onCancel();
+				}}
+			/>
+			{error && <span className="text-[10px] text-destructive">{error}</span>}
+		</div>
+	);
+}

@@ -13,6 +13,8 @@ describe("workflow screenshot CLI", () => {
 			"--layout=expanded",
 			"--focus-node",
 			"normalize",
+			"--handle-errors",
+			"API Call",
 			"--viewport=1440x900",
 			"--dpr=2.5",
 			"--theme=light",
@@ -29,10 +31,17 @@ describe("workflow screenshot CLI", () => {
 			),
 			layout: "expanded",
 			focusNode: "normalize",
+			handleErrors: "API Call",
 			viewport: { width: 1440, height: 900 },
 			dpr: 2.5,
 			theme: "light",
 		});
+	});
+
+	test("requires a Handle Errors node selector", () => {
+		expect(() =>
+			parseWorkflowScreenshotArgs(["sample.flow", "--handle-errors"]),
+		).toThrow("--handle-errors requires a value.");
 	});
 
 	test("defaults to a balanced lossless WebP capture", () => {

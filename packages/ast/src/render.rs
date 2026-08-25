@@ -105,6 +105,14 @@ impl Writer<'_> {
             self.event_block(event);
         }
 
+        for block in &ast.detached {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.detached_block(block);
+        }
+
         // Modules render last, in the order the caller put them in — ordering is a lowering
         // decision, not a rendering one.
         for module in &ast.modules {
@@ -316,6 +324,16 @@ impl Writer<'_> {
         self.out.push_str("}\n");
     }
 
+    /// `detached { … }` — a chain no trigger reaches. The container carries no identity of its
+    /// own (there is no node behind it), so it takes no anchor; its statements keep theirs.
+    fn detached_block(&mut self, body: &Block) {
+        self.indent();
+        self.out.push_str("detached {\n");
+        self.block(body);
+        self.indent();
+        self.out.push_str("}\n");
+    }
+
     fn module_decl(&mut self, module: &ModuleDecl) {
         self.indent();
         self.out.push_str("module ");
@@ -339,6 +357,13 @@ impl Writer<'_> {
             }
             first_section = false;
             self.event_block(event);
+        }
+        for block in &module.detached {
+            if !first_section {
+                self.out.push('\n');
+            }
+            first_section = false;
+            self.detached_block(block);
         }
         for nested in &module.modules {
             if !first_section {

@@ -269,6 +269,29 @@ export const useBackendStore = create<BackendStoreState>((set) => ({
 	setBackend: (backend: IBackendState) => set({ backend }),
 }));
 
+interface AuthStatusState {
+	/** `undefined` until a host provider pushes its OIDC state. */
+	signedIn?: boolean;
+	setSignedIn: (signedIn: boolean) => void;
+}
+
+/**
+ * Sign-in signal for components in this package, pushed by the host provider
+ * (`pushAuthContext`) on every OIDC change. `packages/ui` has no auth context
+ * of its own, so without it queries that only a signed-in session can serve
+ * fire on every mount while signed out and fail (with retries).
+ */
+export const useAuthStatusStore = create<AuthStatusState>((set) => ({
+	signedIn: undefined,
+	setSignedIn: (signedIn: boolean) =>
+		set((state) => (state.signedIn === signedIn ? state : { signedIn })),
+}));
+
+/** False only while a host positively reports a signed-out session. */
+export function useSignedIn(): boolean {
+	return useAuthStatusStore((state) => state.signedIn !== false);
+}
+
 const serverBackend: IBackendState = {
 	appState: new EmptyAppState(),
 	apiState: new EmptyApiState(),
@@ -328,4 +351,13 @@ export function useBackend(): IBackendState {
 		return serverBackend;
 	}
 	return backend;
+}
+
+/**
+ * False while `useBackend()` still hands out the prerender placeholder, whose
+ * states throw on every call. Queries that mount before the host provider has
+ * published its backend gate on this.
+ */
+export function useBackendReady(): boolean {
+	return useBackendStore((state) => state.backend !== null);
 }

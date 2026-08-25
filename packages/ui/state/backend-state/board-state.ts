@@ -285,6 +285,14 @@ export interface IBoardState {
 		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]>;
 
+	/**
+	 * Apply FlowScript source back onto the board.
+	 *
+	 * Applying a **module file** (see {@link IBoardState.getFlowScriptFile}) is a three-part
+	 * contract, and all three must agree or the reconcile diff deletes what the file never
+	 * rendered: pass that file's `scopeAnchors`, `currentLayer` = the module layer id, and
+	 * `module` = the same layer id. `main` passes neither `module` nor a module `currentLayer`.
+	 */
 	applyFlowScript(
 		appId: string,
 		boardId: string,
@@ -295,11 +303,17 @@ export interface IBoardState {
 		/** Defaults to "editor"; FlowPilot's own applies must pass "agent". */
 		origin?: FlowScriptApplyOrigin,
 		/**
-		 * Anchors from a scoped `getFlowScriptScoped` render. When set, board events/functions
-		 * outside these anchors are invisible to the reconcile diff, so the partial document
-		 * never deletes what it did not render.
+		 * Anchors from a scoped `getFlowScriptScoped` render, or from the rendered file of a
+		 * `getFlowScriptFile` call. When set, board events/functions outside these anchors are
+		 * invisible to the reconcile diff, so the partial document never deletes what it did
+		 * not render.
 		 */
 		scopeAnchors?: string[],
+		/**
+		 * Identity of the file being applied: the module layer id whose file this text is.
+		 * Omitted (or undefined) for `main`, which is the board root.
+		 */
+		module?: string,
 	): Promise<IApplyFlowScriptResponse>;
 
 	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
@@ -309,6 +323,26 @@ export interface IBoardState {
 		version?: [number, number, number],
 		anchors?: boolean,
 	): Promise<string>;
+
+	/**
+	 * Render exactly one virtual FlowScript file of the board: `"main"` (the root — globals,
+	 * interfaces and every root-level event/function, module bodies excluded) or a module layer
+	 * id (that module's own sections, unwrapped and without the variable block; globals stay in
+	 * `main`). Interfaces are repeated in every file, and calls into another module are rendered
+	 * qualified (`checkout::payments::helper(…)`).
+	 *
+	 * Apply the edited text back through `applyFlowScript` with the returned `scope_anchors`,
+	 * `currentLayer` = the module layer id and `module` = the same id, so everything the file
+	 * did not render stays untouched. Optional — present where the backend renders per file;
+	 * without it the panel silently stays on the whole-board render.
+	 */
+	getFlowScriptFile?(
+		appId: string,
+		boardId: string,
+		/** `"main"` or a module layer id. */
+		file: string,
+		anchors?: boolean,
+	): Promise<IScopedFlowScriptResponse>;
 
 	/**
 	 * Render only the board slice containing `nodeIds`: the events/functions holding the
@@ -354,6 +388,8 @@ export interface IBoardState {
 		flowscript: string,
 		/** Anchors from a scoped render; limits the compile diff exactly like a scoped apply. */
 		scopeAnchors?: string[],
+		/** The module layer id this text is the file of; undefined for `main`. Mirrors apply. */
+		module?: string,
 	): Promise<ICheckFlowScriptReconcileResponse>;
 
 	getExecutionElements(

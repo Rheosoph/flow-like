@@ -35,6 +35,11 @@ import {
 } from "../../../hooks/use-peer-users";
 import { formatRelativeTime } from "../../../lib/date";
 import {
+	type IBoardModule,
+	MAIN_FILE_ID,
+	fileModuleId,
+} from "../../../lib/flow-modules";
+import {
 	getFlowScriptNamesTable,
 	onFlowScriptNamesTableLoaded,
 } from "../../../lib/flowscript/names";
@@ -93,11 +98,13 @@ import {
 	formatFlowScriptCommentPreview,
 	withFlowScriptCommentContent,
 } from "./flowscript-comments";
+import { FlowScriptFileTabs, flowScriptFileTabs } from "./flowscript-file-tabs";
 import {
 	FLOWSCRIPT_DIAGNOSTIC_OWNER,
 	FLOWSCRIPT_LANGUAGE_ID,
 	FLOWSCRIPT_THEME_DARK,
 	FLOWSCRIPT_THEME_LIGHT,
+	type FlowScriptBoardScope,
 	defineFlowScriptThemes,
 	registerFlowScriptLanguage,
 	registerFlowScriptProviders,
@@ -150,6 +157,7 @@ import {
 	runStatsKey,
 } from "./flowscript-run-trace";
 import { computeFlowScriptMarkersPreferWorker } from "./flowscript-worker-client";
+import type { FlowScriptFileStore } from "./use-flowscript-files";
 
 const DESTRUCTIVE_BLOCK_PREFIX = "FlowScript edit would delete ";
 
@@ -174,8 +182,13 @@ const IN_SYNC_CHECK_RESPONSE: ICheckFlowScriptReconcileResponse = {
 interface ApplyOptions {
 	allowDeletions?: boolean;
 	suppressBlockedToast?: boolean;
-	/** Present when the panel is editing a selection-scoped render. */
+	/** Present when the panel is editing a selection-scoped or per-file render. */
 	scopeAnchors?: string[];
+	/**
+	 * The file this text is: `"main"` or a module layer id. Only set in file mode — the host
+	 * derives both the apply's `currentLayer` and its `module` identity from it.
+	 */
+	file?: string;
 }
 
 interface FlowScriptCheckState {
@@ -190,6 +203,8 @@ type DecorationsCollection = ReturnType<
 >;
 
 const getEmptyPresenceSnapshot = () => EMPTY_FLOWSCRIPT_PRESENCE;
+
+const EMPTY_DIRTY_FILES: ReadonlySet<string> = new Set();
 
 export interface FlowScriptPanelProps {
 	appId: string;
@@ -209,6 +224,23 @@ export interface FlowScriptPanelProps {
 	scopeNodeIds?: string[];
 	/** Leave scoped mode and reload the whole board. */
 	onExitScope?: () => void;
+	/** The board's module layers, ordered by path — one file tab each, after `main.flow`. */
+	modules?: readonly IBoardModule[];
+	/**
+	 * The file the canvas is on (`"main"` or a module layer id). There is exactly one current
+	 * file per board: the canvas and every panel mount read it from here.
+	 */
+	currentFile?: string;
+	/** Opens a file by opening its module on the canvas; `null` is `main`. */
+	onSelectFile?: (moduleId: string | null) => void;
+	/** Per-file buffers, owned by the board so both panel mounts share one stash. */
+	files?: FlowScriptFileStore;
+	/**
+	 * The board's modules and their functions. Feeds the client linter so cross-file calls
+	 * (`checkout::payments::helper()`, a root function called from a module file) are not
+	 * reported as unknown — a file never declares what the other files hold.
+	 */
+	boardScope?: FlowScriptBoardScope;
 	/** Total event/function sections on the board, for the scoped banner. */
 	totalSections?: number;
 	onApplyFlowScript: (
@@ -292,6 +324,11 @@ export function FlowScriptPanel({
 	onRevealNode,
 	scopeNodeIds,
 	onExitScope,
+	modules,
+	currentFile,
+	onSelectFile,
+	files,
+	boardScope,
 	totalSections,
 	onApplyFlowScript,
 	onClose,
@@ -375,6 +412,8 @@ export function FlowScriptPanel({
 	textRef.current = text;
 	const baselineRef = useRef(baseline);
 	baselineRef.current = baseline;
+	const loadErrorRef = useRef(loadError);
+	loadErrorRef.current = loadError;
 	// Mount-time Monaco registrations (format provider, actions) outlive any one
 	// render; hand them the current translations through refs. Plain t() calls
 	// here keep the keys visible to the i18n extractor.
@@ -454,6 +493,14 @@ export function FlowScriptPanel({
 
 	const catalogRef = useRef<INode[] | undefined>(catalogNodes);
 	catalogRef.current = catalogNodes;
+	const boardScopeRef = useRef(boardScope);
+	boardScopeRef.current = boardScope;
+	// The scope object is rebuilt on every board refetch; only its content decides whether the
+	// document has to be re-linted.
+	const boardScopeKey = useMemo(
+		() => (boardScope ? JSON.stringify(boardScope) : ""),
+		[boardScope],
+	);
 	const providersDisposable = useRef<{ dispose: () => void } | null>(null);
 	const formatProviderDisposable = useRef<{ dispose: () => void } | null>(null);
 	const runLensHandleRef = useRef<FlowScriptRunLensHandle | null>(null);
@@ -500,15 +547,35 @@ export function FlowScriptPanel({
 	const lastCursorHighlightRef = useRef<string | undefined>(undefined);
 	const exitScopeAfterConfirmRef = useRef(false);
 
+	// The file the panel edits. One current file per board: it comes from the canvas, so opening
+	// a tab here and walking into a module there are the same navigation.
+	const fileId = currentFile ?? MAIN_FILE_ID;
+	// Deliberately keyed on primitives, never on the `modules` array: it is rebuilt on every board
+	// refetch, and a new scope identity would re-render the file and throw the draft away.
+	const hasModules = (modules?.length ?? 0) > 0;
 	const scopeMode = useMemo(
 		() =>
 			resolveFlowScriptScope(
 				scopeNodeIds,
 				Boolean(backend.boardState.getFlowScriptScoped),
+				{
+					hasModules,
+					backendSupportsFiles: Boolean(backend.boardState.getFlowScriptFile),
+					file: fileId,
+				},
 			),
-		[scopeNodeIds, backend],
+		[scopeNodeIds, backend, hasModules, fileId],
 	);
 	const scoped = scopeMode.kind === "scoped" && !readOnly;
+	/** The module identity an apply/check of the current buffer must carry; main sends none. */
+	const applyModuleId =
+		scopeMode.kind === "file" ? fileModuleId(scopeMode.file) : undefined;
+	const applyFileRef = useRef<string | undefined>(undefined);
+	applyFileRef.current = scopeMode.kind === "file" ? scopeMode.file : undefined;
+	const applyModuleIdRef = useRef(applyModuleId);
+	applyModuleIdRef.current = applyModuleId;
+	const filesRef = useRef(files);
+	filesRef.current = files;
 
 	// Shared scoped sessions: broadcast this panel's scope node ids while it is
 	// open in scoped mode so teammates can join from the presence bar. Persists
@@ -546,6 +613,18 @@ export function FlowScriptPanel({
 				scopeAnchors: scopedScript.scope_anchors,
 			};
 		}
+		const getFile = backend.boardState.getFlowScriptFile?.bind(
+			backend.boardState,
+		);
+		if (scopeMode.kind === "file" && !parsedVersion && getFile) {
+			const file = await getFile(appId, boardId, scopeMode.file, true);
+			// The file's own anchors are what limits its apply — everything the file did not
+			// render (other modules, the root's sections) stays outside the reconcile diff.
+			return {
+				flowscript: file.flowscript,
+				scopeAnchors: file.scope_anchors,
+			};
+		}
 		const script = await backend.boardState.getFlowScript(
 			appId,
 			boardId,
@@ -555,11 +634,17 @@ export function FlowScriptPanel({
 		return { flowscript: script };
 	}, [backend, appId, boardId, versionKey, scopeMode]);
 
+	// Every render request carries a token: a switch away (to another file, or to a stashed
+	// buffer) invalidates the one in flight, so a slow response can never overwrite the document
+	// the user is now looking at.
+	const loadTokenRef = useRef(0);
 	const load = useCallback(async (): Promise<string | undefined> => {
+		const token = ++loadTokenRef.current;
 		setLoading(true);
 		setLoadError(undefined);
 		try {
 			const render = await fetchBoardRender();
+			if (loadTokenRef.current !== token) return undefined;
 			setText(render.flowscript);
 			setBaseline(render.flowscript);
 			setScopeAnchors(render.scopeAnchors);
@@ -569,6 +654,7 @@ export function FlowScriptPanel({
 			preMergeLocalTextRef.current = undefined;
 			return render.flowscript;
 		} catch (error) {
+			if (loadTokenRef.current !== token) return undefined;
 			setLoadError(
 				error instanceof Error
 					? error.message
@@ -576,14 +662,89 @@ export function FlowScriptPanel({
 			);
 			return undefined;
 		} finally {
-			setLoading(false);
+			if (loadTokenRef.current === token) setLoading(false);
 		}
 	}, [fetchBoardRender, t]);
 
-	// Initial load and reload on board/version/scope switch.
+	/** Puts the editor back where the file was left; the model swap lands one frame later. */
+	const restoreViewState = useCallback(
+		(viewState: unknown, expectedText: string) => {
+			const editor = editorRef.current;
+			if (!editor || !viewState) return;
+			const apply = () => {
+				const model = editor.getModel();
+				if (!model || model.getValue() !== expectedText) return false;
+				// Programmatic move — mute editor→canvas cursor sync briefly.
+				canvasSyncAtRef.current = Date.now();
+				editor.restoreViewState(
+					viewState as Parameters<typeof editor.restoreViewState>[0],
+				);
+				return true;
+			};
+			if (!apply()) {
+				requestAnimationFrame(() => {
+					apply();
+				});
+			}
+		},
+		[],
+	);
+
+	// Initial load, reload on board/version/scope switch, and file switches. Leaving a file keeps
+	// its draft, baseline, anchors and editor seat in the board-owned stash; entering one restores
+	// that buffer when it exists and re-renders from the board otherwise. Monaco's undo stack does
+	// not survive the swap — the text does. Only file mode stashes: a whole-board or a
+	// selection-scoped render is not any one file's buffer.
+	const fileModeFile = scopeMode.kind === "file" ? scopeMode.file : undefined;
+	const activeFileRef = useRef(fileModeFile);
 	useEffect(() => {
-		void load();
-	}, [load]);
+		const previousFile = activeFileRef.current;
+		if (previousFile === fileModeFile) {
+			void load();
+			return;
+		}
+		activeFileRef.current = fileModeFile;
+		const store = filesRef.current;
+		const editor = editorRef.current;
+		if (
+			previousFile !== undefined &&
+			store &&
+			!applyStateRef.current.loading &&
+			!loadErrorRef.current &&
+			baselineRef.current
+		) {
+			store.stash(previousFile, {
+				text: textRef.current,
+				baseline: baselineRef.current,
+				scopeAnchors: scopeAnchorsRef.current,
+				viewState: editor?.saveViewState() ?? undefined,
+			});
+		}
+		// Conflicts, remote-touched anchors and the reconcile preview all belong to the file that
+		// is leaving — they are re-derived for the incoming one.
+		setMergeConflicts([]);
+		setRemoteTouched(new Set());
+		setBoardChangedBehindEdits(false);
+		setCheckState(undefined);
+		setDiagnostics([]);
+		preMergeLocalTextRef.current = undefined;
+		pendingSeatRef.current = undefined;
+
+		const buffer =
+			fileModeFile !== undefined ? store?.peek(fileModeFile) : undefined;
+		if (!buffer) {
+			void load();
+			return;
+		}
+		// A render of the file we just left must not land on the buffer we restore here.
+		loadTokenRef.current++;
+		setLoading(false);
+		setLoadError(undefined);
+		setText(buffer.text);
+		setBaseline(buffer.baseline);
+		setScopeAnchors(buffer.scopeAnchors);
+		restoreViewState(buffer.viewState, buffer.text);
+	}, [load, fileModeFile, restoreViewState]);
 
 	// Live re-render support: capture the cursor/selection/scroll as anchor-
 	// relative offsets before a reload or merge swaps the buffer; the effect on
@@ -865,7 +1026,10 @@ export function FlowScriptPanel({
 				const result = await onApplyFlowScript(textRef.current, {
 					allowDeletions,
 					suppressBlockedToast: true,
+					// The current file's anchors and its identity travel together: the host turns
+					// `file` into the apply's `currentLayer` and `module`.
 					scopeAnchors: scopeAnchorsRef.current,
+					file: applyFileRef.current,
 				});
 				if (!result) return;
 
@@ -1793,7 +1957,7 @@ export function FlowScriptPanel({
 	// Realtime linting: instant client-side structural markers everywhere, authoritative
 	// positioned diagnostics from the native parser where available, and — on the same
 	// debounce tick — the reconcile dry-run that powers the apply preview chip.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts; namesReady re-lints once the names snapshot arrives; scopeAnchors is read from a ref
+	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts; namesReady re-lints once the names snapshot arrives; scopeAnchors and the board scope are read from refs (boardScopeKey re-lints when the modules actually changed)
 	useEffect(() => {
 		const monaco = monacoRef.current;
 		const editor = editorRef.current;
@@ -1805,7 +1969,12 @@ export function FlowScriptPanel({
 			// Computed in the language worker for large documents (in-thread otherwise),
 			// so a keystroke burst never pays for linting on the UI thread.
 			const clientMarkers = await Promise.resolve(
-				computeFlowScriptMarkersPreferWorker(monaco, model, catalogRef.current),
+				computeFlowScriptMarkersPreferWorker(
+					monaco,
+					model,
+					catalogRef.current,
+					boardScopeRef.current,
+				),
 			);
 			let nativeMarkers: unknown[] = [];
 			try {
@@ -1842,6 +2011,7 @@ export function FlowScriptPanel({
 					boardIdRef.current,
 					source,
 					scopeAnchorsRef.current,
+					applyModuleIdRef.current,
 				);
 				if (editor.getModel() === model && model.getValue() === source) {
 					setCheckState({ forText: source, response });
@@ -1855,7 +2025,15 @@ export function FlowScriptPanel({
 			}
 		}, LINT_DEBOUNCE_MS);
 		return () => clearTimeout(handle);
-	}, [text, baseline, catalogNodes, backend, editorReady, namesReady]);
+	}, [
+		text,
+		baseline,
+		catalogNodes,
+		backend,
+		editorReady,
+		namesReady,
+		boardScopeKey,
+	]);
 
 	const toggleFullScreen = useCallback(() => {
 		setFullScreen((value) => !value);
@@ -1961,6 +2139,24 @@ export function FlowScriptPanel({
 			deriveClaimedAnchorIds(baseline, text),
 		).length;
 	}, [remoteTouched, baseline, text, dirty]);
+
+	// File tabs only where a file can actually be rendered and applied on its own: a backend
+	// without `getFlowScriptFile` keeps the whole-board document, where they would mean nothing.
+	// The open file's dirty flag lives here; the other files' comes from the board-owned stash.
+	const fileTabsVisible =
+		hasModules && Boolean(backend.boardState.getFlowScriptFile);
+	const fileTabs = useMemo(
+		() =>
+			fileTabsVisible && modules
+				? flowScriptFileTabs(
+						modules,
+						fileId,
+						dirty && !readOnly,
+						files?.dirtyFileIds ?? EMPTY_DIRTY_FILES,
+					)
+				: [],
+		[fileTabsVisible, modules, fileId, dirty, readOnly, files?.dirtyFileIds],
+	);
 
 	const scopedSectionCount = scopeAnchors?.length ?? 0;
 	// Peers whose broadcast scope equals ours (set equality on node ids) — shown
@@ -2119,6 +2315,16 @@ export function FlowScriptPanel({
 					</Button>
 				</div>
 			</div>
+
+			{onSelectFile && (
+				<FlowScriptFileTabs
+					tabs={fileTabs}
+					activeFileId={fileId}
+					// A selection scope is not a file: leave it before switching documents.
+					disabled={applying || scoped}
+					onSelect={onSelectFile}
+				/>
+			)}
 
 			{scoped && !loadError && (
 				<output className="flex flex-wrap items-center justify-between gap-2 border-b bg-[color-mix(in_oklch,var(--primary)_8%,transparent)] px-3 py-2 text-xs text-muted-foreground">

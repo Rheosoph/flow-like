@@ -57,6 +57,7 @@ import {
 	SidebarProvider,
 	SidebarRail,
 	useBackend,
+	useBackendReady,
 	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
@@ -1015,6 +1016,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const backendReady = useBackendReady();
 	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const profile = useInvoke(
@@ -1050,7 +1052,10 @@ export function NavUser({
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
-		true, // getNotifications returns local counts offline; keep it enabled signed-out
+		// getNotifications returns local counts offline, so it stays enabled while
+		// signed out - but not against the prerender placeholder backend, whose
+		// states throw for every call.
+		backendReady,
 		[auth?.user?.profile?.sub, auth?.isAuthenticated],
 		0, // staleTime: 0 to always refetch on mount
 	);

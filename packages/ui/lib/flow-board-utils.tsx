@@ -728,6 +728,10 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
+			// A module is a virtual file, not a place on the canvas: it is never drawn as a
+			// chip in its parent, and it has no boundary pins to draw when it is the layer
+			// being viewed — its nodes render as if they were at the root.
+			if (layer.type === ILayerType.Module) continue;
 			if (layer.type === ILayerType.Function && layer.id !== currentLayer)
 				continue;
 			const parentLayer =

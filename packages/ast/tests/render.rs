@@ -78,6 +78,7 @@ fn renders_event_with_let_and_named_args() {
                 ],
             },
         }],
+        detached: vec![],
         modules: vec![],
     };
 
@@ -136,6 +137,7 @@ fn renders_if_else_branch() {
                 }],
             },
         }],
+        detached: vec![],
         modules: vec![],
     };
 
@@ -182,6 +184,7 @@ fn expr_text(value: Expr) -> String {
                 }],
             },
         }],
+        detached: vec![],
         modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
@@ -352,6 +355,7 @@ fn renders_return_statement() {
                 }],
             },
         }],
+        detached: vec![],
         modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
@@ -388,6 +392,7 @@ fn renders_event_with_multiple_params() {
             anchor: None,
             body: Block { stmts: vec![] },
         }],
+        detached: vec![],
         modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());

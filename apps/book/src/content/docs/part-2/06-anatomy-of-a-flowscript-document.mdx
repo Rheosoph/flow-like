@@ -22,8 +22,9 @@ It is a stable reading of one Board.
 
 Imports establish names. Interfaces describe structured values. Top-level variables describe the
 Board's per-run and configurable state. Functions define callable layers. Events provide the
-entries that can start execution. Inside those entries and functions, statements describe nodes
-and control flow.
+entries that can start execution. A `detached` block holds an execution chain the Board contains
+but no entry reaches, one block per chain. Inside those entries and functions, statements describe
+nodes and control flow.
 
 The order is deliberate:
 
@@ -33,7 +34,11 @@ interfaces
 top-level variables
 functions
 event entries
+detached blocks
 ```
+
+A `detached` block is what lowering writes when a chain has no reachable entry; nothing inside one
+runs, so reading it is a finding about the Board rather than a construct to author.
 
 By the end of this chapter, we will be able to look at a complete document and know what kind of
 graph entity each section represents. We will also know which familiar-looking words have

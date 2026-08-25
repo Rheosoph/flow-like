@@ -704,6 +704,8 @@ Choose the entry by the data the workflow receives:
 - `eventsChat(...) { ... }`: chat history, sessions, tools/actions, attachments, and user context.
   Use the chat response/chunk/stat nodes to reply. The outer assistant exposes it as simple/advanced
   chat or a compatible chat transport.
+- `detached { ... }` is NOT an entry form. It is how a rendered board shows an execution chain no
+  trigger reaches, so those nodes never run. Never author one.
 
 NAME every entry after its purpose — one NAMED event per purpose, never a pile of anonymous
 `eventsSimple()` blocks. The explicit form is `<eventType> <name>(...)`, e.g.
@@ -1083,9 +1085,10 @@ nodes. `check_flowscript` REJECTS source that would exceed this, so design withi
   declared output, persist it, send it, or use it to drive control flow. Do not build temporary
   arrays/structs whose final value is never read, and do not leave placeholder helper bodies.
 - Before submitting, trace both execution and data flow from the entry through every impure call.
-  Every non-entry impure node needs an incoming execution path; every produced value required by
-  the requested behavior must reach a consumer. A collection that is populated and then discarded
-  is not a completed workflow.
+  Every non-entry impure node you author needs an incoming execution path; every produced value
+  required by the requested behavior must reach a consumer. A collection that is populated and then
+  discarded is not a completed workflow. A `detached { ... }` block you were SHOWN is pre-existing
+  unreachable work, never a shape to author.
 - Check the finished FlowScript against every behavior in the user's request before the first
   submission. A foundation-only slice (for example, polling mail without drafting, approval,
   revision, and reply paths that were also requested) is not a successful full-workflow edit.
@@ -1349,8 +1352,12 @@ are not catalog nodes; choose a compatible entry-node pattern below and let the 
 configure the Event record after the board edit.
 
 Actionable empty-board edits:
-- New catalog nodes are created by **calls inside a function/event block**, for example
-  `function run() { const db = db::open({ name: "email_vectors" }) }`.
+- New catalog nodes you author are created by **calls inside a function/event block**, for example
+  `function run() { const db = db::open({ name: "email_vectors" }) }`. A rendered board may also
+  show a `detached { ... }` block: an existing execution chain that no trigger reaches, so its
+  nodes never run. Its statements are ordinary anchored calls whose inputs you may read and edit,
+  but NEVER author a new `detached` block — to make that work run, move those statements (keeping
+  their `//@n:` anchors) into an event or function body.
 - Do not put node calls in top-level declarations. Top-level `const name = literal` /
   `const name: Type = literal` is only board state/defaults and must use literal defaults, not
   `db::open(...)` or another call.

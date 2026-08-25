@@ -818,6 +818,7 @@ export class WebBoardState implements IBoardState {
 		allowDeletions = false,
 		origin: FlowScriptApplyOrigin = "editor",
 		scopeAnchors?: string[],
+		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
 		return apiPost<IApplyFlowScriptResponse>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
@@ -829,6 +830,7 @@ export class WebBoardState implements IBoardState {
 				// be indistinguishable from a person's edit in the admin view.
 				origin,
 				scope_anchors: scopeAnchors,
+				module,
 			},
 			this.backend.auth,
 		);
@@ -909,6 +911,28 @@ export class WebBoardState implements IBoardState {
 		const params = new URLSearchParams();
 		params.set("anchors", String(anchors));
 		params.set("node_ids", nodeIds.join(","));
+		const response = await apiGet<{
+			flowscript: string;
+			scope_anchors?: string[];
+		}>(
+			`apps/${appId}/board/${boardId}/flowscript?${params}`,
+			this.backend.auth,
+		);
+		return {
+			flowscript: response.flowscript,
+			scope_anchors: response.scope_anchors ?? [],
+		};
+	}
+
+	async getFlowScriptFile(
+		appId: string,
+		boardId: string,
+		file: string,
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		const params = new URLSearchParams();
+		params.set("anchors", String(anchors));
+		params.set("file", file);
 		const response = await apiGet<{
 			flowscript: string;
 			scope_anchors?: string[];

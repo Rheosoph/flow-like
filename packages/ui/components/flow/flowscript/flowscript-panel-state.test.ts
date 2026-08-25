@@ -100,6 +100,58 @@ describe("FlowScript editing scope", () => {
 	});
 });
 
+describe("FlowScript file scope", () => {
+	const files = {
+		hasModules: true,
+		backendSupportsFiles: true,
+		file: "module-a",
+	};
+
+	test("edits the canvas's file on a modular board", () => {
+		expect(resolveFlowScriptScope(undefined, true, files)).toEqual({
+			kind: "file",
+			file: "module-a",
+		});
+		expect(
+			resolveFlowScriptScope(undefined, true, { ...files, file: "main" }),
+		).toEqual({ kind: "file", file: "main" });
+	});
+
+	test("a board without modules keeps the whole-board render", () => {
+		expect(
+			resolveFlowScriptScope(undefined, true, { ...files, hasModules: false }),
+		).toEqual({ kind: "full" });
+	});
+
+	test("degrades to the full render when the backend cannot render files", () => {
+		expect(
+			resolveFlowScriptScope(undefined, true, {
+				...files,
+				backendSupportsFiles: false,
+			}),
+		).toEqual({ kind: "full" });
+	});
+
+	test("a selection scope overrides the file while it is active", () => {
+		expect(resolveFlowScriptScope(["node-a"], true, files)).toEqual({
+			kind: "scoped",
+			nodeIds: ["node-a"],
+		});
+		// Exiting the selection scope drops back to the file the canvas is on.
+		expect(resolveFlowScriptScope(undefined, true, files)).toEqual({
+			kind: "file",
+			file: "module-a",
+		});
+	});
+
+	test("a selection the backend cannot scope still lands on the file", () => {
+		expect(resolveFlowScriptScope(["node-a"], false, files)).toEqual({
+			kind: "file",
+			file: "module-a",
+		});
+	});
+});
+
 describe("FlowScript apply state with merge conflicts", () => {
 	test("unresolved statement-merge conflicts block apply", () => {
 		expect(

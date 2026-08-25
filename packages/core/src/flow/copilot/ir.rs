@@ -1197,6 +1197,8 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
         variables,
         functions: Vec::new(),
         events: Vec::new(),
+        // The typed IR only compiles reachable programs: an unreachable chain has no source form.
+        detached: Vec::new(),
         modules: Vec::new(),
     };
     let mut module_node_counts = BTreeMap::new();

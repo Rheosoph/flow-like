@@ -377,9 +377,6 @@ eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     }
 }
 
-notifyProjectUser(success: bool) {   //@n:iykhixlujrwjsexflb8ekm93
-}
-
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
         return `Already created a report`   //@n:rkd57x855lzb6sr1lyatwt2h
@@ -403,4 +400,8 @@ eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string
     filterSources({ hash: widgetInstanceId })   //@n:efukkvhntw0zqzovze5miev6
     saveConfig({ config: userConfiguration })   //@n:zjbodntlzzvdtaujg2nf9j0c
     loadConfigDashboard()   //@n:c14m2n2pc5cr0f7ly3t79zk5
+}
+
+detached {
+    projectUser({ flowUserSub: "32a5a414-a001-70d1-7b23-570f65ba772b", title: "Notification", description: "", link: "/case" })   //@n:iykhixlujrwjsexflb8ekm93
 }

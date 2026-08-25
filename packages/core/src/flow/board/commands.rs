@@ -73,7 +73,8 @@ impl_command_methods!(
     RemoveVariable,
     UpsertVariable,
     UpsertLayer,
-    RemoveLayer
+    RemoveLayer,
+    MoveToLayer
 );
 
 #[async_trait]
@@ -127,6 +128,7 @@ pub enum GenericCommand {
     UpsertVariable(variables::upsert_variable::UpsertVariableCommand),
     UpsertLayer(layer::upsert_layer::UpsertLayerCommand),
     RemoveLayer(layer::remove_layer::RemoveLayerCommand),
+    MoveToLayer(layer::move_to_layer::MoveToLayerCommand),
 }
 
 impl GenericCommand {
@@ -194,6 +196,16 @@ impl GenericCommand {
                 touched
                     .nodes
                     .extend(command.nodes.iter().map(|node| node.id.clone()));
+            }
+            // `previous` mixes node, comment and layer ids with no per-entry type tag, so a
+            // moved id is recorded in both sets — `Touched::seed` only acts on the set that
+            // matches what the id actually names and no-ops on the other.
+            GenericCommand::MoveToLayer(command) => {
+                touched.nodes.extend(command.previous.keys().cloned());
+                touched.layers.extend(command.previous.keys().cloned());
+                if let Some(target) = &command.target {
+                    touched.layers.insert(target.clone());
+                }
             }
         }
     }

@@ -36,25 +36,33 @@ import { useMediaQuery } from "@uidotdev/usehooks";
 import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
+	Columns2Icon,
 	Eye,
-	PencilLineIcon,
 	FileCode2Icon,
-	FileTextIcon,
+	FilesIcon,
+	GitBranchIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
+	MessageSquareIcon,
 	NotebookPenIcon,
+	PanelBottomIcon,
+	PencilLineIcon,
 	PlayCircleIcon,
 	ScrollIcon,
 	SearchIcon,
 	ShareIcon,
+	SlidersHorizontalIcon,
 	SparklesIcon,
 	SquareChevronUpIcon,
 	SquareFunctionIcon,
+	TagIcon,
+	TriangleAlertIcon,
 	VariableIcon,
 	WaypointsIcon,
 	WifiIcon,
 	WifiOffIcon,
 	XIcon,
+	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
@@ -68,10 +76,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type {
-	ImperativePanelGroupHandle,
-	ImperativePanelHandle,
-} from "react-resizable-panels";
 import {
 	Button,
 	Dialog,
@@ -79,10 +83,6 @@ import {
 	DialogDescription,
 	DialogHeader,
 	DialogTitle,
-	Sheet,
-	SheetContent,
-	SheetHeader,
-	SheetTitle,
 	useHub,
 	useLogAggregation,
 	useMobileHeader,
@@ -95,15 +95,14 @@ import {
 } from "../../components/flow/board-sync-recovery";
 import { CommentNode } from "../../components/flow/comment-node";
 import { FlowContextMenu } from "../../components/flow/flow-context-menu";
-import { FlowDock } from "../../components/flow/flow-dock";
 import { FlowNode } from "../../components/flow/flow-node";
+import { EventPayloadForm } from "../../components/flow/flow-node/event-payload-form";
 import {
 	FlowNodeInfoOverlay,
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
-import { FlowPages } from "../../components/flow/flow-pages";
-import { EventPayloadForm } from "../../components/flow/flow-node/event-payload-form";
 import { deriveRunCapabilities } from "../../components/flow/flow-run-capabilities";
+import { catalogNamespaceRoots } from "../../components/flow/flowscript/flowscript-language";
 import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
 import { resolveJoinableScopeNodeIds } from "../../components/flow/flowscript/flowscript-panel-state";
 import {
@@ -117,20 +116,38 @@ import type {
 	FlowScriptRunCapability,
 	FlowScriptRunMode,
 } from "../../components/flow/flowscript/flowscript-run-lens";
+import { useFlowScriptFiles } from "../../components/flow/flowscript/use-flowscript-files";
 import { MediaNode } from "../../components/flow/media-node";
+import { BoardActivityRail } from "../../components/flow/shell/board-activity-rail";
+import type { IBoardRailItem } from "../../components/flow/shell/board-activity-rail";
+import { BoardExplorer } from "../../components/flow/shell/board-explorer";
+import { BoardInspector } from "../../components/flow/shell/board-inspector";
+import {
+	BoardIdentityForm,
+	BoardReleaseForm,
+	BoardRuntimeForm,
+	executionModeIcon,
+} from "../../components/flow/shell/board-meta-controls";
+import { BoardMobileHost } from "../../components/flow/shell/board-mobile-host";
+import { BoardPane, BoardPanel } from "../../components/flow/shell/board-panes";
+import { BoardShell } from "../../components/flow/shell/board-shell";
+import {
+	BoardStatusBar,
+	BoardStatusItem,
+} from "../../components/flow/shell/board-status-bar";
+import type { IBoardCommand } from "../../components/flow/shell/use-board-commands";
+import {
+	formatShortcut,
+	useBoardCommands,
+} from "../../components/flow/shell/use-board-commands";
+import { useBoardSurface } from "../../components/flow/shell/use-board-surface";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
 import { typeToColor } from "../../components/flow/utils";
 import { VariablesMenu } from "../../components/flow/variables/variables-menu";
-import {
-	ResizableHandle,
-	ResizablePanel,
-	ResizablePanelGroup,
-} from "../../components/ui/resizable";
 import { useCommandExecution } from "../../hooks/use-command-execution";
 import { useCopilotCommands } from "../../hooks/use-copilot-commands";
 import { useExecutionPresence } from "../../hooks/use-execution-presence";
-import { useFlowPanels } from "../../hooks/use-flow-panels";
 import {
 	type FollowedEditorAnchor,
 	useFollowMode,
@@ -151,6 +168,7 @@ import {
 	connectPinsCommand,
 	disconnectPinsCommand,
 	moveNodeCommand,
+	moveToLayerCommand,
 	removeCommentCommand,
 	removeLayerCommand,
 	removeNodeCommand,
@@ -181,11 +199,23 @@ import {
 	parseBoard,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
+import {
+	FLOWSCRIPT_KEYWORDS,
+	activeModuleId,
+	boardFlowScriptScope,
+	boardModules,
+	fileModuleId,
+	moduleFileId,
+	modulePathLabel,
+} from "../../lib/flow-modules";
+import { onFlowScriptNamesTableLoaded } from "../../lib/flowscript/names";
 import { toastError, toastSuccess, toastWarning } from "../../lib/messages";
+import { plainTextFromRichContent } from "../../lib/plate-text";
 import { isWebkitLite } from "../../lib/platform";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IBit } from "../../lib/schema/bit/bit";
+import { IExecutionMode } from "../../lib/schema/flow/board";
 import {
 	type IBoard,
 	type IComment,
@@ -198,6 +228,7 @@ import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
 import { buildTemplateCopyPasteCommand } from "../../lib/template-copy-paste";
 import { convertJsonToUint8Array } from "../../lib/uint8";
+import { cn } from "../../lib/utils";
 import {
 	type AssistantBoardSurface,
 	useAssistantSurface,
@@ -211,7 +242,6 @@ import {
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
 import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
-import { BoardMeta } from "./board-meta";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
 import { FlowCopilot } from "./flow-copilot";
@@ -221,6 +251,7 @@ import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
+import { FlowModuleTabs } from "./flow-module-tabs";
 import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowPresenceBar } from "./flow-presence-bar";
 import { FlowRuns } from "./flow-runs";
@@ -240,6 +271,25 @@ import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
+/**
+ * Canvas node types a "move to module" carries: nodes and comments. A layer keeps its
+ * own file through its parent chain, so it is not re-filed from the canvas.
+ */
+const MOVABLE_SELECTION_TYPES = new Set([
+	"node",
+	"flowNode",
+	"callFunctionNode",
+	"commentNode",
+	"mediaNode",
+]);
+
+/** Same ids, order-insensitive — keeps a re-selection from re-rendering half the board. */
+const sameIds = (previous: string[], next: string[]): boolean => {
+	if (previous.length !== next.length) return false;
+	const known = new Set(previous);
+	return next.every((id) => known.has(id));
+};
+
 type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 interface FlowCanvasProps {
@@ -251,7 +301,8 @@ interface FlowCanvasProps {
 	colorMode: ReactFlowProps["colorMode"];
 	nodesInteractive: boolean;
 	onlyRenderVisible: boolean;
-	currentLayer: string | undefined;
+	/** Inside a layer with a boundary. A module is a file, not a place, so it reads as root. */
+	insideLayer: boolean;
 	onContextMenu: ReactFlowProps["onContextMenu"];
 	onInit: ReactFlowProps["onInit"];
 	onNodeDoubleClick: ReactFlowProps["onNodeDoubleClick"];
@@ -283,7 +334,7 @@ const FlowCanvas = memo(function FlowCanvas({
 	colorMode,
 	nodesInteractive,
 	onlyRenderVisible,
-	currentLayer,
+	insideLayer,
 	onContextMenu,
 	onInit,
 	onNodeDoubleClick,
@@ -357,11 +408,9 @@ const FlowCanvas = memo(function FlowCanvas({
 				nodeColor={miniMapNodeColor}
 			/>
 			<Background
-				variant={
-					currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots
-				}
+				variant={insideLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots}
 				color={
-					currentLayer
+					insideLayer
 						? `color-mix(in oklch, var(--foreground) 5%, transparent)`
 						: `color-mix(in oklch, var(--foreground) 20%, transparent)`
 				}
@@ -372,12 +421,6 @@ const FlowCanvas = memo(function FlowCanvas({
 		</ReactFlow>
 	);
 });
-
-// Index of each panel inside the outer horizontal ResizablePanelGroup, ordered by
-// their `order` prop: variables(0), main container(1), runs(2), flowscript(3), search(4).
-const MAIN_PANEL_INDEX = 1;
-const RUNS_PANEL_INDEX = 2;
-const FLOWSCRIPT_PANEL_INDEX = 3;
 
 const PROFILE_BITS_STALE_TIME = 5 * 60 * 1000;
 
@@ -462,13 +505,6 @@ export function FlowBoard({
 	}, [appId, boardId, initialVersionKey]);
 	const [initialized, setInitialized] = useState(false);
 	const [flowInstanceReady, setFlowInstanceReady] = useState(false);
-	const flowPanelRef = useRef<ImperativePanelHandle>(null);
-	const logPanelRef = useRef<ImperativePanelHandle>(null);
-	const varPanelRef = useRef<ImperativePanelHandle>(null);
-
-	const runsPanelRef = useRef<ImperativePanelHandle>(null);
-	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
-	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -709,9 +745,51 @@ export function FlowBoard({
 	const [pinCache, setPinCache] = useState<
 		Map<string, [IPin, INode | ILayer, boolean]>
 	>(new Map());
-	const [editBoard, setEditBoard] = useState(false);
 	const [currentLayer, setCurrentLayer] = useState<string | undefined>();
 	const [layerPath, setLayerPath] = useState<string | undefined>();
+	// The file the canvas is in: a module open on screen, or the module owning whatever layer
+	// is. Null is main — the board root, which is not a layer.
+	const currentModuleId = useMemo(
+		() => activeModuleId(layerPath, currentLayer, board.data?.layers),
+		[layerPath, currentLayer, board.data?.layers],
+	);
+	// A module has no boundary and draws no frame, so its canvas is the root's canvas.
+	const insideModule =
+		Boolean(currentLayer) && currentModuleId === currentLayer;
+	const modules = useMemo(
+		() => boardModules(board.data?.layers),
+		[board.data?.layers],
+	);
+	// The board half of the FlowScript editor's world: what the modules are called and which
+	// functions live in each, so a file that calls into another file is not linted as unknown.
+	const flowScriptBoardScope = useMemo(
+		() => boardFlowScriptScope(board.data?.layers),
+		[board.data?.layers],
+	);
+	/** The FlowScript file the canvas is on — `main` or the module it is inside. */
+	const currentFileId = moduleFileId(currentModuleId);
+	// A module named after a catalog namespace root would make every qualified call inside it
+	// ambiguous, so the catalog's roots are reserved alongside the language's keywords. The roots
+	// are only complete once the FlowScript names snapshot is in — nothing here loads it (the
+	// module name field does), this just recomputes when it arrives.
+	const [flowScriptNamesReady, setFlowScriptNamesReady] = useState(false);
+	useEffect(
+		() => onFlowScriptNamesTableLoaded(() => setFlowScriptNamesReady(true)),
+		[],
+	);
+	const moduleReservedRoots = useMemo(
+		() => [...FLOWSCRIPT_KEYWORDS, ...catalogNamespaceRoots(catalog.data)],
+		// biome-ignore lint/correctness/useExhaustiveDependencies: the names snapshot is a recompute trigger, read inside catalogNamespaceRoots
+		[catalog.data, flowScriptNamesReady],
+	);
+	// One buffer per file, kept here: the panel mounts twice (desktop panel, mobile sheet) and
+	// both must hand the same drafts back and forth.
+	const flowScriptFiles = useFlowScriptFiles();
+	const flowScriptFilesClear = flowScriptFiles.clear;
+	// Drafts belong to one board at one version; switching either makes every stashed file stale.
+	useEffect(() => {
+		flowScriptFilesClear();
+	}, [boardId, version, flowScriptFilesClear]);
 	const [templateSelectorOpen, setTemplateSelectorOpen] = useState(false);
 	const [runtimeVarsPromptOpen, setRuntimeVarsPromptOpen] = useState(false);
 	const [pendingExecution, setPendingExecution] = useState<{
@@ -778,15 +856,6 @@ export function FlowBoard({
 					variant={"outline"}
 					size={"icon"}
 					onClick={async () => {
-						setEditBoard(true);
-					}}
-				>
-					<NotebookPenIcon />
-				</Button>,
-				<Button
-					variant={"outline"}
-					size={"icon"}
-					onClick={async () => {
 						toggleRunHistory();
 					}}
 				>
@@ -829,7 +898,8 @@ export function FlowBoard({
 			);
 		}
 
-		if (currentLayer) {
+		// Modules are left through their tab, not by climbing out of them.
+		if (currentLayer && !insideModule) {
 			left.push(
 				<Button
 					variant={"default"}
@@ -850,6 +920,7 @@ export function FlowBoard({
 	}, [
 		currentMetadata,
 		currentLayer,
+		insideModule,
 		parentRegister.boardParents,
 		boardId,
 		updateHeader,
@@ -881,6 +952,31 @@ export function FlowBoard({
 		fitView,
 		getNodes,
 	});
+
+	// Opening a module file is nothing but making it the current layer, so it inherits the
+	// per-layer viewport and the layer trail. The tab is only a no-op when the canvas already
+	// shows that exact file — from a layer *inside* a module it walks back out to it.
+	const selectModule = useCallback(
+		async (moduleId: string | null) => {
+			if ((currentLayer ?? null) === moduleId) return;
+			if (!moduleId) {
+				await saveViewport();
+				setCurrentLayer(undefined);
+				setLayerPath(undefined);
+				return;
+			}
+			const layer = board.data?.layers?.[moduleId];
+			if (layer) await pushLayer(layer);
+		},
+		[board.data?.layers, currentLayer, pushLayer, saveViewport],
+	);
+
+	const handleSelectModule = useCallback(
+		(moduleId: string | null) => {
+			void selectModule(moduleId);
+		},
+		[selectModule],
+	);
 
 	const {
 		executeCommand,
@@ -1093,18 +1189,6 @@ export function FlowBoard({
 		setNodes,
 	});
 
-	useEffect(() => {
-		if (!logPanelRef.current) return;
-		// Avoid auto-expanding logs on mobile to prevent layout jump
-		const isMobile =
-			typeof window !== "undefined" &&
-			window.matchMedia("(max-width: 767px)").matches;
-		if (isMobile) return;
-		logPanelRef.current.expand();
-		const size = logPanelRef.current.getSize();
-		if (size < 10) logPanelRef.current.resize(45);
-	}, [logPanelRef.current]);
-
 	const initializeFlow = useCallback(async (_instance: ReactFlowInstance) => {
 		setFlowInstanceReady(true);
 	}, []);
@@ -1179,10 +1263,13 @@ export function FlowBoard({
 		[backend.templateState, executeCommand, currentLayer, version],
 	);
 
-	const [varsOpen, setVarsOpen] = useState(false);
-
-	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
-	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
+	const isMobile = useMediaQuery("(max-width: 767px)");
+	// One owner for every dockable surface. Replaces six independent booleans and
+	// the four imperative panel handles that used to hand a closing panel's width
+	// to its neighbour instead of back to the canvas.
+	const { surface: shell, actions: surfaceActions } = useBoardSurface(isMobile);
+	const flowScriptPanelVisible = shell.script;
+	const flowScriptSheetOpen = shell.mobile === "script";
 	// Node ids the FlowScript panel is scoped to ("Edit selection as FlowScript").
 	const [flowScriptScope, setFlowScriptScope] = useState<string[] | undefined>(
 		undefined,
@@ -1204,13 +1291,8 @@ export function FlowBoard({
 		}
 		if (anchor.kind !== "variable") focusNode(anchor.id);
 	};
-	const [runsOpen, setRunsOpen] = useState(false);
-	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
-	const [pagesOpen, setPagesOpen] = useState(false);
 	const [searchOpen, setSearchOpen] = useState(false);
-	const [searchMode, setSearchMode] = useState<"dialog" | "sidebar">("dialog");
-	const [copilotOpen, setCopilotOpen] = useState(false);
 	const [copilotWorkspaceVisible, setCopilotWorkspaceVisible] = useState(false);
 	const [copilotInitialPrompt, setCopilotInitialPrompt] = useState<
 		string | undefined
@@ -1219,12 +1301,14 @@ export function FlowBoard({
 	// state (updated only on real selection changes) so the copilot subtree is not
 	// re-rendered on every unrelated FlowBoard render.
 	const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+	// Nodes *and* comments — the selection a move to another file would carry.
+	const [selectedMovableIds, setSelectedMovableIds] = useState<string[]>([]);
 
 	const handleCopilotClose = useCallback(() => {
-		setCopilotOpen(false);
 		setCopilotInitialPrompt(undefined);
 		setCopilotWorkspaceVisible(false);
-	}, []);
+		surfaceActions.closeSecondary();
+	}, [surfaceActions]);
 	// Single launcher: hosts with a global assistant (desktop) route to the shared surface store,
 	// everything else keeps the embedded FlowCopilot panel.
 	const openAssistant = useCallback(
@@ -1234,9 +1318,9 @@ export function FlowBoard({
 				return;
 			}
 			if (prompt) setCopilotInitialPrompt(prompt);
-			setCopilotOpen(true);
+			surfaceActions.openSecondary("flowpilot");
 		},
-		[externalAssistant],
+		[externalAssistant, surfaceActions],
 	);
 	const handleClearRunContext = useCallback(
 		() => setCurrentMetadata(undefined),
@@ -1244,83 +1328,44 @@ export function FlowBoard({
 	);
 
 	useEffect(() => {
-		if (!copilotOpen) {
-			setCopilotWorkspaceVisible(false);
-		}
-	}, [copilotOpen]);
-	const isMobile = useMediaQuery("(max-width: 767px)");
+		if (shell.secondary !== "flowpilot") setCopilotWorkspaceVisible(false);
+	}, [shell.secondary]);
 
-	const { toggleVars, toggleLogs } = useFlowPanels({
-		varPanelRef,
-		logPanelRef,
-		setVarsOpen,
-		setLogsOpen,
-	});
+	const toggleVars = useCallback(
+		() => surfaceActions.toggleSidebar("variables"),
+		[surfaceActions],
+	);
+	const toggleLogs = useCallback(
+		() => surfaceActions.togglePanel("traces"),
+		[surfaceActions],
+	);
+	const toggleRunHistory = useCallback(
+		() => surfaceActions.togglePanel("runs"),
+		[surfaceActions],
+	);
+	const togglePages = useCallback(
+		() => surfaceActions.toggleSidebar("explorer"),
+		[surfaceActions],
+	);
 
-	// Runs and FlowScript are collapsible siblings on the right edge of the outer
-	// horizontal group. Collapsing one via the per-panel imperative API makes
-	// react-resizable-panels hand the freed width to its immediate neighbor, which
-	// un-collapses it (e.g. closing FlowScript surfaces Runs). Rewrite the whole
-	// layout instead and give the freed width back to the flexible main container.
-	const setSidePanelSize = useCallback((index: number, size: number) => {
-		const group = panelGroupRef.current;
-		if (!group) return;
-		const layout = group.getLayout();
-		const current = layout[index] ?? 0;
-		if (Math.abs(current - size) < 0.01) return;
-		const next = [...layout];
-		next[index] = size;
-		next[MAIN_PANEL_INDEX] = Math.max(
-			0,
-			(next[MAIN_PANEL_INDEX] ?? 0) - (size - current),
-		);
-		group.setLayout(next);
-	}, []);
-
-	const toggleRunHistory = useCallback(() => {
-		if (isMobile) {
-			setRunsOpen((v) => !v);
-			return;
-		}
-		const group = panelGroupRef.current;
-		if (!group) return;
-		const open = (group.getLayout()[RUNS_PANEL_INDEX] ?? 0) < 1;
-		setSidePanelSize(RUNS_PANEL_INDEX, open ? 30 : 0);
-	}, [isMobile, setSidePanelSize]);
-
-	const togglePages = useCallback(() => {
-		if (isMobile) {
-			setPagesOpen((v) => !v);
-		} else {
-			// For desktop, we use the runs panel area to show pages
-			// Toggle the runs panel if needed, or just open the sheet
-			setPagesOpen((v) => !v);
-		}
-	}, [isMobile]);
+	// A run has traces to show — surface them, but never take over a phone screen.
+	useEffect(() => {
+		if (!currentMetadata || isMobile) return;
+		surfaceActions.openPanel("traces");
+	}, [currentMetadata, isMobile, surfaceActions]);
 
 	const toggleFlowScript = useCallback(() => {
-		// The dock/menu entry always opens the whole board, never a stale scope.
+		// The rail/palette entry always opens the whole board, never a stale scope.
 		setFlowScriptScope(undefined);
-		if (isMobile) {
-			setFlowScriptSheetOpen((v) => !v);
-			return;
-		}
-		const group = panelGroupRef.current;
-		if (!group) return;
-		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
-		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
-	}, [isMobile, setSidePanelSize]);
+		surfaceActions.toggleScript();
+	}, [surfaceActions]);
 
 	// "Edit selection as FlowScript": open the panel on a selection-scoped render.
 	const openFlowScriptForSelection = useCallback(() => {
 		if (selectedNodeIds.length === 0) return;
 		setFlowScriptScope([...selectedNodeIds]);
-		if (isMobile) {
-			setFlowScriptSheetOpen(true);
-			return;
-		}
-		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
-	}, [selectedNodeIds, isMobile, setSidePanelSize]);
+		surfaceActions.openScript();
+	}, [selectedNodeIds, surfaceActions]);
 
 	// Join a teammate's shared scoped session (presence bar action): validate
 	// their broadcast node ids against the local board — peers are untrusted and
@@ -1339,13 +1384,9 @@ export function FlowBoard({
 				return;
 			}
 			setFlowScriptScope(known);
-			if (isMobile) {
-				setFlowScriptSheetOpen(true);
-				return;
-			}
-			setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
+			surfaceActions.openScript();
 		},
-		[isMobile, setSidePanelSize, t],
+		[surfaceActions, t],
 	);
 
 	// Canvas "Go to code" (anchored comment toolbar): open/reveal the FlowScript
@@ -1353,11 +1394,10 @@ export function FlowBoard({
 	// freshly opened panel has rendered the anchor.
 	const openFlowScriptAtNode = useCallback(
 		(nodeId: string) => {
-			if (isMobile) setFlowScriptSheetOpen(true);
-			else setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 35);
+			surfaceActions.openScript();
 			setFlowScriptRevealRequest({ nodeId, token: Date.now() });
 		},
-		[isMobile, setSidePanelSize],
+		[surfaceActions],
 	);
 	const openFlowScriptAtNodeRef = useRef(openFlowScriptAtNode);
 	openFlowScriptAtNodeRef.current = openFlowScriptAtNode;
@@ -2420,40 +2460,6 @@ export function FlowBoard({
 		};
 	}, []);
 
-	// Keyboard shortcut: Cmd/Ctrl+Shift+P to toggle pages panel
-	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
-			if (
-				(e.metaKey || e.ctrlKey) &&
-				e.shiftKey &&
-				e.key.toLowerCase() === "p"
-			) {
-				e.preventDefault();
-				setPagesOpen((v) => !v);
-			}
-		};
-		document.addEventListener("keydown", handleKeyDown);
-		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, []);
-
-	// Keyboard shortcut: Cmd/Ctrl+F to open search dialog, Cmd/Ctrl+Shift+F for sidebar
-	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
-				e.preventDefault();
-				if (e.shiftKey) {
-					setSearchMode("sidebar");
-					setSearchOpen((prev) => !prev);
-				} else {
-					setSearchMode("dialog");
-					setSearchOpen(true);
-				}
-			}
-		};
-		document.addEventListener("keydown", handleKeyDown);
-		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, []);
-
 	useEffect(() => {
 		document.addEventListener("flow-drop", handleDrop);
 		return () => {
@@ -2502,20 +2508,13 @@ export function FlowBoard({
 	const handleExplainNodesRef = useRef(handleExplainNodes);
 	handleExplainNodesRef.current = handleExplainNodes;
 
-	const handleFilterLogs = useCallback((nodeId: string) => {
-		setLogNodeIdFilter(nodeId);
-		if (
-			typeof window !== "undefined" &&
-			window.matchMedia("(max-width: 767px)").matches
-		) {
-			setLogsOpen(true);
-			return;
-		}
-		if (!logPanelRef.current) return;
-		logPanelRef.current.expand();
-		const size = logPanelRef.current.getSize();
-		if (size < 10) logPanelRef.current.resize(20);
-	}, []);
+	const handleFilterLogs = useCallback(
+		(nodeId: string) => {
+			setLogNodeIdFilter(nodeId);
+			surfaceActions.openPanel("traces");
+		},
+		[surfaceActions],
+	);
 	const handleFilterLogsRef = useRef(handleFilterLogs);
 	handleFilterLogsRef.current = handleFilterLogs;
 
@@ -2792,11 +2791,15 @@ export function FlowBoard({
 						selectedNode.type === "callFunctionNode",
 				)
 				.map((selectedNode) => selectedNode.id);
-			setSelectedNodeIds((prev) => {
-				if (prev.length !== nodeIds.length) return nodeIds;
-				const prevSet = new Set(prev);
-				return nodeIds.every((id) => prevSet.has(id)) ? prev : nodeIds;
-			});
+			const movableIds = selectedNodes
+				.filter((selectedNode) =>
+					MOVABLE_SELECTION_TYPES.has(selectedNode.type ?? ""),
+				)
+				.map((selectedNode) => selectedNode.id);
+			setSelectedNodeIds((prev) => (sameIds(prev, nodeIds) ? prev : nodeIds));
+			setSelectedMovableIds((prev) =>
+				sameIds(prev, movableIds) ? prev : movableIds,
+			);
 			if (!awareness) return;
 			awareness.setLocalStateField("selection", { nodes: nodeIds });
 			// Broadcast active node when user clicks a single node
@@ -2807,6 +2810,22 @@ export function FlowBoard({
 			}
 		},
 		[awareness, broadcastActiveNode],
+	);
+
+	/**
+	 * Re-files the selection into another module — `null` is `main.flow`, the board root.
+	 * Which file an event belongs to follows its ENTRY node, so moving part of a chain
+	 * changes where those nodes are drawn, not the event's file assignment.
+	 */
+	const moveSelectionToModule = useCallback(
+		async (target: string | null) => {
+			if (selectedMovableIds.length === 0) return;
+			await executeCommand(
+				moveToLayerCommand({ ids: selectedMovableIds, target }),
+				false,
+			);
+		},
+		[executeCommand, selectedMovableIds],
 	);
 
 	const selectNodes = useCallback(
@@ -3421,6 +3440,9 @@ export function FlowBoard({
 			const layerEntities: { id: string; coordinates: number[] }[] = [];
 			if (boardData.layers) {
 				for (const layer of Object.values(boardData.layers)) {
+					// Modules are virtual files, never chips on the canvas — laying one out
+					// would reserve space for a box that is not drawn.
+					if (layer.type === ILayerType.Module) continue;
 					if (layer.type === "Function" && layer.id !== currentLayer) continue;
 					const parentLayer =
 						(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
@@ -3631,9 +3653,18 @@ export function FlowBoard({
 		executeCommands,
 		currentLayer,
 	});
+	// A per-file editor names the file it applies; that name IS the module identity and the layer
+	// the apply runs in (main has neither). Without a file the apply keeps using the open layer.
 	const handleApplyFlowScript = useCallback(
-		(flowscript: string, options?: FlowScriptApplyOptions) =>
-			applyFlowScript(flowscript, currentLayer, catalog.data, options),
+		(flowscript: string, options?: FlowScriptApplyOptions) => {
+			const moduleId = fileModuleId(options?.file);
+			return applyFlowScript(
+				flowscript,
+				options?.file ? moduleId : currentLayer,
+				catalog.data,
+				{ ...options, module: moduleId },
+			);
+		},
 		[applyFlowScript, currentLayer, catalog.data],
 	);
 	const handleApplyFlowIrCommit = useCallback(
@@ -3686,775 +3717,953 @@ export function FlowBoard({
 		handleClearRunContext,
 	]);
 
-	return (
-		<div className="w-full flex flex-1 grow flex-col min-h-0 relative overflow-hidden">
-			{/* Desktop FlowPilot floating panel (embedded hosts only) */}
-			{!externalAssistant && copilotOpen && (
-				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
-					<div
-						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
-						style={{
-							width: copilotWorkspaceVisible
-								? "min(1120px, calc(100vw - 1rem))"
-								: "min(500px, calc(100vw - 1rem))",
-						}}
-					>
-						<FlowCopilot
-							appId={appId}
-							board={board.data}
-							catalogNodes={catalog.data}
-							selectedNodeIds={selectedNodeIds}
-							onAcceptSuggestion={onAcceptSuggestion}
-							onFocusNode={focusNode}
-							onSelectNodes={selectNodes}
-							onExecuteCommands={handleExecuteCommands}
-							onApplyFlowScript={handleApplyFlowScript}
-							onApplyFlowIrCommit={handleApplyFlowIrCommit}
-							runContext={currentMetadata}
-							onClearRunContext={handleClearRunContext}
-							onClose={handleCopilotClose}
-							onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
-							mode="panel"
-							initialPrompt={copilotInitialPrompt}
-						/>
-					</div>
-				</div>
-			)}
-			{/* Top-right toolbar - Figma style with connection status */}
-			<div className="fixed right-3 top-16 z-50 flex items-center gap-2 sm:right-4 sm:top-16 md:right-6 md:top-6">
-				{/* Connection status indicator */}
-				{awareness && connectionStatus === "connected" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
-						<WifiIcon className="h-3.5 w-3.5 text-primary animate-pulse" />
-						<span className="text-xs font-medium text-primary">
-							{t("live", "Live")}
-						</span>
-					</div>
+	// One registry behind the rail, the chords and the Spotlight palette, so a
+	// board action cannot exist in one of the three and be missing from the others.
+	const boardCommands = useMemo<IBoardCommand[]>(
+		() => [
+			{
+				id: "explorer",
+				title: t("explorer", "Explorer"),
+				icon: FilesIcon,
+				shortcut: "mod+shift+e",
+				run: togglePages,
+			},
+			{
+				id: "search",
+				title: t("searchBoard", "Search board"),
+				icon: SearchIcon,
+				shortcut: "mod+shift+f",
+				run: () => surfaceActions.toggleSidebar("search"),
+			},
+			{
+				id: "search-dialog",
+				title: t("findOnBoard", "Find on board"),
+				icon: SearchIcon,
+				shortcut: "mod+f",
+				run: () => setSearchOpen(true),
+			},
+			{
+				id: "variables",
+				title: t("variablesFunctions", "Variables & Functions"),
+				icon: VariableIcon,
+				shortcut: "mod+shift+v",
+				run: toggleVars,
+			},
+			{
+				id: "events",
+				title: t("entryPoints", "Entry points"),
+				icon: ZapIcon,
+				run: () => surfaceActions.toggleSidebar("events"),
+			},
+			{
+				id: "comments",
+				title: t("comments", "Comments"),
+				icon: MessageSquareIcon,
+				run: () => surfaceActions.toggleSidebar("comments"),
+			},
+			{
+				id: "flowscript",
+				title: t("flowscript", "FlowScript"),
+				icon: FileCode2Icon,
+				shortcut: "mod+\\",
+				run: toggleFlowScript,
+			},
+			{
+				id: "runs",
+				title: t("runHistory", "Run History"),
+				icon: HistoryIcon,
+				shortcut: "mod+shift+r",
+				run: toggleRunHistory,
+			},
+			{
+				id: "traces",
+				title: t("logs", "Logs"),
+				icon: ScrollIcon,
+				shortcut: "mod+j",
+				run: toggleLogs,
+			},
+			{
+				id: "inspector",
+				title: t("nodeInfo", "Node Info"),
+				icon: SlidersHorizontalIcon,
+				shortcut: "mod+alt+i",
+				run: () => surfaceActions.toggleSecondary("inspector"),
+			},
+			{
+				id: "templates",
+				title: t("templates", "Templates"),
+				icon: LayoutTemplateIcon,
+				run: () => setTemplateSelectorOpen(true),
+			},
+			{
+				id: "auto-layout",
+				title: t("autoLayout", "Auto Layout"),
+				icon: WaypointsIcon,
+				run: () => setAutoLayoutDialogOpen(true),
+			},
+			{
+				id: "layer-up",
+				title: t("layerUp", "Layer Up"),
+				icon: SquareChevronUpIcon,
+				when: Boolean(currentLayer) && !insideModule,
+				run: () => popLayer(),
+			},
+			{
+				id: "flowpilot",
+				title: t("flowpilot", "FlowPilot"),
+				icon: SparklesIcon,
+				shortcut: "mod+alt+b",
+				run: () => openAssistant(),
+			},
+		],
+		[
+			t,
+			togglePages,
+			toggleVars,
+			toggleFlowScript,
+			toggleRunHistory,
+			toggleLogs,
+			surfaceActions,
+			currentLayer,
+			insideModule,
+			popLayer,
+			openAssistant,
+		],
+	);
+	useBoardCommands(boardCommands);
+
+	const railItems = useMemo<IBoardRailItem[]>(() => {
+		const byId = new Map(boardCommands.map((command) => [command.id, command]));
+		const entry = (
+			id: string,
+			active: boolean,
+			extra?: Partial<IBoardRailItem>,
+		): IBoardRailItem | null => {
+			const command = byId.get(id);
+			if (!command || command.when === false) return null;
+			const Icon = command.icon;
+			return {
+				id,
+				title: command.title,
+				icon: Icon ? <Icon /> : null,
+				shortcut: command.shortcut
+					? formatShortcut(command.shortcut)
+					: undefined,
+				active,
+				onSelect: command.run,
+				...extra,
+			};
+		};
+		return [
+			entry("explorer", shell.sidebar === "explorer"),
+			entry("search", shell.sidebar === "search"),
+			entry("variables", shell.sidebar === "variables"),
+			entry("events", shell.sidebar === "events"),
+			entry("comments", shell.sidebar === "comments", {
+				badge: Object.keys(board.data?.comments ?? {}).length,
+			}),
+			entry("flowscript", shell.script),
+			entry("runs", shell.panel === "runs"),
+			entry("traces", shell.panel === "traces"),
+		].filter(Boolean) as IBoardRailItem[];
+	}, [boardCommands, shell, board.data?.comments]);
+
+	const railBottomItems = useMemo<IBoardRailItem[]>(() => {
+		const items: IBoardRailItem[] = [
+			{
+				id: "inspector",
+				title: t("nodeInfo", "Node Info"),
+				icon: <SlidersHorizontalIcon />,
+				shortcut: formatShortcut("mod+alt+i"),
+				active: shell.secondary === "inspector",
+				onSelect: () => surfaceActions.toggleSecondary("inspector"),
+			},
+		];
+		if (currentLayer && !insideModule) {
+			items.push({
+				id: "layer-up",
+				title: t("layerUp", "Layer Up"),
+				icon: <SquareChevronUpIcon />,
+				onSelect: () => popLayer(),
+			});
+		}
+		// Host-provided entries (the desktop RPA recorder) keep their place now
+		// that the dock they used to live in is gone.
+		for (const [index, item] of (extraDockItems ?? []).entries()) {
+			items.push({
+				id: `host-${index}`,
+				title: item.title,
+				icon: item.icon,
+				active: item.highlight,
+				onSelect: () => void item.onClick(),
+			});
+		}
+		// Hosts with the floating FlowPilot bubble already have an entry point;
+		// only embedded hosts, which have none, get a rail entry.
+		if (!externalAssistant) {
+			items.push({
+				id: "flowpilot",
+				title: t("flowpilot", "FlowPilot"),
+				icon: <SparklesIcon />,
+				shortcut: formatShortcut("mod+alt+b"),
+				active: shell.secondary === "flowpilot",
+				onSelect: () => openAssistant(),
+			});
+		}
+		return items;
+	}, [
+		shell.secondary,
+		externalAssistant,
+		currentLayer,
+		insideModule,
+		popLayer,
+		openAssistant,
+		extraDockItems,
+		surfaceActions,
+		t,
+	]);
+
+	const problemNodes = useMemo(
+		() =>
+			Object.values(board.data?.nodes ?? {}).filter((node) =>
+				Boolean(node.error),
+			),
+		[board.data?.nodes],
+	);
+	const eventNodes = useMemo(
+		() => Object.values(board.data?.nodes ?? {}).filter((node) => node.start),
+		[board.data?.nodes],
+	);
+	const boardComments = useMemo(
+		() => Object.values(board.data?.comments ?? {}),
+		[board.data?.comments],
+	);
+
+	const openPageInBuilder = useCallback(
+		(pageId: string, bId: string) => {
+			router.push(`/page-builder?id=${pageId}&app=${appId}&board=${bId}`);
+		},
+		[router, appId],
+	);
+
+	const sidebarBody =
+		shell.sidebar === "explorer" ? (
+			<BoardExplorer
+				appId={appId}
+				boardId={boardId}
+				board={board.data}
+				currentFileId={currentFileId}
+				onSelectFile={handleSelectModule}
+				onOpenPage={openPageInBuilder}
+				executeCommand={executeCommand}
+				readOnly={typeof version !== "undefined"}
+				reservedRoots={moduleReservedRoots}
+			/>
+		) : shell.sidebar === "search" ? (
+			<FlowSearch
+				board={board.data}
+				open
+				onOpenChange={(open) => {
+					if (!open) surfaceActions.closeSidebar();
+				}}
+				onNavigate={focusNode}
+				mode="sidebar"
+			/>
+		) : shell.sidebar === "variables" ? (
+			board.data && (
+				<VariablesMenu
+					board={board.data}
+					executeCommand={executeCommand}
+					currentLayerId={currentLayer}
+					pushLayer={pushLayer}
+					boardRef={boardRef}
+				/>
+			)
+		) : shell.sidebar === "events" ? (
+			<ul className="flex flex-col p-1">
+				{eventNodes.length === 0 && (
+					<li className="px-2 py-1 text-xs text-muted-foreground">
+						{t("noEntryPointsYet", "No entry points yet")}
+					</li>
 				)}
-				{awareness && connectionStatus === "reconnecting" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
-						<WifiIcon className="h-3.5 w-3.5 text-yellow-500 animate-pulse" />
-						<span className="text-xs font-medium text-yellow-500">
-							Reconnecting...
-						</span>
-					</div>
+				{eventNodes.map((node) => (
+					<li key={node.id}>
+						<button
+							type="button"
+							onClick={() => focusNode(node.id)}
+							className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-accent"
+						>
+							<ZapIcon className="size-3 shrink-0 text-emerald-500" />
+							<span className="truncate">{node.friendly_name}</span>
+						</button>
+					</li>
+				))}
+			</ul>
+		) : shell.sidebar === "comments" ? (
+			<ul className="flex flex-col p-1">
+				{boardComments.length === 0 && (
+					<li className="px-2 py-1 text-xs text-muted-foreground">
+						{t("noCommentsYet", "No comments yet")}
+					</li>
 				)}
-				{awareness && connectionStatus === "disconnected" && (
-					<button
-						type="button"
-						onClick={() => reconnect()}
-						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
-					>
-						<WifiOffIcon className="h-3.5 w-3.5 text-destructive" />
-						<span className="text-xs font-medium text-destructive">
-							{t(
-								"disconnectedClickToReconnect",
-								"Disconnected - Click to reconnect",
-							)}
-						</span>
-					</button>
-				)}
-				{!awareness && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
-						<WifiOffIcon className="h-3.5 w-3.5 text-muted-foreground" />
-						<span className="text-xs font-medium text-muted-foreground">
-							{t("offline", "Offline")}
-						</span>
-					</div>
-				)}
-				{/* Presence bar with follow mode and chat */}
-				{awareness && peerStates.length > 0 && (
-					<FlowPresenceBar
-						peers={peerStates}
-						peerUsers={peerUsers}
-						followingSub={followingSub}
-						currentLayerPath={layerPath ?? "root"}
-						layerNames={layerNames}
-						onToggleFollow={toggleFollow}
-						onJumpToUser={jumpToUser}
-						onJumpToLayer={jumpToLayer}
-						onOpenChat={handleToggleChat}
-						unreadCount={unreadCount}
-						peerScopes={peerScopes}
-						onJoinScope={
-							backend.boardState.getFlowScriptScoped &&
-							typeof version === "undefined"
-								? joinFlowScriptScope
-								: undefined
-						}
-					/>
-				)}
-				{/* Follow mode indicator */}
-				{followingSub && (
-					<button
-						type="button"
-						onClick={() => stopFollowing()}
-						className="flex items-center gap-2 rounded-xl border border-blue-400/50 bg-blue-500/10 px-3 py-1.5 backdrop-blur-sm shadow-sm hover:bg-blue-500/20 transition-colors cursor-pointer"
-					>
-						<Eye className="h-3.5 w-3.5 text-blue-400" />
-						<span className="text-xs font-medium text-blue-400">
-							{t(
-								"followingClickOrPressEscToStop",
-								"Following — click or press Esc to stop",
-							)}
-						</span>
-					</button>
-				)}
-				{/* Board activity indicator */}
-				<BoardActivityIndicator boardId={boardId} />
-				<BoardSyncStatusPill
+				{boardComments.map((comment) => (
+					<li key={comment.id}>
+						<button
+							type="button"
+							onClick={() =>
+								comment.node_id
+									? openFlowScriptAtNode(comment.node_id)
+									: focusNode(comment.id)
+							}
+							className="flex w-full flex-col gap-0.5 rounded-sm px-2 py-1 text-left hover:bg-accent"
+						>
+							<span className="line-clamp-3 whitespace-pre-line text-xs">
+								{plainTextFromRichContent(comment.content) ||
+									t("emptyComment", "Empty comment")}
+							</span>
+							<span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+								{comment.author && <span>{comment.author}</span>}
+								{comment.node_id && (
+									<span className="text-primary">
+										{board.data?.nodes?.[comment.node_id]?.friendly_name ??
+											t("node", "Node:")}
+									</span>
+								)}
+							</span>
+						</button>
+					</li>
+				))}
+			</ul>
+		) : null;
+
+	const SIDEBAR_TITLES: Record<string, string> = {
+		explorer: t("explorer", "Explorer"),
+		search: t("search", "Search"),
+		variables: t("variablesFunctions", "Variables & Functions"),
+		events: t("entryPoints", "Entry points"),
+		comments: t("comments", "Comments"),
+	};
+
+	const MOBILE_TITLES: Record<string, string> = {
+		...SIDEBAR_TITLES,
+		problems: t("problems", "Problems"),
+		runs: t("runs", "Runs"),
+		traces: t("logs", "Logs"),
+		script: t("flowscript", "FlowScript"),
+		inspector: t("nodeInfo", "Node Info"),
+		flowpilot: t("flowpilot", "FlowPilot"),
+	};
+
+	const panelBody =
+		shell.panel === "runs" ? (
+			board.data && (
+				<FlowRuns
+					executeBoard={executeBoard}
+					nodes={board.data.nodes}
 					appId={appId}
 					boardId={boardId}
-					onOpenRecovery={openSyncRecovery}
+					version={board.data.version as [number, number, number]}
+					onVersionChange={setVersion}
+					onFocusNode={focusNode}
+					variant="panel"
 				/>
-			</div>
+			)
+		) : shell.panel === "traces" ? (
+			board.data && currentMetadata ? (
+				<Traces
+					appId={appId}
+					boardId={boardId}
+					board={boardRef}
+					onFocusNode={focusNode}
+					nodeIdFilter={logNodeIdFilter}
+					onClearNodeIdFilter={() => setLogNodeIdFilter(undefined)}
+					variant="panel"
+				/>
+			) : (
+				<p className="p-3 text-xs text-muted-foreground">
+					{t("noLogs", "No Logs")}
+				</p>
+			)
+		) : (
+			<ul className="flex h-full flex-col overflow-auto p-1">
+				{problemNodes.length === 0 && (
+					<li className="flex h-full flex-col items-center justify-center gap-1 text-center">
+						<CheckIcon className="size-5 text-muted-foreground/60" />
+						<p className="text-sm font-medium">
+							{t("noProblems", "No problems")}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"nothingOnThisBoardReportsAnError",
+								"Nothing on this board reports an error.",
+							)}
+						</p>
+					</li>
+				)}
+				{problemNodes.map((node) => (
+					<li key={node.id}>
+						<button
+							type="button"
+							onClick={() => focusNode(node.id)}
+							className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-accent"
+						>
+							<TriangleAlertIcon className="size-3 shrink-0 text-destructive" />
+							<span className="shrink-0 font-medium">{node.friendly_name}</span>
+							<span className="truncate text-muted-foreground">
+								{node.error}
+							</span>
+						</button>
+					</li>
+				))}
+			</ul>
+		);
+
+	const scriptPane =
+		board.data && shell.script ? (
+			<FlowScriptPanel
+				appId={appId}
+				boardId={boardId}
+				version={version}
+				boardUpdatedAt={board.dataUpdatedAt}
+				catalogNodes={catalog.data}
+				selectedNodeIds={selectedNodeIds}
+				onHighlightNode={highlightNodeOnCanvas}
+				onRevealNode={focusNode}
+				scopeNodeIds={flowScriptScope}
+				onExitScope={() => setFlowScriptScope(undefined)}
+				modules={modules}
+				currentFile={currentFileId}
+				onSelectFile={handleSelectModule}
+				files={flowScriptFiles}
+				boardScope={flowScriptBoardScope}
+				totalSections={totalFlowScriptSections}
+				onApplyFlowScript={handleApplyFlowScript}
+				onClose={surfaceActions.closeScript}
+				awareness={awareness}
+				sub={sub}
+				peerUsers={peerUsers}
+				presenceEnabled={!isMobile}
+				revealRequest={flowScriptRevealRequest}
+				onRunEventNode={onRunEventNode}
+				runnableEventNodes={runnableEventNodes}
+				remoteExecutions={remoteExecutions}
+				comments={board.data.comments}
+				onUpsertComment={onUpsertComment}
+				onRemoveComment={onRemoveComment}
+				getNodeSpatial={getNodeSpatial}
+			/>
+		) : undefined;
+
+	const secondaryPane =
+		shell.secondary === "inspector" ? (
+			<BoardPane
+				title={t("nodeInfo", "Node Info")}
+				onClose={surfaceActions.closeSecondary}
+			>
+				<BoardInspector
+					board={board.data}
+					selectedNodeIds={selectedNodeIds}
+					onRevealNode={focusNode}
+				/>
+			</BoardPane>
+		) : shell.secondary === "flowpilot" && !externalAssistant ? (
+			<BoardPane
+				title={t("flowpilot", "FlowPilot")}
+				onClose={() => {
+					surfaceActions.closeSecondary();
+					handleCopilotClose();
+				}}
+				bodyClassName="overflow-hidden"
+			>
+				<FlowCopilot
+					appId={appId}
+					board={board.data}
+					catalogNodes={catalog.data}
+					selectedNodeIds={selectedNodeIds}
+					onAcceptSuggestion={onAcceptSuggestion}
+					onFocusNode={focusNode}
+					onSelectNodes={selectNodes}
+					onExecuteCommands={handleExecuteCommands}
+					onApplyFlowScript={handleApplyFlowScript}
+					onApplyFlowIrCommit={handleApplyFlowIrCommit}
+					runContext={currentMetadata}
+					onClearRunContext={handleClearRunContext}
+					onClose={() => {
+						surfaceActions.closeSecondary();
+						handleCopilotClose();
+					}}
+					onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
+					mode="panel"
+					initialPrompt={copilotInitialPrompt}
+				/>
+			</BoardPane>
+		) : undefined;
+
+	const layerBreadcrumb = currentLayer
+		? insideModule
+			? modulePathLabel(board.data?.layers, currentLayer)
+			: board.data?.layers[currentLayer]?.name
+		: undefined;
+
+	return (
+		<>
+			<BoardShell
+				rail={<BoardActivityRail top={railItems} bottom={railBottomItems} />}
+				sidebar={
+					!isMobile && shell.sidebar ? (
+						<BoardPane
+							title={SIDEBAR_TITLES[shell.sidebar] ?? ""}
+							onClose={surfaceActions.closeSidebar}
+							bodyClassName={
+								shell.sidebar === "variables" || shell.sidebar === "search"
+									? "overflow-hidden"
+									: undefined
+							}
+						>
+							{sidebarBody}
+						</BoardPane>
+					) : undefined
+				}
+				tabs={
+					board.data &&
+					(modules.length > 0 || typeof version === "undefined") ? (
+						<FlowModuleTabs
+							board={board.data}
+							activeModuleId={currentModuleId}
+							onSelect={handleSelectModule}
+							executeCommand={executeCommand}
+							readOnly={typeof version !== "undefined"}
+							reservedRoots={moduleReservedRoots}
+							trailing={
+								<button
+									type="button"
+									onClick={toggleFlowScript}
+									aria-pressed={shell.script}
+									title={t("flowscript", "FlowScript")}
+									className={cn(
+										"flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+										shell.script && "bg-accent text-foreground",
+									)}
+								>
+									<Columns2Icon className="size-3.5" />
+									<span className="hidden sm:inline">
+										{t("flowscript", "FlowScript")}
+									</span>
+								</button>
+							}
+						/>
+					) : undefined
+				}
+				script={isMobile ? undefined : scriptPane}
+				panel={
+					!isMobile && shell.panel ? (
+						<BoardPanel
+							tabs={[
+								{
+									id: "problems",
+									label: t("problems", "Problems"),
+									badge: problemNodes.length,
+									badgeTone: "danger",
+								},
+								{ id: "runs", label: t("runs", "Runs") },
+								{ id: "traces", label: t("logs", "Logs") },
+							]}
+							active={shell.panel}
+							onSelect={(tab) =>
+								surfaceActions.openPanel(tab as typeof shell.panel & string)
+							}
+							onClose={surfaceActions.closePanel}
+						>
+							{panelBody}
+						</BoardPanel>
+					) : undefined
+				}
+				secondary={isMobile ? undefined : secondaryPane}
+				statusBar={
+					<BoardStatusBar
+						left={
+							<>
+								{board.data && (
+									<BoardStatusItem
+										icon={<NotebookPenIcon />}
+										title={t("boardSettings", "Board settings")}
+										popover={
+											<BoardIdentityForm
+												appId={appId}
+												boardId={boardId}
+												board={board.data}
+											/>
+										}
+									>
+										{board.data.name}
+									</BoardStatusItem>
+								)}
+								{awareness && connectionStatus === "connected" && (
+									<BoardStatusItem icon={<WifiIcon />} tone="accent">
+										{t("live", "Live")}
+									</BoardStatusItem>
+								)}
+								{awareness && connectionStatus === "reconnecting" && (
+									<BoardStatusItem icon={<WifiIcon />} tone="warning">
+										{t("reconnecting", "Reconnecting…")}
+									</BoardStatusItem>
+								)}
+								{awareness && connectionStatus === "disconnected" && (
+									<BoardStatusItem
+										icon={<WifiOffIcon />}
+										tone="danger"
+										onClick={() => reconnect()}
+									>
+										{t("disconnected", "Disconnected")}
+									</BoardStatusItem>
+								)}
+								{!awareness && (
+									<BoardStatusItem icon={<WifiOffIcon />} tone="muted">
+										{t("offline", "Offline")}
+									</BoardStatusItem>
+								)}
+								<BoardSyncStatusPill
+									appId={appId}
+									boardId={boardId}
+									onOpenRecovery={openSyncRecovery}
+								/>
+								<BoardActivityIndicator boardId={boardId} />
+								{awareness && peerStates.length > 0 && (
+									<FlowPresenceBar
+										peers={peerStates}
+										peerUsers={peerUsers}
+										followingSub={followingSub}
+										currentLayerPath={layerPath ?? "root"}
+										layerNames={layerNames}
+										onToggleFollow={toggleFollow}
+										onJumpToUser={jumpToUser}
+										onJumpToLayer={jumpToLayer}
+										onOpenChat={handleToggleChat}
+										unreadCount={unreadCount}
+										peerScopes={peerScopes}
+										onJoinScope={
+											backend.boardState.getFlowScriptScoped &&
+											typeof version === "undefined"
+												? joinFlowScriptScope
+												: undefined
+										}
+									/>
+								)}
+								{followingSub && (
+									<BoardStatusItem
+										icon={<Eye />}
+										tone="accent"
+										onClick={() => stopFollowing()}
+									>
+										{t("following", "Following")}
+									</BoardStatusItem>
+								)}
+							</>
+						}
+						right={
+							<>
+								{layerBreadcrumb && (
+									<BoardStatusItem icon={<GitBranchIcon />} tone="muted">
+										{layerBreadcrumb}
+									</BoardStatusItem>
+								)}
+								{board.data && (
+									<BoardStatusItem
+										icon={executionModeIcon(
+											board.data.execution_mode ?? IExecutionMode.Hybrid,
+										)}
+										tone="muted"
+										title={t("runSettings", "Run settings")}
+										popoverAlign="end"
+										popover={
+											<BoardRuntimeForm
+												appId={appId}
+												boardId={boardId}
+												board={board.data}
+												isOffline={
+													app.data?.visibility === IAppVisibility.Offline
+												}
+											/>
+										}
+									>
+										{board.data.log_level}
+									</BoardStatusItem>
+								)}
+								{board.data && (
+									<BoardStatusItem
+										icon={<TagIcon />}
+										tone={version ? "warning" : "muted"}
+										title={t("version", "Version")}
+										popoverAlign="end"
+										popover={
+											<BoardReleaseForm
+												appId={appId}
+												boardId={boardId}
+												board={board.data}
+												version={version}
+												selectVersion={setVersion}
+											/>
+										}
+									>
+										{version
+											? `v${version.join(".")} · ${t("readonly", "- Read-Only")}`
+											: `v${(board.data.version ?? [0, 0, 0]).join(".")} · ${board.data.stage}`}
+									</BoardStatusItem>
+								)}
+								<BoardStatusItem
+									icon={<TriangleAlertIcon />}
+									tone={problemNodes.length > 0 ? "danger" : "muted"}
+									onClick={() => surfaceActions.openPanel("problems")}
+									title={t("problems", "Problems")}
+								>
+									{problemNodes.length}
+								</BoardStatusItem>
+								<BoardStatusItem
+									icon={<PanelBottomIcon />}
+									tone="muted"
+									onClick={() => surfaceActions.togglePanel("runs")}
+									title={t("runHistory", "Run History")}
+								/>
+							</>
+						}
+					/>
+				}
+				canvas={
+					<>
+						<FlowContextMenu
+							board={board.data}
+							droppedPin={droppedPin}
+							currentLayerId={currentLayer}
+							onCommentPlace={onCommentPlace}
+							refs={board.data?.refs || {}}
+							onClose={() => setDroppedPin(undefined)}
+							nodes={catalog.data ?? []}
+							selectionCount={selectedNodeIds.length}
+							movableSelectionCount={selectedMovableIds.length}
+							onEditSelectionAsFlowScript={
+								backend.boardState.getFlowScriptScoped &&
+								typeof version === "undefined"
+									? openFlowScriptForSelection
+									: undefined
+							}
+							onMoveSelectionToModule={
+								typeof version === "undefined"
+									? (target) => void moveSelectionToModule(target)
+									: undefined
+							}
+							onPlaceholder={async (name) => {
+								await placePlaceholder(name);
+								setDroppedPin(undefined);
+							}}
+							onNodePlace={async (node) => {
+								await placeNode(node);
+							}}
+							onCreateVariable={async (variable) => {
+								const command = upsertVariableCommand({ variable });
+								await executeCommand(command, false);
+								setDroppedPin(undefined);
+							}}
+						>
+							<div
+								className={`w-full flex-1 min-h-0 relative select-none touch-none ${isOver && "border-green-400 border-2 z-10"}`}
+								ref={setNodeRef}
+								style={{
+									WebkitUserSelect: "none",
+									WebkitTouchCallout: "none",
+									touchAction: "none",
+								}}
+								onTouchStart={(e) => {
+									const t = e.touches[0];
+									if (!t) return;
+									const target = e.currentTarget;
+									const startX = t.clientX;
+									const startY = t.clientY;
+									let moved = false;
+									const onMove = (me: TouchEvent) => {
+										const tt = me.touches[0];
+										if (!tt) return;
+										if (
+											Math.hypot(tt.clientX - startX, tt.clientY - startY) > 10
+										)
+											moved = true;
+									};
+									const timer = setTimeout(() => {
+										if (moved) return;
+										// Synthesize a contextmenu-like event for long-press
+										const evt = new MouseEvent("contextmenu", {
+											clientX: startX,
+											clientY: startY,
+											bubbles: true,
+											cancelable: true,
+										});
+										target.dispatchEvent(evt);
+									}, 450);
+									const onEnd = () => {
+										clearTimeout(timer);
+										document.removeEventListener("touchmove", onMove, {
+											capture: true,
+										} as any);
+										document.removeEventListener("touchend", onEnd, {
+											capture: true,
+										} as any);
+										document.removeEventListener("touchcancel", onEnd, {
+											capture: true,
+										} as any);
+									};
+									document.addEventListener("touchmove", onMove, {
+										passive: true,
+										capture: true,
+									} as any);
+									document.addEventListener("touchend", onEnd, {
+										passive: true,
+										capture: true,
+									} as any);
+									document.addEventListener("touchcancel", onEnd, {
+										passive: true,
+										capture: true,
+									} as any);
+								}}
+							>
+								{currentLayer && (
+									<h2 className="absolute bottom-0 left-0 z-10 ml-16 mb-10 text-muted pointer-events-none select-none">
+										{insideModule
+											? modulePathLabel(board.data?.layers, currentLayer)
+											: board.data?.layers[currentLayer]?.name}
+									</h2>
+								)}
+								{version && (
+									<h3 className="absolute top-0 mr-2 mt-2 right-0 z-10 text-muted pointer-events-none select-none">
+										{t("version", "Version")} {version[0]}.{version[1]}.
+										{version[2]} {t("readonly", "- Read-Only")}
+									</h3>
+								)}
+								<FlowCanvas
+									flowRef={flowRef}
+									nodes={nodes}
+									edges={edges}
+									nodeTypes={nodeTypes}
+									edgeTypes={edgeTypes}
+									colorMode={colorMode}
+									nodesInteractive={typeof version === "undefined"}
+									onlyRenderVisible={nodes.length > 65}
+									insideLayer={Boolean(currentLayer) && !insideModule}
+									onContextMenu={onContextMenuCB}
+									onInit={initializeFlow}
+									onNodeDoubleClick={onNodeDoubleClick}
+									onNodesChange={onNodesChangeIntercept}
+									onEdgesChange={onEdgesChange}
+									onNodeDragStop={onNodeDragStop}
+									onNodeDrag={onNodeDrag}
+									isValidConnection={isValidConnectionCB}
+									onConnect={onConnect}
+									onSelectionChange={onSelectionChange}
+									onReconnect={onReconnect}
+									onReconnectStart={onReconnectStart}
+									onMoveEnd={onMoveEnd}
+									onReconnectEnd={onReconnectEnd}
+									onConnectEnd={onConnectEnd}
+									onScreenshot={onScreenshot}
+									miniMapNodeColor={miniMapNodeColor}
+								/>
+								<FlowCursorsLayer
+									store={cursorStore}
+									currentLayerPath={layerPath ?? "root"}
+									peerUsers={peerUsers}
+								/>
+								{peerStates.length > 0 && (
+									<FlowLayerIndicators
+										peers={peerStates}
+										currentLayerPath={layerPath ?? "root"}
+										nodes={nodes}
+										peerUsers={peerUsers}
+										onJumpToLayer={jumpToLayer}
+									/>
+								)}
+								<DragOverlay
+									dropAnimation={{
+										duration: 500,
+										easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+									}}
+								>
+									{active?.data?.current?.type === "function-layer" ? (
+										<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
+											<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
+											<span className="text-sm font-medium">
+												{board.data?.layers?.[active.data.current.layerId]
+													?.name ?? "Function"}
+											</span>
+										</div>
+									) : (active?.data?.current as IVariable)?.id ? (
+										<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
+											<span
+												className="h-2 w-4 rounded-full"
+												style={{
+													backgroundColor: typeToColor(
+														(active?.data?.current as IVariable).data_type,
+													),
+												}}
+											/>
+											<span className="font-mono text-sm font-medium">
+												{(active?.data?.current as IVariable).name}
+											</span>
+										</div>
+									) : null}
+								</DragOverlay>
+							</div>
+						</FlowContextMenu>
+					</>
+				}
+				overlays={
+					<>
+						{(templateSelectorOpen || (isBoardEmpty && !currentLayer)) && (
+							<FlowTemplateSelector
+								onSelectTemplate={handleApplyTemplate}
+								onDismiss={() => setTemplateSelectorOpen(false)}
+							/>
+						)}
+						{chatOpen && awareness && (
+							<div className="absolute bottom-2 right-3 z-50">
+								<FlowChat
+									messages={chatMessages}
+									onSendMessage={sendMessage}
+									onClose={() => setChatOpen(false)}
+									peerUsers={peerUsers}
+									sub={sub}
+								/>
+							</div>
+						)}
+						{renderOverlay?.()}
+					</>
+				}
+			/>
+
+			<BoardMobileHost
+				open={isMobile && Boolean(shell.mobile)}
+				title={
+					shell.mobile
+						? (MOBILE_TITLES[shell.mobile] ?? t("board", "Board"))
+						: ""
+				}
+				onClose={surfaceActions.closeMobile}
+				full={shell.mobile === "flowpilot" || shell.mobile === "script"}
+			>
+				{shell.mobile === "script"
+					? scriptPane
+					: shell.mobile === "inspector" || shell.mobile === "flowpilot"
+						? secondaryPane
+						: shell.mobile === "problems" ||
+								shell.mobile === "runs" ||
+								shell.mobile === "traces"
+							? panelBody
+							: sidebarBody}
+			</BoardMobileHost>
+
 			<BoardSyncRecoveryDialog
 				appId={appId}
 				boardId={boardId}
 				open={syncRecoveryOpen}
 				onOpenChange={setSyncRecoveryOpen}
 			/>
-			{/* Floating chat panel */}
-			{chatOpen && awareness && (
-				<div className="fixed right-3 top-28 z-50 sm:right-4 md:right-6 md:top-20">
-					<FlowChat
-						messages={chatMessages}
-						onSendMessage={sendMessage}
-						onClose={() => setChatOpen(false)}
-						peerUsers={peerUsers}
-						sub={sub}
-					/>
-				</div>
-			)}
-			<div className="flex items-center justify-center absolute translate-x-[-50%] mt-5 left-[50dvw] z-40">
-				{board.data && editBoard && (
-					<BoardMeta
-						appId={appId}
-						board={board.data}
-						boardId={boardId}
-						closeMeta={() => setEditBoard(false)}
-						version={version}
-						selectVersion={(version) => setVersion(version)}
-						onPageClick={(pageId) => {
-							setEditBoard(false);
-							router.push(
-								`/page-builder?id=${pageId}&app=${appId}&board=${boardId}`,
-							);
-						}}
-						isOffline={app.data?.visibility === IAppVisibility.Offline}
-					/>
-				)}
-				<FlowDock
-					mobileClassName="hidden"
-					items={[
-						...(typeof parentRegister.boardParents[boardId] === "string" &&
-						!currentLayer
-							? [
-									{
-										icon: <ArrowBigLeftDashIcon />,
-										title: t("back", "Back"),
-										onClick: async () => {
-											const urlWithQuery = parentRegister.boardParents[boardId];
-											router.push(urlWithQuery);
-										},
-									},
-								]
-							: []),
-						{
-							icon: <VariableIcon />,
-							title: t("variables", "Variables"),
-							onClick: async () => {
-								toggleVars();
-							},
-						},
-
-						{
-							icon: <LayoutTemplateIcon />,
-							title: t("templates", "Templates"),
-							onClick: async () => {
-								setTemplateSelectorOpen(true);
-							},
-						},
-						{
-							icon: <WaypointsIcon />,
-							title: t("autoLayout", "Auto Layout"),
-							onClick: async () => {
-								setAutoLayoutDialogOpen(true);
-							},
-						},
-						{
-							icon: <NotebookPenIcon />,
-							title: t("manageBoard", "Manage Board"),
-							onClick: async () => {
-								setEditBoard(true);
-							},
-						},
-						{
-							icon: <FileTextIcon />,
-							title: t("pages", "Pages"),
-							onClick: async () => {
-								togglePages();
-							},
-						},
-						{
-							icon: <SearchIcon />,
-							title: t("searchFFSidebar", "Search (⌘F / ⌘⇧F sidebar)"),
-							onClick: async () => {
-								setSearchMode("dialog");
-								setSearchOpen(true);
-							},
-							onContextMenu: async () => {
-								setSearchMode("sidebar");
-								setSearchOpen((prev) => !prev);
-							},
-						},
-						{
-							icon: <FileCode2Icon />,
-							title: t("flowscript", "FlowScript"),
-							onClick: async () => {
-								toggleFlowScript();
-							},
-						},
-						{
-							icon: <HistoryIcon />,
-							separator: "left",
-							title: t("runHistory", "Run History"),
-							onClick: async () => {
-								toggleRunHistory();
-							},
-						},
-						...(currentMetadata
-							? [
-									{
-										icon: <ScrollIcon />,
-										title: t("logs", "Logs"),
-										onClick: async () => {
-											toggleLogs();
-										},
-									},
-								]
-							: ([] as any)),
-						...(currentLayer
-							? [
-									{
-										icon: <SquareChevronUpIcon />,
-										title: t("layerUp", "Layer Up"),
-										separator: "left",
-										highlight: true,
-										onClick: async () => {
-											popLayer();
-										},
-									},
-								]
-							: []),
-						...(extraDockItems ?? []),
-						// The floating FlowPilot bubble replaces this dock item when the host
-						// provides the global assistant.
-						...(externalAssistant
-							? []
-							: [
-									{
-										icon: <SparklesIcon className="text-white" />,
-										title: t("flowpilot", "FlowPilot"),
-										separator: "left",
-										special: true,
-										onClick: () => openAssistant(),
-									},
-								]),
-					]}
-				/>
-				{renderOverlay?.()}
-			</div>
-
-			{/* Template Selector Overlay - FigJam style centered overlay */}
-			{(templateSelectorOpen || (isBoardEmpty && !currentLayer)) && (
-				<FlowTemplateSelector
-					onSelectTemplate={handleApplyTemplate}
-					onDismiss={() => setTemplateSelectorOpen(false)}
-				/>
-			)}
-
-			<ResizablePanelGroup
-				ref={panelGroupRef}
-				direction="horizontal"
-				className="flex grow flex-1 min-h-0 h-full overscroll-none"
-				style={{
-					touchAction: "none",
-					overflow: "hidden",
-				}}
-			>
-				{/* Desktop/Tablet side panels */}
-				<ResizablePanel
-					id="flow-variables"
-					order={1}
-					className="z-50 bg-background hidden md:block"
-					defaultSize={0}
-					collapsible={true}
-					collapsedSize={0}
-					ref={varPanelRef}
-				>
-					{board.data && (
-						<VariablesMenu
-							board={board.data}
-							executeCommand={executeCommand}
-							currentLayerId={currentLayer}
-							pushLayer={pushLayer}
-							boardRef={boardRef}
-						/>
-					)}
-				</ResizablePanel>
-				<ResizableHandle withHandle />
-				<ResizablePanel id="flow-main-container" order={2}>
-					<ResizablePanelGroup
-						direction="vertical"
-						className="h-full flex grow"
-					>
-						<ResizablePanel autoSave="flow-main" ref={flowPanelRef}>
-							<FlowContextMenu
-								board={board.data}
-								droppedPin={droppedPin}
-								currentLayerId={currentLayer}
-								onCommentPlace={onCommentPlace}
-								refs={board.data?.refs || {}}
-								onClose={() => setDroppedPin(undefined)}
-								nodes={catalog.data ?? []}
-								selectionCount={selectedNodeIds.length}
-								onEditSelectionAsFlowScript={
-									backend.boardState.getFlowScriptScoped &&
-									typeof version === "undefined"
-										? openFlowScriptForSelection
-										: undefined
-								}
-								onPlaceholder={async (name) => {
-									await placePlaceholder(name);
-									setDroppedPin(undefined);
-								}}
-								onNodePlace={async (node) => {
-									await placeNode(node);
-								}}
-								onCreateVariable={async (variable) => {
-									const command = upsertVariableCommand({ variable });
-									await executeCommand(command, false);
-									setDroppedPin(undefined);
-								}}
-							>
-								<div
-									className={`w-full h-full relative select-none touch-none ${isOver && "border-green-400 border-2 z-10"}`}
-									ref={setNodeRef}
-									style={{
-										WebkitUserSelect: "none",
-										WebkitTouchCallout: "none",
-										touchAction: "none",
-									}}
-									onTouchStart={(e) => {
-										const t = e.touches[0];
-										if (!t) return;
-										const target = e.currentTarget;
-										const startX = t.clientX;
-										const startY = t.clientY;
-										let moved = false;
-										const onMove = (me: TouchEvent) => {
-											const tt = me.touches[0];
-											if (!tt) return;
-											if (
-												Math.hypot(tt.clientX - startX, tt.clientY - startY) >
-												10
-											)
-												moved = true;
-										};
-										const timer = setTimeout(() => {
-											if (moved) return;
-											// Synthesize a contextmenu-like event for long-press
-											const evt = new MouseEvent("contextmenu", {
-												clientX: startX,
-												clientY: startY,
-												bubbles: true,
-												cancelable: true,
-											});
-											target.dispatchEvent(evt);
-										}, 450);
-										const onEnd = () => {
-											clearTimeout(timer);
-											document.removeEventListener("touchmove", onMove, {
-												capture: true,
-											} as any);
-											document.removeEventListener("touchend", onEnd, {
-												capture: true,
-											} as any);
-											document.removeEventListener("touchcancel", onEnd, {
-												capture: true,
-											} as any);
-										};
-										document.addEventListener("touchmove", onMove, {
-											passive: true,
-											capture: true,
-										} as any);
-										document.addEventListener("touchend", onEnd, {
-											passive: true,
-											capture: true,
-										} as any);
-										document.addEventListener("touchcancel", onEnd, {
-											passive: true,
-											capture: true,
-										} as any);
-									}}
-								>
-									{currentLayer && (
-										<h2 className="absolute bottom-0 left-0 z-10 ml-16 mb-10 text-muted pointer-events-none select-none">
-											{board.data?.layers[currentLayer]?.name}
-										</h2>
-									)}
-									{version && (
-										<h3 className="absolute top-0 mr-2 mt-2 right-0 z-10 text-muted pointer-events-none select-none">
-											{t("version", "Version")} {version[0]}.{version[1]}.
-											{version[2]} {t("readonly", "- Read-Only")}
-										</h3>
-									)}
-									<FlowCanvas
-										flowRef={flowRef}
-										nodes={nodes}
-										edges={edges}
-										nodeTypes={nodeTypes}
-										edgeTypes={edgeTypes}
-										colorMode={colorMode}
-										nodesInteractive={typeof version === "undefined"}
-										onlyRenderVisible={nodes.length > 65}
-										currentLayer={currentLayer}
-										onContextMenu={onContextMenuCB}
-										onInit={initializeFlow}
-										onNodeDoubleClick={onNodeDoubleClick}
-										onNodesChange={onNodesChangeIntercept}
-										onEdgesChange={onEdgesChange}
-										onNodeDragStop={onNodeDragStop}
-										onNodeDrag={onNodeDrag}
-										isValidConnection={isValidConnectionCB}
-										onConnect={onConnect}
-										onSelectionChange={onSelectionChange}
-										onReconnect={onReconnect}
-										onReconnectStart={onReconnectStart}
-										onMoveEnd={onMoveEnd}
-										onReconnectEnd={onReconnectEnd}
-										onConnectEnd={onConnectEnd}
-										onScreenshot={onScreenshot}
-										miniMapNodeColor={miniMapNodeColor}
-									/>
-									<FlowCursorsLayer
-										store={cursorStore}
-										currentLayerPath={layerPath ?? "root"}
-										peerUsers={peerUsers}
-									/>
-									{peerStates.length > 0 && (
-										<FlowLayerIndicators
-											peers={peerStates}
-											currentLayerPath={layerPath ?? "root"}
-											nodes={nodes}
-											peerUsers={peerUsers}
-											onJumpToLayer={jumpToLayer}
-										/>
-									)}
-									<DragOverlay
-										dropAnimation={{
-											duration: 500,
-											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
-										}}
-									>
-										{active?.data?.current?.type === "function-layer" ? (
-											<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
-												<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
-												<span className="text-sm font-medium">
-													{board.data?.layers?.[active.data.current.layerId]
-														?.name ?? "Function"}
-												</span>
-											</div>
-										) : (active?.data?.current as IVariable)?.id ? (
-											<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
-												<span
-													className="h-2 w-4 rounded-full"
-													style={{
-														backgroundColor: typeToColor(
-															(active?.data?.current as IVariable).data_type,
-														),
-													}}
-												/>
-												<span className="font-mono text-sm font-medium">
-													{(active?.data?.current as IVariable).name}
-												</span>
-											</div>
-										) : null}
-									</DragOverlay>
-								</div>
-							</FlowContextMenu>
-						</ResizablePanel>
-						<ResizableHandle withHandle />
-						<ResizablePanel
-							className="z-50 hidden md:block"
-							hidden={!currentMetadata}
-							ref={logPanelRef}
-							defaultSize={0}
-							collapsedSize={0}
-							collapsible={true}
-							autoSave="flow-logs"
-						>
-							{board.data && currentMetadata && (
-								<Traces
-									appId={appId}
-									boardId={boardId}
-									board={boardRef}
-									onFocusNode={focusNode}
-									nodeIdFilter={logNodeIdFilter}
-									onClearNodeIdFilter={() => setLogNodeIdFilter(undefined)}
-								/>
-							)}
-						</ResizablePanel>
-					</ResizablePanelGroup>
-				</ResizablePanel>
-				<ResizableHandle withHandle />
-				<ResizablePanel
-					id="flow-runs"
-					order={3}
-					className="z-50 hidden md:block"
-					defaultSize={0}
-					collapsible={true}
-					collapsedSize={0}
-					ref={runsPanelRef}
-				>
-					{board.data && (
-						<FlowRuns
-							executeBoard={executeBoard}
-							nodes={board.data.nodes}
-							appId={appId}
-							boardId={boardId}
-							version={board.data.version as [number, number, number]}
-							onVersionChange={setVersion}
-							onFocusNode={focusNode}
-						/>
-					)}
-				</ResizablePanel>
-				<ResizableHandle withHandle />
-				<ResizablePanel
-					id="flow-flowscript"
-					order={4}
-					className="z-50 hidden md:block"
-					defaultSize={0}
-					collapsible={true}
-					collapsedSize={0}
-					ref={flowScriptPanelRef}
-					onExpand={() => setFlowScriptPanelVisible(true)}
-					onCollapse={() => {
-						setFlowScriptPanelVisible(false);
-						setFlowScriptScope(undefined);
-					}}
-				>
-					{board.data && flowScriptPanelVisible && (
-						<FlowScriptPanel
-							appId={appId}
-							boardId={boardId}
-							version={version}
-							boardUpdatedAt={board.dataUpdatedAt}
-							catalogNodes={catalog.data}
-							selectedNodeIds={selectedNodeIds}
-							onHighlightNode={highlightNodeOnCanvas}
-							onRevealNode={focusNode}
-							scopeNodeIds={flowScriptScope}
-							onExitScope={() => setFlowScriptScope(undefined)}
-							totalSections={totalFlowScriptSections}
-							onApplyFlowScript={handleApplyFlowScript}
-							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
-							awareness={awareness}
-							sub={sub}
-							peerUsers={peerUsers}
-							presenceEnabled={!isMobile}
-							revealRequest={flowScriptRevealRequest}
-							onRunEventNode={onRunEventNode}
-							runnableEventNodes={runnableEventNodes}
-							remoteExecutions={remoteExecutions}
-							comments={board.data.comments}
-							onUpsertComment={onUpsertComment}
-							onRemoveComment={onRemoveComment}
-							getNodeSpatial={getNodeSpatial}
-						/>
-					)}
-				</ResizablePanel>
-				{searchMode === "sidebar" && searchOpen && (
-					<>
-						<ResizableHandle withHandle />
-						<ResizablePanel
-							id="flow-search"
-							order={5}
-							className="z-50 hidden md:block min-w-[280px] max-w-[400px]"
-							defaultSize={20}
-							minSize={15}
-							maxSize={30}
-						>
-							<FlowSearch
-								board={board.data}
-								open={searchOpen}
-								onOpenChange={setSearchOpen}
-								onNavigate={focusNode}
-								mode="sidebar"
-							/>
-						</ResizablePanel>
-					</>
-				)}
-				{/* Mobile sheets */}
-				<Sheet open={varsOpen} onOpenChange={setVarsOpen}>
-					<SheetContent side="bottom" className="h-[60dvh] w-full">
-						<SheetHeader>
-							<SheetTitle>
-								{t("variablesFunctions", "Variables & Functions")}
-							</SheetTitle>
-						</SheetHeader>
-						{board.data && (
-							<div className="h-[calc(60dvh-3.5rem)] overflow-y-auto overscroll-contain">
-								<VariablesMenu
-									board={board.data}
-									executeCommand={executeCommand}
-									currentLayerId={currentLayer}
-									pushLayer={pushLayer}
-									boardRef={boardRef}
-								/>
-							</div>
-						)}
-					</SheetContent>
-				</Sheet>
-				<Sheet open={runsOpen} onOpenChange={setRunsOpen}>
-					<SheetContent side="bottom" className="h-[80dvh] w-full">
-						<SheetHeader>
-							<SheetTitle>{t("runs", "Runs")}</SheetTitle>
-						</SheetHeader>
-						{board.data && (
-							<div className="h-[calc(80dvh-3.5rem)] overflow-y-auto overscroll-contain">
-								<FlowRuns
-									executeBoard={executeBoard}
-									nodes={board.data.nodes}
-									appId={appId}
-									boardId={boardId}
-									version={board.data.version as [number, number, number]}
-									onVersionChange={setVersion}
-									onFocusNode={focusNode}
-								/>
-							</div>
-						)}
-					</SheetContent>
-				</Sheet>
-				<Sheet open={logsOpen} onOpenChange={setLogsOpen}>
-					<SheetContent side="bottom" className="h-[80dvh] w-full">
-						<SheetHeader>
-							<SheetTitle>{t("logs", "Logs")}</SheetTitle>
-						</SheetHeader>
-						{board.data && currentMetadata && (
-							<div className="h-[calc(80dvh-3.5rem)] w-full">
-								<Traces
-									appId={appId}
-									boardId={boardId}
-									board={boardRef}
-									onFocusNode={focusNode}
-									nodeIdFilter={logNodeIdFilter}
-									onClearNodeIdFilter={() => setLogNodeIdFilter(undefined)}
-								/>
-							</div>
-						)}
-						{(!currentMetadata || !board.data) && (
-							<div className="h-[calc(80dvh-3.5rem)] w-full flex items-center justify-center text-sm text-muted-foreground p-6">
-								{t(
-									"noRunSelectedYetStartARunToViewLogsHere",
-									"No run selected yet. Start a run to view logs here.",
-								)}
-							</div>
-						)}
-					</SheetContent>
-				</Sheet>
-				{/* FlowScript Sheet (mobile) */}
-				<Sheet
-					open={flowScriptSheetOpen}
-					onOpenChange={(open) => {
-						setFlowScriptSheetOpen(open);
-						if (!open) setFlowScriptScope(undefined);
-					}}
-				>
-					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
-						<SheetHeader className="px-4 pt-4">
-							<SheetTitle>{t("flowscript", "FlowScript")}</SheetTitle>
-						</SheetHeader>
-						{board.data && flowScriptSheetOpen && (
-							<div className="h-[calc(90dvh-3.5rem)] w-full">
-								<FlowScriptPanel
-									appId={appId}
-									boardId={boardId}
-									version={version}
-									boardUpdatedAt={board.dataUpdatedAt}
-									catalogNodes={catalog.data}
-									selectedNodeIds={selectedNodeIds}
-									onRevealNode={focusNode}
-									scopeNodeIds={flowScriptScope}
-									onExitScope={() => setFlowScriptScope(undefined)}
-									totalSections={totalFlowScriptSections}
-									onApplyFlowScript={handleApplyFlowScript}
-									onClose={() => setFlowScriptSheetOpen(false)}
-									awareness={awareness}
-									sub={sub}
-									peerUsers={peerUsers}
-									presenceEnabled={isMobile}
-									revealRequest={flowScriptRevealRequest}
-									onRunEventNode={onRunEventNode}
-									runnableEventNodes={runnableEventNodes}
-									remoteExecutions={remoteExecutions}
-									comments={board.data.comments}
-									onUpsertComment={onUpsertComment}
-									onRemoveComment={onRemoveComment}
-									getNodeSpatial={getNodeSpatial}
-								/>
-							</div>
-						)}
-					</SheetContent>
-				</Sheet>
-				{/* Pages Sheet */}
-				<Sheet open={pagesOpen} onOpenChange={setPagesOpen}>
-					<SheetContent side="right" className="w-[400px] sm:w-[540px] p-0">
-						<FlowPages
-							appId={appId}
-							boardId={boardId}
-							onOpenPage={(pageId, bId) => {
-								setPagesOpen(false);
-								router.push(
-									`/page-builder?id=${pageId}&app=${appId}&board=${bId}`,
-								);
-							}}
-						/>
-					</SheetContent>
-				</Sheet>
-				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
-				<Sheet
-					open={!externalAssistant && copilotOpen && isMobile}
-					onOpenChange={(open) => {
-						setCopilotOpen(open);
-						if (!open) setCopilotInitialPrompt(undefined);
-					}}
-				>
-					<SheetContent side="bottom" className="h-[100dvh] w-full p-0">
-						<div className="h-full w-full">
-							<FlowCopilot
-								appId={appId}
-								board={board.data}
-								catalogNodes={catalog.data}
-								selectedNodeIds={selectedNodeIds}
-								onAcceptSuggestion={onAcceptSuggestion}
-								onFocusNode={focusNode}
-								onSelectNodes={selectNodes}
-								onExecuteCommands={handleExecuteCommands}
-								onApplyFlowScript={handleApplyFlowScript}
-								onApplyFlowIrCommit={handleApplyFlowIrCommit}
-								runContext={currentMetadata}
-								onClearRunContext={handleClearRunContext}
-								onClose={handleCopilotClose}
-								onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
-								mode="panel"
-								initialPrompt={copilotInitialPrompt}
-							/>
-						</div>
-					</SheetContent>
-				</Sheet>
-			</ResizablePanelGroup>
 			<PinEditModal appId={appId} boardId={boardId} version={version} />
 			<FlowNodeInfoOverlay
 				key={boardId}
@@ -4463,21 +4672,17 @@ export function FlowBoard({
 				boardRef={boardRef}
 				onFocusNode={focusNode}
 			/>
-			{searchMode === "dialog" && (
-				<FlowSearch
-					board={board.data}
-					open={searchOpen}
-					onOpenChange={setSearchOpen}
-					onNavigate={focusNode}
-					mode="dialog"
-					onSwitchToSidebar={() => {
-						setSearchOpen(false);
-						setSearchMode("sidebar");
-						// Use setTimeout to ensure state updates properly
-						setTimeout(() => setSearchOpen(true), 0);
-					}}
-				/>
-			)}
+			<FlowSearch
+				board={board.data}
+				open={searchOpen}
+				onOpenChange={setSearchOpen}
+				onNavigate={focusNode}
+				mode="dialog"
+				onSwitchToSidebar={() => {
+					setSearchOpen(false);
+					surfaceActions.openSidebar("search");
+				}}
+			/>
 
 			{/* Runtime Variables Prompt */}
 			<RuntimeVariablesPrompt
@@ -4545,6 +4750,6 @@ export function FlowBoard({
 					)}
 				</DialogContent>
 			</Dialog>
-		</div>
+		</>
 	);
 }

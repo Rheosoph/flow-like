@@ -206,9 +206,40 @@ erasable = { git = "https://github.com/Rheosoph/pointer-utils.git", rev = "e1c31
 
 # Use line-tables-only debug info and strip debuginfo to keep .so under 4GB for Android APK ZIP32 limit
 [profile.dev]
-debug = 1
-strip = "debuginfo"
+debug = "line-tables-only"
 incremental = true
+strip = "none"
 
+# Fastest cold compilation. Add named opt-level=1 exceptions only
+# for dependencies that are unusably slow at runtime otherwise.
 [profile.dev.package."*"]
+debug = false
+opt-level = 0
+
+[profile.dev-run]
+inherits = "dev"
+
+[profile.dev-run.package."*"]
+debug = false
 opt-level = 1
+
+[profile.ci]
+inherits = "dev"
+debug = "none"
+incremental = false
+
+[profile.ci.package."*"]
+debug = false
+opt-level = 0
+
+[profile.release-fast]
+inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 16
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 8
+strip = "symbols"

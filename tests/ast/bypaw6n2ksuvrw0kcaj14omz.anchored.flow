@@ -263,9 +263,6 @@ eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
     navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })   //@n:kngou6wcb3yk0b89zop3bbl0
 }
 
-variableSet setReportCreated(valueRef: bool) {   //@n:pwyjqi9tgqajltsx4hsjhmlk
-}
-
 eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
     const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
     const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
@@ -375,9 +372,6 @@ eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     }
 }
 
-notifyProjectUser(success: bool) {   //@n:iykhixlujrwjsexflb8ekm93
-}
-
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
         return `Already created a report`   //@n:rkd57x855lzb6sr1lyatwt2h
@@ -401,4 +395,12 @@ eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string
     filterSources({ hash: widgetInstanceId })   //@n:efukkvhntw0zqzovze5miev6
     saveConfig({ config: userConfiguration })   //@n:zjbodntlzzvdtaujg2nf9j0c
     loadConfigDashboard()   //@n:c14m2n2pc5cr0f7ly3t79zk5
+}
+
+detached {
+    reportCreated = null   //@n:pwyjqi9tgqajltsx4hsjhmlk
+}
+
+detached {
+    projectUser({ flowUserSub: "32a5a414-a001-70d1-7b23-570f65ba772b", title: "Notification", description: "", link: "/case" })   //@n:iykhixlujrwjsexflb8ekm93
 }

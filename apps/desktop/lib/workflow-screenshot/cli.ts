@@ -123,6 +123,17 @@ export function parseWorkflowScreenshotArgs(
 			);
 			index = consumed;
 			options.focusNode = value;
+		} else if (
+			arg === "--handle-errors" ||
+			arg.startsWith("--handle-errors=")
+		) {
+			const [value, consumed] = valueAfter(
+				normalizedArgs,
+				index,
+				"--handle-errors",
+			);
+			index = consumed;
+			options.handleErrors = value;
 		} else if (arg === "--viewport" || arg.startsWith("--viewport=")) {
 			const [value, consumed] = valueAfter(normalizedArgs, index, "--viewport");
 			index = consumed;

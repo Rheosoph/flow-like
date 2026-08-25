@@ -34,25 +34,41 @@ export function canApplyFlowScript({
 
 export type FlowScriptScopeMode =
 	| { kind: "full" }
-	| { kind: "scoped"; nodeIds: string[] };
+	| { kind: "scoped"; nodeIds: string[] }
+	/** One virtual file of a modular board: `"main"` or a module layer id. */
+	| { kind: "file"; file: string };
+
+/** What the panel knows about the board's files when it resolves its scope. */
+export interface FlowScriptFileScopeInput {
+	/** The board carries at least one module layer, so it has more than one file. */
+	hasModules: boolean;
+	/** `getFlowScriptFile` exists on the backend. */
+	backendSupportsFiles: boolean;
+	/** The file the canvas is on: `"main"` or a module layer id. */
+	file: string;
+}
 
 /**
- * Selection-scoped editing needs `getFlowScriptScoped` on the backend; without
- * it a scope request silently degrades to the full-board render so the panel
- * never shows a scoped banner it cannot honor on apply.
+ * Selection-scoped editing needs `getFlowScriptScoped` on the backend, per-file editing needs
+ * `getFlowScriptFile`; without the respective method the request silently degrades to the
+ * full-board render, so the panel never shows a banner (or a file tab) it cannot honor on apply.
+ *
+ * A selection scope OVERRIDES the file mode while it is active: the selection is the narrower,
+ * explicitly requested view. Exiting it drops back to the file the canvas is on. A board without
+ * modules has exactly one file and behaves as it always did — `full`.
  */
 export function resolveFlowScriptScope(
 	requestedNodeIds: readonly string[] | undefined,
 	backendSupportsScope: boolean,
+	files?: FlowScriptFileScopeInput,
 ): FlowScriptScopeMode {
-	if (
-		!backendSupportsScope ||
-		!requestedNodeIds ||
-		requestedNodeIds.length === 0
-	) {
-		return { kind: "full" };
+	if (backendSupportsScope && requestedNodeIds && requestedNodeIds.length > 0) {
+		return { kind: "scoped", nodeIds: [...requestedNodeIds] };
 	}
-	return { kind: "scoped", nodeIds: [...requestedNodeIds] };
+	if (files?.hasModules && files.backendSupportsFiles) {
+		return { kind: "file", file: files.file };
+	}
+	return { kind: "full" };
 }
 
 /** Set equality on scope node ids — order and duplicates are irrelevant. */

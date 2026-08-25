@@ -57,7 +57,7 @@ The three forms overlap, but they do not own identical information.
 | Representation | Its job | Information it owns |
 | --- | --- | --- |
 | Board | Persist and execute the Flow | Node and pin identity, connections, defaults, layers, coordinates, viewport, presentation, package and runtime metadata |
-| `BoardAst` | Express the typed meaning shared by both editors | Imports, interfaces, variables, Functions, Events, modules, ordered statements and expressions, plus identity anchors used during editing |
+| `BoardAst` | Express the typed meaning shared by both editors | Imports, interfaces, variables, Functions, Events, modules, detached chains, ordered statements and expressions, plus identity anchors used during editing |
 | FlowScript | Give people and tools a compact authoring surface | A canonical textual projection of the AST's program structure |
 
 This is why “both views are the source of truth” is close but imprecise. It sounds as if Flow-Like
@@ -125,10 +125,16 @@ It performs several related jobs:
 - schema-backed shapes become FlowScript interfaces;
 - Function layers become typed `function` declarations;
 - trigger nodes and their reachable execution paths become Event bodies;
+- every execution chain no trigger reaches becomes its own `detached` block;
 - impure nodes on execution wires become ordered statements;
 - pure data dependencies are pulled backward and nested as expressions;
 - named execution outputs become branches such as `onSuccess`, `execError`, or an `if` body; and
 - node, variable, and layer identities can become editing anchors.
+
+That `detached` block exists because the chain has to go somewhere. FlowScript has no top-level
+statement position, and the chain's root is an ordinary node, so spelling it as an entry would
+misrepresent it and hide its inputs. Nothing inside such a block runs; it reports what the Board
+already contains rather than offering a way to author new work.
 
 Consider the Incident Desk rule:
 
