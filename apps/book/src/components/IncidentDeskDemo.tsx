@@ -122,7 +122,11 @@ export default function IncidentDeskDemo() {
 					</div>
 				</form>
 
-				<aside className="incident-desk__result" aria-live="polite">
+				<section
+					className="incident-desk__result"
+					aria-label="Incident triage result"
+					aria-live="polite"
+				>
 					<div className="incident-desk__result-heading">
 						<span>Structured result</span>
 						<span className="incident-desk__mock">Mock</span>
@@ -159,7 +163,7 @@ export default function IncidentDeskDemo() {
 							? "Example output is ready. Change the form to preview another response."
 							: `Local preview recalculated ${previewCount} ${previewCount === 1 ? "time" : "times"}.`}
 					</p>
-				</aside>
+				</section>
 			</div>
 		</section>
 	);

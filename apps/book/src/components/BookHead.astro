@@ -1,6 +1,5 @@
 ---
 import {
-	BOOK_LANGUAGE,
 	BOOK_NAME,
 	BOOK_OG_LOCALE,
 	BOOK_ORIGIN,
@@ -8,6 +7,7 @@ import {
 	resolveBookSeo,
 	serializeStructuredData,
 } from "../lib/seo";
+import { bookMarkdownPath } from "../lib/llm-content";
 
 const { entry, head } = Astro.locals.starlightRoute;
 const seo = resolveBookSeo(entry.id, entry.data);
@@ -21,6 +21,11 @@ const canonical = isNotFound
 		? canonicalFromRoute
 		: new URL(seo.path, Astro.site ?? BOOK_ORIGIN).toString();
 const imageUrl = new URL(seo.imagePath, Astro.site ?? BOOK_ORIGIN).toString();
+const markdownUrl = new URL(
+	bookMarkdownPath(entry.id),
+	Astro.site ?? BOOK_ORIGIN,
+).toString();
+const llmsUrl = new URL("/llms.txt", Astro.site ?? BOOK_ORIGIN).toString();
 const robots = isNotFound
 	? "noindex,follow,max-image-preview:none,max-snippet:0,max-video-preview:0"
 	: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1";
@@ -43,6 +48,13 @@ const preservedHead = head.filter((item) => {
 
 	if (item.tag === "link") {
 		if (item.attrs?.rel === "manifest") return false;
+		if (item.attrs?.rel === "describedby") return false;
+		if (
+			item.attrs?.rel === "alternate" &&
+			item.attrs?.type === "text/markdown"
+		) {
+			return false;
+		}
 		if (isNotFound && item.attrs?.rel === "canonical") return false;
 		return true;
 	}
@@ -74,6 +86,19 @@ const preservedHead = head.filter((item) => {
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <link rel="manifest" href="/site.webmanifest" />
 {
+	!isNotFound && (
+		<>
+			<link
+				rel="alternate"
+				type="text/markdown"
+				href={markdownUrl}
+				title={`${entry.data.title} — Markdown`}
+			/>
+			<link rel="describedby" type="text/markdown" href={llmsUrl} />
+		</>
+	)
+}
+{
 	seo.pageType === "home" && (
 		<link
 			rel="alternate"
@@ -84,38 +109,48 @@ const preservedHead = head.filter((item) => {
 	)
 }
 
-<meta property="og:type" content={openGraphType} />
-<meta property="og:site_name" content={BOOK_NAME} />
-<meta property="og:locale" content={BOOK_OG_LOCALE} />
-{canonical && <meta property="og:url" content={canonical} />}
-<meta property="og:title" content={seo.title} />
-<meta property="og:description" content={seo.description} />
-<meta property="og:image" content={imageUrl} />
-<meta property="og:image:secure_url" content={imageUrl} />
-<meta property="og:image:type" content="image/png" />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content={seo.imageAlt} />
 {
-	seo.pageType === "reading" && (
+	!isNotFound && (
 		<>
-			<meta
-				property="article:section"
-				content={
-					seo.location?.part?.title ??
-					(seo.location?.kind === "introduction" ? "Introduction" : "FlowBook")
-				}
-			/>
-			{seo.topics.map((topic) => <meta property="article:tag" content={topic} />)}
+			<meta property="og:type" content={openGraphType} />
+			<meta property="og:site_name" content={BOOK_NAME} />
+			<meta property="og:locale" content={BOOK_OG_LOCALE} />
+			{canonical && <meta property="og:url" content={canonical} />}
+			<meta property="og:title" content={seo.title} />
+			<meta property="og:description" content={seo.description} />
+			<meta property="og:image" content={imageUrl} />
+			<meta property="og:image:secure_url" content={imageUrl} />
+			<meta property="og:image:type" content="image/png" />
+			<meta property="og:image:width" content="1200" />
+			<meta property="og:image:height" content="630" />
+			<meta property="og:image:alt" content={seo.imageAlt} />
+			{
+				seo.pageType === "reading" && (
+					<>
+						<meta
+							property="article:section"
+							content={
+								seo.location?.part?.title ??
+								(seo.location?.kind === "introduction"
+									? "Introduction"
+									: "FlowBook")
+							}
+						/>
+						{seo.topics.map((topic) => (
+							<meta property="article:tag" content={topic} />
+						))}
+					</>
+				)
+			}
+
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:title" content={seo.title} />
+			<meta name="twitter:description" content={seo.description} />
+			<meta name="twitter:image" content={imageUrl} />
+			<meta name="twitter:image:alt" content={seo.imageAlt} />
 		</>
 	)
 }
-
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content={seo.title} />
-<meta name="twitter:description" content={seo.description} />
-<meta name="twitter:image" content={imageUrl} />
-<meta name="twitter:image:alt" content={seo.imageAlt} />
 
 {
 	structuredData && (

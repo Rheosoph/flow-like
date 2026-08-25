@@ -158,8 +158,8 @@ description = "Build documentation site"
 run = "bun run --cwd ./apps/docs build"
 
 [tasks."build:book"]
-description = "Build FlowBook"
-run = "bun run --cwd ./apps/book build"
+description = "Build FlowBook and regenerate the print-ready PDF"
+run = "bun run --cwd ./apps/book build:release"
 
 [tasks."build:embedded"]
 description = "Build embedded app"

@@ -42,7 +42,13 @@ export interface BookEditionLocation {
 export interface ResolvedBookSeo {
 	readonly entryId: string;
 	readonly path: string;
-	readonly pageType: "home" | "contents" | "reading" | "not-found" | "page";
+	readonly pageType:
+		| "home"
+		| "contents"
+		| "part"
+		| "reading"
+		| "not-found"
+		| "page";
 	readonly title: string;
 	readonly documentTitle: string;
 	readonly description: string;
@@ -51,6 +57,7 @@ export interface ResolvedBookSeo {
 	readonly imageAlt: string;
 	readonly breadcrumbs: readonly BookBreadcrumb[];
 	readonly location?: BookEditionLocation;
+	readonly part?: (typeof CURRENT_BOOK_EDITION.parts)[number];
 }
 
 export function normalizeBookEntryId(entryId: string): string {
@@ -88,6 +95,13 @@ export function getBookEditionLocation(
 	return undefined;
 }
 
+export function getBookEditionPart(
+	entryId: string,
+): (typeof CURRENT_BOOK_EDITION.parts)[number] | undefined {
+	const normalized = normalizeBookEntryId(entryId);
+	return CURRENT_BOOK_EDITION.parts.find((part) => part.id === normalized);
+}
+
 function withoutChapterNumber(title: string): string {
 	return title.replace(/^\d+\.\s*/, "");
 }
@@ -107,18 +121,34 @@ export function getBookBreadcrumbs(
 	}
 
 	const location = getBookEditionLocation(normalized);
+	const part = getBookEditionPart(normalized);
 	if (location?.kind === "chapter") {
 		return [
 			home,
-			{ name: "Contents", path: "/contents/" },
+			{
+				name: `${location.part?.label}: ${location.part?.title}`,
+				path: bookEntryPath(location.part?.id ?? "contents"),
+			},
 			{
 				name: `Chapter ${location.number}: ${withoutChapterNumber(title)}`,
 				path: bookEntryPath(normalized),
 			},
 		];
 	}
+	if (part) {
+		return [
+			home,
+			{
+				name: `${part.label}: ${part.title}`,
+				path: bookEntryPath(normalized),
+			},
+		];
+	}
 
-	return [home, { name: withoutChapterNumber(title), path: bookEntryPath(normalized) }];
+	return [
+		home,
+		{ name: withoutChapterNumber(title), path: bookEntryPath(normalized) },
+	];
 }
 
 export function resolveBookSeo(
@@ -127,6 +157,7 @@ export function resolveBookSeo(
 ): ResolvedBookSeo {
 	const normalized = normalizeBookEntryId(entryId);
 	const location = getBookEditionLocation(normalized);
+	const part = getBookEditionPart(normalized);
 	const pageType =
 		normalized === "404" || normalized.endsWith("/404")
 			? "not-found"
@@ -134,15 +165,24 @@ export function resolveBookSeo(
 				? "home"
 				: normalized === "contents"
 					? "contents"
-					: location
-						? "reading"
-						: "page";
-	const title = data.seo?.title ?? data.title;
-	const documentTitle = title.includes(BOOK_NAME)
-		? title
-		: `${title} | ${BOOK_NAME}`;
+					: part
+						? "part"
+						: location
+							? "reading"
+							: "page";
+	const title =
+		pageType === "not-found"
+			? "Page not found"
+			: (data.seo?.title ?? data.title);
+	const documentTitle = data.seo?.title
+		? data.seo.title
+		: title.includes(BOOK_NAME)
+			? title
+			: `${title} | ${BOOK_NAME}`;
 	const description =
-		data.description ?? CURRENT_BOOK_EDITION.description;
+		pageType === "not-found"
+			? "The requested FlowBook page could not be found. Return to the book or start reading the open edition."
+			: (data.description ?? CURRENT_BOOK_EDITION.description);
 	const topics =
 		data.seo?.topics && data.seo.topics.length > 0
 			? data.seo.topics
@@ -165,6 +205,7 @@ export function resolveBookSeo(
 		imageAlt,
 		breadcrumbs: getBookBreadcrumbs(normalized, data.title),
 		location,
+		part,
 	};
 }
 
@@ -172,7 +213,10 @@ function absoluteUrl(path: string): string {
 	return new URL(path, BOOK_ORIGIN).toString();
 }
 
-function editionEntryIds(): readonly string[] {
+function editionEntryIds(
+	part?: (typeof CURRENT_BOOK_EDITION.parts)[number],
+): readonly string[] {
+	if (part) return part.chapters.map((chapter) => chapter.entryId);
 	return [
 		CURRENT_BOOK_EDITION.introduction.entryId,
 		...CURRENT_BOOK_EDITION.parts.flatMap((part) =>
@@ -197,26 +241,28 @@ function chapterStructuredData(
 		alternativeHeadline: seo.title,
 		description: seo.description,
 		position:
-			seo.location.kind === "chapter"
-				? seo.location.number
-				: "Introduction",
+			seo.location.kind === "chapter" ? seo.location.number : "Introduction",
 		isPartOf: { "@id": BOOK_ID },
 		mainEntityOfPage: { "@id": `${canonical}#webpage` },
 		inLanguage: BOOK_LANGUAGE,
 		isAccessibleForFree: true,
 		keywords: seo.topics.join(", "),
 		image: { "@id": imageId },
-		author: { "@id": FLOW_LIKE_ORGANIZATION_ID },
 		publisher: { "@id": FLOW_LIKE_ORGANIZATION_ID },
 	};
 }
 
-function contentsItemList(): Record<string, unknown> {
-	const entries = editionEntryIds();
+function contentsItemList(seo: ResolvedBookSeo): Record<string, unknown> {
+	const entries = editionEntryIds(seo.part);
+	const id = seo.part
+		? `${BOOK_ORIGIN}/${seo.part.id}/#chapters`
+		: `${BOOK_ORIGIN}/contents/#chapters`;
 	return {
 		"@type": "ItemList",
-		"@id": `${BOOK_ORIGIN}/contents/#chapters`,
-		name: `${BOOK_NAME} chapters`,
+		"@id": id,
+		name: seo.part
+			? `${seo.part.label}: ${seo.part.title}`
+			: `${BOOK_NAME} chapters`,
 		numberOfItems: entries.length,
 		itemListOrder: "https://schema.org/ItemListOrderAscending",
 		itemListElement: entries.map((entryId, index) => ({
@@ -240,11 +286,14 @@ export function buildBookStructuredData(
 	const imageId = `${canonical}#primaryimage`;
 	const breadcrumbId = `${canonical}#breadcrumb`;
 	const chapter = chapterStructuredData(seo, data, canonical, imageId);
-	const itemList = seo.pageType === "contents" ? contentsItemList() : undefined;
+	const itemList =
+		seo.pageType === "contents" || seo.pageType === "part"
+			? contentsItemList(seo)
+			: undefined;
 	const mainEntityId = chapter
 		? `${canonical}#chapter`
 		: itemList
-			? `${BOOK_ORIGIN}/contents/#chapters`
+			? String(itemList["@id"])
 			: BOOK_ID;
 
 	const graph: Record<string, unknown>[] = [
@@ -259,14 +308,13 @@ export function buildBookStructuredData(
 				width: 1024,
 				height: 1024,
 			},
-			sameAs: ["https://github.com/Rheosoph/flow-like"],
 		},
 		{
 			"@type": "WebSite",
 			"@id": BOOK_WEBSITE_ID,
 			url: `${BOOK_ORIGIN}/`,
 			name: BOOK_NAME,
-			alternateName: CURRENT_BOOK_EDITION.subtitle,
+			alternateName: "The Flow-Like FlowScript Book",
 			description: CURRENT_BOOK_EDITION.description,
 			inLanguage: BOOK_LANGUAGE,
 			publisher: { "@id": FLOW_LIKE_ORGANIZATION_ID },
@@ -279,11 +327,16 @@ export function buildBookStructuredData(
 			alternateName: CURRENT_BOOK_EDITION.subtitle,
 			description: CURRENT_BOOK_EDITION.description,
 			bookEdition: CURRENT_BOOK_EDITION.editionLabel,
+			bookFormat: "https://schema.org/EBook",
 			inLanguage: CURRENT_BOOK_EDITION.language,
 			copyrightYear: CURRENT_BOOK_EDITION.year,
 			isAccessibleForFree: true,
-			image: { "@id": imageId },
-			author: { "@id": FLOW_LIKE_ORGANIZATION_ID },
+			image: absoluteUrl("/social/index.png"),
+			genre: ["Software development", "Workflow automation"],
+			about: [
+				{ "@type": "Thing", name: "Flow-Like FlowScript" },
+				{ "@type": "Thing", name: "Visual workflow programming" },
+			],
 			publisher: { "@id": FLOW_LIKE_ORGANIZATION_ID },
 			hasPart: editionEntryIds().map((entryId) => ({
 				"@id": `${absoluteUrl(bookEntryPath(entryId))}#chapter`,
@@ -296,7 +349,10 @@ export function buildBookStructuredData(
 			},
 		},
 		{
-			"@type": seo.pageType === "contents" ? "CollectionPage" : "WebPage",
+			"@type":
+				seo.pageType === "contents" || seo.pageType === "part"
+					? "CollectionPage"
+					: "WebPage",
 			"@id": webpageId,
 			url: canonical,
 			name: seo.title,
@@ -340,6 +396,8 @@ export function buildBookStructuredData(
 	return { "@context": "https://schema.org", "@graph": graph };
 }
 
-export function serializeStructuredData(value: Record<string, unknown>): string {
+export function serializeStructuredData(
+	value: Record<string, unknown>,
+): string {
 	return JSON.stringify(value).replace(/</g, "\\u003c");
 }

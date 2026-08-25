@@ -49,7 +49,6 @@ const parts = await Promise.all(
 
 const chapterTitle = (title: string) => title.replace(/^\d+\.\s*/, "");
 const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*/, "");
-const canonicalUrl = new URL("/print/", Astro.site ?? Astro.url).toString();
 ---
 
 <!doctype html>
@@ -69,7 +68,7 @@ const canonicalUrl = new URL("/print/", Astro.site ?? Astro.url).toString();
 			content={`${edition.description} ${edition.editionLabel}.`}
 		/>
 		<meta name="robots" content="noindex, follow" />
-		<link rel="canonical" href={canonicalUrl} />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<title>{edition.title}: {edition.subtitle} — Print edition</title>
 	</head>
 	<body class="flowbook-print">

@@ -37,7 +37,7 @@ const readingPath = [
 			description:
 				editionPart?.description ??
 				`${contentPart.chapters.length} ${contentPart.chapters.length === 1 ? "chapter" : "chapters"} in the current edition.`,
-			href: `/${contentPart.firstEntryId}/`,
+			href: `/${contentPart.id}/`,
 		};
 	}),
 ];
@@ -316,6 +316,12 @@ const readingPath = [
 		color: var(--flowbook-orange);
 	}
 
+	.book-home__premise h2 em,
+	.book-home__path h2 em,
+	.book-home__system h2 em {
+		color: var(--flowbook-orange-dark);
+	}
+
 	.book-home__premise-copy > div p,
 	.book-home__path-intro > p,
 	.book-home__system-copy > p,
@@ -538,7 +544,7 @@ const readingPath = [
 
 	.book-home__chapter > div b {
 		font-size: 1.35rem;
-		color: var(--flowbook-orange);
+		color: var(--flowbook-orange-dark);
 	}
 
 	.book-home__chapter h3 {

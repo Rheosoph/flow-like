@@ -1,0 +1,36 @@
+{
+  "name": "FlowBook: The FlowScript Book",
+  "short_name": "FlowBook",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "description": "Learn Flow-Like FlowScript through typed code, visual workflows, and observable execution.",
+  "lang": "en",
+  "dir": "ltr",
+  "background_color": "#0c0e13",
+  "theme_color": "#0c0e13",
+  "categories": ["books", "education", "developer-tools"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start reading",
+      "url": "/introduction/"
+    },
+    {
+      "name": "Contents",
+      "url": "/contents/"
+    },
+    {
+      "name": "Download PDF",
+      "url": "/flowbook.pdf"
+    }
+  ]
+}

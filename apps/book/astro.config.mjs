@@ -1,5 +1,6 @@
 import { unified } from "@astrojs/markdown-remark";
 import react from "@astrojs/react";
+import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import rehypeFlowbookTables from "./src/lib/rehype-flowbook-tables.mjs";
@@ -13,12 +14,23 @@ export default defineConfig({
 	},
 	integrations: [
 		react(),
+		sitemap({
+			filter: (page) => {
+				const pathname = new URL(page).pathname;
+				return (
+					!/^\/print\/?$/.test(pathname) &&
+					!pathname.endsWith(".md") &&
+					pathname !== "/llms.txt" &&
+					pathname !== "/llms-full.txt"
+				);
+			},
+		}),
 		starlight({
 			title: "FlowBook",
 			description:
-				"The FlowScript book: build reliable software in code and as a visible workflow.",
+				"Learn Flow-Like FlowScript through typed code, visual workflows, and observable execution.",
 			credits: false,
-			favicon: "https://flow-like.com/favicon.svg",
+			favicon: "/favicon.svg",
 			customCss: ["./src/styles/book.css"],
 			expressiveCode: {
 				defaultProps: {
@@ -33,7 +45,9 @@ export default defineConfig({
 			components: {
 				ContentPanel: "./src/components/BookContentPanel.astro",
 				Footer: "./src/components/BookFooter.astro",
+				Head: "./src/components/BookHead.astro",
 				Hero: "./src/components/BookHero.astro",
+				PageTitle: "./src/components/BookPageTitle.astro",
 			},
 			editLink: {
 				baseUrl: "https://github.com/Rheosoph/flow-like/edit/main/apps/book/",
@@ -42,39 +56,6 @@ export default defineConfig({
 				{
 					tag: "meta",
 					attrs: { name: "theme-color", content: "#0c0e13" },
-				},
-				{
-					tag: "meta",
-					attrs: {
-						property: "og:image",
-						content: "https://book.flow-like.com/og.png",
-					},
-				},
-				{
-					tag: "meta",
-					attrs: { property: "og:image:width", content: "1200" },
-				},
-				{
-					tag: "meta",
-					attrs: { property: "og:image:height", content: "630" },
-				},
-				{
-					tag: "meta",
-					attrs: {
-						property: "og:image:alt",
-						content: "FlowBook — source code becoming a visible workflow",
-					},
-				},
-				{
-					tag: "meta",
-					attrs: { name: "twitter:card", content: "summary_large_image" },
-				},
-				{
-					tag: "meta",
-					attrs: {
-						name: "twitter:image",
-						content: "https://book.flow-like.com/og.png",
-					},
 				},
 			],
 			social: [
@@ -97,6 +78,10 @@ export default defineConfig({
 				{
 					label: "Part I — Software That Explains Itself",
 					items: [
+						{
+							label: "Part I overview",
+							slug: "part-1",
+						},
 						{
 							label: "1. The 3 A.M. Call",
 							slug: "part-1/01-the-3-am-call",

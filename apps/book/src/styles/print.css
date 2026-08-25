@@ -199,8 +199,8 @@ body.flowbook-print {
 	box-sizing: border-box;
 }
 
-.flowbook-print :where(header.header, .sidebar-pane, .right-sidebar, .mobile-preferences,
-	.pagination-links, .print-hidden, [data-pagefind-ignore], .copy) {
+	.flowbook-print :where(header.header, .sidebar-pane, .right-sidebar, .mobile-preferences,
+	.pagination-links, .print-hidden, .sl-anchor-link, .copy) {
 	display: none !important;
 }
 

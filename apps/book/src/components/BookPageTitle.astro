@@ -1,9 +1,9 @@
 ---
-import { PAGE_TITLE_ID } from "@astrojs/starlight/constants";
 import { getBookBreadcrumbs } from "../lib/seo";
 
 const { entry } = Astro.locals.starlightRoute;
 const breadcrumbs = getBookBreadcrumbs(entry.id, entry.data.title);
+const pageTitleId = "_top";
 ---
 
 {
@@ -27,7 +27,7 @@ const breadcrumbs = getBookBreadcrumbs(entry.id, entry.data.title);
 	)
 }
 
-<h1 id={PAGE_TITLE_ID}>{entry.data.title}</h1>
+<h1 id={pageTitleId}>{entry.data.title}</h1>
 
 <style>
 	@layer starlight.core {

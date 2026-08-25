@@ -6,7 +6,9 @@ import workflowCore from "../../../website/src/images/parallax/workflow-core.png
 import { getBookContentStats } from "../lib/book-content";
 import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
 
-const { data } = Astro.locals.starlightRoute.entry;
+const { entry } = Astro.locals.starlightRoute;
+const { data } = entry;
+const isNotFound = entry.id === "404" || entry.id.endsWith("/404");
 const { title = data.title, tagline, actions = [] } = data.hero || {};
 const edition = CURRENT_BOOK_EDITION;
 const { chapterCount } = await getBookContentStats();
@@ -25,7 +27,28 @@ const resolvedActions = actions.map((action) => ({
 }));
 ---
 
-<section class="flowbook-hero" aria-labelledby="_top">
+
+{
+	isNotFound ? (
+		<section class="flowbook-not-found" aria-labelledby="_top">
+			<p>404 · Page not found</p>
+			<h1 id="_top" data-page-title>That page left the graph.</h1>
+			<p>
+				The address may have changed, or the chapter may not be part of the open edition yet.
+			</p>
+			<div>
+				<a class="flowbook-button flowbook-button--primary" href="/">
+					<span>Return to FlowBook</span>
+					<Icon name="right-arrow" />
+				</a>
+				<a class="flowbook-button flowbook-button--minimal" href="/introduction/">
+					<span>Start the introduction</span>
+					<Icon name="open-book" />
+				</a>
+			</div>
+		</section>
+	) : (
+		<section class="flowbook-hero" aria-labelledby="_top">
 	<div class="flowbook-hero__grid" aria-hidden="true"></div>
 	<div class="flowbook-hero__glow" aria-hidden="true"></div>
 
@@ -76,13 +99,18 @@ const resolvedActions = actions.map((action) => ({
 				src={workflowCore}
 				alt="Flow-Like workflow graph and FlowScript editor shown side by side"
 				width={1440}
+				widths={[480, 720, 960, 1200, 1440]}
+				sizes="(max-width: 720px) 92vw, (max-width: 1200px) 54vw, 720px"
 				quality={86}
 				loading="eager"
+				fetchpriority="high"
 				decoding="async"
 			/>
 		</figure>
 	</div>
-</section>
+		</section>
+	)
+}
 
 <script>
 	const root = document.documentElement;
@@ -104,6 +132,50 @@ const resolvedActions = actions.map((action) => ({
 </script>
 
 <style>
+	.flowbook-not-found {
+		min-height: calc(78svh - var(--sl-nav-height));
+		padding: clamp(6rem, 14vw, 11rem) clamp(1.5rem, 9vw, 8rem);
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		background:
+			radial-gradient(circle at 24% 32%, rgba(242, 64, 42, 0.2), transparent 28rem),
+			#0c0e13;
+		color: #f6f1ed;
+	}
+
+	.flowbook-not-found > p:first-child {
+		margin: 0 0 1rem;
+		font: 700 0.7rem/1.3 var(--flowbook-mono, ui-monospace, monospace);
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: #ff8066;
+	}
+
+	.flowbook-not-found h1 {
+		max-width: 12ch;
+		margin: 0;
+		font-size: clamp(3.2rem, 8vw, 7rem);
+		line-height: 0.92;
+		letter-spacing: -0.055em;
+		color: #f6f1ed;
+	}
+
+	.flowbook-not-found h1 + p {
+		max-width: 48rem;
+		margin: 1.5rem 0 0;
+		font-size: clamp(1rem, 2vw, 1.25rem);
+		line-height: 1.65;
+		color: #b8bac1;
+	}
+
+	.flowbook-not-found > div {
+		margin-top: 2rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+
 	.flowbook-hero,
 	.flowbook-hero * {
 		box-sizing: border-box;

@@ -7,7 +7,37 @@ const TABLE_WRAPPER_CLASS = "flowbook-table-scroll";
 export default function rehypeFlowbookTables() {
 	return (tree) => {
 		wrapTables(tree);
+		wrapReleaseChecksAsNoSnippet(tree);
 	};
+}
+
+/**
+ * Release caveats are valuable to readers but make poor search-result snippets.
+ * Google supports `data-nosnippet` on div, span, and section elements. Keep the
+ * semantic blockquote and wrap it in a supported container so the directive is
+ * honored without hiding or de-indexing the surrounding chapter.
+ */
+function wrapReleaseChecksAsNoSnippet(node) {
+	if (!Array.isArray(node?.children)) return;
+
+	for (let index = 0; index < node.children.length; index += 1) {
+		const child = node.children[index];
+		if (
+			child?.type === "element" &&
+			child.tagName === "blockquote" &&
+			getText(child).trim().startsWith("Release check:")
+		) {
+			node.children[index] = {
+				type: "element",
+				tagName: "div",
+				properties: { dataNosnippet: "" },
+				children: [child],
+			};
+			continue;
+		}
+
+		wrapReleaseChecksAsNoSnippet(child);
+	}
 }
 
 function wrapTables(node) {

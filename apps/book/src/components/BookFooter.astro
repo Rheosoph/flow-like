@@ -3,6 +3,7 @@ import DefaultFooter from "@astrojs/starlight/components/Footer.astro";
 import { getCollection } from "astro:content";
 import ReadingExperience from "./ReadingExperience";
 import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
+import BookRelatedReading from "./BookRelatedReading.astro";
 
 const { entry } = Astro.locals.starlightRoute;
 const docs = await getCollection("docs");
@@ -29,10 +30,11 @@ const currentEntryId = entry.id;
 const isReadingPage = chapters.some((chapter) => chapter.entryId === currentEntryId);
 ---
 
+<BookRelatedReading />
 {
 	(isReadingPage || currentEntryId === "") && (
 		<ReadingExperience
-			client:load
+			client:idle
 			editionId={CURRENT_BOOK_EDITION.id}
 			chapters={chapters}
 			currentEntryId={currentEntryId}
