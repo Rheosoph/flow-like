@@ -244,13 +244,30 @@ async function waitForDocumentAssets(page) {
 	await page.evaluate(async () => {
 		if (document.fonts?.ready) await document.fonts.ready;
 		const images = Array.from(document.images);
+		for (const image of images) {
+			image.loading = "eager";
+			image.decoding = "sync";
+			image.fetchPriority = "high";
+		}
 		await Promise.all(
 			images.map(async (image) => {
-				if (image.complete) return;
-				try {
-					await image.decode();
-				} catch {
-					// The explicit broken-image check below reports a useful source URL.
+				if (!image.complete) {
+					await new Promise((resolveImage) => {
+						const timeout = window.setTimeout(resolveImage, 30_000);
+						const finish = () => {
+							window.clearTimeout(timeout);
+							resolveImage();
+						};
+						image.addEventListener("load", finish, { once: true });
+						image.addEventListener("error", finish, { once: true });
+					});
+				}
+				if (image.naturalWidth > 0) {
+					try {
+						await image.decode();
+					} catch {
+						// The explicit broken-image check below reports a useful source URL.
+					}
 				}
 			}),
 		);
@@ -347,27 +364,24 @@ async function normalizePrintDocument(page) {
 		overrideStyle.textContent = `
 			@media print {
 				html { color-scheme: light !important; }
-				html[data-pdf-pass="body"] ${FRONT_SELECTORS} { display: none !important; }
-				html[data-pdf-pass="front"] ${BODY_SELECTORS} { display: none !important; }
+				html[data-pdf-pass="body"] :is(${FRONT_SELECTORS}) { display: none !important; }
+				html[data-pdf-pass="front"] :is(${BODY_SELECTORS}) { display: none !important; }
 				.pdf-chapter-marked { position: relative !important; }
 				.pdf-page-marker {
 					position: absolute !important;
 					inset: 0 auto auto 0 !important;
 					display: block !important;
-					width: 1px !important;
-					height: 1px !important;
 					margin: 0 !important;
 					padding: 0 !important;
-					overflow: hidden !important;
 					font: 1px/1 Arial, sans-serif !important;
 					letter-spacing: 0 !important;
 					white-space: nowrap !important;
-					color: rgba(0, 0, 0, 0.01) !important;
-					opacity: 0.01 !important;
+					color: #fff !important;
+					opacity: 1 !important;
 				}
 				pre.pdf-code-wide,
 				.pdf-code-wide pre {
-					font-size: 7.25pt !important;
+					font-size: 6.35pt !important;
 					line-height: 1.48 !important;
 				}
 				pre.pdf-code-very-wide,
@@ -514,7 +528,6 @@ async function normalizePrintDocument(page) {
 			const markerElement = document.createElement("span");
 			markerElement.className = "pdf-page-marker";
 			markerElement.dataset.pdfPageMarker = marker;
-			markerElement.setAttribute("aria-hidden", "true");
 			markerElement.textContent = marker;
 			chapter.prepend(markerElement);
 
@@ -552,7 +565,6 @@ async function normalizePrintDocument(page) {
 				const markerElement = document.createElement("span");
 				markerElement.className = "pdf-page-marker";
 				markerElement.dataset.pdfPageMarker = marker;
-				markerElement.setAttribute("aria-hidden", "true");
 				markerElement.textContent = marker;
 				part.prepend(markerElement);
 				return {
@@ -683,16 +695,18 @@ async function normalizePrintDocument(page) {
 		let wideCodeBlocks = 0;
 		let veryWideCodeBlocks = 0;
 		for (const pre of body.querySelectorAll("pre")) {
-			const lines = (pre.textContent ?? "")
-				.replace(/\r/g, "")
-				.split("\n")
-				.map((line) => line.replace(/\t/g, "    "));
+			const renderedLines = Array.from(pre.querySelectorAll(".ec-line .code"));
+			const lines = (
+				renderedLines.length > 0
+					? renderedLines.map((line) => line.textContent ?? "")
+					: (pre.textContent ?? "").replace(/\r/g, "").split("\n")
+			).map((line) => line.replace(/\t/g, "    "));
 			const widths = lines.map((line) => Array.from(line).length);
 			const maximumWidth = Math.max(0, ...widths);
 			const oversizedLines = widths.filter((width) => width > 92).length;
 			const printableBlock = pre.closest(".expressive-code") ?? pre;
 			pre.dataset.pdfMaxColumns = String(maximumWidth);
-			if (maximumWidth > 112 || oversizedLines > Math.max(3, lines.length * 0.2)) {
+			if (maximumWidth > 124 || oversizedLines > Math.max(3, lines.length * 0.2)) {
 				printableBlock.classList.add("pdf-code-very-wide");
 				veryWideCodeBlocks += 1;
 			} else if (maximumWidth > 84) {
@@ -805,7 +819,7 @@ async function setPrintPass(page, pass) {
 			body.toggleAttribute("aria-hidden", nextPass === "front");
 		}
 		window.scrollTo(0, 0);
-	});
+	}, pass);
 	await page.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
 }
 

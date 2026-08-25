@@ -8,6 +8,9 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import triageTrim from '../../../assets/workflows/incident-triage--focus-trim.webp';
+
 The useful size of a programming language is not measured only by how many keywords it has. It is
 measured by how much real work we can express without leaving its model.
 
@@ -37,14 +40,14 @@ work?*
 
 The most reliable way to read a node call is the fully qualified form:
 
-```ts
+```flow
 namespace::operation({ pinName: value })
 ```
 
 The path identifies a catalog namespace and member. The object maps values to input pins. Consider
 the first operation in our Incident Triage Flow:
 
-```ts
+```flow
 const normalized = string::trim({ string: report })
 ```
 
@@ -62,9 +65,11 @@ match a declaration.
 Named arguments are worth keeping as the canonical mental model even where compact positional
 forms are accepted. They make the graph mapping visible in the source:
 
-```text
-report ─▶ Trim String.string
-```
+<WorkflowFigure
+  src={triageTrim}
+  alt="Triage Incident report output connected to the String input of Trim String, whose Trimmed String output feeds Contains."
+  caption="The named string argument becomes the visible input pin on Trim String; its result remains an ordinary typed output wire."
+/>
 
 They also make reviews resilient to a long signature. Someone reading an HTTP call should not have
 to remember whether the fourth Boolean controls redirects, certificate validation, or retries.
@@ -83,7 +88,7 @@ would blur two different ideas. Write `::` for a namespace and `.` for a receive
 Here is the chapter's Incident example. It intentionally uses several equivalent call surfaces so
 we can examine them in the following sections:
 
-```ts
+```flow
 use log::{ info, warn }
 use string as text
 
@@ -117,7 +122,7 @@ Board.
 
 FlowScript supports four forms:
 
-```ts
+```flow
 use ai::response
 use string::*
 use string as text
@@ -173,7 +178,7 @@ The simplest style rule is therefore:
 Some catalog nodes designate one data input as a receiver. Their generated declaration contains a
 `this:` parameter. Split Once currently declares its contract in this shape:
 
-```ts
+```flow
 function splitOnce(
     this: string,
     { string: string, separator: string, fromEnd?: bool }
@@ -183,7 +188,7 @@ function splitOnce(
 The `this: string` marker says the input pin named `string` may be supplied by the value to the
 left of a dot. These two calls resolve to the same node:
 
-```ts
+```flow
 const split = string::splitOnce({
     string: normalized,
     separator: ":",
@@ -235,21 +240,21 @@ without turning output order into an invisible convention.
 
 A node with one data output behaves like a value-producing function:
 
-```ts
+```flow
 const normalized = text::trim({ string: report })
 ```
 
 `normalized` refers to Trim's only data output. An impure logging node has no data output, so it is
 normally written as a statement:
 
-```ts
+```flow
 warn({ message: normalized, toast: false })
 ```
 
 For several data outputs, select them by pin name. Object destructuring makes all selected wires
 clear at once:
 
-```ts
+```flow
 const { before: system, after: detail, found } = normalized.splitOnce({
     separator: ":",
     fromEnd: false,
@@ -263,7 +268,7 @@ output” to a different value.
 
 The alternative is to retain a name for the call and select outputs as fields:
 
-```ts
+```flow
 const split = normalized.splitOnce({ separator: ":", fromEnd: false })
 if (split.found) {
     warn({ message: split.after, toast: false })
@@ -282,7 +287,7 @@ so code that consumes one result must name it explicitly.
 
 Array destructuring is intentionally unsupported:
 
-```ts
+```flow
 // Rejected: output meaning must not depend on pin position.
 const [system, detail, found] = normalized.splitOnce(":")
 ```
@@ -302,7 +307,7 @@ the Flow. Flow-Like generates `.flow.d` files from node metadata to create that 
 
 A declaration for Contains looks like this, abbreviated only by removing prose lines:
 
-```ts
+```flow
 declare namespace string {
     /**
      * @node string_contains @receiver string @alias stringContains

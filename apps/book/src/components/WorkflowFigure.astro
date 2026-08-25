@@ -1,0 +1,32 @@
+---
+import { Image } from "astro:assets";
+import type { ImageMetadata } from "astro";
+
+interface Props {
+	src: ImageMetadata;
+	alt: string;
+	caption: string;
+	wide?: boolean;
+}
+
+const { src, alt, caption, wide = false } = Astro.props;
+---
+
+<figure class:list={["flowbook-workflow-figure", { "print-wide": wide }]}>
+	<a
+		class="flowbook-workflow-figure__image"
+		href={src.src}
+	>
+		<Image
+			src={src}
+			alt={alt}
+			layout="constrained"
+			widths={[800, 1200, 1600]}
+			sizes="(max-width: 50rem) calc(100vw - 2rem), 50rem"
+			quality="max"
+			loading="lazy"
+			decoding="async"
+		/>
+	</a>
+	<figcaption>{caption}</figcaption>
+</figure>

@@ -3,9 +3,26 @@ import { Image } from "astro:assets";
 import { Icon } from "@astrojs/starlight/components";
 import DraftContentNotice from "@astrojs/starlight/components/DraftContentNotice.astro";
 import workflowCore from "../../../website/src/images/parallax/workflow-core.png";
+import { getBookContentStats } from "../lib/book-content";
+import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
 
 const { data } = Astro.locals.starlightRoute.entry;
 const { title = data.title, tagline, actions = [] } = data.hero || {};
+const edition = CURRENT_BOOK_EDITION;
+const { chapterCount } = await getBookContentStats();
+const chapterNoun = chapterCount === 1 ? "CHAPTER" : "CHAPTERS";
+const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
+const resolvedActions = actions.map((action) => ({
+	...action,
+	attrs:
+		action.link === "/flowbook.pdf"
+			? {
+					...action.attrs,
+					download: pdfFileName,
+					type: "application/pdf",
+				}
+			: action.attrs,
+}));
 ---
 
 <section class="flowbook-hero" aria-labelledby="_top">
@@ -17,7 +34,7 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 			<div class="flowbook-hero__status">
 				<i aria-hidden="true"></i>
 				<span>THE FLOWSCRIPT BOOK</span>
-				<b>OPEN EDITION · 2026</b>
+				<b>{edition.editionLabel.toUpperCase()}</b>
 			</div>
 
 			<h1 id="_top" data-page-title set:html={title} />
@@ -25,9 +42,9 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 			{tagline && <p class="flowbook-hero__tagline" set:html={tagline} />}
 
 			{
-				actions.length > 0 && (
+				resolvedActions.length > 0 && (
 					<div class="flowbook-hero__actions">
-						{actions.map(({ attrs: { class: className, ...attrs } = {}, icon, link, text, variant }) => (
+						{resolvedActions.map(({ attrs: { class: className, ...attrs } = {}, icon, link, text, variant }) => (
 							<a
 								class:list={[
 									"flowbook-button",
@@ -47,36 +64,22 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 				)
 			}
 
-			<div class="flowbook-hero__legend" aria-label="Book principles">
-				<span><b>01</b> READABLE SOURCE</span>
-				<span><b>02</b> VISIBLE SYSTEM</span>
-				<span><b>03</b> RUNTIME EVIDENCE</span>
+			<div class="flowbook-hero__legend" aria-label="Current edition summary">
+				<span><b>01</b> INTRODUCTION</span>
+				<span><b>02</b> {chapterCount} {chapterNoun}</span>
+				<span><b>03</b> PDF + WEB</span>
 			</div>
 		</div>
 
 		<figure class="flowbook-hero__visual">
-			<div class="flowbook-hero__frame">
-				<div class="flowbook-hero__framebar">
-					<span><i aria-hidden="true"></i> FLOW / AUTHORING SURFACE</span>
-					<em>IN SYNC</em>
-				</div>
-				<Image
-					src={workflowCore}
-					alt="Flow-Like workflow graph and FlowScript editor shown side by side"
-					width={1440}
-					quality={86}
-					loading="eager"
-					decoding="async"
-				/>
-				<div class="flowbook-hero__framefoot">
-					<span><i aria-hidden="true"></i> ONE PROGRAM / TWO VIEWS</span>
-					<b>INSPECTABLE BY DESIGN</b>
-				</div>
-			</div>
-			<figcaption>
-				<span>LIVE SYSTEM VIEW</span>
-				<b>Graph ↔ FlowScript</b>
-			</figcaption>
+			<Image
+				src={workflowCore}
+				alt="Flow-Like workflow graph and FlowScript editor shown side by side"
+				width={1440}
+				quality={86}
+				loading="eager"
+				decoding="async"
+			/>
 		</figure>
 	</div>
 </section>
@@ -181,9 +184,7 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 		color: #ff7658;
 	}
 
-	.flowbook-hero__status i,
-	.flowbook-hero__framebar i,
-	.flowbook-hero__framefoot i {
+	.flowbook-hero__status i {
 		width: 0.38rem;
 		height: 0.38rem;
 		flex: 0 0 auto;
@@ -321,8 +322,8 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 	.flowbook-hero__visual {
 		position: relative;
 		z-index: 1;
+		min-width: 0;
 		margin: 0;
-		perspective: 80rem;
 	}
 
 	.flowbook-hero__visual::before {
@@ -335,74 +336,15 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 		content: "";
 	}
 
-	.flowbook-hero__frame {
-		overflow: hidden;
-		border: 1px solid rgba(255, 255, 255, 0.14);
-		border-radius: 1.15rem;
-		background: rgba(16, 18, 24, 0.78);
-		box-shadow: 0 3.5rem 7rem rgba(0, 0, 0, 0.48);
-		transform: rotateY(-3deg) rotateX(1.25deg);
-		animation: flowbook-float 8s ease-in-out infinite;
-	}
-
-	.flowbook-hero__framebar,
-	.flowbook-hero__framefoot {
-		height: 2.65rem;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 1rem;
-		border-bottom: 1px solid var(--hero-border);
-		font: 650 0.52rem/1 var(--flowbook-mono);
-		letter-spacing: 0.12em;
-		color: rgba(246, 241, 237, 0.68);
-	}
-
-	.flowbook-hero__framebar span,
-	.flowbook-hero__framefoot span {
-		display: flex;
-		align-items: center;
-		gap: 0.55rem;
-	}
-
-	.flowbook-hero__framebar em {
-		font-style: normal;
-		color: #ff7658;
-	}
-
-	.flowbook-hero__frame :global(img) {
-		width: 100%;
+	.flowbook-hero__visual :global(img) {
+		width: 118%;
+		max-width: none;
 		height: auto;
 		display: block;
-		background: #0b0d11;
-	}
-
-	.flowbook-hero__framefoot {
-		border-top: 1px solid var(--hero-border);
-		border-bottom: 0;
-	}
-
-	.flowbook-hero__framefoot b {
-		font-weight: 600;
-		color: rgba(246, 241, 237, 0.72);
-	}
-
-	.flowbook-hero__visual figcaption {
-		margin: 0.9rem 0.5rem 0;
-		display: flex;
-		justify-content: space-between;
-		font: 600 0.52rem/1 var(--flowbook-mono);
-		letter-spacing: 0.13em;
-		color: rgba(246, 241, 237, 0.66);
-	}
-
-	.flowbook-hero__visual figcaption b {
-		color: #ff7658;
-	}
-
-	@keyframes flowbook-float {
-		0%, 100% { transform: rotateY(-3deg) rotateX(1.25deg) translateY(0); }
-		50% { transform: rotateY(-2deg) rotateX(0.5deg) translateY(-0.7rem); }
+		margin-left: -9%;
+		filter:
+			drop-shadow(0 2rem 2.5rem rgba(0, 0, 0, 0.28))
+			drop-shadow(0 0 3rem rgba(240, 59, 45, 0.08));
 	}
 
 	@media (max-width: 76rem) {
@@ -444,6 +386,11 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 			width: min(100%, 56rem);
 			margin-inline: auto;
 		}
+
+		.flowbook-hero__visual :global(img) {
+			width: 112%;
+			margin-left: -6%;
+		}
 	}
 
 	@media (max-width: 36rem) {
@@ -468,29 +415,13 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 			display: grid;
 		}
 
-		.flowbook-hero__framebar,
-		.flowbook-hero__framefoot {
-			height: 2.2rem;
-			font-size: 0.5rem;
-		}
-
-		.flowbook-hero__framefoot b,
-		.flowbook-hero__framebar em {
-			display: none;
-		}
-
-		.flowbook-hero__frame {
-			border-radius: 0.8rem;
-			transform: none;
-			animation: none;
+		.flowbook-hero__visual :global(img) {
+			width: 112%;
+			margin-left: -6%;
 		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.flowbook-hero__frame {
-			animation: none;
-		}
-
 		.flowbook-button {
 			transition: none;
 		}

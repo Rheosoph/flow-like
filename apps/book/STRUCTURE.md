@@ -588,95 +588,135 @@ final publication.
 
 ## Chapter 12 — Functions, Layers, Handlers, and Caching
 
-**Summary:** Build reusable, typed logic without losing the visible boundaries that let the
-graph, runtime, and agent tooling understand it.
+**Summary:** Turn repeated node networks into reusable typed contracts without losing the visible
+execution, Event, and cache boundaries that let humans, the runtime, and agent tooling understand
+what a call actually does.
 
 ### 12.1 Functions become layers
 
-Map parameters and returns to boundary pins and follow a call through the graph.
+Map parameters and returns to Function-layer boundary pins and follow a Call Function node through
+the graph. Use the founder's extraction rule: when a layer is copied because its logic must remain
+the same, make it a function. Caching is the second reason to establish a Function boundary.
 
 ### 12.2 Pure and impure functions
 
-Explain reachability, observable effects, execution wiring, and why a pure function with no
-return is not actionable work.
+Explain the two directions of evaluation: impure execution moves forward while required pure data
+is pulled backward from input pins. Purity is a node-designer promise expressed by Execution-pin
+shape, not a theorem proved by the engine. Recommend cheap deterministic work as pure and expensive
+or potentially side-effecting work as impure. Compare this with Unreal Blueprint's official
+state-mutation definition and demand evaluation without claiming identical reevaluation behavior.
 
 ### 12.3 Functions as methods
 
-Show how the first typed parameter can become a receiver without changing the underlying
-call contract.
+Show that every user function with a first typed parameter can be called as a method on that value.
+The receiver fills the first input without changing the Function layer or implying mutation. Note
+that catalog-node receivers remain metadata-driven and Board-to-source projection may normalize a
+method spelling back to a flat call.
 
 ### 12.4 Nested handlers and agent tools
 
-Distinguish an ordinary function from an event/handler entry that can be registered as a
-tool with typed arguments and a result.
+Distinguish a reusable Function layer from a triggerable Event entry. Agent tool registration must
+explicitly reference an eligible Event handler; a plain function currently requires an
+author-written thin handler shim. Explain inferred argument/result shapes, nested handler scope,
+and the lack of automatic per-tool confirmation or authorization metadata.
 
 ### 12.5 `@cache`
 
-Cover namespaces, TTL, app/user scope, permanent entries, and the rule that cacheable
-functions must be determined by their declared inputs.
+Teach `@cache` as an explicit authored promise that a prior output may replace the whole call,
+including side effects. Cover namespace, TTL, App/user scope, the current cache key, cache/backend
+failure behavior, concurrent misses, permanent entries, and the present mismatch between visual
+and FlowScript defaults. Cache only when declared inputs express every meaningful dependency.
 
-### 12.6 Layers for organization
+### 12.6 Invalidate after the source of truth changes
+
+Invalidate the exact namespace and scope after a durable update succeeds, not after every read.
+Use TTL, namespace versions, and an explicit data revision input. Explain the in-flight-miss race
+and why a revision key prevents a late old result from serving new callers.
+
+### 12.7 Layers for organization
 
 Return to presentational layers and show when visual compression is useful without turning
-every named section into a callable abstraction.
+every named section into a callable abstraction. Contrast “one noisy section” with “copies intended
+to remain identical,” and show the Studio layer-to-Function conversion boundary.
 
-**Evidence:** SRC-LANGUAGE-AST, SRC-RECONCILER, SRC-LAYERS, and SRC-AI-AUTHORING.
-**Interview dependency:** INT-03 and INT-08 must clarify the philosophy of functions as
-agent tools and the intended caching contract.
+### 12.8 Read the complete function and cache example
+
+Walk through a pull-evaluated normalizer, a deterministic but structurally execution-driven cached
+resolver, direct and method calls, a registered agent Event shim, an explicit data-revision input,
+and a separate namespace-invalidation Event placed after authoritative data update.
+
+**Evidence:** SRC-LANGUAGE-AST, SRC-RECONCILER, SRC-LAYERS, SRC-FUNCTION-EXECUTION,
+SRC-FUNCTION-CACHE, SRC-AGENT-HANDLERS, and SRC-UNREAL-BLUEPRINTS.
+**Interview dependency:** Resolved in the INT-03 Chapter 12 follow-up for extraction, purity,
+methods, Event shims, explicit cache ownership, and author-controlled invalidation. INT-08 can add a
+production agent-tool case study but no longer blocks the language chapter.
+**Worked material:** `examples/functions-and-caching/functions.flow`, kept in canonical
+parser/render tests; add catalog-aware reconciliation and cache miss/hit/expiry/invalidation
+execution coverage before final publication.
 
 ## Chapter 13 — Events, Interfaces, and Complete Apps
 
-**Summary:** Move from a callable Flow to a complete App. Readers give an internal event a
-stable external interface, authenticated callers, a small page, a generated API contract,
-versioning, permissions, and an execution location.
+**Summary:** Move from a callable Flow to a complete App. Readers keep one typed incident decision
+behind separate Page, Quick Action/Cron, and REST adapters; configure identity, credentials,
+execution location, and immutable releases; and inspect both current guarantees and boundary gaps.
 
-### 13.1 Event nodes are entry functions
+### 13.1 An event node is an entry; an App Event is an exposure
 
-Define simple, generic, chat, page, and other supported entry shapes without conflating the
-node with its exposure.
+Separate the triggerable Board node from the App-level binding that selects a compatible surface,
+version, variable overrides, route, exposure, and execution location.
 
-### 13.2 App Events expose entry points
+### 13.2 Keep one decision and write honest adapters
 
-Bind an event node to a quick action, schedule, API, chat, page, or supported sink.
+Reuse one typed Function while adapting Page, Quick Action/Cron, and REST callers through explicit
+Event entries. Explain why REST registers a handler entry rather than a Function layer.
 
-### 13.3 Typed payloads and results
+### 13.3 A Page should be experienced, not merely described
 
-Design the boundary schema first and validate input before it reaches side effects.
+Embed the interactive React Incident Desk prototype, then map its fields and button to the A2UI
+component, element-state, workflow-event, Page-target, and route contracts used in the App.
 
-### 13.4 Identity, roles, and callers
+### 13.4 Quick Action and Cron share a shape, not an identity
 
-Require authentication where appropriate and distinguish caller identity, App membership,
-role permissions, Event authentication, and credentials used by the Flow itself.
+Show exposed variables, Event overrides, the Quick Action form, and an unattended schedule over the
+same Simple Event without confusing interactive and scheduled credentials.
 
-### 13.5 Build a page over the Event
+### 13.5 A REST App Event is a setup program
 
-Create a small page or A2UI surface that gathers the typed incident input, invokes the Event,
-and renders its result so UI authoring is practiced rather than merely listed.
+Compose server configuration, one registered Generic handler, API-key auth, OpenAPI routes, and REST
+Server inside a Simple setup Event. Explain save-time remote setup and last-successful fallback.
 
-### 13.6 Routes, chat, and widgets
+### 13.6 The HTTP boundary is structured—and still evolving
 
-Compare the other surfaces the same typed entry point can power and explain when each is the
-right application boundary.
+Call the route, receive the typed incident result, inspect reserved request/client inputs, and name
+the current remote OpenAPI, schema-enforcement, and rejected-run gaps.
 
-### 13.7 APIs and generated contracts
+### 13.7 Identity, permission, and credentials are different boundaries
 
-Expose a REST entry point, inspect its generated OpenAPI contract and interactive docs, and
-tie authentication and route stability to the pinned Event version.
+Distinguish App roles, REST registration auth, connected-App identity, in-Flow authorization, and
+the credentials used for downstream work.
 
-### 13.8 Local, remote, and hybrid choices
+### 13.8 Hybrid is a Board choice, not an Event location
 
-Choose where a run happens based on required capabilities, caller, data, and policy. Make
-clear that a hybrid Flow does not split one run between two machines.
+Explain Local, Remote, and Hybrid Boards; Local/Remote-only App Events; Studio versus web dispatch;
+and why a single run never splits between machines.
 
-### 13.9 Pin the interface to a version
+### 13.9 Pin the contract before other people depend on it
 
-Show how production-facing Events can target an immutable Flow version while authoring
-continues on the latest draft.
+Use Latest for authoring, pin production to a numbered Flow version, verify successful REST setup,
+retain rollback, and label stored-but-unwired canary selection honestly.
+
+### 13.10 The complete App checklist
+
+Close with entry, contract, interface, identity, credentials, location, release, and evidence as the
+minimum handoff questions for a complete App.
 
 **Evidence:** SRC-APP-MODEL, SRC-EVENTS, SRC-IDENTITY-PERMISSIONS, SRC-APP-SURFACES,
 SRC-API-SURFACES, and SRC-VERSIONING.
-**Interview dependency:** INT-07 must classify stable Event surfaces and supported execution
-locations.
+**Interview dependency:** Resolved for Chapter 13 in the INT-03 Event/interface follow-up and code
+audit. INT-07 still supplies the wider production-deployment claims for Chapters 3 and 25.
+**Worked material:** `examples/events-and-interfaces/events.flow`, kept in canonical parser/render
+tests; embedded `IncidentDeskDemo.tsx`; add end-to-end remote setup/inbound and rejected-run coverage
+before upgrading the documented gaps to guarantees.
 
 ---
 
@@ -689,41 +729,61 @@ connects a running system back to its building blocks.
 ## Chapter 14 — Board ⇄ AST ⇄ Text
 
 **Summary:** Open the machinery without requiring readers to be compiler engineers. A Board
-is lowered into a typed intermediate representation and rendered; edited text is parsed and
-reconciled back into board commands.
+is lowered into a typed semantic pivot and rendered; edited text is parsed, validated, and
+reconciled into a minimal atomic batch of Board commands.
 
-### 14.1 Three representations, one program
+### 14.1 One program, three representations
 
 Introduce Board, `BoardAst`, and canonical FlowScript text and state which information each
-representation owns.
+representation owns. Establish equal authoring surfaces over one persisted Flow model.
 
-### 14.2 Board to AST
+### 14.2 Why Board JSON is not the language
+
+Let readers copy several nodes into a text editor, inspect the transport-oriented JSON, and see
+why an editable language needs a semantic pivot rather than direct storage manipulation.
+
+### 14.3 Board to AST
 
 Show how nodes, layers, variables, functions, events, schemas, and execution arms become
-language constructs.
+language constructs; explain pure-expression recovery and semantically transparent reroutes.
 
-### 14.3 AST to text
+### 14.4 AST to text
 
-Explain canonical rendering, derived imports, safe sugar, stable naming, and secret redaction.
+Explain canonical rendering, derived imports, qualified calls at collisions, safe sugar, stable
+naming, standardized author style, and secret omission.
 
-### 14.4 Text to AST
+### 14.5 Text to AST
 
 Tour the context-free lexer, recursive-descent structure parser, Pratt expression parser,
-and bounded nesting without turning this into the contributor chapter.
+bounded nesting, and the syntax-versus-semantics diagnostic boundary in one expert aside.
 
-### 14.5 AST to commands
+### 14.6 AST to commands
 
 Explain catalog-aware resolution, type and shape checks, dynamic pins, correction proposals,
-and a minimal edit plan.
+minimal edit planning, preview, rollback, persistence, and canonical reload.
 
-### 14.6 What the text deliberately does not own
+### 14.7 Follow one Incident Desk change through the loop
+
+Show one anchored literal becoming exactly one `UpdateNodePin`, then derive a local
+`customerFacing` signal as a structural preview without changing an established Function signature.
+
+### 14.8 What the text deliberately does not own
 
 Discuss coordinates, colors, comments, reroutes, and other graph metadata that minimal
 reconciliation can preserve even when it is not fully encoded in source.
 
-**Evidence:** SRC-LANGUAGE-AST, SRC-PARSER-RENDERER, and SRC-RECONCILER.
-**Interview dependency:** INT-03 should supply the historical design constraints and rejected
-round-trip approaches.
+### 14.9 The mental model to keep
+
+Close on lower, render, parse, reconcile, apply, and reload as the six verbs behind the contract.
+
+**Evidence:** SRC-LANGUAGE-AST, SRC-PARSER-RENDERER, SRC-GRAPH-MODEL, SRC-RECONCILER,
+SRC-APPLY, and SRC-EDITOR.
+**Interview dependency:** Resolved for Chapter 14 in INT-03. The founder supplied the later
+crystallization, minimal-command, canonical-style, namespace, secret, validation, and expert-depth
+decisions; the precise historical rationale is labelled as an inference from code and repository
+history.
+**Worked material:** `examples/board-ast-text/canonical.flow`, kept in canonical parser/render
+tests; the exact literal-edit claim is backed by the core anchored-reconciliation regression test.
 
 ## Chapter 15 — Identity, Anchors, and Safe Change
 

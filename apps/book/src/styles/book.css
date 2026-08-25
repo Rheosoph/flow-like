@@ -1,9 +1,16 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/inter/wght-italic.css";
+@import "@fontsource-variable/source-serif-4";
+@import "@fontsource-variable/source-serif-4/wght-italic.css";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+
 :root {
-	--flowbook-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+	--flowbook-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
 		"Segoe UI", sans-serif;
-	--flowbook-serif: "Source Serif 4", "Iowan Old Style", Charter,
+	--flowbook-serif: "Source Serif 4 Variable", "Source Serif 4", "Iowan Old Style", Charter,
 		"Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
-	--flowbook-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+	--flowbook-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
 		Monaco, Consolas, monospace;
 	--flowbook-ink: oklch(0.184 0.0081 285.5768);
 	--flowbook-paper: oklch(0.9841 0.0035 39.4848);
@@ -416,17 +423,130 @@ header.header .social-icons::after {
 	color: var(--flowbook-orange-dark);
 }
 
-.sl-markdown-content pre,
-.expressive-code .frame {
-	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 78%, transparent) !important;
-	border-radius: 0.85rem !important;
-	box-shadow: 0 1.4rem 3.5rem color-mix(in srgb, var(--flowbook-ink) 9%, transparent) !important;
+body:not(.flowbook-print) .sl-markdown-content pre {
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 72%, var(--flowbook-muted));
+	border-radius: 0.7rem !important;
+	box-shadow: none !important;
+	font-family: var(--flowbook-mono);
+	font-size: 0.875rem;
+	font-variant-ligatures: none;
+	font-weight: 460;
+	line-height: 1.65;
+	overscroll-behavior-inline: contain;
+	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
+	scrollbar-width: thin;
+	tab-size: 4;
 }
 
-.sl-markdown-content pre {
-	font-family: var(--flowbook-mono);
-	font-size: 0.84rem;
-	line-height: 1.65;
+body:not(.flowbook-print) .expressive-code {
+	--flowbook-code-bg: color-mix(in oklab, var(--flowbook-paper-deep) 72%, var(--flowbook-card));
+	--flowbook-code-chrome: color-mix(in oklab, var(--flowbook-paper-deep) 91%, var(--flowbook-ink) 3%);
+	--flowbook-code-border: color-mix(in srgb, var(--flowbook-rule) 72%, var(--flowbook-muted));
+	--flowbook-code-toolbar-height: 2.5rem;
+
+	--ec-brdRad: 0.7rem;
+	--ec-brdCol: var(--flowbook-code-border);
+	--ec-codeFontFml: var(--flowbook-mono);
+	--ec-codeFontSize: 0.875rem;
+	--ec-codeFontWg: 460;
+	--ec-codeLineHt: 1.65;
+	--ec-codePadBlk: 1rem;
+	--ec-codePadInl: 1.1rem;
+	--ec-codeBg: var(--flowbook-code-bg);
+	--ec-codeFg: var(--flowbook-ink);
+	--ec-codeSelBg: color-mix(in srgb, var(--flowbook-orange) 24%, transparent);
+	--ec-focusBrd: var(--flowbook-orange);
+	--ec-sbThumbCol: color-mix(in srgb, var(--flowbook-muted) 48%, transparent);
+	--ec-sbThumbHoverCol: color-mix(in srgb, var(--flowbook-muted) 78%, transparent);
+	--ec-uiFontFml: var(--flowbook-sans);
+	--ec-uiPadInl: 1rem;
+	--ec-frm-frameBoxShdCssVal: none;
+	--ec-frm-edActTabBg: var(--flowbook-code-chrome);
+	--ec-frm-edActTabFg: var(--flowbook-ink);
+	--ec-frm-edActTabBrdCol: var(--flowbook-code-border);
+	--ec-frm-edActTabIndTopCol: var(--flowbook-orange);
+	--ec-frm-edTabBarBg: var(--flowbook-code-chrome);
+	--ec-frm-edTabBarBrdCol: var(--flowbook-code-border);
+	--ec-frm-edTabBarBrdBtmCol: var(--flowbook-code-border);
+	--ec-frm-edBg: var(--flowbook-code-bg);
+	--ec-frm-trmTtbBg: var(--flowbook-code-chrome);
+	--ec-frm-trmTtbFg: var(--flowbook-muted);
+	--ec-frm-trmTtbBrdBtmCol: var(--flowbook-code-border);
+	--ec-frm-trmBg: var(--flowbook-code-bg);
+	--ec-frm-inlBtnFg: color-mix(in srgb, var(--flowbook-ink) 82%, var(--flowbook-muted));
+	--ec-frm-inlBtnBg: var(--flowbook-ink);
+	--ec-frm-inlBtnBgIdleOpa: 0;
+	--ec-frm-inlBtnBgHoverOrFocusOpa: 0.09;
+	--ec-frm-inlBtnBgActOpa: 0.15;
+	--ec-frm-inlBtnBrd: var(--flowbook-code-border);
+	--ec-frm-inlBtnBrdOpa: 1;
+
+	margin-block: 1.75rem;
+}
+
+body:not(.flowbook-print) .expressive-code .frame {
+	border: 0 !important;
+	border-radius: 0.7rem !important;
+	box-shadow: none !important;
+}
+
+body:not(.flowbook-print) .expressive-code pre {
+	position: relative;
+	border-color: var(--flowbook-code-border) !important;
+	background: var(--flowbook-code-bg);
+	box-shadow: none !important;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre {
+	background: linear-gradient(
+		to bottom,
+		var(--flowbook-code-chrome) 0,
+		var(--flowbook-code-chrome) calc(var(--flowbook-code-toolbar-height) - 1px),
+		var(--flowbook-code-border) calc(var(--flowbook-code-toolbar-height) - 1px),
+		var(--flowbook-code-border) var(--flowbook-code-toolbar-height),
+		var(--flowbook-code-bg) var(--flowbook-code-toolbar-height)
+	) !important;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre::before {
+	position: absolute;
+	top: 0.78rem;
+	left: var(--ec-codePadInl);
+	content: attr(data-language);
+	font: 720 0.625rem/1 var(--flowbook-mono);
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--flowbook-muted) 88%, var(--flowbook-ink));
+	user-select: none;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre > code {
+	padding-block: calc(var(--ec-codePadBlk) + var(--flowbook-code-toolbar-height)) var(--ec-codePadBlk);
+	font-variant-ligatures: none;
+}
+
+body:not(.flowbook-print) .expressive-code .frame.has-title pre,
+body:not(.flowbook-print) .expressive-code .frame.is-terminal pre {
+	border-start-start-radius: 0 !important;
+	border-start-end-radius: 0 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button {
+	width: 2rem;
+	height: 2rem;
+	border-radius: 0.4rem;
+	background: var(--flowbook-code-bg);
+	opacity: 0.86 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button:hover {
+	opacity: 1 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button:focus-visible,
+body:not(.flowbook-print) .expressive-code pre:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
 }
 
 .sl-markdown-content hr {
@@ -434,25 +554,160 @@ header.header .social-icons::after {
 	border-color: color-mix(in srgb, var(--flowbook-rule) 80%, transparent);
 }
 
-.sl-markdown-content table {
-	overflow-x: auto;
-	-webkit-overflow-scrolling: touch;
-	border: 1px solid var(--flowbook-rule);
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll {
+	max-inline-size: 100%;
+	margin-block: 2rem 2.25rem;
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 82%, var(--flowbook-muted));
 	border-radius: 0.75rem;
-	background: color-mix(in srgb, var(--flowbook-card) 76%, transparent);
-	font-family: var(--flowbook-sans);
-	font-size: 0.84rem;
+	background: var(--flowbook-card);
+	overflow-x: auto;
+	overscroll-behavior-inline: contain;
+	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
+	scrollbar-width: thin;
+	-webkit-overflow-scrolling: touch;
 }
 
-.sl-markdown-content th {
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table {
+	display: table;
+	inline-size: 100%;
+	min-inline-size: 36rem;
+	margin: 0;
+	border: 0;
+	border-collapse: separate;
+	border-spacing: 0;
+	background: var(--flowbook-card);
+	overflow: visible;
+	font: 500 0.9rem/1.5 var(--flowbook-sans);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table:has(tr > :nth-child(3)) {
+	min-inline-size: 44rem;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table:has(tr > :nth-child(4)) {
+	min-inline-size: 52rem;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :is(th, td) {
+	padding: 0.78rem 0.95rem;
+	border: 0;
+	border-block-end: 1px solid color-mix(in srgb, var(--flowbook-rule) 72%, transparent);
+	vertical-align: top;
+	text-align: start;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll thead th {
 	background: var(--flowbook-paper-deep);
-	font: 720 0.66rem/1.3 var(--flowbook-mono);
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
+	font: 700 0.76rem/1.4 var(--flowbook-sans);
+	letter-spacing: 0.025em;
+	color: var(--flowbook-ink);
 }
 
-.sl-markdown-content :is(th, td) {
-	border-color: var(--flowbook-rule);
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr {
+	background: var(--flowbook-card);
+	transition: background-color 140ms ease;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:nth-child(even) {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 36%, var(--flowbook-card));
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:is(:hover, :focus-within) {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 62%, var(--flowbook-card));
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:last-child > * {
+	border-block-end: 0;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody td:first-child {
+	font-weight: 650;
+	color: var(--flowbook-ink);
+}
+
+body:not(.flowbook-print)
+	.sl-markdown-content
+	.flowbook-table-scroll
+	table:has(tr > :nth-child(3))
+	:is(th, td):first-child {
+	position: sticky;
+	inset-inline-start: 0;
+	z-index: 1;
+	background: inherit;
+	box-shadow: 1px 0 0 color-mix(in srgb, var(--flowbook-rule) 72%, transparent);
+}
+
+body:not(.flowbook-print)
+	.sl-markdown-content
+	.flowbook-table-scroll
+	table:has(tr > :nth-child(3))
+	thead
+	th:first-child {
+	z-index: 2;
+	background: var(--flowbook-paper-deep);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :not(pre) > code {
+	white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+	body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table {
+		font-size: 0.875rem;
+	}
+
+	body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :is(th, td) {
+		padding: 0.7rem 0.75rem;
+	}
+}
+
+.sl-markdown-content .flowbook-workflow-figure {
+	margin: 2.2rem 0 2.4rem;
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 88%, transparent);
+	border-radius: 0.85rem;
+	background: var(--flowbook-card);
+	box-shadow: var(--sl-shadow-md);
+	overflow: hidden;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image {
+	display: block;
+	position: relative;
+	border: 0;
+	background: #fbfaf9;
+	text-decoration: none;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image:is(:hover, :focus-visible) {
+	background: #fff;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image:focus-visible::after {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	box-shadow: inset 0 0 0 3px var(--flowbook-orange);
+	pointer-events: none;
+	content: "";
+}
+
+.sl-markdown-content .flowbook-workflow-figure :is(picture, img) {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.sl-markdown-content .flowbook-workflow-figure figcaption {
+	margin: 0;
+	padding: 0.85rem 1rem 0.95rem;
+	border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 78%, transparent);
+	font: 560 0.76rem/1.55 var(--flowbook-sans);
+	color: var(--flowbook-muted);
 }
 
 .starlight-aside {

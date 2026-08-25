@@ -8,6 +8,10 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import cacheInvalidation from '../../../assets/workflows/cache-invalidation.webp';
+import triageFull from '../../../assets/workflows/incident-triage.webp';
+
 The first copy of a useful node network feels harmless. The second creates a maintenance question:
 are these two blocks allowed to evolve independently, or are they supposed to remain the same?
 
@@ -44,7 +48,7 @@ This chapter separates four ideas that can look similar on a canvas:
 
 A FlowScript function gives a node network a name, typed inputs, and typed outputs:
 
-```ts
+```flow
 function normalizeSystemId(systemId: string): (normalized: string) {
     return systemId.trim()
 }
@@ -79,14 +83,11 @@ packaged node, depending on the intended reach.
 
 Flow-Like has two complementary directions of evaluation:
 
-```text
-Event ──▶ impure operation ──▶ impure operation
-              ▲
-              │ needs an input
-          pure formatter
-              ▲
-          pure normalizer
-```
+<WorkflowFigure
+  src={triageFull}
+  alt="Incident execution wire moving from the event toward Branch while pure Trim String and Contains data dependencies feed the Branch condition."
+  caption="Execution moves forward on the dark wire; required pure data is pulled through the colored dependency wires before the impure consumer runs."
+/>
 
 Execution travels forward through Execution pins. Before an impure node runs, the runtime examines
 its data inputs. If a required value is produced by pure nodes, it walks backward through those
@@ -153,7 +154,7 @@ answers **may an older result replace this call?** They are separate decisions.
 Every user-defined function with at least one parameter can be written as a method on its first
 argument:
 
-```ts
+```flow
 const normalized = normalizeSystemId(systemId)
 const sameValue = systemId.normalizeSystemId()
 ```
@@ -161,8 +162,8 @@ const sameValue = systemId.normalizeSystemId()
 Both forms call the same Function layer. In the method form, `systemId` fills the first parameter.
 The remaining arguments follow after it:
 
-```ts
-const resolution = normalized.resolveSystem(directoryRevision)
+```flow
+const { team, runbook } = normalized.resolveSystem(directoryRevision)
 ```
 
 This is universal for user functions because the first parameter already supplies an unambiguous
@@ -187,19 +188,17 @@ The design rule is straightforward: any suitable Event should be explicitly regi
 tool. When reusable logic already lives in a function, a thin Event shim adapts the function to
 that trigger boundary:
 
-```ts
+```flow
 eventsGeneric configureIncidentAgent(payload: Struct, agent: Struct, directoryRevision: string) {
     const configuredAgent = agent::registerFunctionTools({
         agentIn: agent,
         tools: [resolveSystemTool],
     })
-
     eventsGeneric resolveSystemTool(systemId: string) {
         const normalized = systemId.normalizeSystemId()
         const { team, runbook } = normalized.resolveSystem(directoryRevision)
         return { team: team, runbook: runbook }
     }
-
     return configuredAgent
 }
 ```
@@ -209,6 +208,10 @@ the agent may invoke; it is not an ordinary array passed through a data pin. The
 an independent Event entry even though the source places it beside the registration that owns it.
 Its parameters become the tool's inferred input properties, and its `return` becomes the tool
 result.
+
+That inference is not yet a complete external contract. The current model-facing schema describes
+the properties but does not mark them as required, and it does not advertise a declared output
+schema. The handler remains responsible for validating the values it receives.
 
 The current implementation requires this handler to be written. Registering `resolveSystem`
 directly is rejected because a Function layer has no trigger node. A future convenience can create
@@ -229,10 +232,16 @@ shim does not invent additional approval on its own.
 
 Flow-Like never silently decides that a function should be cached. The author opts in visibly:
 
-```ts
+```flow
 @cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600 })
 function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
-    // deterministic lookup
+    let team = "platform-on-call"
+    let runbook = "runbooks/general.md"
+    if (systemId == "payments") {
+        team = "payments-on-call"
+        runbook = "runbooks/payments.md"
+    }
+    return team, runbook
 }
 ```
 
@@ -292,7 +301,7 @@ cache is neither a distributed lock nor an exactly-once mechanism.
 Namespaces give related entries one invalidation boundary. Open the same scope and namespace, then
 remove the group:
 
-```ts
+```flow
 eventsGeneric invalidateSystemDirectory(payload: Struct, directoryRevision: string) {
     const directoryCache = data::cache::open({
         scope: "app",
@@ -310,12 +319,12 @@ eventsGeneric invalidateSystemDirectory(payload: Struct, directoryRevision: stri
 This Event belongs at the successful end of the authoritative system-directory update—not at the
 end of every read. The safe order is:
 
-```text
-commit durable update
-    └─ advance its revision
-        └─ invalidate the matching cache namespace
-            └─ publish success
-```
+<WorkflowFigure
+  src={cacheInvalidation}
+  alt="Update Directory event connected through Call commitDurableUpdate, Call advanceRevision, Call invalidateCache, and Call publishSuccess."
+  caption="This illustrative call topology makes the required order explicit. Production function bodies must implement the durable update, revision, invalidation, and publication contracts they name."
+  wide
+/>
 
 There is still a concurrency edge. A lookup that missed before invalidation can finish afterward
 and write an old result back into the namespace. Passing `directoryRevision` into the cached
@@ -357,14 +366,20 @@ author has named it yet.
 
 The canonical Chapter 12 fixture combines the chapter's boundaries:
 
-```ts
+```flow
 function normalizeSystemId(systemId: string): (normalized: string) {
     return systemId.trim()
 }
 
 @cache({ namespace: "incident-system-directory-v1", ttlSeconds: 600 })
 function resolveSystem(systemId: string, directoryRevision: string): (team: string, runbook: string) {
-    // deterministic, side-effect-free resolution
+    let team = "platform-on-call"
+    let runbook = "runbooks/general.md"
+    if (systemId == "payments") {
+        team = "payments-on-call"
+        runbook = "runbooks/payments.md"
+    }
+    return team, runbook
 }
 ```
 

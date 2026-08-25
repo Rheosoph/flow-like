@@ -1,0 +1,128 @@
+---
+import {
+	BOOK_LANGUAGE,
+	BOOK_NAME,
+	BOOK_OG_LOCALE,
+	BOOK_ORIGIN,
+	buildBookStructuredData,
+	resolveBookSeo,
+	serializeStructuredData,
+} from "../lib/seo";
+
+const { entry, head } = Astro.locals.starlightRoute;
+const seo = resolveBookSeo(entry.id, entry.data);
+const isNotFound = seo.pageType === "not-found";
+const canonicalFromRoute = head.find(
+	(item) => item.tag === "link" && item.attrs?.rel === "canonical",
+)?.attrs?.href;
+const canonical = isNotFound
+	? undefined
+	: typeof canonicalFromRoute === "string"
+		? canonicalFromRoute
+		: new URL(seo.path, Astro.site ?? BOOK_ORIGIN).toString();
+const imageUrl = new URL(seo.imagePath, Astro.site ?? BOOK_ORIGIN).toString();
+const robots = isNotFound
+	? "noindex,follow,max-image-preview:none,max-snippet:0,max-video-preview:0"
+	: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1";
+const openGraphType = seo.pageType === "reading" ? "article" : "website";
+const structuredData = canonical
+	? buildBookStructuredData(seo, entry.data, canonical, imageUrl)
+	: undefined;
+
+const managedMetaNames = new Set([
+	"application-name",
+	"apple-mobile-web-app-title",
+	"color-scheme",
+	"description",
+	"referrer",
+	"robots",
+]);
+
+const preservedHead = head.filter((item) => {
+	if (item.tag === "title") return false;
+
+	if (item.tag === "link") {
+		if (item.attrs?.rel === "manifest") return false;
+		if (isNotFound && item.attrs?.rel === "canonical") return false;
+		return true;
+	}
+
+	if (item.tag !== "meta") return true;
+	const name = item.attrs?.name;
+	const property = item.attrs?.property;
+	if (typeof name === "string") {
+		if (managedMetaNames.has(name) || name.startsWith("twitter:")) return false;
+	}
+	if (typeof property === "string") {
+		if (property.startsWith("og:") || property.startsWith("article:")) return false;
+	}
+	return true;
+});
+---
+
+{
+	preservedHead.map(({ tag: Tag, attrs, content }) => (
+		<Tag {...attrs} set:html={content} />
+	))
+}
+<title>{seo.documentTitle}</title>
+<meta name="description" content={seo.description} />
+<meta name="robots" content={robots} />
+<meta name="application-name" content={BOOK_NAME} />
+<meta name="apple-mobile-web-app-title" content={BOOK_NAME} />
+<meta name="color-scheme" content="dark light" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<link rel="manifest" href="/site.webmanifest" />
+{
+	seo.pageType === "home" && (
+		<link
+			rel="alternate"
+			type="application/pdf"
+			title="FlowBook open PDF edition"
+			href="/flowbook.pdf"
+		/>
+	)
+}
+
+<meta property="og:type" content={openGraphType} />
+<meta property="og:site_name" content={BOOK_NAME} />
+<meta property="og:locale" content={BOOK_OG_LOCALE} />
+{canonical && <meta property="og:url" content={canonical} />}
+<meta property="og:title" content={seo.title} />
+<meta property="og:description" content={seo.description} />
+<meta property="og:image" content={imageUrl} />
+<meta property="og:image:secure_url" content={imageUrl} />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content={seo.imageAlt} />
+{
+	seo.pageType === "reading" && (
+		<>
+			<meta
+				property="article:section"
+				content={
+					seo.location?.part?.title ??
+					(seo.location?.kind === "introduction" ? "Introduction" : "FlowBook")
+				}
+			/>
+			{seo.topics.map((topic) => <meta property="article:tag" content={topic} />)}
+		</>
+	)
+}
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={seo.title} />
+<meta name="twitter:description" content={seo.description} />
+<meta name="twitter:image" content={imageUrl} />
+<meta name="twitter:image:alt" content={seo.imageAlt} />
+
+{
+	structuredData && (
+		<script
+			type="application/ld+json"
+			is:inline
+			set:html={serializeStructuredData(structuredData)}
+		/>
+	)
+}

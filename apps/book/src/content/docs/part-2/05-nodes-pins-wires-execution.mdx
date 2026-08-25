@@ -8,6 +8,13 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import triageBranch from '../../../assets/workflows/incident-triage--focus-branch.webp';
+import triageContains from '../../../assets/workflows/incident-triage--focus-contains.webp';
+import workflowParallel from '../../../assets/workflows/workflow-parallel.webp';
+import workflowSequence from '../../../assets/workflows/workflow-sequence.webp';
+import workflowStructure from '../../../assets/workflows/workflow-structure.webp';
+
 The six nodes in our Incident Triage Flow told two stories at once.
 
 One story carried the report through Trim String and Contains into the Branch condition. The
@@ -39,7 +46,7 @@ name.
 For an author, a node might trim a string, send a request, write a record, call a model, or choose
 an execution path. In FlowScript, using one often looks like a normal function or method call:
 
-```ts
+```flow
 const normalized = report.trim()
 ```
 
@@ -104,17 +111,11 @@ that “object” does not have to mean “anything whatsoever.”
 
 Our first Flow already used this system:
 
-```text
-report: String
-    │
-    ▼
-Trim String.String: String
-    │
-    ├──▶ Contains.String: String
-    └──▶ Log Message: String
-
-Contains.Contains: Boolean ───▶ Branch.Condition: Boolean
-```
+<WorkflowFigure
+  src={triageContains}
+  alt="Trim String and Contains nodes with data outputs fanning toward Branch and off-frame consumers."
+  caption="Studio exposes direction, type, and fan-out at the pins. Pink dotted wires carry strings; the darker Boolean output supplies Branch.Condition."
+/>
 
 The connection from Contains to Branch is valid because the producer and consumer agree on a
 single Boolean. Connecting the same output directly to a String input should fail during
@@ -164,10 +165,11 @@ color and styling are presentation; their Execution type is the durable rule.
 
 Return to the Incident Triage graph:
 
-```text
-Triage Incident ───▶ Branch ─── True  ───▶ Log Error
-                          └───── False ───▶ Info log
-```
+<WorkflowFigure
+  src={triageBranch}
+  alt="Branch node with its True execution path connected to Log Error and its False path connected to Print Info."
+  caption="The solid execution path reaches exactly one logging node; the dotted data wires only supply values."
+/>
 
 The event starts control. Branch evaluates its Boolean data input and activates one of two
 execution outputs. The selected logging node then runs because control reached it—not because its
@@ -175,7 +177,7 @@ Message input happened to contain a string.
 
 FlowScript renders this graph as familiar control flow:
 
-```ts
+```flow
 if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
     error({ message: normalized, toast: false })
 } else {
@@ -222,13 +224,13 @@ Instead, a consumer pulls its output when that output is needed.
 
 In our first Flow, Branch needs its Condition. To obtain it, the executor follows the data
 dependency to Contains. Contains in turn needs the normalized report, so the executor follows the
-next dependency to Trim String. The conceptual order is therefore pulled backward from demand:
+next dependency to Trim String. The canvas records that backward chain of demand:
 
-```text
-Branch asks for condition
-    └── Contains asks for normalized text
-            └── Trim String asks for report
-```
+<WorkflowFigure
+  src={triageContains}
+  alt="Focused pure-data chain from Trim String through Contains to the Branch condition."
+  caption="When Branch asks for its condition, the runtime pulls the visible pure-data dependencies backward from Contains to Trim String."
+/>
 
 The result then travels forward to the consumer. No execution wires are required between those
 pure operations.
@@ -279,9 +281,11 @@ Execution pins, and the control nodes that activate them, define the behavior.
 
 For ordinary sequential work, draw one unbroken execution chain:
 
-```text
-Event ───▶ Validate ───▶ Write record ───▶ Send confirmation
-```
+<WorkflowFigure
+  src={workflowSequence}
+  alt="Process Record event connected in sequence to Call validate, Call writeRecord, and Call sendConfirmation."
+  caption="Consecutive impure FlowScript calls reconcile into one explicit execution chain."
+/>
 
 In FlowScript, consecutive impure statements express the same intent. Each operation receives
 control only after the preceding operation's selected continuation is reached.
@@ -298,14 +302,15 @@ and falls back to task mode. Parallel For Each provides the loop equivalent, inc
 concurrency input; FlowScript can render its supported form with `@parallel`.
 
 The shape is explicit. The task paths do not have to wire back into Done; the Parallel operation
-activates that continuation after the task branches settle:
+activates that continuation after the task branches settle. The source-authored example below
+wires one task arm and Done, while Studio can add more task branches through the repeatable output
+control:
 
-```text
-                         ┌── Parallel Task ──▶ Update search index
-Event ───▶ Parallel ─────├── Parallel Task ──▶ Notify subscriber
-                         ├── Parallel Task ──▶ Refresh cache
-                         └── Done ───────────▶ Continue after tasks settle
-```
+<WorkflowFigure
+  src={workflowParallel}
+  alt="Refresh Views event entering Parallel Execution, with one task arm calling updateSearchIndex and Done calling continueAfterTasks."
+  caption="The task tail remains separate from Done. The plus control adds repeatable task outputs on the Board; Done proceeds only after all connected task branches settle."
+/>
 
 This is a concurrency promise, not an ordering promise. The branches may finish in any order.
 They must not race on shared mutable state unless the design makes that safe, and external effects
@@ -350,16 +355,21 @@ see at once; it does not change the rules that run inside it.
 
 Suppose Incident Triage eventually grows from six nodes to sixty. Normalization might include
 language detection, identifier extraction, enrichment, and validation. We could collapse that
-region into a layer named **Prepare Incident**. The top-level Flow would communicate the process
-at the right altitude:
+inline region into a layer named **Prepare Incident**. Before doing so, compare the related function
+form: FlowScript can directly author the same top-level sentence as named callable boundaries.
 
-```text
-Receive incident ───▶ Prepare Incident ───▶ Classify ───▶ Respond
-```
+<WorkflowFigure
+  src={workflowStructure}
+  alt="Receive Incident event passing report data through Call prepareIncident and Call classifyIncident before Call respondToIncident."
+  caption="This is deliberately the function form: three Call nodes carry both the execution chain and typed data across named boundaries."
+/>
 
-Opening **Prepare Incident** would reveal its implementation. Its Start and Return boundaries
-would show exactly which typed values and execution paths cross the layer edge. An inner failure
-would remain an inner node failure; the layer is a door, not a black box.
+Each purple Call node in that render refers to a function layer, not an ordinary collapsed layer.
+Opening `prepareIncident` reveals its maintained callable implementation and signature. If the
+normalization nodes instead remain one inline region, collapsing them into an ordinary **Prepare
+Incident** layer can present a similar high-level label without making the region reusable. Its
+Start and Return boundaries show exactly which typed values and execution paths cross the layer
+edge. An inner failure remains an inner node failure; the layer is a door, not a black box.
 
 A function is related, but not synonymous. A plain layer organizes one inline region of a Board.
 A function layer defines logic that callers can invoke from more than one place. Its boundary pins

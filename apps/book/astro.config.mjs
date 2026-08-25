@@ -1,5 +1,8 @@
+import { unified } from "@astrojs/markdown-remark";
+import react from "@astrojs/react";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
+import rehypeFlowbookTables from "./src/lib/rehype-flowbook-tables.mjs";
 
 export default defineConfig({
 	site: "https://book.flow-like.com",
@@ -9,6 +12,7 @@ export default defineConfig({
 		inlineStylesheets: "never",
 	},
 	integrations: [
+		react(),
 		starlight({
 			title: "FlowBook",
 			description:
@@ -16,8 +20,19 @@ export default defineConfig({
 			credits: false,
 			favicon: "https://flow-like.com/favicon.svg",
 			customCss: ["./src/styles/book.css"],
+			expressiveCode: {
+				defaultProps: {
+					wrap: true,
+					preserveIndent: true,
+					hangingIndent: 2,
+					overridesByLang: {
+						text: { wrap: false },
+					},
+				},
+			},
 			components: {
 				ContentPanel: "./src/components/BookContentPanel.astro",
+				Footer: "./src/components/BookFooter.astro",
 				Hero: "./src/components/BookHero.astro",
 			},
 			editLink: {
@@ -104,32 +119,19 @@ export default defineConfig({
 					label: "Part II — Thinking and Writing in Flows",
 					items: [
 						{
-							label: "5. Nodes, Pins, Wires, and Execution",
-							slug: "part-2/05-nodes-pins-wires-execution",
+							autogenerate: {
+								directory: "part-2",
+							},
 						},
+					],
+				},
+				{
+					label: "Part III — The Two-Way Contract",
+					items: [
 						{
-							label: "6. Anatomy of a FlowScript Document",
-							slug: "part-2/06-anatomy-of-a-flowscript-document",
-						},
-						{
-							label: "7. Values, Types, Collections, and Interfaces",
-							slug: "part-2/07-values-types-collections-interfaces",
-						},
-						{
-							label: "8. Calling the Node Library",
-							slug: "part-2/08-calling-the-node-library",
-						},
-						{
-							label: "9. Expressions, Operators, and Readable Sugar",
-							slug: "part-2/09-expressions-operators-readable-sugar",
-						},
-						{
-							label: "10. Branches, Loops, Parallelism, and Return",
-							slug: "part-2/10-branches-loops-parallelism-return",
-						},
-						{
-							label: "11. State, Configuration, Runtime Values, and Secrets",
-							slug: "part-2/11-state-configuration-runtime-values-secrets",
+							autogenerate: {
+								directory: "part-3",
+							},
 						},
 					],
 				},
@@ -137,8 +139,12 @@ export default defineConfig({
 		}),
 	],
 	markdown: {
+		processor: unified({ rehypePlugins: [rehypeFlowbookTables] }),
 		syntaxHighlight: "shiki",
 		shikiConfig: {
+			langAlias: {
+				flow: "typescript",
+			},
 			themes: {
 				light: "min-light",
 				dark: "dracula",

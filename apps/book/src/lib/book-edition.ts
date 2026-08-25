@@ -122,6 +122,31 @@ export const CURRENT_BOOK_EDITION = {
 					entryId: "part-2/11-state-configuration-runtime-values-secrets",
 					anchor: "chapter-11",
 				},
+				{
+					number: 12,
+					entryId: "part-2/12-functions-layers-handlers-caching",
+					anchor: "chapter-12",
+				},
+				{
+					number: 13,
+					entryId: "part-2/13-events-interfaces-complete-apps",
+					anchor: "chapter-13",
+				},
+			],
+		},
+		{
+			id: "part-3",
+			anchor: "part-iii",
+			label: "Part III",
+			title: "The Two-Way Contract",
+			description:
+				"Open the machinery that keeps the visual Board and canonical FlowScript aligned through typed meaning and guarded changes.",
+			chapters: [
+				{
+					number: 14,
+					entryId: "part-3/14-board-ast-text",
+					anchor: "chapter-14",
+				},
 			],
 		},
 	],

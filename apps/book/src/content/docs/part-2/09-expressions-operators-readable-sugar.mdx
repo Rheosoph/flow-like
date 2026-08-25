@@ -8,9 +8,16 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import sugarFinal from '../../../assets/workflows/readable-sugar--focus-final-format.webp';
+import sugarFormat from '../../../assets/workflows/readable-sugar--focus-summary-format.webp';
+import sugarFull from '../../../assets/workflows/readable-sugar.webp';
+import sugarSelect from '../../../assets/workflows/readable-sugar--focus-select.webp';
+import sugarStruct from '../../../assets/workflows/readable-sugar--focus-struct-update.webp';
+
 FlowScript is at its most familiar when the nodes seem to disappear:
 
-```ts
+```flow
 let urgent = production && (attempts >= 3)
 let status = urgent ? "critical" : "investigate"
 let summary = `${status}: ${report}`
@@ -44,7 +51,7 @@ helps people reason about the system; it is not permission to conceal a decision
 
 An operator is a catalog lookup with two extra clues: the symbol and the operand type. Given:
 
-```ts
+```flow
 let urgent = attempts >= 3
 ```
 
@@ -76,7 +83,7 @@ Float equality and inequality demonstrate why that matters. Comparing floating-p
 usually needs a tolerance. Flow-Like's Float Equal node exposes that tolerance as an input, so `a
 == b` cannot honestly express its full decision. Use the explicit call and choose the tolerance:
 
-```ts
+```flow
 const closeEnough = float::equal({
     float1: measured,
     float2: expected,
@@ -96,13 +103,13 @@ others associate to the left.
 
 The parser can therefore understand:
 
-```ts
+```flow
 let urgent = production && attempts >= 3 || manuallyEscalated
 ```
 
 The canonical renderer adds parentheses around nested binary expressions:
 
-```ts
+```flow
 let urgent = (production && (attempts >= 3)) || manuallyEscalated
 ```
 
@@ -120,7 +127,7 @@ different contracts and require an explicit conversion.
 
 Consider the deceptively small expression:
 
-```ts
+```flow
 let result = "5" + 1
 ```
 
@@ -138,7 +145,7 @@ the Board.
 The right repair depends on intent. Numeric intent can be made explicit with a typed parser and
 its success output:
 
-```ts
+```flow
 const { integer: parsed, success } = "5".toInt({ fallback: 0 })
 if (!success) {
     // Handle invalid input as part of this Flow's domain policy.
@@ -148,7 +155,7 @@ let total = parsed + 1
 
 Text intent can be made explicit with formatting:
 
-```ts
+```flow
 let text = `5${1}`
 ```
 
@@ -169,7 +176,7 @@ merely moves the eventual failure to a later typed consumer.
 
 FlowScript supports two prefix conveniences:
 
-```ts
+```flow
 let unavailable = !healthy
 let debt = -balance
 ```
@@ -178,7 +185,7 @@ Boolean negation becomes the Boolean Not node. Unlike binary operators, canonica
 generally show that catalog call rather than preserve `!healthy`. Numeric negation canonicalizes
 to subtraction from zero:
 
-```ts
+```flow
 let debt = 0 - balance
 ```
 
@@ -188,7 +195,7 @@ small difference is visible on the Board because one needs a node and the other 
 
 Four compound assignments are accepted while writing:
 
-```ts
+```flow
 attempts += 1
 remaining -= consumed
 scale *= 2.0
@@ -197,7 +204,7 @@ scale /= 4.0
 
 Canonical rendering expands them:
 
-```ts
+```flow
 attempts = attempts + 1
 remaining = remaining - consumed
 scale = scale * 2.0
@@ -211,13 +218,13 @@ text makes the read, operation, and rebind explicit.
 
 Field compound assignment follows the same rule:
 
-```ts
+```flow
 incident.attempts += 1
 ```
 
 becomes:
 
-```ts
+```flow
 incident.attempts = incident.attempts + 1
 ```
 
@@ -229,19 +236,17 @@ the uncertainty sits behind a dot.
 
 A ternary is a value decision:
 
-```ts
+```flow
 let status = urgent ? "critical" : "investigate"
 ```
 
 It lowers to the Types Select node:
 
-```text
-urgent ───────────────▶ Select.condition
-"critical" ──────────▶ Select.a
-"investigate" ───────▶ Select.b
-                         │
-                         └─ result ─▶ status
-```
+<WorkflowFigure
+  src={sugarSelect}
+  alt="Boolean And result connected to Select.Condition, with the selected Result fanning out to Set Field and Format String."
+  caption="The ternary becomes one Select data node. Its result can feed several consumers without creating execution branches."
+/>
 
 This is not an execution branch. At runtime the Select node evaluates its condition and reads only
 the selected data input, but it exposes no alternative Execution arms. An impure operation placed
@@ -265,19 +270,18 @@ Select node grows another meaningful pin, the lossless-sugar test must grow with
 
 Template literals turn a format operation into readable prose:
 
-```ts
+```flow
 let summary = `${status}: ${normalized} after ${attempts} attempt(s)`
 ```
 
 Apply converts that expression into one String Format node. Static text becomes its
 `format_string` input. Each interpolation becomes a dynamic input pin:
 
-```text
-format_string = "{status}: {normalized} after {attempts} attempt(s)"
-status      ◀── status
-normalized  ◀── normalized
-attempts    ◀── attempts
-```
+<WorkflowFigure
+  src={sugarFormat}
+  alt="Format String node with dynamic status, normalized, and attempts input pins wired from Select, Trim String, and the event."
+  caption="Template interpolation names survive as dynamic Studio pins, so every placeholder has an inspectable producer."
+/>
 
 Simple references keep their names. A member or output access normally uses its final segment.
 More complex expressions receive stable positional names such as `arg1`. If two different
@@ -304,7 +308,7 @@ The renderer returns to template syntax only when the round trip is exact. It re
 
 If one of those checks fails, the Board renders the explicit call:
 
-```ts
+```flow
 string::format({
     formatString: "Incident {ticket}",
     ticket: externalId,
@@ -318,7 +322,7 @@ silently renames a dynamic pin or drops a configured value.
 
 A dot can select two different graph concepts:
 
-```ts
+```flow
 let found = split.found
 let status = incident.status
 ```
@@ -335,13 +339,13 @@ member access without first checking which output is wired. A wire from `found` 
 render as `incident.status`, which ordinarily means the value. The safe authoring form when the
 presence flag matters is an explicit call and named output until lowering checks the selected pin.
 
-```ts
+```flow
 const { value: status, found } = incident.get({ field: "status" })
 ```
 
 A field write is equally concrete:
 
-```ts
+```flow
 incident.status = "closed"
 ```
 
@@ -349,15 +353,13 @@ It lowers to Set Field with three data inputs—`struct_in`, the literal path `"
 value—and a `struct_out` output. FlowScript then rebinds `incident` so later uses resolve to that
 output.
 
-It helps to label the values by time:
+It helps to see the successive values on the Board:
 
-```text
-incident@0 ─┬─▶ Get "status" ─▶ previousStatus
-            │
-            └─▶ Set "status" = status ─▶ incident@1
-                                                │
-                                                └─▶ Set "summary" = summary ─▶ incident@2
-```
+<WorkflowFigure
+  src={sugarStruct}
+  alt="Two Set Field nodes connected in sequence, carrying successive Struct values while status and summary data feed their Value pins."
+  caption="Each Set Field produces a new Struct wire for the next update; existing consumers remain connected to the earlier producer."
+/>
 
 This is the precise sense in which the source appears to mutate a Struct. A consumer wired before
 the assignment keeps `incident@0`. A reference after the first write receives `incident@1`; after
@@ -371,7 +373,7 @@ consumer that already received the earlier producer.
 
 Nested literal paths follow the same model:
 
-```ts
+```flow
 incident.owner.name = "Ada"
 incident.affectedSystems[0].status = "degraded"
 ```
@@ -387,7 +389,7 @@ explicit call.
 The chapter's complete example applies all four kinds of readable sugar to the Incident Triage
 Flow:
 
-```ts
+```flow
 use log::{ info }
 
 eventsGeneric explainIncident(payload: Struct, incident: Struct, report: string, attempts: int, production: bool) {
@@ -403,22 +405,20 @@ eventsGeneric explainIncident(payload: Struct, incident: Struct, report: string,
 
 Read it once as code. It trims a report, classifies repeated production trouble, remembers the old
 status, produces two successive Incident values, and logs the transition. Then read the same logic
-as a graph inventory:
+as a graph:
 
-```text
-attempts ─▶ Integer >= 3 ─┐
-production ───────────────▶ Boolean AND ─▶ Select status ─┬─▶ Set "status"
-                                                          └─▶ Summary Format
-report ─▶ Trim ───────────────────────────────────────────▶ Summary Format
-attempts ─────────────────────────────────────────────────▶ Summary Format
-incident@0 ─┬─▶ Get "status" ─▶ previousStatus
-            └─▶ Set "status" ─▶ incident@1
-                                      └─▶ Set "summary" ◀─ Summary Format
-                                                └─▶ incident@2
-incident@2 ─┬─▶ Get "status" ─┐
-            └─▶ Get "summary" ├─▶ Final String Format ─▶ Log Info
-previousStatus ────────────────┘
-```
+<WorkflowFigure
+  src={sugarFinal}
+  alt="Three Get Field nodes feeding previousStatus, status, and summary into the final Format String before Print Info."
+  caption="The final focused region completes the graph detail shown in the three earlier crops: previous and updated Struct fields converge into the last format and log call."
+/>
+
+<WorkflowFigure
+  src={sugarFull}
+  alt="Complete Explain Incident workflow containing comparison, Boolean And, Select, Trim String, two Set Field nodes, three Get Field nodes, two Format String nodes, and Print Info."
+  caption="The complete readable-sugar example is an overview at page width; the focused renders expose its details. Open this image for the full-size graph."
+  wide
+/>
 
 The exact layout is Studio's concern, but every meaningful operation in the source has a node or
 a pin value behind it. Conversely, every meaningful configured input on those nodes is intended to
@@ -437,14 +437,14 @@ node type:
 
 String equality makes the rule tangible. With the case option untouched, a graph can render:
 
-```ts
+```flow
 let same = left == right
 ```
 
 When the node's `ignoreCase` input is enabled, the operator can no longer carry the contract, so
 the renderer preserves the setting:
 
-```ts
+```flow
 const same = left.equal({ string: right, ignoreCase: true })
 ```
 
@@ -459,7 +459,7 @@ contract is the preserved graph and its configuration.
 
 The complementary failure is equally useful. Change the example to:
 
-```ts
+```flow
 let urgent = report + attempts
 ```
 

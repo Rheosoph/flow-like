@@ -166,6 +166,13 @@
 
 html:has(body.flowbook-print),
 body.flowbook-print {
+	--flowbook-sans: var(--pdf-sans);
+	--flowbook-serif: var(--pdf-serif);
+	--flowbook-mono: var(--pdf-mono);
+	--sl-font: var(--pdf-sans);
+	--sl-font-mono: var(--pdf-mono);
+	--__sl-font: var(--pdf-sans);
+	--__sl-font-mono: var(--pdf-mono);
 	margin: 0;
 	background: var(--pdf-paper);
 	color: var(--pdf-text);
@@ -179,6 +186,10 @@ body.flowbook-print {
 	text-rendering: optimizeLegibility;
 	-webkit-print-color-adjust: exact;
 	print-color-adjust: exact;
+}
+
+.flowbook-print .flowbook-table-scroll {
+	display: contents;
 }
 
 .flowbook-print,
@@ -467,9 +478,9 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	grid-template-columns: auto 1fr auto;
 	align-items: baseline;
 	gap: 2.5mm;
-	min-height: 8.5mm;
-	padding: 2.2mm 0 1.8mm;
-	border-bottom: 0.22mm solid var(--pdf-rule);
+	min-height: 8.8mm;
+	padding: 2.3mm 0 1.9mm;
+	border: 0;
 	color: var(--pdf-text);
 	text-decoration: none;
 }
@@ -479,7 +490,7 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	grid-row: 1;
 	align-self: end;
 	height: 0;
-	border-bottom: 0.22mm dotted var(--pdf-rule-strong);
+	border-bottom: 0.16mm dotted var(--pdf-rule-strong);
 	content: "";
 }
 
@@ -532,25 +543,35 @@ body[data-pdf-pass="body"] [data-pdf-front],
 }
 
 .flowbook-print .print-toc__part {
-	margin-top: 7mm;
+	margin-top: 5.5mm;
 }
 
 .flowbook-print .print-toc__part > a {
-	border-bottom-color: var(--pdf-rule-strong);
+	min-height: 9.5mm;
+	padding-top: 3mm;
+	border-top: 0.28mm solid var(--pdf-rule-strong);
 }
 
-.flowbook-print .print-toc__part > a .print-toc__number,
+.flowbook-print .print-toc__part > a::before {
+	display: none;
+}
+
 .flowbook-print .print-toc__part > a .print-toc__title {
 	font-weight: 720;
 	color: var(--pdf-ink);
 }
 
+.flowbook-print .print-toc__part > a .print-toc__number {
+	font-weight: 720;
+	color: var(--pdf-accent-dark);
+}
+
 .flowbook-print .print-toc__part > ol {
-	padding-left: 8mm;
+	padding-left: 7mm;
 }
 
 .flowbook-print .print-toc__entry--introduction {
-	margin-bottom: 6mm;
+	margin-bottom: 5mm;
 }
 
 /* Part and chapter openers */
@@ -868,6 +889,10 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	font: 0.84em/1.2 var(--pdf-mono);
 	font-weight: 560;
 	color: var(--pdf-accent-dark);
+	hyphens: none;
+	-webkit-hyphens: none;
+	word-break: normal;
+	overflow-wrap: normal;
 	box-decoration-break: clone;
 	-webkit-box-decoration-break: clone;
 }
@@ -1076,7 +1101,30 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	color: var(--pdf-muted);
 }
 
-.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-wide, .pdf-code-very-wide) {
+.flowbook-print .sl-markdown-content .flowbook-workflow-figure {
+	box-sizing: border-box;
+	margin: 6mm 0 7mm;
+	border: 0.25mm solid var(--pdf-rule-strong);
+	border-radius: 1.2mm;
+	background: var(--pdf-paper);
+	box-shadow: none;
+	overflow: hidden;
+}
+
+.flowbook-print .sl-markdown-content .flowbook-workflow-figure__image {
+	background: var(--pdf-paper);
+}
+
+.flowbook-print .sl-markdown-content .flowbook-workflow-figure figcaption {
+	margin: 0;
+	padding: 3mm 4mm 3.2mm;
+	border-top: 0.25mm solid var(--pdf-rule);
+	background: var(--pdf-paper);
+	font: 600 7.5pt/1.4 var(--pdf-sans);
+	color: var(--pdf-muted);
+}
+
+.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-very-wide) {
 	page: flowbook-landscape;
 	width: 100%;
 	max-width: none;
@@ -1085,10 +1133,10 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	break-inside: avoid;
 }
 
-.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-wide, .pdf-code-very-wide) .expressive-code,
-.flowbook-print .expressive-code:where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-wide, .pdf-code-very-wide),
-.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-wide, .pdf-code-very-wide) pre,
-.flowbook-print pre:where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-wide, .pdf-code-very-wide) {
+.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-very-wide) .expressive-code,
+.flowbook-print .expressive-code:where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-very-wide),
+.flowbook-print :where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-very-wide) pre,
+.flowbook-print pre:where(.print-wide:not(.print-edition), .print-code-wide, .pdf-code-very-wide) {
 	max-width: none;
 }
 
@@ -1104,6 +1152,8 @@ body[data-pdf-pass="body"] [data-pdf-front],
 .flowbook-print .expressive-code.pdf-code-very-wide,
 .flowbook-print .pdf-code-very-wide pre,
 .flowbook-print pre.pdf-code-very-wide {
+	width: 261mm;
+	max-width: 261mm;
 	--ec-codeFontSize: 6.15pt;
 	--ec-codeLineHt: 1.4;
 	--ec-codePadInl: 3mm;
@@ -1246,5 +1296,24 @@ body[data-pdf-pass="body"] [data-pdf-front],
 	.flowbook-print a {
 		-webkit-print-color-adjust: exact;
 		print-color-adjust: exact;
+	}
+
+	.flowbook-print .sl-markdown-content .flowbook-workflow-figure.print-wide {
+		width: 261mm;
+		max-width: 261mm;
+		margin: 3mm 0 4mm;
+	}
+
+	.flowbook-print .sl-markdown-content .flowbook-workflow-figure.print-wide .flowbook-workflow-figure__image {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.flowbook-print .sl-markdown-content .flowbook-workflow-figure.print-wide img {
+		width: auto;
+		max-width: 100%;
+		max-height: 148mm;
+		margin-inline: auto;
 	}
 }

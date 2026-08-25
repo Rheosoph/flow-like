@@ -1,0 +1,1376 @@
+.flowbook-page-progress {
+	position: fixed;
+	top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height) - 2px);
+	right: 0;
+	left: var(--sl-content-inline-start, 0);
+	z-index: calc(var(--sl-z-index-navbar) + 1);
+	height: 2px;
+	background: color-mix(in srgb, var(--flowbook-rule) 58%, transparent);
+	pointer-events: none;
+}
+
+.flowbook-page-progress i {
+	display: block;
+	height: 100%;
+	background: linear-gradient(
+		90deg,
+		var(--flowbook-orange),
+		oklch(0.73 0.19 53)
+	);
+	box-shadow: 0 0 0.7rem
+		color-mix(in srgb, var(--flowbook-orange) 55%, transparent);
+	transition: width 180ms ease-out;
+}
+
+.flowbook-reading-link {
+	position: relative;
+	padding-inline-end: 3.25rem !important;
+}
+
+.flowbook-reading-link::before {
+	position: absolute;
+	right: 0.55rem;
+	bottom: 0.22rem;
+	left: 0.55rem;
+	height: 1px;
+	background: linear-gradient(
+		to right,
+		color-mix(in srgb, var(--flowbook-orange) 72%, transparent)
+			var(--flowbook-link-progress),
+		transparent var(--flowbook-link-progress)
+	);
+	content: "";
+	pointer-events: none;
+}
+
+.flowbook-reading-link::after {
+	position: absolute;
+	top: 50%;
+	right: 0.55rem;
+	min-width: 2rem;
+	transform: translateY(-50%);
+	content: attr(data-reading-status);
+	font: 680 0.56rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.02em;
+	text-align: end;
+	color: color-mix(
+		in srgb,
+		var(--flowbook-orange-dark) 84%,
+		var(--flowbook-muted)
+	);
+}
+
+.flowbook-reading-link[data-reading-complete="true"]::after {
+	content: "✓";
+	font-size: 0.72rem;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-reading-status-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+main[data-pagefind-body] .sl-markdown-content ::selection {
+	background: color-mix(in srgb, var(--flowbook-orange) 32%, transparent);
+	color: inherit;
+}
+
+::highlight(flowbook-bookmarks) {
+	background: color-mix(in srgb, var(--flowbook-orange) 11%, transparent);
+	text-decoration-line: underline;
+	text-decoration-color: color-mix(
+		in srgb,
+		var(--flowbook-orange) 72%,
+		transparent
+	);
+	text-decoration-thickness: 2px;
+	text-underline-offset: 0.16em;
+}
+
+::highlight(flowbook-comments) {
+	background: color-mix(in srgb, var(--flowbook-orange) 18%, transparent);
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
+	text-decoration-color: var(--flowbook-orange-dark);
+	text-decoration-thickness: 2px;
+	text-underline-offset: 0.16em;
+}
+
+.flowbook-annotated-block {
+	position: relative;
+}
+
+.flowbook-inline-annotations {
+	position: absolute;
+	top: 0.05rem;
+	inset-inline-start: -3rem;
+	z-index: 4;
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	font-family: var(--flowbook-sans);
+	user-select: none;
+}
+
+.flowbook-inline-annotation {
+	position: relative;
+	width: 2.5rem;
+	height: 2.5rem;
+	display: grid;
+	place-items: center;
+	border: 1px solid transparent;
+	border-radius: 0.68rem;
+	background: transparent;
+	color: var(--flowbook-orange-dark);
+	opacity: 0.78;
+	cursor: pointer;
+	transition:
+		opacity 140ms ease, transform 140ms ease, background 140ms ease,
+		border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.flowbook-inline-annotation:is(:hover, :focus-visible) {
+	transform: translateY(-1px);
+	border-color: color-mix(
+		in srgb,
+		var(--flowbook-orange) 38%,
+		var(--flowbook-rule)
+	);
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 10%,
+		var(--flowbook-card)
+	);
+	box-shadow: var(--sl-shadow-sm);
+	opacity: 1;
+}
+
+.flowbook-inline-annotation:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
+}
+
+.flowbook-inline-annotation .flowbook-bookmark-glyph {
+	width: 0.68rem;
+	height: 0.92rem;
+}
+
+.flowbook-inline-annotation .flowbook-comment-glyph {
+	width: 0.95rem;
+	height: 0.68rem;
+}
+
+.flowbook-inline-annotation[data-count]::after {
+	position: absolute;
+	top: 0.15rem;
+	right: 0.1rem;
+	min-width: 1rem;
+	height: 1rem;
+	display: grid;
+	place-items: center;
+	border-radius: 999px;
+	background: var(--flowbook-orange);
+	content: attr(data-count);
+	font: 760 0.52rem / 1 var(--flowbook-mono);
+	color: var(--flowbook-on-accent, #17181c);
+}
+
+.flowbook-reader-dock,
+.flowbook-reader-panel,
+.flowbook-selection-tools,
+.flowbook-resume-toast,
+.flowbook-resume-card,
+.flowbook-reader-announcement {
+	--flowbook-on-accent: #17181c;
+	box-sizing: border-box;
+	font-family: var(--flowbook-sans);
+}
+
+.flowbook-reader-dock *,
+.flowbook-reader-panel *,
+.flowbook-selection-tools *,
+.flowbook-resume-toast *,
+.flowbook-resume-card *,
+.flowbook-reader-announcement * {
+	box-sizing: border-box;
+}
+
+.flowbook-reader-dock {
+	position: fixed;
+	right: max(1rem, env(safe-area-inset-right));
+	bottom: max(1rem, env(safe-area-inset-bottom));
+	z-index: 1001;
+	display: flex;
+	width: 3.55rem;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.18rem;
+	padding: 0.32rem;
+	border: 1px solid
+		color-mix(in srgb, var(--flowbook-orange) 24%, var(--flowbook-rule));
+	border-radius: 1rem;
+	background: color-mix(in srgb, var(--flowbook-card) 94%, transparent);
+	box-shadow: 0 1.25rem 3.5rem color-mix(in srgb, black 32%, transparent), inset
+		0 1px color-mix(in srgb, white 18%, transparent);
+	backdrop-filter: blur(1.25rem) saturate(145%);
+	isolation: isolate;
+	pointer-events: auto;
+}
+
+.flowbook-reader-dock > button {
+	position: relative;
+	width: 2.9rem;
+	min-width: 0;
+	height: 2.9rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0;
+	border: 0;
+	border-radius: 0.72rem;
+	padding: 0;
+	background: transparent;
+	font: 680 0.72rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-muted);
+	cursor: pointer;
+	transition: background 150ms ease, color 150ms ease, transform 150ms ease,
+		box-shadow 150ms ease;
+}
+
+.flowbook-reader-dock > button > span {
+	position: absolute;
+	top: 50%;
+	right: calc(100% + 0.65rem);
+	z-index: 1;
+	padding: 0.48rem 0.62rem;
+	transform: translate(0.25rem, -50%);
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.48rem;
+	background: var(--flowbook-card);
+	box-shadow: var(--sl-shadow-sm);
+	white-space: nowrap;
+	color: var(--flowbook-ink);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.flowbook-reader-dock > button:hover > span,
+.flowbook-reader-dock > button:focus-visible > span {
+	transform: translate(0, -50%);
+	opacity: 1;
+}
+
+.flowbook-reader-dock.is-panel-open > button > span {
+	display: none;
+}
+
+.flowbook-reader-dock > button:hover,
+.flowbook-reader-dock > button[aria-expanded="true"],
+.flowbook-reader-dock > button.is-active {
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 12%,
+		var(--flowbook-paper-deep)
+	);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-dock > button[aria-expanded="true"],
+.flowbook-reader-dock > button.is-active {
+	box-shadow: inset 2px 0 var(--flowbook-orange);
+}
+
+.flowbook-reader-dock > button:active {
+	transform: translateY(1px);
+}
+
+.flowbook-reader-dock > button:focus-visible,
+.flowbook-reader-panel button:focus-visible,
+.flowbook-reader-panel textarea:focus-visible,
+.flowbook-selection-tools button:focus-visible,
+.flowbook-resume-toast button:focus-visible,
+.flowbook-resume-card a:focus-visible,
+.flowbook-resume-card button:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
+}
+
+.flowbook-reader-dock > button > b {
+	position: absolute;
+	top: 0.2rem;
+	right: 0.18rem;
+	min-width: 1rem;
+	height: 1rem;
+	display: grid;
+	place-items: center;
+	padding-inline: 0.22rem;
+	border-radius: 999px;
+	background: var(--flowbook-orange);
+	font: 750 0.52rem / 1 var(--flowbook-mono);
+	color: var(--flowbook-on-accent);
+}
+
+.flowbook-reader-dock__progress > i {
+	--flowbook-current-progress: 0%;
+	position: relative;
+	width: 1.85rem;
+	height: 1.85rem;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: radial-gradient(circle, var(--flowbook-card) 56%, transparent 58%),
+		conic-gradient(
+			var(--flowbook-orange) var(--flowbook-current-progress),
+			var(--flowbook-rule) var(--flowbook-current-progress)
+		);
+	font: 750 0.5rem / 1 var(--flowbook-mono);
+	font-style: normal;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-bookmark-glyph {
+	width: 0.76rem;
+	height: 1.02rem;
+	display: block;
+	border: 1.6px solid currentColor;
+	border-radius: 0.12rem 0.12rem 0.05rem 0.05rem;
+	background: transparent;
+	clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+	transition: background 150ms ease;
+}
+
+button.is-active .flowbook-bookmark-glyph,
+.flowbook-save-current:hover .flowbook-bookmark-glyph {
+	border-color: var(--flowbook-orange);
+	background: var(--flowbook-orange);
+	color: var(--flowbook-orange);
+}
+
+.flowbook-comment-glyph {
+	position: relative;
+	width: 1.08rem;
+	height: 0.78rem;
+	display: block;
+	border: 1.6px solid currentColor;
+	border-radius: 0.25rem;
+}
+
+.flowbook-comment-glyph::after {
+	position: absolute;
+	right: 0.08rem;
+	bottom: -0.28rem;
+	width: 0.34rem;
+	height: 0.34rem;
+	border-right: 1.6px solid currentColor;
+	border-bottom: 1.6px solid currentColor;
+	background: var(--flowbook-card);
+	transform: skewY(38deg);
+	content: "";
+}
+
+.flowbook-selection-tools {
+	position: fixed;
+	z-index: 1002;
+	max-width: calc(100vw - 1.25rem);
+	min-width: 0;
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 0.18rem;
+	padding: 0.28rem;
+	transform: translateX(-50%);
+	border: 1px solid
+		color-mix(in srgb, var(--flowbook-orange) 30%, var(--flowbook-rule));
+	border-radius: 0.72rem;
+	background: color-mix(in srgb, var(--flowbook-card) 96%, transparent);
+	box-shadow: 0 0.9rem 2.5rem color-mix(in srgb, black 28%, transparent), inset
+		0 1px color-mix(in srgb, white 18%, transparent);
+	backdrop-filter: blur(1rem) saturate(140%);
+	animation: flowbook-selection-in 140ms ease-out both;
+	isolation: isolate;
+	pointer-events: auto;
+}
+
+.flowbook-selection-tools > span {
+	padding-inline: 0.48rem 0.38rem;
+	font: 720 0.56rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-selection-tools > button {
+	height: 2.5rem;
+	display: flex;
+	align-items: center;
+	gap: 0.42rem;
+	border: 0;
+	border-radius: 0.5rem;
+	padding: 0 0.62rem;
+	background: transparent;
+	font: 680 0.68rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.flowbook-selection-tools > button:hover {
+	background: var(--flowbook-paper-deep);
+}
+
+.flowbook-selection-tools > button.flowbook-selection-tools__comment {
+	background: var(--flowbook-orange);
+	color: var(--flowbook-on-accent);
+}
+
+.flowbook-selection-tools
+	> button.flowbook-selection-tools__comment:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--flowbook-orange) 88%, white);
+}
+
+.flowbook-selection-tools > button:disabled {
+	opacity: 0.52;
+	cursor: not-allowed;
+}
+
+.flowbook-selection-tools > button.flowbook-selection-tools__dismiss {
+	width: 2.5rem;
+	flex: 0 0 auto;
+	justify-content: center;
+	padding: 0;
+	font-size: 1rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-selection-tools > button.flowbook-selection-tools__dismiss:hover {
+	background: var(--flowbook-paper-deep);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-selection-tools .flowbook-bookmark-glyph {
+	width: 0.58rem;
+	height: 0.8rem;
+}
+
+.flowbook-selection-tools .flowbook-comment-glyph {
+	width: 0.86rem;
+	height: 0.62rem;
+}
+
+.flowbook-selection-tools .flowbook-comment-glyph::after {
+	background: var(--flowbook-orange);
+}
+
+.flowbook-reader-panel {
+	position: fixed;
+	inset: auto 5.25rem 1rem auto;
+	z-index: 1000;
+	width: min(25rem, calc(100vw - 6.25rem));
+	max-height: min(72vh, 44rem);
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	border: 1px solid
+		color-mix(in srgb, var(--flowbook-rule) 82%, var(--flowbook-muted));
+	border-radius: 0.9rem;
+	background: color-mix(
+		in srgb,
+		var(--flowbook-card) 96%,
+		var(--flowbook-paper)
+	);
+	box-shadow: 0 1.7rem 5rem color-mix(in srgb, black 34%, transparent), inset 0
+		1px color-mix(in srgb, white 13%, transparent);
+	color: var(--flowbook-ink);
+	animation: flowbook-panel-in 180ms ease-out both;
+}
+
+.flowbook-reader-panel > header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 1.15rem 1.2rem 0.95rem;
+}
+
+.flowbook-reader-panel > header span {
+	display: block;
+	margin-bottom: 0.32rem;
+	font: 730 0.62rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.13em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-reader-panel > header h2 {
+	margin: 0;
+	font: 690 1.2rem / 1.08 var(--flowbook-sans);
+	letter-spacing: -0.045em;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-panel > header > button {
+	width: 2.5rem;
+	height: 2.5rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.55rem;
+	background: var(--flowbook-paper-deep);
+	font: 400 1.25rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-muted);
+	cursor: pointer;
+	transition: background 140ms ease, color 140ms ease;
+}
+
+.flowbook-reader-panel > header > button:hover {
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 12%,
+		var(--flowbook-paper-deep)
+	);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-panel > nav {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	padding-inline: 1rem;
+	border-bottom: 1px solid var(--flowbook-rule);
+}
+
+.flowbook-reader-panel > nav button {
+	position: relative;
+	padding: 0.75rem 0.35rem;
+	border: 0;
+	background: transparent;
+	font: 650 0.75rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-muted);
+	cursor: pointer;
+}
+
+.flowbook-reader-panel > nav button[aria-pressed="true"] {
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-panel > nav button[aria-pressed="true"]::after {
+	position: absolute;
+	right: 0.55rem;
+	bottom: -1px;
+	left: 0.55rem;
+	height: 2px;
+	background: var(--flowbook-orange);
+	content: "";
+}
+
+.flowbook-reader-panel__body {
+	min-height: 12rem;
+	overflow-y: auto;
+	padding: 1rem;
+	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 42%, transparent)
+		transparent;
+	scrollbar-width: thin;
+}
+
+.flowbook-reader-overview__score {
+	padding: 1.15rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.8rem;
+	background: linear-gradient(
+			135deg,
+			color-mix(in srgb, var(--flowbook-orange) 8%, transparent),
+			transparent 62%
+		), var(--flowbook-paper-deep);
+}
+
+.flowbook-reader-overview__score > strong {
+	display: block;
+	font: 690 2.7rem / 0.92 var(--flowbook-sans);
+	letter-spacing: -0.075em;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-overview__score > span {
+	display: block;
+	margin-top: 0.42rem;
+	font-size: 0.72rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-reader-overview__score > i {
+	height: 0.22rem;
+	display: block;
+	margin-top: 1rem;
+	overflow: hidden;
+	border-radius: 999px;
+	background: var(--flowbook-rule);
+}
+
+.flowbook-reader-overview__score > i > b {
+	height: 100%;
+	display: block;
+	border-radius: inherit;
+	background: var(--flowbook-orange);
+}
+
+.flowbook-reader-stats {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.45rem;
+	margin-top: 0.55rem;
+}
+
+.flowbook-reader-stats > div {
+	padding: 0.72rem 0.55rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.65rem;
+	background: color-mix(in srgb, var(--flowbook-card) 78%, transparent);
+	text-align: center;
+}
+
+.flowbook-reader-stats strong,
+.flowbook-reader-stats span {
+	display: block;
+}
+
+.flowbook-reader-stats strong {
+	font: 720 1.05rem / 1 var(--flowbook-mono);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-stats span {
+	margin-top: 0.32rem;
+	font-size: 0.65rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-current-location {
+	width: 100%;
+	margin-top: 0.55rem;
+	display: block;
+	padding: 0.78rem 0.85rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.65rem;
+	background: var(--flowbook-card);
+	text-align: start;
+	cursor: pointer;
+	transition: border-color 140ms ease, background 140ms ease;
+}
+
+.flowbook-current-location:hover,
+.flowbook-save-current:hover,
+.flowbook-saved-list > article > button:first-child:hover,
+.flowbook-comment-list article > button:first-child:hover {
+	border-color: color-mix(
+		in srgb,
+		var(--flowbook-orange) 46%,
+		var(--flowbook-rule)
+	);
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 7%,
+		var(--flowbook-card)
+	);
+}
+
+.flowbook-current-location span,
+.flowbook-current-location strong {
+	display: block;
+}
+
+.flowbook-current-location span {
+	font: 700 0.62rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-current-location strong {
+	margin-top: 0.35rem;
+	font: 650 0.78rem / 1.25 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-reader-overview > p {
+	margin: 0.85rem 0 0;
+	display: flex;
+	align-items: flex-start;
+	gap: 0.48rem;
+	font-size: 0.72rem;
+	line-height: 1.45;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-reader-overview > p i {
+	width: 0.45rem;
+	height: 0.45rem;
+	flex: 0 0 auto;
+	margin-top: 0.22rem;
+	border-radius: 50%;
+	background: oklch(0.65 0.16 145);
+}
+
+.flowbook-reader-overview > p.is-warning i {
+	background: var(--flowbook-orange);
+}
+
+.flowbook-save-current {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 0.8rem;
+	padding: 0.8rem;
+	border: 1px dashed
+		color-mix(in srgb, var(--flowbook-orange) 50%, var(--flowbook-rule));
+	border-radius: 0.72rem;
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 5%,
+		var(--flowbook-card)
+	);
+	text-align: start;
+	color: var(--flowbook-orange-dark);
+	cursor: pointer;
+}
+
+.flowbook-save-current > span,
+.flowbook-save-current strong,
+.flowbook-save-current small {
+	display: block;
+}
+
+.flowbook-save-current strong {
+	font-size: 0.75rem;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-save-current small {
+	margin-top: 0.24rem;
+	font-size: 0.68rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-saved-list > article,
+.flowbook-comment-list > article {
+	position: relative;
+	margin-top: 0.55rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.72rem;
+	background: var(--flowbook-card);
+}
+
+.flowbook-saved-list > article.is-targeted,
+.flowbook-comment-list > article.is-targeted {
+	border-color: color-mix(
+		in srgb,
+		var(--flowbook-orange) 68%,
+		var(--flowbook-rule)
+	);
+	box-shadow: 0 0 0 3px
+		color-mix(in srgb, var(--flowbook-orange) 12%, transparent);
+}
+
+.flowbook-saved-list > article > button:first-child {
+	width: 100%;
+	display: block;
+	padding: 0.82rem 2.7rem 0.82rem 0.82rem;
+	border: 0;
+	background: transparent;
+	text-align: start;
+	cursor: pointer;
+}
+
+.flowbook-saved-list > article > button:first-child span,
+.flowbook-saved-list > article > button:first-child strong,
+.flowbook-saved-list > article > button:first-child small {
+	display: block;
+}
+
+.flowbook-saved-list > article > button:first-child .flowbook-saved-quote {
+	margin-top: 0.46rem;
+	display: -webkit-box;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	font: italic 0.7rem / 1.4 var(--flowbook-serif);
+	text-transform: none;
+	letter-spacing: 0;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-saved-list > article > button:first-child span,
+.flowbook-comment-list article > button:first-child span {
+	font: 700 0.62rem / 1.2 var(--flowbook-mono);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-saved-list > article > button:first-child strong,
+.flowbook-comment-list article > button:first-child strong {
+	margin-top: 0.32rem;
+	font: 650 0.77rem / 1.25 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-saved-list > article > button:first-child small {
+	margin-top: 0.4rem;
+	font-size: 0.65rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-saved-list > article > button:last-child {
+	position: absolute;
+	top: 50%;
+	right: 0.62rem;
+	width: 2.5rem;
+	height: 2.5rem;
+	transform: translateY(-50%);
+	border: 0;
+	border-radius: 0.45rem;
+	background: var(--flowbook-paper-deep);
+	font-size: 1rem;
+	color: var(--flowbook-muted);
+	cursor: pointer;
+}
+
+.flowbook-saved-list > article > button:last-child:hover,
+.flowbook-comment-list article > footer button:hover {
+	background: color-mix(
+		in srgb,
+		var(--flowbook-orange) 12%,
+		var(--flowbook-paper-deep)
+	);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-empty-state {
+	padding: 2rem 1rem;
+	text-align: center;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-empty-state strong,
+.flowbook-empty-state span {
+	display: block;
+}
+
+.flowbook-empty-state strong {
+	font-size: 0.82rem;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-empty-state span {
+	max-width: 28ch;
+	margin: 0.42rem auto 0;
+	font-size: 0.72rem;
+	line-height: 1.45;
+}
+
+.flowbook-comments > form {
+	padding: 0.85rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.75rem;
+	background: var(--flowbook-paper-deep);
+}
+
+.flowbook-comments > form label,
+.flowbook-comments > form label span {
+	display: block;
+}
+
+.flowbook-comments > form label {
+	font: 680 0.76rem / 1.2 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-comments > form label span {
+	margin-top: 0.28rem;
+	font: 620 0.64rem / 1.2 var(--flowbook-mono);
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-comments blockquote {
+	margin: 0.65rem 0 0;
+	padding: 0.62rem 0.7rem;
+	border-left: 2px solid var(--flowbook-orange);
+	background: color-mix(in srgb, var(--flowbook-card) 62%, transparent);
+	font: italic 0.72rem / 1.45 var(--flowbook-serif);
+	color: var(--flowbook-muted);
+}
+
+.flowbook-comments textarea {
+	width: 100%;
+	margin-top: 0.7rem;
+	resize: vertical;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.58rem;
+	padding: 0.72rem;
+	background: var(--flowbook-card);
+	font: 500 0.76rem / 1.45 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+}
+
+.flowbook-comments textarea::placeholder {
+	color: color-mix(in srgb, var(--flowbook-muted) 72%, transparent);
+}
+
+.flowbook-comments > form > div {
+	margin-top: 0.55rem;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.45rem;
+}
+
+.flowbook-comments > form > div small {
+	margin-right: auto;
+	font-size: 0.62rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-comments > form > div button {
+	min-height: 2.5rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.48rem;
+	padding: 0.52rem 0.68rem;
+	background: var(--flowbook-card);
+	font: 650 0.72rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-muted);
+	cursor: pointer;
+}
+
+.flowbook-comments > form > div button[type="submit"] {
+	border-color: var(--flowbook-orange);
+	background: var(--flowbook-orange);
+	color: var(--flowbook-on-accent);
+}
+
+.flowbook-comments > form > div button:disabled {
+	opacity: 0.48;
+	cursor: not-allowed;
+}
+
+.flowbook-comment-list > article {
+	padding: 0.82rem;
+}
+
+.flowbook-comment-list article > button:first-child {
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	text-align: start;
+	cursor: pointer;
+}
+
+.flowbook-comment-list article > p {
+	margin: 0.7rem 0 0;
+	white-space: pre-wrap;
+	font-size: 0.8rem;
+	line-height: 1.5;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-comment-list article > footer {
+	margin-top: 0.75rem;
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.flowbook-comment-list article > footer small {
+	margin-right: auto;
+	font-size: 0.62rem;
+	color: var(--flowbook-muted);
+}
+
+.flowbook-comment-list article > footer button {
+	min-height: 2.5rem;
+	padding-inline: 0.55rem;
+	border: 0;
+	border-radius: 0.42rem;
+	background: transparent;
+	font: 640 0.72rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-orange-dark);
+	cursor: pointer;
+}
+
+.flowbook-resume-toast {
+	position: fixed;
+	right: 5.25rem;
+	bottom: max(1rem, env(safe-area-inset-bottom));
+	z-index: 999;
+	width: min(22rem, calc(100vw - 2rem));
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.75rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.78rem;
+	background: color-mix(in srgb, var(--flowbook-card) 95%, transparent);
+	box-shadow: 0 1rem 3rem
+		color-mix(in srgb, var(--flowbook-ink) 16%, transparent);
+	backdrop-filter: blur(0.8rem);
+	animation: flowbook-panel-in 180ms ease-out both;
+}
+
+.flowbook-resume-toast > div {
+	min-width: 0;
+	margin-right: auto;
+}
+
+.flowbook-resume-toast span,
+.flowbook-resume-toast strong {
+	display: block;
+}
+
+.flowbook-resume-toast span {
+	font: 700 0.6rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+.flowbook-resume-toast strong {
+	margin-top: 0.3rem;
+	overflow: hidden;
+	font-size: 0.76rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--flowbook-ink);
+}
+
+.flowbook-resume-toast > button:not(.flowbook-resume-toast__dismiss) {
+	min-height: 2.5rem;
+	border: 0;
+	border-radius: 0.48rem;
+	padding: 0.58rem 0.68rem;
+	background: var(--flowbook-orange);
+	font: 680 0.72rem / 1 var(--flowbook-sans);
+	color: var(--flowbook-on-accent);
+	cursor: pointer;
+}
+
+.flowbook-resume-toast__dismiss {
+	width: 2.5rem;
+	height: 2.5rem;
+	border: 0;
+	background: transparent;
+	font-size: 1rem;
+	color: var(--flowbook-muted);
+	cursor: pointer;
+}
+
+.flowbook-resume-card {
+	position: fixed;
+	right: 1rem;
+	bottom: 1rem;
+	z-index: 1001;
+	width: min(20rem, calc(100vw - 2rem));
+	padding: 1rem 3rem 1rem 1rem;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 0.9rem;
+	background: rgba(17, 19, 25, 0.88);
+	box-shadow: 0 1.4rem 4rem rgba(0, 0, 0, 0.32);
+	backdrop-filter: blur(1rem) saturate(135%);
+	color: #f6f1ed;
+	animation: flowbook-panel-in 220ms ease-out both;
+}
+
+.flowbook-resume-card > span,
+.flowbook-resume-card > strong,
+.flowbook-resume-card > a {
+	display: block;
+}
+
+.flowbook-resume-card__eyebrow {
+	font: 720 0.53rem / 1 var(--flowbook-mono);
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: #ff7658;
+}
+
+.flowbook-resume-card > strong {
+	margin-top: 0.48rem;
+	overflow: hidden;
+	font: 650 0.86rem / 1.25 var(--flowbook-sans);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.flowbook-resume-card > span:not(.flowbook-resume-card__eyebrow) {
+	margin-top: 0.28rem;
+	overflow: hidden;
+	font-size: 0.65rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: rgba(246, 241, 237, 0.62);
+}
+
+.flowbook-resume-card > a {
+	margin-top: 0.8rem;
+	border-radius: 0.52rem;
+	padding: 0.68rem;
+	background: #f25535;
+	font: 680 0.67rem / 1 var(--flowbook-sans);
+	text-align: center;
+	text-decoration: none;
+	color: var(--flowbook-on-accent);
+}
+
+.flowbook-resume-card__dismiss {
+	position: absolute;
+	top: 0.55rem;
+	right: 0.55rem;
+	display: grid;
+	width: 2.5rem;
+	height: 2.5rem;
+	place-items: center;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	font-size: 1rem;
+	line-height: 1;
+	color: rgba(246, 241, 237, 0.68);
+	cursor: pointer;
+}
+
+.flowbook-resume-card__dismiss:hover {
+	background: rgba(255, 255, 255, 0.09);
+	color: white;
+}
+
+.flowbook-resume-card__dismiss:focus-visible {
+	outline: 2px solid #ff7658;
+	outline-offset: 2px;
+}
+
+.flowbook-reader-announcement {
+	position: fixed;
+	top: calc(var(--sl-nav-height) + 0.85rem);
+	right: max(1rem, env(safe-area-inset-right));
+	z-index: 1003;
+	max-width: min(23rem, calc(100vw - 2rem));
+	padding: 0.72rem 0.85rem;
+	transform: translateY(-0.45rem);
+	border: 1px solid
+		color-mix(in srgb, var(--flowbook-orange) 30%, var(--flowbook-rule));
+	border-radius: 0.62rem;
+	background: color-mix(in srgb, var(--flowbook-card) 96%, transparent);
+	box-shadow: 0 0.8rem 2.2rem color-mix(in srgb, black 28%, transparent);
+	font: 650 0.73rem / 1.35 var(--flowbook-sans);
+	color: var(--flowbook-ink);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition: opacity 140ms ease, transform 140ms ease, visibility 0s 140ms;
+}
+
+.flowbook-reader-announcement.is-visible {
+	transform: translateY(0);
+	opacity: 1;
+	visibility: visible;
+	transition-delay: 0s;
+}
+
+@keyframes flowbook-panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(0.55rem) scale(0.985);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+@keyframes flowbook-selection-in {
+	from {
+		opacity: 0;
+		transform: translate(-50%, 0.3rem) scale(0.97);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(-50%) scale(1);
+	}
+}
+
+@media (min-width: 72rem) {
+	.flowbook-page-progress {
+		top: calc(var(--sl-nav-height) - 2px);
+	}
+}
+
+@media (max-width: 50rem) {
+	body[data-mobile-menu-expanded] .flowbook-reader-dock,
+	body[data-mobile-menu-expanded] .flowbook-reader-panel,
+	body[data-mobile-menu-expanded] .flowbook-selection-tools,
+	body[data-mobile-menu-expanded] .flowbook-resume-toast,
+	body[data-mobile-menu-expanded] .flowbook-resume-card,
+	body[data-mobile-menu-expanded] .flowbook-reader-announcement {
+		visibility: hidden;
+		pointer-events: none;
+	}
+
+	.flowbook-reader-dock {
+		right: max(0.65rem, env(safe-area-inset-right));
+		bottom: max(0.65rem, env(safe-area-inset-bottom));
+		left: max(0.65rem, env(safe-area-inset-left));
+		width: auto;
+		flex-direction: row;
+		justify-content: stretch;
+	}
+
+	.flowbook-reader-dock > button {
+		width: auto;
+		min-width: 0;
+		flex: 1 1 0;
+		gap: 0.45rem;
+		padding-inline: 0.45rem;
+	}
+
+	.flowbook-selection-tools > button,
+	.flowbook-reader-panel > header > button,
+	.flowbook-saved-list > article > button:last-child,
+	.flowbook-comments > form > div button,
+	.flowbook-comment-list article > footer button,
+	.flowbook-resume-toast > button,
+	.flowbook-resume-card__dismiss {
+		min-height: 2.75rem;
+	}
+
+	.flowbook-reader-panel > header > button,
+	.flowbook-saved-list > article > button:last-child,
+	.flowbook-selection-tools > button.flowbook-selection-tools__dismiss,
+	.flowbook-resume-toast__dismiss,
+	.flowbook-resume-card__dismiss {
+		min-width: 2.75rem;
+	}
+
+	.flowbook-reader-dock > button > span {
+		position: static;
+		padding: 0;
+		transform: none;
+		border: 0;
+		background: transparent;
+		box-shadow: none;
+		color: currentColor;
+		opacity: 1;
+	}
+
+	.flowbook-reader-dock > button:hover > span,
+	.flowbook-reader-dock > button:focus-visible > span {
+		transform: none;
+	}
+
+	.flowbook-reader-dock > button[aria-expanded="true"],
+	.flowbook-reader-dock > button.is-active {
+		box-shadow: inset 0 -2px var(--flowbook-orange);
+	}
+
+	.flowbook-reader-panel {
+		inset: auto 0.65rem calc(4.65rem + env(safe-area-inset-bottom));
+		width: calc(100vw - 1.3rem);
+		max-height: min(74dvh, 42rem);
+		border-radius: 0.9rem;
+		overscroll-behavior: contain;
+	}
+
+	.flowbook-reader-panel__body {
+		min-height: 0;
+	}
+
+	.flowbook-resume-toast {
+		right: 0.65rem;
+		bottom: calc(4.65rem + env(safe-area-inset-bottom));
+		width: calc(100vw - 1.3rem);
+	}
+
+	.flowbook-selection-tools > span {
+		display: none;
+	}
+
+	.flowbook-comments textarea {
+		font-size: 1rem;
+	}
+
+	body:has(.flowbook-reader-dock) main[data-pagefind-body] {
+		padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+	}
+
+	.flowbook-annotated-block {
+		padding-inline-end: 2.75rem;
+	}
+
+	.flowbook-inline-annotations {
+		top: -0.15rem;
+		inset-inline-end: -0.1rem;
+		inset-inline-start: auto;
+	}
+
+	.flowbook-inline-annotation {
+		width: 2.75rem;
+		height: 2.75rem;
+	}
+
+	.flowbook-reader-announcement {
+		top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height) + 0.65rem);
+		right: 0.65rem;
+		left: 0.65rem;
+		max-width: none;
+	}
+
+	.flowbook-resume-card {
+		right: 0.65rem;
+		bottom: 0.65rem;
+		width: calc(100vw - 1.3rem);
+	}
+}
+
+@media (max-width: 36rem) {
+	.flowbook-resume-card {
+		padding-right: 2.75rem;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.flowbook-page-progress i,
+	.flowbook-reader-dock > button,
+	.flowbook-reader-panel,
+	.flowbook-selection-tools,
+	.flowbook-resume-toast,
+	.flowbook-resume-card,
+	.flowbook-reader-announcement {
+		animation: none;
+		transition: none;
+	}
+}
+
+@media print {
+	.flowbook-page-progress,
+	.flowbook-reader-dock,
+	.flowbook-reader-panel,
+	.flowbook-selection-tools,
+	.flowbook-resume-toast,
+	.flowbook-resume-card,
+	.flowbook-reader-announcement {
+		display: none !important;
+	}
+
+	.flowbook-inline-annotations {
+		display: none !important;
+	}
+
+	::highlight(flowbook-bookmarks),
+	::highlight(flowbook-comments) {
+		background: transparent;
+		text-decoration: none;
+	}
+}

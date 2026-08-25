@@ -1,74 +1,86 @@
 ---
 import { Image } from "astro:assets";
 import { Icon } from "@astrojs/starlight/components";
-import tracing from "../../../docs/src/assets/RunsAndLogs.webp";
-import appAnatomy from "../../../docs/src/assets/FlowLikeAppAnatomy.svg";
+import incidentTriage from "../assets/workflows/incident-triage.webp";
+import { getBookContentStats } from "../lib/book-content";
+import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
 
-const chapters = [
+const edition = CURRENT_BOOK_EDITION;
+const contentStats = await getBookContentStats();
+const { chapterCount, partCount } = contentStats;
+const chapterNoun = chapterCount === 1 ? "chapter" : "chapters";
+const partNoun = partCount === 1 ? "part" : "parts";
+const chapterSpan =
+	contentStats.firstChapterNumber === undefined ||
+	contentStats.lastChapterNumber === undefined
+		? "the available chapters"
+		: contentStats.firstChapterNumber === contentStats.lastChapterNumber
+		? `Chapter ${contentStats.firstChapterNumber}`
+		: `Chapters ${contentStats.firstChapterNumber}–${contentStats.lastChapterNumber}`;
+const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
+
+const readingPath = [
 	{
-		number: "01–04",
-		label: "PART I",
-		title: "Software that explains itself",
+		number: "INTRO",
+		label: "BEGIN HERE",
+		title: "One program, two ways to see it",
 		description:
-			"Begin with the 3 a.m. incident, state the operating principles, and build the first deterministic triage Flow.",
-		href: "/part-1/01-the-3-am-call/",
+			"Meet the book’s central question, the graph-and-text contract, and the deterministic-first rule that anchors the chapters ahead.",
+		href: "/introduction/",
 	},
-	{
-		number: "05–10",
-		label: "PART II",
-		title: "Think and write in flows",
-		description:
-			"Move between nodes, pins, wires, values, interfaces, the catalog, and readable FlowScript without losing the graph.",
-		href: "/part-2/05-nodes-pins-wires-execution/",
-	},
-	{
-		number: "NEXT",
-		label: "CAPSTONE PATH",
-		title: "From incident triage to Incident Room",
-		description:
-			"Grow one understandable Flow into a governed application with data, interfaces, tools, versions, and observable runs.",
-		href: "/contents/",
-	},
+	...contentStats.parts.map((contentPart) => {
+		const editionPart = edition.parts.find((part) => part.id === contentPart.id);
+		return {
+			number: contentPart.chapterRange,
+			label: editionPart?.label.toUpperCase() ?? `PART ${contentPart.number}`,
+			title: editionPart?.title ?? `Part ${contentPart.number}`,
+			description:
+				editionPart?.description ??
+				`${contentPart.chapters.length} ${contentPart.chapters.length === 1 ? "chapter" : "chapters"} in the current edition.`,
+			href: `/${contentPart.firstEntryId}/`,
+		};
+	}),
 ];
 ---
 
 <div class="book-home">
 	<section class="book-home__premise" aria-labelledby="premise-title">
 		<div class="book-home__section-label">
-			<span>01 / THE CONTRACT</span>
-			<b>ONE PROGRAM · TWO HONEST VIEWS</b>
+			<span>01 / ABOUT THE BOOK</span>
+			<b>A NARRATIVE · NOT A MANUAL</b>
 		</div>
 		<div class="book-home__premise-copy">
-			<h2 id="premise-title">Code for precision.<br /><em>A system you can see.</em></h2>
+			<h2 id="premise-title">Begin with the incident.<br /><em>Learn by building.</em></h2>
 			<div>
 				<p>
-					FlowScript gives serious software a compact textual form without hiding the
-					graph, permissions, execution path, or evidence needed to operate it.
+					FlowBook begins inside the 3 a.m. outage that raised its central question:
+					why did everyone have to wait for the one person who understood the system?
+					From there, it turns that question into a practical introduction to FlowScript.
 				</p>
-				<a href="/introduction/">Read the premise <Icon name="right-arrow" /></a>
+				<a href="/introduction/">Open the introduction <Icon name="right-arrow" /></a>
 			</div>
 		</div>
 
-		<div class="book-home__principles" aria-label="Core principles">
+		<div class="book-home__principles" aria-label="How FlowBook teaches">
 			<article>
 				<span>01</span>
-				<h3>Author in both views</h3>
-				<p>Write precise source. Inspect and edit the same typed logic as a graph.</p>
+				<h3>Start with why</h3>
+				<p>Enter the major incident and the question it left behind before learning syntax.</p>
 			</article>
 			<article>
 				<span>02</span>
-				<h3>Follow the evidence</h3>
-				<p>Trace results and failures back to the exact building block that produced them.</p>
+				<h3>Build one real Flow</h3>
+				<p>Create a deterministic incident classifier with no model, API key, or external service.</p>
 			</article>
 			<article>
 				<span>03</span>
-				<h3>Extend with boundaries</h3>
-				<p>Use reviewed catalog operations and capability-scoped WASM nodes.</p>
+				<h3>See both faces</h3>
+				<p>Read the same typed program as compact FlowScript and as a visible graph.</p>
 			</article>
 			<article>
 				<span>04</span>
-				<h3>Ship the whole system</h3>
-				<p>Keep logic, data, interfaces, permissions, versions, and runs together.</p>
+				<h3>Break it on purpose</h3>
+				<p>Follow a bad input to the node and runtime evidence that explain the failure.</p>
 			</article>
 		</div>
 	</section>
@@ -76,56 +88,57 @@ const chapters = [
 	<section class="book-home__evidence" aria-labelledby="evidence-title">
 		<div class="book-home__evidence-copy">
 			<div class="book-home__section-label book-home__section-label--dark">
-				<span>02 / RUNTIME EVIDENCE</span>
-				<b>OBSERVABLE BY DEFAULT</b>
+				<span>02 / THE METHOD</span>
+				<b>FOUR QUESTIONS · EVERY CONCEPT</b>
 			</div>
-			<h2 id="evidence-title">Read the logic.<br /><em>See the run.</em></h2>
+			<h2 id="evidence-title">Read the language.<br /><em>See what it means.</em></h2>
 			<p>
-				The graph is not a presentation layer pasted over hidden code. It is the
-				persisted program the runtime executes—and the map you use when production asks
-				what happened.
+				Every construct is tested against four questions: what problem does it solve,
+				how does it read in FlowScript, what graph does it represent, and what evidence
+				does it leave when it runs or fails?
 			</p>
 			<div class="book-home__evidence-facts">
-				<span><i aria-hidden="true"></i> TYPED OPERATIONS</span>
-				<span><i aria-hidden="true"></i> RECORDED RUNS</span>
-				<span><i aria-hidden="true"></i> EXPLICIT FAILURES</span>
+				<span><i aria-hidden="true"></i> THE PROBLEM</span>
+				<span><i aria-hidden="true"></i> SOURCE ↔ GRAPH</span>
+				<span><i aria-hidden="true"></i> RUN OR FAILURE</span>
 			</div>
 		</div>
 		<figure class="book-home__evidence-visual">
 			<div class="book-home__media-bar">
-				<span>RUN INSPECTOR / EXECUTION TRACE</span>
-				<b>STATUS: HEALTHY</b>
+				<span>CHAPTER 04 / INCIDENT TRIAGE</span>
+				<b>CHECKED-IN EXAMPLE</b>
 			</div>
 			<Image
-				src={tracing}
-				alt="Flow-Like workflow with a detailed run inspector and execution logs"
-				width={1400}
+				src={incidentTriage}
+				alt="The deterministic Incident Triage Flow used throughout the opening chapters"
+				width={1600}
 				quality={84}
 				loading="lazy"
 				decoding="async"
 			/>
-			<figcaption>REAL PRODUCT SURFACE · REPRESENTATIVE RUN DATA</figcaption>
+			<figcaption>BOOK FIGURE · GENERATED FROM THE INCLUDED .FLOW SOURCE</figcaption>
 		</figure>
 	</section>
 
 	<section class="book-home__path" id="reading-path" aria-labelledby="path-title">
 		<div class="book-home__path-intro">
 			<div class="book-home__section-label">
-				<span>03 / READING PATH</span>
-				<b>TEN CHAPTERS · ONE BUILD</b>
+				<span>03 / CURRENT EDITION</span>
+				<b>{chapterCount} {chapterNoun.toUpperCase()} · {partCount} {partNoun.toUpperCase()}</b>
 			</div>
-			<h2 id="path-title">A field guide,<br /><em>not a syntax tour.</em></h2>
+			<h2 id="path-title">{partCount} {partNoun}.<br /><em>One progressive path.</em></h2>
 			<p>
-				Every chapter advances a real system. You will build it, inspect it, break it,
-				and carry the evidence forward.
+				The current open edition contains the introduction and {chapterSpan}. Read from
+				the founding incident through a complete application path, or jump directly to
+				the language chapters.
 			</p>
 			<a class="book-home__text-link" href="/contents/">
-				View complete contents <Icon name="open-book" />
+				See the first-edition plan <Icon name="open-book" />
 			</a>
 		</div>
 
 		<div class="book-home__chapters">
-			{chapters.map((chapter) => (
+			{readingPath.map((chapter) => (
 				<a class="book-home__chapter" href={chapter.href}>
 					<div>
 						<span>{chapter.label}</span>
@@ -136,56 +149,96 @@ const chapters = [
 					<Icon name="right-arrow" />
 				</a>
 			))}
+			<p class="book-home__path-note">
+				<b>Next in the first-edition plan:</b> the two-way implementation contract,
+				Incident Room capstone, extensions, governance, runtime, and deployment.
+			</p>
 		</div>
 	</section>
 
 	<section class="book-home__system" aria-labelledby="system-title">
 		<div class="book-home__system-copy">
 			<div class="book-home__section-label">
-				<span>04 / THE APPLICATION</span>
-				<b>LOGIC IS ONLY THE SPINE</b>
+				<span>04 / PDF EDITION</span>
+				<b>SAME MANUSCRIPT · BUILT FOR PRINT</b>
 			</div>
-			<h2 id="system-title">Build beyond<br /><em>the happy path.</em></h2>
+			<h2 id="system-title">Take the book.<br /><em>Read it anywhere.</em></h2>
 			<p>
-				Apps, Flows, data, Events, interfaces, packages, roles, versions, and audit
-				evidence stay in one legible operating model. The capstone brings those pieces
-				together as Incident Room.
+				The downloadable edition is built from the same source as this website, with a
+				cover, linked contents, page numbers, running heads, chapter bookmarks, and
+				print-ready A4 pages.
 			</p>
+			<a
+				class="book-home__download"
+				href="/flowbook.pdf"
+				download={pdfFileName}
+				type="application/pdf"
+			>
+				<span>Download the PDF</span>
+				<Icon name="download" />
+			</a>
+			<p class="book-home__edition-note">{edition.editionLabel} · {chapterCount} {chapterNoun} · PDF</p>
 		</div>
-		<figure class="book-home__system-visual">
-			<img
-				src={appAnatomy.src}
-				alt="Architecture of a Flow-Like application from interfaces and events to flows, data, and the governed runtime"
-				width="1600"
-				height="900"
-				loading="lazy"
-				decoding="async"
-			/>
-			<figcaption>APPLICATION ANATOMY / GOVERNED FROM ENTRY POINT TO RUN</figcaption>
-		</figure>
+		<a
+			class="book-home__edition-visual"
+			href="/flowbook.pdf"
+			download={pdfFileName}
+			type="application/pdf"
+			aria-label={`Download ${edition.title}: ${edition.subtitle} as a PDF`}
+		>
+			<div class="book-home__edition-cover">
+				<div class="book-home__edition-cover-top">
+					<span>{edition.publisher}</span>
+					<b>{edition.editionLabel}</b>
+				</div>
+				<div class="book-home__edition-title">
+					<span>ONE PROGRAM · TWO HONEST VIEWS</span>
+					<h3>{edition.title}</h3>
+					<p>{edition.subtitle}</p>
+				</div>
+				<div class="book-home__edition-cover-foot">
+					<span>PDF EDITION</span>
+					<b>{chapterCount} {chapterNoun.toUpperCase()}</b>
+				</div>
+			</div>
+			<div class="book-home__edition-meta">
+				<span>DOWNLOAD THE OPEN EDITION</span>
+				<Icon name="download" />
+			</div>
+		</a>
 	</section>
 
 	<section class="book-home__closing" aria-labelledby="closing-title">
 		<div>
-			<span>START WITH THE INCIDENT</span>
-			<h2 id="closing-title">Make the software<br /><em>tell the truth.</em></h2>
+			<span>READ THE OPEN EDITION</span>
+			<h2 id="closing-title">Start online.<br /><em>Take it with you.</em></h2>
 		</div>
 		<div>
 			<p>
-				Enter through the founding 3 a.m. call, then turn that operational pressure
-				into a small Flow you can read from either side.
+				Read FlowBook chapter by chapter with web navigation and search, or download the
+				current manuscript as one PDF. Both editions come from the same source.
 			</p>
-			<a class="book-home__start" href="/part-1/01-the-3-am-call/">
-				<span>Begin chapter one</span>
-				<Icon name="right-arrow" />
-			</a>
+			<div class="book-home__closing-actions">
+				<a
+					class="book-home__start"
+					href="/flowbook.pdf"
+					download={pdfFileName}
+					type="application/pdf"
+				>
+					<span>Download the PDF</span>
+					<Icon name="download" />
+				</a>
+				<a class="book-home__closing-link" href="/introduction/">
+					Begin the introduction <Icon name="right-arrow" />
+				</a>
+			</div>
 		</div>
 	</section>
 
 	<footer class="book-home__footer">
 		<a href="https://flow-like.com">FLOW-LIKE</a>
 		<span>FLOWBOOK / THE FLOWSCRIPT BOOK</span>
-		<a href="https://github.com/Rheosoph/flow-like">OPEN SOURCE · GITHUB</a>
+		<a href="/flowbook.pdf" download={pdfFileName} type="application/pdf">DOWNLOAD PDF</a>
 	</footer>
 </div>
 
@@ -418,15 +471,13 @@ const chapters = [
 		color: #ff7658;
 	}
 
-	.book-home__evidence-visual :global(img),
-	.book-home__system-visual img {
+	.book-home__evidence-visual :global(img) {
 		width: 100%;
 		height: auto;
 		display: block;
 	}
 
-	.book-home__evidence-visual figcaption,
-	.book-home__system-visual figcaption {
+	.book-home__evidence-visual figcaption {
 		padding: 0.8rem 1rem;
 		font: 600 0.5rem/1 var(--flowbook-mono);
 		letter-spacing: 0.12em;
@@ -525,9 +576,23 @@ const chapters = [
 		transform: translate(0.2rem, -0.2rem);
 	}
 
+	.book-home__path-note {
+		padding: 1.5rem 0 0;
+		font-family: var(--flowbook-serif);
+		font-size: 0.92rem;
+		line-height: 1.6;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__path-note b {
+		font-family: var(--flowbook-sans);
+		font-weight: 720;
+		color: var(--flowbook-ink);
+	}
+
 	.book-home__system {
 		display: grid;
-		grid-template-columns: minmax(22rem, 0.7fr) minmax(32rem, 1.3fr);
+		grid-template-columns: minmax(22rem, 0.82fr) minmax(26rem, 1.18fr);
 		gap: clamp(4rem, 8vw, 9rem);
 		align-items: center;
 		background: var(--flowbook-paper-deep);
@@ -542,17 +607,183 @@ const chapters = [
 		margin-top: 2rem;
 	}
 
-	.book-home__system-visual {
-		margin: 0;
-		overflow: hidden;
-		border: 1px solid var(--flowbook-rule);
-		border-radius: 1.15rem;
-		background: #0c0e13;
-		box-shadow: 0 2.5rem 6rem color-mix(in srgb, var(--flowbook-ink) 14%, transparent);
+	.book-home__download {
+		width: min(100%, 22rem);
+		height: 3.7rem;
+		margin-top: 2rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1.25rem;
+		padding: 0 1.2rem;
+		border: 1px solid #18171b;
+		border-radius: 0.7rem;
+		background: #18171b;
+		box-shadow: 0 1.25rem 3rem color-mix(in srgb, var(--flowbook-ink) 14%, transparent);
+		font-size: 0.8rem;
+		font-weight: 760;
+		text-decoration: none;
+		color: white;
+		transition: transform 180ms ease, background 180ms ease;
 	}
 
-	.book-home__system-visual figcaption {
-		border-top: 1px solid rgba(255, 255, 255, 0.1);
+	.book-home__download :global(svg) {
+		width: 1rem;
+		height: 1rem;
+		color: #ff7658;
+	}
+
+	.book-home__download:hover {
+		transform: translateY(-3px);
+		background: var(--flowbook-orange-dark);
+		color: white;
+	}
+
+	.book-home__system-copy > .book-home__edition-note {
+		margin-top: 1rem;
+		font: 700 0.54rem/1.3 var(--flowbook-mono);
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__edition-visual {
+		width: min(100%, 34rem);
+		justify-self: center;
+		display: block;
+		text-decoration: none;
+		color: var(--flowbook-ink);
+		perspective: 70rem;
+	}
+
+	.book-home__edition-cover {
+		position: relative;
+		isolation: isolate;
+		aspect-ratio: 1 / 1.414;
+		display: grid;
+		grid-template-rows: auto 1fr auto;
+		padding: clamp(1.6rem, 4vw, 3rem);
+		overflow: hidden;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 0.4rem 1rem 1rem 0.4rem;
+		background:
+			radial-gradient(circle at 20% 78%, rgba(242, 64, 42, 0.34), transparent 16rem),
+			linear-gradient(145deg, #11141a, #080a0e);
+		box-shadow:
+			-0.7rem 0 0 #2a2627,
+			-0.85rem 0 0 var(--flowbook-orange),
+			0 3rem 6rem color-mix(in srgb, var(--flowbook-ink) 25%, transparent);
+		color: #f6f1ed;
+		transform: rotateY(-3deg) rotateX(1deg);
+		transform-origin: left center;
+		transition: transform 220ms ease, box-shadow 220ms ease;
+	}
+
+	.book-home__edition-cover::before {
+		position: absolute;
+		inset: 0;
+		z-index: -2;
+		opacity: 0.32;
+		background-image:
+			linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+		background-size: 3rem 3rem;
+		content: "";
+	}
+
+	.book-home__edition-cover::after {
+		position: absolute;
+		right: -7rem;
+		bottom: -7rem;
+		z-index: -1;
+		width: 20rem;
+		height: 20rem;
+		border-radius: 50%;
+		background: rgba(241, 60, 46, 0.24);
+		filter: blur(4rem);
+		content: "";
+	}
+
+	.book-home__edition-cover-top,
+	.book-home__edition-cover-foot {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		font: 700 0.54rem/1 var(--flowbook-mono);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: rgba(246, 241, 237, 0.64);
+	}
+
+	.book-home__edition-cover-top span,
+	.book-home__edition-cover-foot span {
+		color: #ff7658;
+	}
+
+	.book-home__edition-cover-top b,
+	.book-home__edition-cover-foot b {
+		font-weight: 600;
+	}
+
+	.book-home__edition-title {
+		align-self: center;
+	}
+
+	.book-home__edition-title > span {
+		font: 700 0.55rem/1.2 var(--flowbook-mono);
+		letter-spacing: 0.15em;
+		color: #ff7658;
+	}
+
+	.book-home__edition-title h3 {
+		margin-top: 1.1rem;
+		font-size: clamp(4rem, 7vw, 6.3rem);
+		font-weight: 690;
+		letter-spacing: -0.075em;
+		line-height: 0.88;
+		color: #f6f1ed;
+	}
+
+	.book-home__edition-title p {
+		margin-top: 1.2rem;
+		font-family: var(--flowbook-serif);
+		font-size: clamp(1.25rem, 2.4vw, 1.8rem);
+		font-style: italic;
+		color: rgba(246, 241, 237, 0.7);
+	}
+
+	.book-home__edition-meta {
+		height: 3rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 0.15rem;
+		font: 700 0.54rem/1 var(--flowbook-mono);
+		letter-spacing: 0.13em;
+		color: var(--flowbook-muted);
+	}
+
+	.book-home__edition-meta :global(svg) {
+		width: 1rem;
+		height: 1rem;
+		color: var(--flowbook-orange);
+		transition: transform 180ms ease;
+	}
+
+	.book-home__edition-visual:hover {
+		color: var(--flowbook-ink);
+	}
+
+	.book-home__edition-visual:hover .book-home__edition-cover {
+		transform: rotateY(-1deg) rotateX(0) translateY(-0.4rem);
+		box-shadow:
+			-0.7rem 0 0 #2a2627,
+			-0.85rem 0 0 var(--flowbook-orange),
+			0 3.5rem 7rem color-mix(in srgb, var(--flowbook-ink) 31%, transparent);
+	}
+
+	.book-home__edition-visual:hover .book-home__edition-meta :global(svg) {
+		transform: translateY(0.18rem);
 	}
 
 	.book-home__closing {
@@ -587,10 +818,17 @@ const chapters = [
 		color: #fff;
 	}
 
+	.book-home__closing-actions {
+		margin-top: 2rem;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 1rem 1.5rem;
+	}
+
 	.book-home__start {
 		width: min(100%, 24rem);
 		height: 3.7rem;
-		margin-top: 2rem;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -615,6 +853,30 @@ const chapters = [
 		transform: translateY(-3px);
 		background: rgba(255, 255, 255, 0.19);
 		color: white;
+	}
+
+	.book-home__closing-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.7rem;
+		font-size: 0.78rem;
+		font-weight: 760;
+		text-decoration: none;
+		color: white;
+	}
+
+	.book-home__closing-link :global(svg) {
+		width: 0.95rem;
+		height: 0.95rem;
+		transition: transform 160ms ease;
+	}
+
+	.book-home__closing-link:hover {
+		color: white;
+	}
+
+	.book-home__closing-link:hover :global(svg) {
+		transform: translateX(0.2rem);
 	}
 
 	.book-home__footer {
@@ -723,6 +985,11 @@ const chapters = [
 			padding-right: 2rem;
 		}
 
+		.book-home__chapter > div b {
+			font-size: 1.1rem;
+			white-space: nowrap;
+		}
+
 		.book-home__footer {
 			align-items: flex-start;
 			flex-direction: column;
@@ -735,7 +1002,8 @@ const chapters = [
 
 	@media (prefers-reduced-motion: reduce) {
 		.book-home a,
-		.book-home a :global(svg) {
+		.book-home a :global(svg),
+		.book-home__edition-cover {
 			transition: none;
 		}
 	}

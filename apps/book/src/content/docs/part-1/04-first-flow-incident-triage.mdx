@@ -8,6 +8,10 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import triageContains from '../../../assets/workflows/incident-triage--focus-contains.webp';
+import triageFull from '../../../assets/workflows/incident-triage.webp';
+
 It is time to build something.
 
 Our first Flow will not call an API, open a database, or ask an AI model to make a judgment. It
@@ -33,7 +37,7 @@ inspected its run evidence, and saved a known-good version.
 
 The smallest useful incident record for this exercise has one field:
 
-```ts
+```flow
 report: string
 ```
 
@@ -107,17 +111,13 @@ Connect the `report` value to the String input of Trim String. Connect Trimmed S
 String input of Contains. Configure Contains with the substring
 `production is on hold`, and enable its case-insensitive comparison.
 
-The data side of the graph is now:
+The data side of the graph is now visible in Studio:
 
-```text
-Generic Event.report
-        │
-        ▼
-    Trim String
-        │ trimmed string
-        ▼
-      Contains ─── contains? ───▶ Branch.condition
-```
+<WorkflowFigure
+  src={triageContains}
+  alt="Focused Trim String and Contains nodes wired into the visible Branch condition."
+  caption="A focused crop of the first data path after FlowScript reconciliation and balanced auto-layout. Open the image to inspect the pins at full size."
+/>
 
 The execution side is shorter. Connect the Generic Event execution output to the Branch input.
 Connect the Branch’s True output to Log Error and its False output to the Info log node.
@@ -128,13 +128,11 @@ temporary toast.
 
 The completed graph therefore has two kinds of wires:
 
-```text
-Execution: Generic Event ─▶ Branch ─┬─ True  ─▶ Log Error
-                                    └─ False ─▶ Info log
-
-Data:      report ─▶ Trim String ─▶ Contains ─▶ Branch condition
-                         └─────────────────────▶ both log messages
-```
+<WorkflowFigure
+  src={triageFull}
+  alt="Six-node Incident Triage workflow with Branch routing to Log Error and Print Info while normalized report data feeds the condition and both messages."
+  caption="The complete six-node FlowScript rendered in Studio. Solid dark wires carry execution; colored dotted wires carry typed data."
+/>
 
 Notice what is absent: Trim String and Contains do not need execution wires. They are pure
 operations. When Branch needs its condition, the runtime evaluates the data dependencies that
@@ -160,7 +158,7 @@ on. Correct wiring is necessary; readable organization is part of the result.
 Open the FlowScript view of the Board. Ignoring the identity anchors that the editor may append,
 the program is:
 
-```ts
+```flow
 use log::*
 
 eventsGeneric triageIncident(payload: Struct, report: string) {
@@ -179,7 +177,7 @@ that Board.
 The import at the top tells FlowScript that unqualified logging calls come from the `log`
 namespace:
 
-```ts
+```flow
 use log::*
 ```
 
@@ -189,7 +187,7 @@ Board's canonical rendering uses the import and the shorter aliases here.
 
 The event declaration describes the entry node:
 
-```ts
+```flow
 eventsGeneric triageIncident(payload: Struct, report: string) {
 ```
 
@@ -199,7 +197,7 @@ entry. `payload: Struct` is the event node's built-in payload output. The additi
 
 The next line contains one binding and one method-shaped node call:
 
-```ts
+```flow
 const normalized = report.trim()
 ```
 
@@ -212,7 +210,7 @@ that node remains visible on the Board.
 
 The condition contains two more operations:
 
-```ts
+```flow
 if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
 ```
 
@@ -225,7 +223,7 @@ to its True execution output; the `else` block corresponds to False.
 
 Finally, each statement inside those blocks is an impure logging node:
 
-```ts
+```flow
 error({ message: normalized, toast: false })
 info({ message: normalized, toast: false })
 ```
@@ -250,7 +248,7 @@ formatting choice does not change the Board.
 
 Change the urgent phrase in the Contains call:
 
-```ts
+```flow
 substring: "customer orders are blocked"
 ```
 
@@ -289,7 +287,7 @@ Log Warning and then continue to Log Error.
 After the Board change has been saved, re-render FlowScript from the Board. The urgent branch
 should be semantically equivalent to:
 
-```ts
+```flow
 if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
     warn({ message: normalized, toast: false })
     error({ message: normalized, toast: false })

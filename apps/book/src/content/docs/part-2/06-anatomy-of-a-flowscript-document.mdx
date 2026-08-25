@@ -62,7 +62,7 @@ spelling:
 
 For example, this is accepted input:
 
-```ts
+```flow
 const urgentPhrase: string = 'production is on hold';
 
 eventsGeneric triageIncident(payload: Struct, report: string) {
@@ -72,7 +72,7 @@ eventsGeneric triageIncident(payload: Struct, report: string) {
 
 Its canonical text uses double quotes, no statement terminators, and four-space indentation:
 
-```ts
+```flow
 const urgentPhrase = "production is on hold"
 
 eventsGeneric triageIncident(payload: Struct, report: string) {
@@ -100,7 +100,7 @@ FlowScript also carries comments with two very different jobs.
 
 A normal body comment is prose:
 
-```ts
+```flow
 eventsGeneric triageIncident(payload: Struct, report: string) {
     // Normalize before applying the incident rule.
     const normalized = report.trim()
@@ -114,7 +114,7 @@ round-trip gap, not as a documentation guarantee.
 
 An anchor comment is identity metadata:
 
-```ts
+```flow
 const urgentPhrase = "production is on hold"   //@v:variable-id
 
 function normalizeReport(report: string): (normalized: string) {   //@l:layer-id
@@ -141,7 +141,7 @@ comments may look small, but they are part of safe identity-preserving reconcili
 Every catalog operation has a namespace-aware FlowScript name. The fully qualified form is the
 least ambiguous:
 
-```ts
+```flow
 log::error({ message: report, toast: false })
 ```
 
@@ -150,7 +150,7 @@ different role in expressions such as `report.trim()` and `incident.report`.
 
 Top-level `use` declarations can open that namespace in four supported ways:
 
-```ts
+```flow
 use log
 use log::*
 use log as audit
@@ -159,7 +159,7 @@ use log::{ error, info }
 
 These forms allow, respectively:
 
-```ts
+```flow
 log::info({ message: "qualified through imported namespace", toast: false })
 info({ message: "bare through glob", toast: false })
 audit::error({ message: "qualified through alias", toast: false })
@@ -188,7 +188,7 @@ An interface is the readable FlowScript surface of a structured schema.
 
 Here is an incident contract:
 
-```ts
+```flow
 interface Incident {
     report: string;
     source?: string | null = null;
@@ -205,7 +205,7 @@ a type system rather than a checklist.
 Interfaces matter because “Struct” by itself says very little. A named interface can give a
 top-level variable, Function boundary, or Generic Event output an exact field contract:
 
-```ts
+```flow
 let incident: Incident
 
 function incidentReport(incident: Incident): (report: string) {
@@ -238,7 +238,7 @@ Top-level variables are where JavaScript intuition becomes actively misleading.
 
 Consider two declarations:
 
-```ts
+```flow
 const urgentPhrase = "production is on hold"
 let ignoreCase = true
 ```
@@ -285,7 +285,7 @@ examines those boundaries and the remaining enforcement gaps.
 
 A secret declaration is intentionally value-free when rendered:
 
-```ts
+```flow
 @description("Token used by the ticket integration")
 @secret
 @runtime
@@ -308,7 +308,7 @@ A FlowScript function is a callable Function layer with a typed boundary.
 
 We can extract the normalization step from Incident Triage:
 
-```ts
+```flow
 function normalizeReport(report: string): (normalized: string) {
     return report.trim()
 }
@@ -318,13 +318,13 @@ The parameter becomes a typed input pin on the Function layer. The named return 
 output pin. The body remains a graph inside the layer, and a call elsewhere becomes a Call
 Function node targeting that layer:
 
-```ts
+```flow
 const normalized = normalizeReport({ report: report })
 ```
 
 The declaration's return syntax is deliberately explicit:
 
-```ts
+```flow
 : (normalized: string)
 ```
 
@@ -339,7 +339,7 @@ the same model as Chapter 5; `function` does not create a second runtime.
 
 Within a body, a call-result binding normally renders with `const`:
 
-```ts
+```flow
 const normalized = report.trim()
 ```
 
@@ -363,7 +363,7 @@ Events come last because they are where declarations become runnable programs.
 
 An event header has two names with different jobs:
 
-```ts
+```flow
 eventsGeneric triageIncident(payload: Struct, report: string) {
     // body
 }
@@ -385,7 +385,7 @@ action, or another supported trigger.
 
 On a fresh Board, the Incident example can now use every document section we have learned:
 
-```ts
+```flow
 use log::*
 
 interface Incident {

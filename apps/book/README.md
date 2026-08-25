@@ -14,8 +14,11 @@ From the repository root:
 bun run --cwd apps/book dev
 ```
 
-Use `bun run --cwd apps/book check` for content and type diagnostics, and
-`bun run --cwd apps/book build` for the static production build.
+Use `bun run --cwd apps/book check` for content and type diagnostics. The regular
+`bun run --cwd apps/book build` copies the current `output/pdf/flowbook.pdf` into
+`public/flowbook.pdf` before building the static site. Use
+`bun run --cwd apps/book build:release` to regenerate the PDF first and leave a fully
+deployable `dist` directory.
 
 ## Export the print edition
 
@@ -27,13 +30,17 @@ bun run --cwd apps/book pdf
 
 The command builds the dedicated `/print/` edition, calculates the contents-page
 numbers from the finished body, adds running headers and page numbers, embeds the local
-book fonts, and writes `output/pdf/flowbook.pdf`. If `dist` is already current, use
+book fonts, writes `output/pdf/flowbook.pdf`, and publishes a generated copy to
+`public/flowbook.pdf`. If `dist` is already current, use
 `bun run --cwd apps/book pdf:from-dist` to run only the PDF stage.
+
+Both deploy scripts run the full release build before Wrangler, so the hosted
+`/flowbook.pdf` always comes from the manuscript being deployed.
 
 The browser preview at `/print/` is intentionally light-only so it matches the printable
 artifact rather than the dark documentation UI.
 
-The published manuscript lives in `src/content/docs`. The introduction and first eleven
+The published manuscript lives in `src/content/docs`. The introduction and first fourteen
 chapters are drafted; the complete editorial plan and interview dependencies remain beside
 the app.
 

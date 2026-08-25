@@ -1,0 +1,21 @@
+use log::{ info }
+
+function prepareIncident(report: string): (normalized: string) {
+    info({ message: "Prepare incident", toast: false })
+    return report.trim()
+}
+
+function classifyIncident(report: string): (status: string) {
+    info({ message: "Classify incident", toast: false })
+    return report.contains({ substring: "production is on hold", ignoreCase: true }) ? "critical" : "normal"
+}
+
+function respondToIncident(status: string, report: string) {
+    info({ message: `${status}: ${report}`, toast: false })
+}
+
+eventsGeneric receiveIncident(payload: Struct, report: string) {
+    const normalized = prepareIncident(report)
+    const status = classifyIncident(normalized)
+    respondToIncident({ status: status, report: normalized })
+}

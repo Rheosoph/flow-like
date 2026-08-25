@@ -8,9 +8,13 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import controlApi from '../../../assets/workflows/control-flow--focus-api-call.webp';
+import controlForEach from '../../../assets/workflows/control-flow--focus-for-each.webp';
+
 Control flow in FlowScript looks familiar:
 
-```ts
+```flow
 if (critical) {
     notifyOperations()
 } else {
@@ -55,7 +59,7 @@ inspectable at the responsible nodes.
 
 Use `if` when a Boolean value chooses an execution path:
 
-```ts
+```flow
 if (report.contains({
     substring: "production is on hold",
     ignoreCase: true,
@@ -72,7 +76,7 @@ below another on the canvas cannot change the choice; only the wires and the con
 
 This is different from the ternary in Chapter 9:
 
-```ts
+```flow
 let status = critical ? "critical" : "investigate"
 ```
 
@@ -81,7 +85,7 @@ contain calls, writes, retries, tickets, or other work that should run only on t
 
 FlowScript accepts an `else if` ladder:
 
-```ts
+```flow
 if (productionStopped) {
     status = "critical"
 } else if (degraded) {
@@ -93,7 +97,7 @@ if (productionStopped) {
 
 Canonical source currently renders the same graph as a nested branch:
 
-```ts
+```flow
 if (productionStopped) {
     status = "critical"
 } else {
@@ -123,7 +127,7 @@ True and False are not sufficient names for every decision. The built-in HTTP AP
 example, has Success and Error execution outputs. FlowScript preserves those labels with a named
 arm block:
 
-```ts
+```flow
 const request = http::request({ method: "GET", url: healthUrl })
 const apiCall = http::fetch({ request: request })
 apiCall {
@@ -148,12 +152,11 @@ response can instead be an unexpected node error. Enabling **Handle Errors** add
 
 The distinction is operationally useful:
 
-```text
-HTTP call
-├─ Success ........ expected positive outcome
-├─ Error .......... expected HTTP negative outcome
-└─ On Error ....... unexpected execution failure, when Handle Errors is enabled
-```
+<WorkflowFigure
+  src={controlApi}
+  alt="API Call node with Success routed to Print Info, expected Error routed to Log Warning, and an additional unconnected On Error output."
+  caption="The source-authored Success and Error arms remain wired; this capture applies Studio's Handle Errors toggle so the generic On Error execution and Error string outputs are visible."
+/>
 
 A Flow can route Error to a retry, ticket, or domain response without claiming that the node
 crashed. If an On Error recovery path completes, the runtime can continue while the original node
@@ -173,7 +176,7 @@ labels, not disposable prose; they preserve which graph output each arm represen
 
 The ordinary collection loop is sequential:
 
-```ts
+```flow
 for (const report of reports) {
     classify(report)
 }
@@ -181,7 +184,7 @@ for (const report of reports) {
 
 Bind the zero-based index as well when identity or ordering matters:
 
-```ts
+```flow
 for (const [index, report] of reports) {
     info({ message: `#${index}: ${report}`, toast: false })
 }
@@ -192,13 +195,11 @@ publishes the current value and index and waits for the connected body chain to 
 starting the next item. Only after every item does the **Done** output activate and allow the
 statement following the loop to run.
 
-```text
-array ─▶ For Each
-          ├─ item 0 ─▶ body settles
-          ├─ item 1 ─▶ body settles
-          ├─ item 2 ─▶ body settles
-          └─ Done   ─▶ next statement
-```
+<WorkflowFigure
+  src={controlForEach}
+  alt="For Each node with Value and Index data outputs, a body execution path through Call classify, and Done continuing to Parallel For Each."
+  caption="The static Board shows one body path: the runtime reuses it for each array item in order, then activates Done once."
+/>
 
 This makes ordinary `for` the safe default when iterations touch shared or external state:
 
@@ -226,7 +227,7 @@ explicitly—capture and collect per-item outcomes, then make the final success 
 
 Parallelism is an opt-in promise that iterations may overlap:
 
-```ts
+```flow
 @parallel
 for (const report of reports) {
     inspectIndependentReport(report)
@@ -237,7 +238,7 @@ The current Parallel For Each node starts work for independent items up to its c
 concurrency limit. The `@parallel` sugar is lossless only at the node's default of 30. A custom
 limit remains an explicit call so the meaningful setting cannot disappear:
 
-```ts
+```flow
 for (const parallelForEach of control::parallelForEach({
     array: reports,
     maxConcurrent: 5,
@@ -283,7 +284,7 @@ work because its contract permits overlap, not because an annotation is availabl
 
 Workflow loops must have an operational ceiling. The compact form is:
 
-```ts
+```flow
 let attempt = 0
 while (attempt < 3) {
     pollDependency()
@@ -296,7 +297,7 @@ again. The body runs only while that value is true. The current node also has a 
 plain `while (condition)` preserves the default value of 15; changing the guard makes the node call
 explicit:
 
-```ts
+```flow
 while (control::whileLoop({ condition: retryReady, maxIter: 3 })) {
     pollDependency()
 }
@@ -329,7 +330,7 @@ timeouts on external operations therefore remain useful even when a caller can c
 FlowScript does not currently have `break` or `continue` statements. To skip the remainder of one
 ordinary iteration, put that remainder behind a branch:
 
-```ts
+```flow
 for (const report of reports) {
     const relevant = isRelevant(report)
     if (relevant) {
@@ -356,7 +357,7 @@ should preserve the same visible stop condition and Completed path in both views
 
 In a function, return values map positionally to the declared output pins:
 
-```ts
+```flow
 function classify(report: string): (status: string, normalized: string) {
     const normalized = report.trim()
     let status = "investigate"
@@ -374,7 +375,7 @@ guessing how an arity mismatch should be repaired.
 
 What this does **not** mean today is JavaScript-style early return:
 
-```ts
+```flow
 // Do not rely on this shape to terminate the whole function today.
 if (invalid) {
     return "rejected"
@@ -390,7 +391,7 @@ result, rejoin, and return it once at the boundary.
 
 An Event return has a different implementation:
 
-```ts
+```flow
 eventsGeneric status(payload: Struct) {
     return "accepted"
 }
@@ -420,7 +421,7 @@ eventually migrate to a true function-wide Return node.
 
 The Chapter 10 fixture combines the forms in one small incident coordinator:
 
-```ts
+```flow
 use log::{ info, warn }
 
 function classify(report: string): (status: string) {

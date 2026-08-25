@@ -8,6 +8,10 @@ sidebar:
     variant: caution
 ---
 
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import breakStruct from '../../../assets/workflows/break-struct--focus-fields.webp';
+import typedCollections from '../../../assets/workflows/typed-collections.webp';
+
 FlowScript types are not annotations added to make source code look disciplined. They describe
 what may cross a visible connection.
 
@@ -56,7 +60,7 @@ store in variables. They answer “what runs next?” instead of “what data is
 
 The first four types have direct literal forms:
 
-```ts
+```flow
 const service = "orders"
 const retries = 3
 const confidence = 0.95
@@ -102,7 +106,7 @@ The base type is only half of a pin contract. Flow-Like also records the value's
 FlowScript renders those shapes in familiar syntax. Top-level Board variables may intentionally
 have no persisted default, as in this type-focused example:
 
-```ts
+```flow
 const report: string
 const reports: string[]
 const incidentsById: Map<string, Struct>
@@ -119,11 +123,14 @@ output declares a collection shape, current connection planning protects the sca
 collection boundary rather than silently guessing.
 
 This matters visually. Imagine a node that produces `Incident[]` and a node that accepts one
-`Incident`. The correct graph needs an operation that selects or iterates an element:
+`Incident`. The correct graph needs an operation that selects or iterates an element. This example
+makes the choice explicit with For Each:
 
-```text
-Incident[] ─▶ For Each / Get Element ─▶ Incident
-```
+<WorkflowFigure
+  src={typedCollections}
+  alt="Inspect Incidents event passing a typed incidents array into For Each, with each Struct value feeding Get Field and Print Info."
+  caption="The collection wire ends at For Each; only its per-item Value output crosses into the scalar Incident path."
+/>
 
 Connecting the collection directly would hide which incident the consumer should receive.
 Rejecting the wire makes that decision explicit.
@@ -131,7 +138,7 @@ Rejecting the wire makes that decision explicit.
 Array literals exist, but top-level defaults use compact canonical JSON, and an unannotated array
 default only establishes `any[]` today:
 
-```ts
+```flow
 const names: any[] = ["api","billing"]
 const typedNames: string[] = ["api","billing"]
 ```
@@ -166,20 +173,20 @@ The present rules are deliberately small:
 
 The renderer removes a redundant scalar annotation when the literal infers exactly the same type:
 
-```ts
+```flow
 const retries: int = 3
 ```
 
 becomes the canonical form:
 
-```ts
+```flow
 const retries = 3
 ```
 
 It retains an annotation when it carries information the literal does not. These declarations are
 not equivalent:
 
-```ts
+```flow
 const threshold = 1
 const thresholdAsFloat: float = 1
 ```
@@ -191,13 +198,13 @@ their intended shape remains readable.
 `null` cannot tell us whether the missing value will later be text, a date, an incident, or
 something else. FlowScript therefore rejects this:
 
-```ts
+```flow
 const owner = null
 ```
 
 and requires an explicit type. A top-level Board variable may omit its persisted default:
 
-```ts
+```flow
 const owner: string
 ```
 
@@ -209,7 +216,7 @@ base-plus-container form.
 Top-level inference is also limited to literals. FlowScript does not treat this as a hidden
 compile-time program:
 
-```ts
+```flow
 const normalized = normalizeReport()
 ```
 
@@ -240,7 +247,7 @@ catch everything knowable, and localize everything else.
 A named interface turns an anonymous `Struct` into a readable field contract. Here is a more
 complete incident record:
 
-```ts
+```flow
 interface AffectedSystem {
     name: string;
     region?: string | null = null;
@@ -275,7 +282,7 @@ This one declaration carries several independent facts:
 
 Optionality, nullability, and a default are different statements:
 
-```ts
+```flow
 source?: string | null = null;
 ```
 
@@ -288,7 +295,7 @@ Inside interfaces, the current surface supports named types, nested arrays, stri
 unions, string-literal alternatives, `null`, and `any`. Parentheses disambiguate an array whose
 element is itself a union:
 
-```ts
+```flow
 interface Evidence {
     observations?: (string | null)[] = [];
 }
@@ -317,11 +324,11 @@ string may remain plausible until a run reaches it.
 
 Given `IncidentRecord`, the schema can drive field-shaped nodes instead:
 
-```text
-IncidentRecord ─▶ Break Struct ─┬─ id: string
-                                ├─ report: string
-                                └─ observedAt: Date
-```
+<WorkflowFigure
+  src={breakStruct}
+  alt="Typed incident Struct connected to Break Struct, which exposes Id, Report, and ObservedAt output pins."
+  caption="Break Struct adopts the IncidentRecord schema and turns its three fields into visible, typed outputs."
+/>
 
 **Break Struct** adopts the concrete schema from its producer and creates a field output pin with
 the most specific type it can currently derive for each property. **Make Struct (Schema)** does the
@@ -331,7 +338,7 @@ keys.
 
 FlowScript can render that graph compactly:
 
-```ts
+```flow
 let report = incident.report
 let ticketId = incident["external-ticket-id"]
 ```

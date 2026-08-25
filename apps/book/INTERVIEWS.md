@@ -14,11 +14,11 @@ to the speaker for wording approval.
 | --- | --- | --- | --- |
 | INT-01 | Origin and manifesto | Complete | 1, 2, Epilogue |
 | INT-02 | Audience, platform, security, deployment, and AI | Complete, fact-check follow-up required | 2, 3, 20, 22–25 |
-| INT-03 | Language design and the two-view contract | Complete; Chapter 11 follow-up code-checked | 5–16, 26 |
+| INT-03 | Language design and the two-view contract | Complete; Chapters 11–14 follow-ups code-checked | 5–16, 26 |
 | INT-04 | Runtime reliability, incidents, execution, and observability | In progress; failure, evidence, and rerun answers code-checked | 4, 5, 10, 15, 17, 24 |
 | INT-05 | WASM threat model and the no-inline-code decision | Planned | 11, 21, 22 |
 | INT-06 | Governance, packages, scores, and publication | Planned | 2, 23 |
-| INT-07 | Deployment support and enterprise operating model | Planned | 3, 13, 25 |
+| INT-07 | Deployment support and enterprise operating model | Planned; Chapter 13 Event-location facts already code-checked | 3, 25 |
 | INT-08 | Data Studio, document-agent capstone, and AI authorship | Planned | 12, 18–20 |
 | INT-09 | Tradeoffs, rejected shortcuts, limits, contribution, and future | Planned | 2, 26, Epilogue |
 
@@ -283,6 +283,156 @@ The governing editorial rule is:
 
 > Choose a state mechanism by the cost of losing the value, not by the convenience of its write
 > node.
+
+### Functions, execution, and caching doctrine for Chapter 12
+
+The founder's threshold for extracting a Function is shared intent, not merely node count. A layer
+copied because both copies are expected to retain the same logic should become one Function.
+Automatic result caching is the second reason to establish that callable boundary; ordinary visual
+grouping remains appropriate when one inline section only needs organization.
+
+Pure and impure behavior is decided by the node designer. The desired design rule is that
+deterministic light transformations remain pure, while nodes that may have side effects or perform
+expensive work become impure so their schedule and cost stay visible. Runtime execution follows
+the impure chain forward and resolves its input pins backward through pure dependencies. An unused
+pure output is never demanded and therefore never runs.
+
+The code check confirms that the engine recognizes purity structurally through Execution pins; it
+does not prove determinism, cost, or absence of side effects. FlowScript derives a Function's
+boundary from its body, and current branches/loops make a Function execution-driven even when its
+domain result is deterministic. This supports a careful distinction between semantically safe to
+cache and structurally pure.
+
+Every user function with a first parameter should be available as a method on that parameter. This
+already works and is type-checked in current reconciliation and completion. It remains call sugar
+over the same Function layer, not object ownership or mutation, and Board-to-source projection can
+currently normalize the method spelling back to a flat call.
+
+Agent tools should be Events. Any suitable Event can be explicitly registered; a Function can be
+adapted through a slim Event shim whose input and result types come from that Event. Confirmation is
+authored inside the handler when required. Current implementation requires the author to write the
+shim: a Function layer itself is not triggerable and direct registration is rejected. Only Event
+entries marked referenceable are accepted today, and function-reference metadata has no automatic
+per-tool confirmation or authorization object.
+
+Caching must remain visible and author-controlled. The engine must not silently infer a cache just
+because a function looks pure. `@cache` is the author's promise that a prior output may replace the
+whole call. Current runtime allows that decorator on impure Functions and skips all inner side
+effects on a hit, so safe authorship requires that the complete meaningful dependency set be
+declared as inputs and that skipping the body be correct.
+
+Cache lifetime and invalidation are also the author's responsibility. TTL bounds staleness;
+namespaces make a group easy to clear. The approved example resolves a system owner/runbook and
+invalidates that namespace at the successful end of an authoritative directory update. The code
+audit adds a concurrency safeguard: an old in-flight miss can write after invalidation, so a data
+revision should also be a declared input or namespace version.
+
+### Events, interfaces, and release doctrine for Chapter 13
+
+The founder confirms the two-level Event model. An event node is the triggerable entry inside a
+Flow. An App Event selects a compatible exposure and owns release/setup concerns such as version,
+canary intent, configuration, and Board-variable overrides. Different event-node shapes permit
+different App Event types; one label must not conceal those distinct setup contracts.
+
+The Incident Desk should use one shared deterministic Function behind separate adapters. An A2UI
+Page button and Quick Action are useful interactive surfaces. Cron has the same Simple Event entry
+shape as Quick Action. REST is deliberately more involved: it uses the REST catalog's server-config,
+function-registration, authentication, OpenAPI, and server nodes, with a Simple Event as the setup
+entry and a referenced Generic Event as the request handler. The founder requested a real React
+component embedded in the chapter as the tangible Page prototype, without claiming that the book
+component invokes a working Flow.
+
+REST should return a structured incident result. The chosen contract is severity, responsible team,
+and runbook. Current code can return that object as `200 application/json`; a response envelope can
+control status, headers, content type, and body. The audited remote setup is workable, but its
+OpenAPI request/response schemas remain open, it persists only the first handler reference per route,
+and it does not validate JSON fields against handler pin schemas before dispatch. The book therefore
+teaches one handler per route and distinguishes a documented contract from an enforced edge schema.
+
+App roles, rather than per-Event ACLs, govern ordinary execution and editing. A Flow can inspect the
+executing user, role, permissions, and supported attributes and make a stricter domain decision.
+Public REST uses its configured registration authentication; an Internal REST surface additionally
+requires an approved App connection, without bypassing that registration auth. Interactive calls can
+carry caller credentials, while unattended/public sinks typically use credentials deliberately stored
+with the App Event or sink. The REST credential and downstream service credentials are separate.
+
+The founder's Hybrid shorthand is “Studio local, web App remote.” The implementation requires a
+more precise statement: Hybrid belongs to the Board; every App Event remains explicitly Local or
+Remote, and the web client always uses remote dispatch. One run never splits between machines.
+
+Latest is for authoring; production-facing Events should pin a tested numbered Flow version and be
+promoted by authorized admins/builders. The code supports immutable targets and last-successful REST
+setup fallback, but does not impose a separate two-party approval gate. `CanaryEvent` is stored and
+validated but the audited dispatch paths do not perform weighted selection, so canary rollout is
+intent rather than a current guarantee.
+
+The desired failure contract is to reject known-invalid input before work begins and show that
+attempt in Runs as Rejected. Current code falls short: malformed JSON, failed authentication, and
+unmatched routes return before Run insertion; the persisted run-status enum has no Rejected state;
+and typed field mismatches can fail later during execution. The chapter names that gap explicitly.
+
+The founder considers a typed entry, usable interface, authentication, permissions, credentials,
+execution location, pinned release, and traceable outcomes a sufficient definition of a complete
+App for this stage of the book.
+
+### Board, AST, text, and reconciliation doctrine for Chapter 14
+
+The founder confirms the representation boundary: the persisted Board is the executable model,
+FlowScript is an equal authoring surface, and `BoardAst` is the temporary semantic contract between
+graph and text. FlowScript was in mind while Boards were being built, but the need for this precise
+intermediate form crystallized later.
+
+The historical explanation in the chapter is explicitly an evidence-backed editorial inference.
+Board JSON combines executable structure with opaque node and pin IDs, adjacency, coordinates,
+presentation, package metadata, and runtime fields. That makes it useful persistence and clipboard
+transport but a poor human or model editing domain. Once FlowScript became authoritative rather
+than a readable export—especially for FlowPilot—a typed AST was needed to decouple syntax from
+storage, validate a complete proposal before mutation, and reconcile only the semantic difference.
+Repository history supports the connection: the first FlowScript implementation arrived together
+with the FlowPilot update and introduced the AST, parser, renderer, lowering, and reconciliation as
+one architectural path.
+
+The founder's requested experiment is to copy several Board nodes and paste them into a text
+editor. Current clipboard code emits pretty JSON containing nodes, comments, cursor position,
+layers, variables, schema references, pin IDs, and connections. Paste is deliberately supported as
+transport and has to mint translated identities. The chapter uses that experience to show why the
+JSON is not the programming language.
+
+Every applied text change should become minimal Board commands such as moving or updating one
+node, changing one pin, or adding only the new nodes and wires required by the edit. Current
+reconciliation and Apply implement that model: authoritative diagnostics produce zero executed
+commands, destructive plans require approval, and a valid batch is applied against a staged Board
+with rollback. Successful application then reloads source from the Board.
+
+Canonicalization is intentional. Flow-Like does not preserve an author's quote style, semicolons,
+whitespace, import preference, or equivalent call spelling after Apply. Pure parse/render handles
+basic formatting; lowering the accepted Board performs the stronger graph-derived standardization.
+When opened namespaces would collide, calls stay inline and fully qualified, for example
+`string::contains(...)` and `array::contains(...)`, rather than choosing one ambiguous import.
+
+Secret-variable source values are omitted from the AST and an unrelated edit preserves the hidden
+Board value. New secrets cannot receive a nonempty source initializer. This is not a universal
+taint-tracking claim: arbitrary downstream logging and sensitive node-pin rendering require their
+own boundaries and audits.
+
+The intended editor sequence is Board edits re-render clean source; text remains a draft through
+typing, lint, and preview; only a valid revision can be applied; and Apply lands atomically. The
+current editor also performs a statement-level merge when a clean Board projection changes under a
+dirty buffer and blocks on unresolved conflict or stale state. The authoritative pre-Apply semantic
+command preview is currently implemented for Studio/Desktop. Web has client-side structural lint
+and authoritative server reconciliation during Apply, but no equivalent pre-Apply command preview.
+
+The Incident Desk illustration derives a local `customerFacing` signal from the existing report and
+ORs it into the established classification Branch. The walkthrough must not add it as a parameter
+to an established anchored Function: current reconciliation rejects Function signature changes
+because it cannot yet migrate the boundary and every caller safely. The chapter pairs that honest
+gap with a proven small case in which editing one anchored literal emits exactly one
+`UpdateNodePin`.
+
+The founder requested a light mental model for ordinary readers plus a small expert section. The
+expert material records the hand-written context-free lexer, recursive-descent declaration and
+statement parser, Pratt expression parser, 128-level nesting budget, and the limited current
+diagnostic model without turning the chapter into compiler construction.
 
 ### Type-safety doctrine for Chapter 7
 
