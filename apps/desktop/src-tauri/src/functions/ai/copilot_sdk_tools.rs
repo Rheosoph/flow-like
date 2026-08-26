@@ -1993,7 +1993,7 @@ fn create_write_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
-        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        ToolResultObject::text(result.model_envelope())
     });
     (tool, handler)
 }
@@ -2038,6 +2038,11 @@ fn create_patch_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
+        // Patch is the one lifecycle result that must keep the full `source`: the merged document
+        // is host-computed, and both the workflow loop state (`workflow_tool_record_with_outcome`
+        // reads it into `last_flowscript`/continuation snapshots) and the workspace panel's
+        // `flowscript_workspace` frames have no other way to observe it. Write/check/commit return
+        // the model envelope because their retained source is exactly what the model submitted.
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -2083,7 +2088,7 @@ fn create_check_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
-        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        ToolResultObject::text(result.model_envelope())
     });
     (tool, handler)
 }
@@ -2160,7 +2165,6 @@ fn create_commit_flowscript_tool(
                         "draft_id": draft_id,
                         "revision": expected_revision,
                         "claim_released": released,
-                        "source": result.source,
                         "message": "FlowScript committed without a complete board/revision/claim identity. No commands were transferred; the malformed pre-delivery claim was rolled back."
                     })
                     .to_string(),
@@ -2187,7 +2191,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": result.source,
                             "message": "FlowScript checked successfully, but the host command queue is unavailable. The claim was released; retry this exact revision when the queue is available."
                         })
                         .to_string(),
@@ -2201,7 +2204,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_BATCH_INVALID",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": result.source,
                             "message": "The retained FlowScript command batch was incomplete. No commands were transferred and the claim was released."
                         })
                         .to_string(),
@@ -2218,7 +2220,6 @@ fn create_commit_flowscript_tool(
                                 "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
                                 "draft_id": draft_id,
                                 "revision": expected_revision,
-                                "source": result.source,
                                 "message": "The host command queue could not be locked. The FlowScript claim was released; retry this exact revision."
                             })
                             .to_string(),
@@ -2247,7 +2248,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_TOKEN_CONFLICT",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": source,
                             "message": "This FlowPilot response already carries unresolved commands or another commit token. The newer FlowScript claim was released rather than mixing batches under one review token."
                         })
                         .to_string(),
@@ -2260,9 +2260,10 @@ fn create_commit_flowscript_tool(
                 }
             }
 
-            // FlowScriptDraftResponse skips its host-only commands field, preventing a second,
-            // client-trusted copy of the batch from escaping through the model tool result.
-            ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+            // The envelope skips the host-only commands field, preventing a second, client-trusted
+            // copy of the batch from escaping, and replaces the full source with its size — the
+            // queued document already travels to the host through `queued_flowscript` above.
+            ToolResultObject::text(result.model_envelope())
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
         tool_result
@@ -5261,7 +5262,12 @@ mod tests {
         let written: Value = serde_json::from_str(&written.text_result_for_llm)
             .expect("write returns structured source response");
         assert_eq!(written["revision"], 0);
-        assert_eq!(written["source"], source);
+        assert!(written.get("source").is_none(), "{written:#}");
+        assert_eq!(written["source_bytes"].as_u64(), Some(source.len() as u64));
+        assert_eq!(
+            written["source_lines"].as_u64(),
+            Some(source.lines().count() as u64)
+        );
 
         let checked = call(
             "check_flowscript",
@@ -5270,7 +5276,8 @@ mod tests {
         let checked: Value = serde_json::from_str(&checked.text_result_for_llm)
             .expect("check returns structured source response");
         assert_eq!(checked["status"], "valid", "{checked:#}");
-        assert_eq!(checked["source"], source);
+        assert!(checked.get("source").is_none(), "{checked:#}");
+        assert_eq!(checked["source_bytes"].as_u64(), Some(source.len() as u64));
 
         let committed = call(
             "commit_flowscript",
@@ -5279,7 +5286,8 @@ mod tests {
         let committed: Value = serde_json::from_str(&committed.text_result_for_llm)
             .expect("commit returns structured source response");
         assert_eq!(committed["status"], "queued", "{committed:#}");
-        assert_eq!(committed["source"], source);
+        assert!(committed.get("source").is_none(), "{committed:#}");
+        assert_eq!(committed["source_bytes"].as_u64(), Some(source.len() as u64));
         assert!(committed.get("commands").is_none());
 
         let mut queued = queue.lock().expect("command queue lock");

@@ -3188,14 +3188,16 @@ export class BoardState implements IBoardState {
 	 * Report an apply that did not do what the user asked, so the source that produced it can be
 	 * reviewed. Best-effort in every direction: the source is redacted natively first so nothing
 	 * raw leaves the machine, a signed-out user reports nothing, and a failed report is swallowed —
-	 * losing a capture must never cost someone their edit.
+	 * losing a capture must never cost someone their edit. The typed-IR commit path holds only a
+	 * compiler token, never the draft source, so `flowscript` may be absent there; a supplied but
+	 * empty source still reports nothing.
 	 */
 	private async reportFlowScriptApplyFailure(failure: {
 		appId: string;
 		boardId: string;
 		currentLayer?: string;
 		allowDeletions: boolean;
-		flowscript: string;
+		flowscript?: string;
 		outcome: FlowScriptApplyOutcome;
 		origin: FlowScriptApplyOrigin;
 		errorMessage?: string;
@@ -3205,14 +3207,18 @@ export class BoardState implements IBoardState {
 	}): Promise<void> {
 		const { profile, auth } = this.backend;
 		if (!profile || !auth) return;
-		if (!failure.flowscript.trim()) return;
 
 		try {
-			const redacted = await invoke<{ flowscript: string }>(
-				"redact_flowscript",
-				{ flowscript: failure.flowscript },
-			);
-			if (!redacted.flowscript.trim()) return;
+			let flowscript = "";
+			if (failure.flowscript !== undefined) {
+				if (!failure.flowscript.trim()) return;
+				const redacted = await invoke<{ flowscript: string }>(
+					"redact_flowscript",
+					{ flowscript: failure.flowscript },
+				);
+				if (!redacted.flowscript.trim()) return;
+				flowscript = redacted.flowscript;
+			}
 
 			const report: IFlowScriptApplyFailureReport = {
 				app_id: failure.appId,
@@ -3220,7 +3226,7 @@ export class BoardState implements IBoardState {
 				layer_id: failure.currentLayer,
 				outcome: failure.outcome,
 				origin: failure.origin,
-				flowscript: redacted.flowscript,
+				flowscript,
 				error_message: failure.errorMessage,
 				diagnostics: failure.diagnostics,
 				corrections: failure.corrections,
@@ -3239,6 +3245,48 @@ export class BoardState implements IBoardState {
 		} catch (error) {
 			console.debug("[applyFlowScript] failure report skipped", error);
 		}
+	}
+
+	/**
+	 * Capture a terminal typed-IR commit outcome, classified on the native result before remote
+	 * delivery so a blocked sync is never miscounted as the agent's edit going wrong. Replays and
+	 * already-delivered claims are earlier successes, not failures.
+	 */
+	private captureFlowIrCommitFailure(
+		appId: string,
+		token: FlowIrCommitToken,
+		result: IApplyFlowIrCommitResponse,
+	): void {
+		if (result.replayed || result.code === "IR_COMMIT_DELIVERY_FINALIZED")
+			return;
+		// A user declining the native destructive dialog is a choice, not an agent failure.
+		if (result.code === "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED") return;
+		const outcome =
+			result.status === "applied"
+				? flowScriptApplyOutcome(
+						result.commands.length,
+						result.diagnostics.length,
+					)
+				: result.status === "error"
+					? "error"
+					: "blocked";
+		if (!outcome) return;
+		void this.reportFlowScriptApplyFailure({
+			appId,
+			boardId: token.board_id,
+			allowDeletions: token.requires_destructive_approval ?? false,
+			origin: "agent",
+			outcome,
+			errorMessage:
+				result.status === "applied"
+					? undefined
+					: result.code
+						? `${result.code}: ${result.message}`
+						: result.message,
+			diagnostics: result.diagnostics,
+			corrections: result.corrections ?? [],
+			commandCount: result.commands.length,
+		});
 	}
 
 	async getFlowScript(
@@ -3597,13 +3645,33 @@ export class BoardState implements IBoardState {
 				}
 				deliveryIdentity = boundIdentity;
 			}
-			const result = await invoke<IApplyFlowIrCommitResponse>(
-				"flowpilot_apply_flow_ir_commit",
-				{
+			let result: IApplyFlowIrCommitResponse;
+			try {
+				result = await invoke<IApplyFlowIrCommitResponse>(
+					"flowpilot_apply_flow_ir_commit",
+					{
+						appId,
+						token,
+					},
+				);
+			} catch (error) {
+				void this.reportFlowScriptApplyFailure({
 					appId,
-					token,
-				},
-			);
+					boardId: token.board_id,
+					allowDeletions: token.requires_destructive_approval ?? false,
+					origin: "agent",
+					outcome: "error",
+					errorMessage: getErrorMessage(
+						error,
+						"Unknown typed workflow apply error",
+					),
+					diagnostics: [],
+					corrections: [],
+					commandCount: 0,
+				});
+				throw error;
+			}
+			this.captureFlowIrCommitFailure(appId, token, result);
 			if (result.status !== "applied" || result.commands.length === 0) {
 				return result;
 			}

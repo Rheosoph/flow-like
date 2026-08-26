@@ -50,7 +50,7 @@ mod aot_cache {
 
         let wasm = minimal_wasm();
         let module = Module::new(&engine, &wasm).unwrap();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
 
         cache.save_module(&module, &hash);
         let loaded = cache.load_module(&engine, &hash);
@@ -78,7 +78,7 @@ mod aot_cache {
 
         let wasm = minimal_wasm();
         let module = Module::new(&engine, &wasm).unwrap();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
 
         cache.save_module(&module, &hash);
 
@@ -116,8 +116,12 @@ mod aot_cache {
         let wasm_a = wat::parse_str("(module)").unwrap();
         let wasm_b = wat::parse_str("(module (func))").unwrap();
 
-        let hash_a = blake3::hash(&wasm_a).to_hex().to_string();
-        let hash_b = blake3::hash(&wasm_b).to_hex().to_string();
+        let hash_a = flow_like_storage::blake3::hash(&wasm_a)
+            .to_hex()
+            .to_string();
+        let hash_b = flow_like_storage::blake3::hash(&wasm_b)
+            .to_hex()
+            .to_string();
 
         assert_ne!(
             hash_a, hash_b,
@@ -140,7 +144,7 @@ mod aot_cache {
         // Verify the cache key format includes OS, arch, and wasmtime version
         // so that .cwasm files compiled on one platform can't be loaded on another.
         let wasm = minimal_wasm();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
 
         let tmp = TempDir::new().unwrap();
         let cache = AotCache::new(tmp.path());
@@ -178,7 +182,7 @@ mod aot_cache {
 
         let wasm = minimal_wasm();
         let module = Module::new(&engine, &wasm).unwrap();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
         cache.save_module(&module, &hash);
 
         let modules_dir = tmp.path().join("modules");
@@ -199,7 +203,7 @@ mod aot_cache {
 
         let wasm = minimal_wasm();
         let module = Module::new(&engine, &wasm).unwrap();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
         cache.save_module(&module, &hash);
 
         assert!(tmp.path().join("modules").exists());
@@ -218,7 +222,7 @@ mod aot_cache {
 
         let wasm = minimal_wasm();
         let module = Module::new(&engine, &wasm).unwrap();
-        let hash = blake3::hash(&wasm).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&wasm).to_hex().to_string();
         cache.save_module(&module, &hash);
 
         // Create a different engine with different settings

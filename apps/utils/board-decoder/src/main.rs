@@ -1,8 +1,7 @@
 use clap::Parser;
 use flow_like::flow::board::Board;
 use flow_like::utils::compression::from_compressed;
-use flow_like_types::FromProto;
-use flow_like_types::tokio;
+use flow_like_types_proto::FromProto;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -27,7 +26,7 @@ async fn main() {
     }
 }
 
-async fn translate_board(path: &str) -> flow_like_types::Result<()> {
+async fn translate_board(path: &str) -> anyhow::Result<()> {
     let mut path_buf = PathBuf::from(path);
     let parent = path_buf.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "Parent directory not found")
@@ -41,10 +40,10 @@ async fn translate_board(path: &str) -> flow_like_types::Result<()> {
     let object_store: Arc<dyn flow_like_storage::object_store::ObjectStore> =
         Arc::new(object_store);
     let path = flow_like_storage::Path::from(file_name.to_string_lossy().to_string());
-    let board: flow_like_types::proto::Board = from_compressed(object_store, path).await?;
+    let board: flow_like_types_proto::proto::Board = from_compressed(object_store, path).await?;
     let board = Board::from_proto(board);
     path_buf.set_extension(".board.json");
-    let json = flow_like_types::json::to_string_pretty(&board).map_err(|e| {
+    let json = serde_json::to_string_pretty(&board).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Failed to serialize board: {}", e),

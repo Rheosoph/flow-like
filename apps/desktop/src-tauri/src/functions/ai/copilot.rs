@@ -9877,10 +9877,8 @@ fn workflow_predraft_context_preflight_with_lease(
                         } else {
                             "plan_board_scope"
                         }
-                    } else if state.current_reads > 0 {
-                        "get_declarations"
                     } else {
-                        "get_current_flowscript_then_get_declarations"
+                        "get_declarations"
                     },
                     "inspection_calls": state.predraft_context_reads,
                     "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
@@ -10548,7 +10546,7 @@ fn workflow_tool_preflight_with_args(
                     "code": "FLOWSCRIPT_RETAINED_REVISION_REQUIRED",
                     "retryable": true,
                     "next_action": match state.last_status.as_deref() {
-                        Some("valid") => "commit_flowscript",
+                        Some("valid" | "draft_started" | "draft_updated") => "commit_flowscript",
                         Some("validation_errors" | "error" | "no_changes") => "patch_flowscript",
                         _ => "check_flowscript",
                     },
@@ -11019,7 +11017,7 @@ fn workflow_tool_preflight_with_args(
                     } else {
                         "write_flowscript"
                     },
-                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch/check the retained source, and commit_flowscript."
+                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. The embedded FlowScript render IS the current board. Use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch the retained source, and commit_flowscript once diagnostics are clear."
                 }),
                 true,
             ))
@@ -12334,7 +12332,16 @@ fn workflow_tool_record_with_outcome(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .or_else(|| submitted_flowscript(args).map(str::to_string))
-            .or(interrupted_source);
+            .or(interrupted_source)
+            .or_else(|| {
+                // Envelope results replace `source` with `source_bytes` but never change the
+                // retained bytes, so the last recorded source still describes this revision.
+                parsed
+                    .as_ref()
+                    .is_some_and(|value| value.get("source_bytes").is_some())
+                    .then(|| state.last_flowscript.clone())
+                    .flatten()
+            });
         let current_draft_id = state.flowscript_draft_id.clone();
         state.flowscript_draft_id = response_draft_id
             .clone()
@@ -12865,10 +12872,10 @@ fn flowpilot_mcp_server_instructions<'a>(
     }
 
     if workflow_mutation && has_ui {
-        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
+        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, the FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections.";
     }
     if workflow_mutation {
-        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
+        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. The FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
     }
     match (has_board, has_ui, has_data) {
         (false, true, false) => {
@@ -13734,11 +13741,11 @@ fn build_external_agent_prompt(
         r#"
 THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
-2. Read get_current_flowscript once. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
+2. The system prompt already embeds the current board as anchored FlowScript — that render IS the board, so do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
 3. After any usable declaration result and BEFORE the first source write, call plan_board_scope exactly ONCE. Use one `single` segment for an ordinary edit; split only work too large to compose safely in one pass. Once the host accepts a plan, never call plan_board_scope again unless the host explicitly rejects the plan or a source repair proves the active segment impossible and the tool explicitly permits one revision.
 4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
-5. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
-6. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
+5. If the write/patch result carries diagnostics, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment — a zero-diagnostic write/patch needs no separate check round.
+6. Call commit_flowscript directly at the latest zero-diagnostic revision — commit runs the identical validation inline and returns the same structured validation_errors on failure. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
 7. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
 
 Helper rule: every helper declaration requires the literal keyword `function`, for example `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper. Keep each helper declaration in the same full document as its calls; never invent helper calls and expect them to resolve as catalog nodes. If a helper returns a value, declare a named return signature such as `function classify(...): (isSupport: bool) { ...; return result.value }`.
@@ -13952,7 +13959,7 @@ fn build_external_workflow_continuation_prompt(
     let continuation_action = if typed_mode {
         "Continue only the typed-IR lifecycle selected by the retained state. Repair the same module/draft, validate it, and call commit_flow_ir_draft at the latest revision. Do not switch to FlowScript text or another mutation representation."
     } else if retained_source_mode {
-        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
+        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript and call commit_flowscript at the latest zero-diagnostic revision — commit validates inline and returns the same validation_errors on failure; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
     } else if has_accepted_scope_plan {
         "The host already accepted and retained the scope plan. DO NOT call plan_board_scope again. Call write_flowscript now for the returned active segment, then check and commit according to its strategy_rule."
     } else if snapshot.is_some_and(|state| state.last_declarations.is_some()) {
@@ -15589,7 +15596,7 @@ fn workflow_edit_continuation_prompt(
 {workspace_note}
 {failure_note}
 Do not ask the user to confirm. Do not say "Create draft", "go ahead", "tell me if", or similar.
-Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript, check_flowscript, and end with commit_flowscript creating the exact review claim; UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
+Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript and end with commit_flowscript creating the exact review claim (commit validates inline once diagnostics are clear; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment); UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
 
 Original user request:
 {original_user_prompt}"#
