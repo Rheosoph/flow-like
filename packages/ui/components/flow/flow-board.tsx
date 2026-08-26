@@ -40,6 +40,7 @@ import {
 	Eye,
 	FileCode2Icon,
 	FilesIcon,
+	FlaskConicalIcon,
 	GitBranchIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -177,6 +178,7 @@ import {
 	IValueType,
 	connectPinsCommand,
 	disconnectPinsCommand,
+	discoverBoardTests,
 	moveNodeCommand,
 	moveToLayerCommand,
 	removeCommentCommand,
@@ -245,6 +247,10 @@ import {
 	useAssistantSurface,
 } from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
+import {
+	boardTestSummary,
+	useBoardTestsStore,
+} from "../../state/board-tests-state";
 import { useRequestFabBubble } from "../../state/fab-bubble";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
@@ -267,6 +273,7 @@ import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowPresenceBar } from "./flow-presence-bar";
 import { FlowRuns } from "./flow-runs";
 import { FlowSearch } from "./flow-search";
+import { FlowTests } from "./flow-tests";
 import {
 	type FlowElementOption,
 	createEmptyFlowSelectorData,
@@ -829,12 +836,29 @@ export function FlowBoard({
 		node: INode;
 		payload?: object;
 		isRemote: boolean;
+		/** When set, the prompt hands the saved variables back instead of executing `node`. */
+		resume?: (runtimeVariables?: Record<string, IVariable>) => void;
+		cancel?: () => void;
 	} | null>(null);
 	const deleteSelectionInFlightRef = useRef(false);
 	const [existingRuntimeVars, setExistingRuntimeVars] = useState<
 		Map<string, RuntimeVariableValue>
 	>(new Map());
 	const runtimeVarsContext = useRuntimeVariables();
+	const boardTestEntries = useBoardTestsStore(
+		(state) => state.entries[boardId],
+	);
+	const boardTestNodeIds = useMemo(
+		() =>
+			new Set(
+				discoverBoardTests(board.data?.nodes).map((test) => test.node.id),
+			),
+		[board.data?.nodes],
+	);
+	const boardTestsFailed = useMemo(
+		() => boardTestSummary(boardTestEntries, boardTestNodeIds).failed,
+		[boardTestEntries, boardTestNodeIds],
+	);
 	const colorMode = useMemo(
 		() => (resolvedTheme === "dark" ? "dark" : "light"),
 		[resolvedTheme],
@@ -1395,6 +1419,10 @@ export function FlowBoard({
 		() => surfaceActions.togglePanel("runs"),
 		[surfaceActions],
 	);
+	const toggleTests = useCallback(
+		() => surfaceActions.togglePanel("tests"),
+		[surfaceActions],
+	);
 	const togglePages = useCallback(
 		() => surfaceActions.toggleSidebar("explorer"),
 		[surfaceActions],
@@ -1604,6 +1632,30 @@ export function FlowBoard({
 		setWasmConsentResolve(null);
 	}, [wasmConsentResolve]);
 
+	const buildRuntimeVariablesMap = useCallback(
+		(
+			storedValues: Map<string, RuntimeVariableValue>,
+			isRemote: boolean,
+		): Record<string, IVariable> | undefined => {
+			const runtimeVariables: Record<string, IVariable> = {};
+			for (const variable of runtimeConfiguredVars) {
+				// For remote execution, skip secrets
+				if (isRemote && variable.secret) continue;
+				const storedValue = storedValues.get(variable.id);
+				if (storedValue?.value !== undefined) {
+					runtimeVariables[variable.id] = {
+						...variable,
+						default_value: storedValue.value,
+					};
+				}
+			}
+			return Object.keys(runtimeVariables).length > 0
+				? runtimeVariables
+				: undefined;
+		},
+		[runtimeConfiguredVars],
+	);
+
 	// Check if runtime variables need configuration before execution
 	// Returns { intercepted: false, runtimeVariables: map } if all configured
 	// Returns { intercepted: true } if prompting user for values
@@ -1630,45 +1682,39 @@ export function FlowBoard({
 			if (hasAll) {
 				// All configured - build the runtime variables map
 				const storedValues = await runtimeVarsContext.getValues(appId);
-				const runtimeVariables: Record<string, IVariable> = {};
-
-				for (const variable of runtimeConfiguredVars) {
-					// For remote execution, skip secrets
-					if (isRemote && variable.secret) continue;
-
-					const storedValue = storedValues.get(variable.id);
-					if (storedValue?.value !== undefined) {
-						runtimeVariables[variable.id] = {
-							...variable,
-							default_value: storedValue.value,
-						};
-					}
-				}
-
 				return {
 					intercepted: false,
-					runtimeVariables:
-						Object.keys(runtimeVariables).length > 0
-							? runtimeVariables
-							: undefined,
+					runtimeVariables: buildRuntimeVariablesMap(
+						storedValues,
+						isRemote ?? false,
+					),
 				};
 			}
 
 			// Need to prompt for configuration
 			const existingValues = await runtimeVarsContext.getValues(appId);
 			setExistingRuntimeVars(existingValues);
-			setPendingExecution({ node, payload, isRemote: isRemote ?? false });
+			setPendingExecution((previous) => {
+				previous?.cancel?.();
+				return { node, payload, isRemote: isRemote ?? false };
+			});
 			setRuntimeVarsPromptOpen(true);
 			return { intercepted: true }; // Intercepted
 		},
-		[appId, runtimeConfiguredVars, runtimeVarsContext],
+		[
+			appId,
+			runtimeConfiguredVars,
+			runtimeVarsContext,
+			buildRuntimeVariablesMap,
+		],
 	);
 
 	// Cancel runtime vars prompt
 	const handleRuntimeVarsCancel = useCallback(() => {
 		setRuntimeVarsPromptOpen(false);
+		pendingExecution?.cancel?.();
 		setPendingExecution(null);
-	}, []);
+	}, [pendingExecution]);
 
 	// Internal execution function (called after runtime vars check)
 	const executeBoardInternal = useCallback(
@@ -1927,12 +1973,14 @@ export function FlowBoard({
 
 			// Close prompt and proceed with execution
 			setRuntimeVarsPromptOpen(false);
-			const { node, payload, isRemote } = pendingExecution;
+			const { node, payload, isRemote, resume } = pendingExecution;
 			setPendingExecution(null);
 
 			const varsMap =
 				Object.keys(runtimeVariables).length > 0 ? runtimeVariables : undefined;
-			if (isRemote) {
+			if (resume) {
+				resume(varsMap);
+			} else if (isRemote) {
 				await executeBoardRemoteInternal(node, payload, varsMap);
 			} else {
 				await executeBoardInternal(node, payload, true, varsMap);
@@ -1983,6 +2031,164 @@ export function FlowBoard({
 			}
 		},
 		[checkWasmConsent, checkRuntimeVarsAndExecute, executeBoardRemoteInternal],
+	);
+
+	// One pre-flight for a batch of test runs: WASM consent plus runtime
+	// variables, prompting through the existing dialog when values are missing.
+	const prepareTestRun = useCallback(
+		async (
+			representative: INode,
+		): Promise<{
+			ok: boolean;
+			runtimeVariables?: Record<string, IVariable>;
+		}> => {
+			const wasmOk = await checkWasmConsent();
+			if (!wasmOk) return { ok: false };
+			if (runtimeConfiguredVars.length === 0 || !runtimeVarsContext) {
+				return { ok: true };
+			}
+			const hasAll = await runtimeVarsContext.hasAllValues(
+				appId,
+				runtimeConfiguredVars.map((v) => v.id),
+			);
+			if (!hasAll) {
+				const existingValues = await runtimeVarsContext.getValues(appId);
+				setExistingRuntimeVars(existingValues);
+				return new Promise((resolve) => {
+					setPendingExecution((previous) => {
+						previous?.cancel?.();
+						return {
+							node: representative,
+							isRemote: false,
+							resume: (runtimeVariables) =>
+								resolve({ ok: true, runtimeVariables }),
+							cancel: () => resolve({ ok: false }),
+						};
+					});
+					setRuntimeVarsPromptOpen(true);
+				});
+			}
+			const storedValues = await runtimeVarsContext.getValues(appId);
+			return {
+				ok: true,
+				runtimeVariables: buildRuntimeVariablesMap(storedValues, false),
+			};
+		},
+		[
+			appId,
+			checkWasmConsent,
+			runtimeConfiguredVars,
+			runtimeVarsContext,
+			buildRuntimeVariablesMap,
+		],
+	);
+
+	// Raw run for the Tests panel: no toasts — verdicts surface in the panel.
+	const executeTestNode = useCallback(
+		async (
+			node: INode,
+			runtimeVariables?: Record<string, IVariable>,
+		): Promise<ILogMetadata | undefined> => {
+			const startedAtMicros = Date.now() * 1000;
+			let added = false;
+			let runId = "";
+			let meta: ILogMetadata | undefined;
+			try {
+				meta = await backend.boardState.executeBoard(
+					appId,
+					boardId,
+					{
+						id: node.id,
+						payload: {},
+						runtime_variables: runtimeVariables,
+					},
+					true,
+					(id: string) => {
+						if (added) return;
+						runId = id;
+						added = true;
+						addRun(id, boardId, [node.id]);
+					},
+					(update) => {
+						const runUpdates = update
+							.filter((item) => item.event_type.startsWith("run:"))
+							.map((item) => item.payload);
+						if (runUpdates.length === 0) return;
+						const firstItem = runUpdates[0];
+						if (!added) {
+							runId = firstItem.runId;
+							added = true;
+							addRun(firstItem.runId, boardId, [node.id]);
+						}
+						pushUpdate(firstItem.runId, runUpdates);
+					},
+				);
+			} catch (error) {
+				// Same recovery events the Run button dispatches, so consent
+				// dialogs still open; the test itself reports the error.
+				const oauthError = error as Error & {
+					isOAuthError?: boolean;
+					missingProviders?: unknown[];
+				};
+				if (oauthError.isOAuthError && oauthError.missingProviders) {
+					window.dispatchEvent(
+						new CustomEvent("flow:oauth-required", {
+							detail: {
+								missingProviders: oauthError.missingProviders,
+								appId,
+								boardId,
+								nodeId: node.id,
+								payload: {},
+							},
+						}),
+					);
+				}
+				const rpaPermissionError = error as Error & {
+					isRpaPermissionError?: boolean;
+					permissions?: unknown;
+				};
+				if (rpaPermissionError.isRpaPermissionError) {
+					window.dispatchEvent(
+						new CustomEvent("flow:rpa-permissions-required", {
+							detail: {
+								appId,
+								boardId,
+								nodeId: node.id,
+								payload: {},
+								permissions: rpaPermissionError.permissions,
+							},
+						}),
+					);
+				}
+				throw error;
+			} finally {
+				if (runId) removeRun(runId);
+			}
+			if (meta || !runId) return meta;
+			// Remote backends resolve without metadata — recover it by run id so
+			// the run can still be graded.
+			const runs = await backend.boardState.listRuns(
+				appId,
+				boardId,
+				undefined,
+				startedAtMicros - 60_000_000,
+				undefined,
+				undefined,
+				undefined,
+				0,
+				100,
+			);
+			return runs.find((run) => run.run_id === runId);
+		},
+		[appId, boardId, backend, addRun, pushUpdate, removeRun],
+	);
+
+	const openTestRunLogs = useCallback(
+		(meta: ILogMetadata) => {
+			setCurrentMetadata(meta);
+			surfaceActions.openPanel("traces");
+		},
+		[setCurrentMetadata, surfaceActions],
 	);
 
 	// Listen for OAuth retry events to re-execute after authorization
@@ -3854,6 +4060,13 @@ export function FlowBoard({
 				run: toggleLogs,
 			},
 			{
+				id: "tests",
+				surface: "rail",
+				title: t("tests", "Tests"),
+				icon: FlaskConicalIcon,
+				run: toggleTests,
+			},
+			{
 				id: "inspector",
 				surface: "rail-bottom",
 				title: t("nodeInfo", "Node Info"),
@@ -3924,6 +4137,7 @@ export function FlowBoard({
 					return shell.script;
 				case "runs":
 				case "traces":
+				case "tests":
 				case "problems":
 					return shell.panel === id;
 				case "inspector":
@@ -4140,6 +4354,7 @@ export function FlowBoard({
 		problems: t("problems", "Problems"),
 		runs: t("runs", "Runs"),
 		traces: t("logs", "Logs"),
+		tests: t("tests", "Tests"),
 		script: t("flowscript", "FlowScript"),
 		inspector: t("nodeInfo", "Node Info"),
 		flowpilot: t("flowpilot", "FlowPilot"),
@@ -4174,6 +4389,19 @@ export function FlowBoard({
 				<p className="p-3 text-xs text-muted-foreground">
 					{t("noLogs", "No Logs")}
 				</p>
+			)
+		) : shell.panel === "tests" ? (
+			board.data && (
+				<FlowTests
+					appId={appId}
+					boardId={boardId}
+					nodes={board.data.nodes}
+					onFocusNode={focusNode}
+					onOpenRunLogs={openTestRunLogs}
+					prepareRun={prepareTestRun}
+					executeTest={executeTestNode}
+					variant="panel"
+				/>
 			)
 		) : (
 			<ul className="flex h-full flex-col overflow-auto p-1">
@@ -4355,6 +4583,12 @@ export function FlowBoard({
 								},
 								{ id: "runs", label: t("runs", "Runs") },
 								{ id: "traces", label: t("logs", "Logs") },
+								{
+									id: "tests",
+									label: t("tests", "Tests"),
+									badge: boardTestsFailed,
+									badgeTone: "danger",
+								},
 							]}
 							active={shell.panel}
 							onSelect={(tab) =>
@@ -4744,7 +4978,8 @@ export function FlowBoard({
 						? secondaryPane
 						: shell.mobile === "problems" ||
 								shell.mobile === "runs" ||
-								shell.mobile === "traces"
+								shell.mobile === "traces" ||
+								shell.mobile === "tests"
 							? panelBody
 							: sidebarBody}
 			</BoardMobileHost>
@@ -4778,7 +5013,11 @@ export function FlowBoard({
 			{/* Runtime Variables Prompt */}
 			<RuntimeVariablesPrompt
 				open={runtimeVarsPromptOpen}
-				onOpenChange={setRuntimeVarsPromptOpen}
+				onOpenChange={(open) => {
+					// ESC / X / overlay dismissal must settle a pending resume promise.
+					if (open) setRuntimeVarsPromptOpen(true);
+					else handleRuntimeVarsCancel();
+				}}
 				variables={runtimeConfiguredVars}
 				existingValues={existingRuntimeVars}
 				onSave={handleRuntimeVarsSave}

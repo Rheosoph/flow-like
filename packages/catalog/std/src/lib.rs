@@ -22,6 +22,7 @@ pub mod logging;
 pub mod math;
 pub mod notifications;
 pub mod structs;
+pub mod testing;
 pub mod utils;
 pub mod variables;
 

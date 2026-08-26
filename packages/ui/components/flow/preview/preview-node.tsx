@@ -5,6 +5,7 @@ import { useDebounce } from "@uidotdev/usehooks";
 import type { Node, NodeProps } from "@xyflow/react";
 import {
 	ClockIcon,
+	FlaskConicalIcon,
 	PlayCircleIcon,
 	SquareCheckIcon,
 	WorkflowIcon,
@@ -12,6 +13,7 @@ import {
 import { useTheme } from "next-themes";
 import { useEffect, useRef, useState } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
+import { isTestEventNode } from "../../../lib/board-tests";
 import { toastSuccess } from "../../../lib/messages";
 import type { INode } from "../../../lib/schema/flow/node";
 import type { IPin } from "../../../lib/schema/flow/pin";
@@ -186,16 +188,19 @@ export function PreviewFlowNode(props: NodeProps<FlowNode>) {
 					),
 				)}
 			<div
-				className={`absolute top-0 left-0 right-0 h-4 gap-1 mt-0! flex flex-row items-center border-b border-b-foreground p-1 justify-between rounded-md rounded-b-none bg-card ${!isExec && "bg-linear-to-r  from-card via-emerald-300/50 to-emerald-300 dark:via-tertiary/50 dark:to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-rose-300/50 to-rose-300 dark:via-primary/50 dark:to-primary"}`}
+				className={`absolute top-0 left-0 right-0 h-4 gap-1 mt-0! flex flex-row items-center border-b border-b-foreground p-1 justify-between rounded-md rounded-b-none bg-card ${!isExec && "bg-linear-to-r  from-card via-emerald-300/50 to-emerald-300 dark:via-tertiary/50 dark:to-tertiary"} ${props.data.node.start && (isTestEventNode(props.data.node) ? "bg-linear-to-r  from-card via-cyan-300/50 to-cyan-300 dark:via-cyan-500/50 dark:to-cyan-500" : "bg-linear-to-r  from-card via-rose-300/50 to-rose-300 dark:via-primary/50 dark:to-primary")}`}
 			>
 				<div className={"flex flex-row items-center mt-0! gap-1"}>
-					{props.data.node?.icon && (
+					{isTestEventNode(props.data.node) ? (
+						<FlaskConicalIcon className="w-2 h-2" />
+					) : props.data.node?.icon ? (
 						<DynamicImage
 							className="w-2 h-2 bg-foreground"
 							url={props.data.node?.icon}
 						/>
+					) : (
+						<WorkflowIcon className="w-2 h-2" />
 					)}
-					{!props.data.node?.icon && <WorkflowIcon className="w-2 h-2" />}
 					<small className="font-medium leading-none mt-0!">
 						{props.data.node?.friendly_name}
 					</small>

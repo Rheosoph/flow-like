@@ -261,7 +261,11 @@ pub const VALUE_TYPE_NAMESPACES: &[(&str, &str, &str)] = &[
     ("map", "*", "HashMap"),
     ("set", "*", "HashSet"),
     ("struct", "Struct", "Normal"),
-    ("bytes", "Byte", "Normal"),
+    // A SCALAR byte is its own class. Sharing the `bytes` class with `Byte/Array` meant a single
+    // byte dispatched to buffer methods (`sentinel.toHex()`) and only failed later at connection
+    // validation with a pin-type error, instead of "no method `toHex` on `byte`" up front. No
+    // catalog node takes a scalar-byte receiver, so nothing resolves through this today.
+    ("byte", "Byte", "Normal"),
     ("path", "PathBuf", "Normal"),
     ("datetime", "Date", "Normal"),
 ];

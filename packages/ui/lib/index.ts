@@ -18,6 +18,7 @@ export * from "./platform";
 export * from "./page-context";
 export * from "./runtime-vars-utils";
 export * from "./board-metrics";
+export * from "./board-tests";
 export * from "./observe-resize";
 
 export * from "./bit/bit";

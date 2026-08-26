@@ -11,7 +11,7 @@ export type IBoardSidebarView =
 	| "comments";
 
 /** A tab of the bottom panel. */
-export type IBoardPanelTab = "problems" | "runs" | "traces";
+export type IBoardPanelTab = "problems" | "runs" | "traces" | "tests";
 
 /** A view stacked in the secondary sidebar. */
 export type IBoardSecondaryView = "inspector" | "flowpilot";

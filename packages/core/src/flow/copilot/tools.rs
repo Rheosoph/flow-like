@@ -829,7 +829,7 @@ EXAMPLES: search_by_pin("String", true) finds nodes with String input pins"#.to_
                 "properties": {
                     "pin_type": {
                         "type": "string",
-                        "description": "Data type: String, Integer, Float, Boolean, Struct, Generic, Execution"
+                        "description": "Data type: String, Integer, Float, Boolean, Struct, Generic, Date, PathBuf, Byte, Execution"
                     },
                     "is_input": {
                         "type": "boolean",
@@ -1411,7 +1411,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                 {
                                     "properties": {
                                         "command_type": { "const": "AddNode" },
-                                        "node_type": { "type": "string", "description": "EXACT node_type from catalog_search (e.g., 'flow_like_catalog_nodes::example::Example')" },
+                                        "node_type": { "type": "string", "description": "EXACT node_type from catalog_search (e.g., 'string_contains', 'control_branch')" },
                                         "ref_id": { "type": "string", "description": "Reference ID like '$0', '$1' to use in ConnectPins/UpdateNodePin" },
                                         "position": {
                                             "type": "object",
@@ -1888,6 +1888,39 @@ impl Tool for QueryExecutionLogsTool {
 
     type Error = RuntimeVerificationToolError;
     type Args = QueryExecutionLogsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        runtime_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let arguments = runtime_tool_arguments(Self::NAME, args)?;
+        Ok(self.bridge.call(Self::NAME, arguments).await)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RunBoardTestsArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "appId")]
+    pub app_id: Option<String>,
+    #[serde(alias = "boardId")]
+    pub board_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "maxTests")]
+    pub max_tests: Option<u32>,
+}
+
+pub struct RunBoardTestsTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for RunBoardTestsTool {
+    const NAME: &'static str = "run_board_tests";
+
+    type Error = RuntimeVerificationToolError;
+    type Args = RunBoardTestsArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -3803,6 +3836,12 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
             .and_then(|value| value.as_str())
             .map(|node_id| format!("Executing workflow from node {node_id}..."))
             .unwrap_or_else(|| "Executing workflow from board node...".to_string()),
+        "run_board_tests" => arguments
+            .get("board_id")
+            .or_else(|| arguments.get("boardId"))
+            .and_then(|value| value.as_str())
+            .map(|board_id| format!("Running test events on board {board_id}..."))
+            .unwrap_or_else(|| "Running board test events...".to_string()),
         "query_execution_logs" => arguments
             .get("run_id")
             .or_else(|| arguments.get("runId"))

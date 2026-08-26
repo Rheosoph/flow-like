@@ -34,6 +34,10 @@ import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
 import { Container } from "./container";
+import {
+	isSafeEmbeddedExternalHref,
+	resolveEmbeddedPageNavigation,
+} from "./embedded-page-navigation";
 import { Header } from "./header";
 import { InterfaceLoadError } from "./interface-load-error";
 import type {
@@ -95,6 +99,12 @@ export interface UsePageContentProps {
 	appId?: string | null;
 	routePath?: string | null;
 	eventId?: string | null;
+	queryParams?: Record<string, string>;
+	/**
+	 * Whether this interface is on screen. An embedded runtime that parks its host keeps the
+	 * page mounted, so timed page work has to be told to idle rather than inferring it.
+	 */
+	active?: boolean;
 	embedded?: boolean;
 	/** Use an explicit event target before resolving the current route. Route navigation can
 	 * restore normal route resolution by sending a null event id. */
@@ -102,7 +112,10 @@ export interface UsePageContentProps {
 	onNavigate?: (next: {
 		routePath?: string | null;
 		eventId?: string | null;
+		queryParams?: Record<string, string>;
 	}) => void;
+	/** Report the Event and page that actually resolved after route navigation. */
+	onResolvedPage?: (target: { eventId: string; pageId: string }) => void;
 }
 
 /**
@@ -238,9 +251,12 @@ export function UsePageContent({
 	appId: appIdProp,
 	routePath: routePathProp,
 	eventId: eventIdProp,
+	queryParams: queryParamsProp,
+	active = true,
 	embedded = false,
 	eventIdTakesPrecedence = false,
 	onNavigate,
+	onResolvedPage,
 }: Readonly<UsePageContentProps>) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
@@ -254,6 +270,12 @@ export function UsePageContent({
 	const appId = appIdProp ?? searchParams.get("id");
 	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
 	const eventId = eventIdProp ?? searchParams.get("eventId");
+	// A URL that names only an Event is a direct Event target. The implicit "/" fallback must
+	// not replace it with an unrelated default route. When both are explicit, the route keeps
+	// precedence unless an embedded caller opts into Event-first resolution.
+	const preferEventId =
+		eventIdTakesPrecedence ||
+		Boolean(eventId && routePathProp == null && !searchParams.has("route"));
 	const authCheckPending = Boolean(appId && !embedded && auth.isLoading);
 
 	const headerRef = useRef<IToolBarActions>(
@@ -559,9 +581,9 @@ export function UsePageContent({
 	}, [redirectCheckPending, shouldRedirectToStore, goToStore]);
 
 	const effectiveRouteEvent = useMemo(() => {
-		if (eventIdTakesPrecedence && eventId) return null;
+		if (preferEventId && eventId) return null;
 		return canUseEvent(routeEvent) ? routeEvent : null;
-	}, [canUseEvent, eventId, eventIdTakesPrecedence, routeEvent]);
+	}, [canUseEvent, eventId, preferEventId, routeEvent]);
 
 	const effectiveRouteMapping = useMemo(() => {
 		return effectiveRouteEvent ? routeMapping : null;
@@ -663,6 +685,11 @@ export function UsePageContent({
 		appId && pageEventId && pageId
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
+
+	useEffect(() => {
+		if (!pageEventId || !pageId) return;
+		onResolvedPage?.({ eventId: pageEventId, pageId });
+	}, [onResolvedPage, pageEventId, pageId]);
 	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
 	// Auth/profile initialization can refresh the same route/event objects after
 	// an early native page read failed. Use the query generation to retry even
@@ -959,6 +986,32 @@ export function UsePageContent({
 		[appId, embedded, onNavigate, router],
 	);
 
+	const handleEmbeddedNavigation = useCallback(
+		(message: Parameters<typeof resolveEmbeddedPageNavigation>[0]) => {
+			if (!appId || !embedded) return;
+			const next = resolveEmbeddedPageNavigation(
+				message,
+				appId,
+				queryParamsProp ?? {},
+			);
+			if (next.externalHref) {
+				if (
+					typeof window !== "undefined" &&
+					isSafeEmbeddedExternalHref(next.externalHref, window.location.href)
+				) {
+					window.open(next.externalHref, "_blank", "noopener,noreferrer");
+				}
+				return;
+			}
+			onNavigate?.({
+				...(next.routePath !== undefined ? { routePath: next.routePath } : {}),
+				...(next.eventId !== undefined ? { eventId: next.eventId } : {}),
+				queryParams: next.queryParams,
+			});
+		},
+		[appId, embedded, onNavigate, queryParamsProp],
+	);
+
 	// --- Render logic ---
 
 	// A silent token renewal or a background access re-check must not tear down an
@@ -1002,7 +1055,13 @@ export function UsePageContent({
 							appId={appId}
 							event={pageEvent}
 							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
+							route={effectiveRouteMapping?.path ?? routePath}
 							page={pageData}
+							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
+							active={active}
+							onNavigationMessage={
+								embedded ? handleEmbeddedNavigation : undefined
+							}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
 						/>
@@ -1115,6 +1174,12 @@ export function UsePageContent({
 		isOnline,
 		isPagePending,
 		pageEvent,
+		effectiveRouteMapping,
+		routePath,
+		embedded,
+		queryParamsProp,
+		active,
+		handleEmbeddedNavigation,
 		effectiveRouteEvent,
 		sortedEvents,
 		activeEvent,
@@ -1132,8 +1197,9 @@ export function UsePageContent({
 		return <>{notFound ?? <NoDefaultInterface appId="" />}</>;
 	}
 
+	const Root = embedded ? "div" : "main";
 	return (
-		<main className="flex flex-col h-full overflow-hidden flex-1 min-h-0">
+		<Root className="flex flex-col h-full overflow-hidden flex-1 min-h-0">
 			<Container ref={sidebarRef}>
 				<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
 					{shouldRenderHeader ? (
@@ -1153,6 +1219,6 @@ export function UsePageContent({
 					{inner}
 				</div>
 			</Container>
-		</main>
+		</Root>
 	);
 }

@@ -2884,6 +2884,20 @@ declare namespace string {
     function sorensenDiceCoefficient(this: string, { string1: string, string2: string }): float;
 }
 
+declare namespace test {
+    // === Utils/Testing ===
+
+    /**
+     * Asserts a condition inside a flow. On pass it logs `ASSERT_OK {label}` (Info) and continues; on fail it logs `ASSERT_FAIL {label} {details}` (Error) and halts the run with an error. Test runners grep these stable marker prefixes. Name test events with a `test` prefix so they are discoverable by test tooling.
+     * @node flow_assert @alias flowAssert
+     * @param condition (optional) — The condition that must hold.
+     * @param label (optional) — Stable name for this assertion, echoed in the ASSERT_OK/ASSERT_FAIL log markers.
+     * @param details (optional) — Optional context logged when the assertion fails.
+     * @impure has side effects / drives control flow
+     */
+    function assert({ condition?: bool, label?: string, details?: any }): void;
+}
+
 declare namespace types {
     // === Utils/Types ===
 

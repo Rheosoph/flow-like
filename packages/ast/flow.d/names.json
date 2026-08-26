@@ -9260,6 +9260,15 @@
     "class": null,
     "category": "Utils/Math/Vector"
   },
+  "flow_assert": {
+    "qualified": "test::assert",
+    "namespace": "test",
+    "alias": "assert",
+    "flat": "flowAssert",
+    "receiver": null,
+    "class": null,
+    "category": "Utils/Testing"
+  },
   "flush_local_db": {
     "qualified": "db::flush",
     "namespace": "db",

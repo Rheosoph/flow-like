@@ -1372,23 +1372,24 @@ declare namespace df {
     function mountAthenaQuery(this: DataFusionSession, { session: Struct, s3Path: string, region?: string, credentialMode?: string, accessKeyId: string, secretAccessKey: string, sessionToken: string, tableName: string, format?: string }): Struct;
 
     /**
-     * Register an AWS Athena table in DataFusion. Query S3 data via Athena's catalog. Supports explicit credentials or environment variables (including Lambda IAM roles).
+     * Register an AWS Athena table for federated queries via ODBC. Query data in S3 using serverless SQL.
      * @node df_register_athena @receiver session @alias dfRegisterAthena
-     * @param session — DataFusion session to register the table in (receiver: `this` in `x.registerAthena(...)`)
-     * @param region (optional) — AWS region where Athena is configured
-     * @param credentialMode (optional) — How to authenticate: 'explicit' (access keys), 'environment' (env vars/Lambda IAM role/profile via AWS_PROFILE env var)
-     * @param accessKeyId — AWS access key ID (only used when credential_mode is 'explicit')
-     * @param secretAccessKey — AWS secret access key (only used when credential_mode is 'explicit')
-     * @param sessionToken — Optional AWS session token for temporary credentials
-     * @param catalog (optional) — Athena data catalog name (default: AwsDataCatalog)
-     * @param athenaDatabase — Database name in Athena
-     * @param athenaTable — Table name in Athena to query
-     * @param outputLocation — S3 location for query results (e.g., s3://my-bucket/athena-results/)
-     * @param tableName — Name to register the table as in DataFusion
-     * @returns sessionOut — DataFusion session with registered table
+     * @param session — DataFusion session (receiver: `this` in `x.registerAthena(...)`)
+     * @param region (optional) — AWS region (e.g., us-east-1)
+     * @param accessKeyId — AWS Access Key ID
+     * @param secretAccessKey — AWS Secret Access Key
+     * @param s3OutputLocation — S3 path for query results (e.g., s3://my-bucket/athena-results/)
+     * @param catalog (optional) — Athena data catalog name
+     * @param database — Athena/Glue database name
+     * @param sourceTable — Name of the table in Athena
+     * @param tableName — Name to register in DataFusion
+     * @param workgroup (optional) — Athena workgroup (optional)
+     * @param odbcDriver (optional) — Simba Athena ODBC driver name/path
+     * @returns sessionOut — DataFusion session
+     * @returns connectionInfo — Connection details (without secrets)
      * @impure has side effects / drives control flow
      */
-    function registerAthena(this: DataFusionSession, { session: Struct, region?: string, credentialMode?: string, accessKeyId: string, secretAccessKey: string, sessionToken: string, catalog?: string, athenaDatabase: string, athenaTable: string, outputLocation: string, tableName: string }): Struct;
+    function registerAthena(this: DataFusionSession, { session: Struct, region?: string, accessKeyId: string, secretAccessKey: string, s3OutputLocation: string, catalog?: string, database: string, sourceTable: string, tableName: string, workgroup?: string, odbcDriver?: string }): { sessionOut: Struct, connectionInfo: string };
 
     /**
      * Register a Google BigQuery table or query result into a DataFusion session. Takes a GcpProvider for authentication — pair it with the GCP Provider node.

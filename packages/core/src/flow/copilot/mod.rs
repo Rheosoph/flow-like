@@ -96,7 +96,8 @@ pub use tools::{
     GetCurrentFlowScriptTool, GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsArgs,
     GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool, ModelFacingEmitCommandsTool,
     PatchFlowScriptTool, PlanBoardScopeTool, QueryExecutionLogsArgs, QueryExecutionLogsTool,
-    QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool,
+    QueryLogsArgs, QueryLogsTool, RunBoardTestsArgs, RunBoardTestsTool, SearchArgs,
+    SearchByPinArgs, SearchByPinTool,
     SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool, ThinkingArgs,
     UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
     build_find_connectable_nodes_output, build_list_board_nodes_output, build_node_details_output,
@@ -341,6 +342,7 @@ pub fn workflow_authoring_defers_runtime_tool(tool_name: &str) -> bool {
         "execute_event"
             | "execute_node"
             | "query_execution_logs"
+            | "run_board_tests"
             | "interact_app_page"
             | "call_app_chat"
     )
@@ -1051,6 +1053,9 @@ impl Copilot {
                     })
                     .tool(QueryExecutionLogsTool {
                         bridge: bridge.clone(),
+                    })
+                    .tool(RunBoardTestsTool {
+                        bridge: bridge.clone(),
                     });
             }
         }
@@ -1157,7 +1162,8 @@ impl Copilot {
 
         let mut full_response = String::new();
         let mut all_commands: Vec<BoardCommand> = Vec::new();
-        let mut iteration_budget = DEFAULT_WORKFLOW_ITERATION_BUDGET;
+        let mut iteration_budget = workflow_iteration_budget(board.nodes.len());
+        let mut progress_iteration_extension_granted = false;
         let max_discovery_rounds_before_emit = 4u64;
         let mut plan_step_counter = 0u32;
         const MAX_INVALID_FLOWSCRIPT_ATTEMPTS: u8 = 5;
@@ -2052,7 +2058,20 @@ impl Copilot {
 
             // Continue to next iteration (agent will see tool results and continue)
             if iteration + 1 >= iteration_budget {
-                break;
+                if !progress_iteration_extension_granted
+                    && workflow_session_is_progressing(workflow_session.as_ref())
+                {
+                    progress_iteration_extension_granted = true;
+                    iteration_budget = iteration_budget
+                        .saturating_add(PROGRESS_ITERATION_EXTENSION)
+                        .min(MAX_TYPED_IR_ITERATION_BUDGET);
+                    flowpilot_debug_log!(
+                        "[Copilot] Round budget exhausted while the session ledger shows progress; granting one {PROGRESS_ITERATION_EXTENSION}-round extension"
+                    );
+                }
+                if iteration + 1 >= iteration_budget {
+                    break;
+                }
             }
         }
 
@@ -2544,7 +2563,7 @@ impl Copilot {
                 execute_workflow_context_bridge_tool(self.runtime_bridge.as_ref(), name, arguments)
                     .await
             }
-            "execute_event" | "execute_node" | "query_execution_logs" => {
+            "execute_event" | "execute_node" | "query_execution_logs" | "run_board_tests" => {
                 execute_runtime_bridge_tool(self.runtime_bridge.as_ref(), name, arguments).await
             }
             "query_logs" => {
@@ -3747,6 +3766,31 @@ fn typed_ir_iteration_budget(module_count: usize) -> u64 {
         .clamp(MIN_TYPED_IR_ITERATION_BUDGET, MAX_TYPED_IR_ITERATION_BUDGET)
 }
 
+/// Baseline round budget scaled by board size: editing a large board takes more rounds even when
+/// every round makes progress. Small boards keep the historical default; the hard loop ceiling
+/// still bounds everything.
+fn workflow_iteration_budget(node_count: usize) -> u64 {
+    DEFAULT_WORKFLOW_ITERATION_BUDGET
+        .saturating_add((node_count as u64) / 8)
+        .clamp(
+            DEFAULT_WORKFLOW_ITERATION_BUDGET,
+            MAX_TYPED_IR_ITERATION_BUDGET,
+        )
+}
+
+/// Rounds granted by the one progress-based budget re-arm at exhaustion.
+const PROGRESS_ITERATION_EXTENSION: u64 = 6;
+
+/// Whether the shared session ledger says the loop is still converging: the most recent attempt
+/// made forward progress and no circuit is open. Circling loops (open circuit, repeated
+/// strategies, zero progress) never qualify — those cut-offs stay exactly as strict as before.
+fn workflow_session_is_progressing(session: Option<&Arc<StdMutex<WorkflowSession>>>) -> bool {
+    session
+        .and_then(|session| session.lock().ok())
+        .map(|session| session.is_progressing())
+        .unwrap_or(false)
+}
+
 fn typed_ir_phase_after_tool_result(
     current: TypedIrWatchdogPhase,
     tool_name: &str,
@@ -4082,7 +4126,12 @@ mod runtime_bridge_tests {
 
     #[test]
     fn runtime_verification_waits_for_the_authoring_turn_to_be_applied() {
-        for tool_name in ["execute_event", "execute_node", "query_execution_logs"] {
+        for tool_name in [
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+            "run_board_tests",
+        ] {
             assert!(workflow_authoring_defers_runtime_tool(tool_name));
         }
         assert!(!workflow_authoring_defers_runtime_tool("get_declarations"));

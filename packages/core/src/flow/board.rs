@@ -2507,29 +2507,17 @@ impl Board {
             }
         } else {
             let required_ids = self.get_required_element_ids();
-            let component_ids: std::collections::HashSet<String> = required_ids
-                .iter()
-                .filter_map(|id| {
-                    if id.starts_with(&format!("{}/", page_id)) {
-                        Some(
-                            id.strip_prefix(&format!("{}/", page_id))
-                                .unwrap()
-                                .to_string(),
-                        )
-                    } else if !id.contains('/') {
-                        Some(id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
 
+            // A ref prefixed with another page's id still ships this page's component of the
+            // same name, so flows written against one page resolve on every page that has
+            // the element.
             for component in &page.components {
-                if component_ids.contains(&component.id) {
-                    let full_id = format!("{}/{}", page_id, component.id);
-                    if let Ok(value) = flow_like_types::json::to_value(component) {
-                        elements.insert(full_id, value);
-                    }
+                let suffix = format!("/{}", component.id);
+                let required = required_ids
+                    .iter()
+                    .any(|id| *id == component.id || id.ends_with(&suffix));
+                if required && let Ok(value) = flow_like_types::json::to_value(component) {
+                    elements.insert(format!("{}/{}", page_id, component.id), value);
                 }
             }
         }

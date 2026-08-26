@@ -24,6 +24,12 @@ export {
 	WILDCARD_EVENT,
 } from "./event-handlers";
 export {
+	type A2UINavigationMessage,
+	type A2UINavigationMessageInterceptor,
+	createNavigateToMessage,
+	interceptA2UINavigationMessage,
+} from "./navigation-message";
+export {
 	microWidgetHasInstance,
 	microWidgetQuery,
 	microWidgetValuesKey,

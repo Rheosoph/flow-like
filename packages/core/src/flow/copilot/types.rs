@@ -37,8 +37,15 @@ pub struct NodeMetadata {
 }
 
 impl NodeMetadata {
+    /// The qualified FlowScript spelling (`ns::alias`), when both parts are known.
+    pub fn qualified_spelling(&self) -> Option<String> {
+        let namespace = self.namespace.as_deref().filter(|ns| !ns.is_empty())?;
+        let alias = self.alias.as_deref().filter(|alias| !alias.is_empty())?;
+        Some(format!("{}::{alias}", namespace.replace('.', "::")))
+    }
+
     /// Convert to a minimal string format for token efficiency
-    /// Format: "node_type: friendly_name - description (truncated)"
+    /// Format: "ns::alias [node_type]: friendly_name - description (truncated)"
     pub fn to_compact(&self) -> String {
         // Truncate description to first ~50 chars
         let desc = if self.description.chars().count() > 50 {
@@ -48,7 +55,15 @@ impl NodeMetadata {
             self.description.clone()
         };
 
-        format!("{}: {} - {}", self.name, self.friendly_name, desc)
+        match self.qualified_spelling() {
+            Some(qualified) if qualified != self.name => {
+                format!(
+                    "{qualified} [{}]: {} - {}",
+                    self.name, self.friendly_name, desc
+                )
+            }
+            _ => format!("{}: {} - {}", self.name, self.friendly_name, desc),
+        }
     }
 
     /// Get detailed pin information (only call when needed)

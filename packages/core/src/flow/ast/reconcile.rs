@@ -1030,10 +1030,12 @@ fn reconcile_inner(
         );
     }
 
-    // Layer-size gate LAST, over the merged command set: a violating edit queues nothing.
+    // Layer size is ADVICE, not a gate. A crowded layer is a readability and performance
+    // problem, not a correctness one, and refusing the whole edit over it stranded authors with
+    // a document that could not be applied at all — the edit was rejected wholesale rather than
+    // landing with a note. Report it as a correction so the work still applies.
     if let Some(violations) = layer_node_limit_violations(existing, &result.commands) {
-        result.commands.clear();
-        result.diagnostics.extend(violations);
+        result.corrections.extend(violations);
     }
 
     result.corrections.sort();
@@ -1760,9 +1762,9 @@ fn bridge_removed_exec_chains(
     }
 }
 
-/// Enforce [`MAX_NODES_PER_LAYER`]: existing per-layer populations plus the edit's additions
-/// (minus its removals) must stay within the cap. Returns violation diagnostics, or `None` when
-/// the edit fits.
+/// Check the [`MAX_NODES_PER_LAYER`] guideline: existing per-layer populations plus the edit's
+/// additions (minus its removals). Returns advisory messages, or `None` when the edit fits.
+/// This is a lint, NOT a gate — an over-budget edit still applies.
 fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> Option<Vec<String>> {
     let mut counts: HashMap<Option<String>, i64> = HashMap::new();
     let mut layer_names: HashMap<String, String> = HashMap::new();
@@ -1850,7 +1852,7 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
                 None => "the root layer".to_string(),
             };
             format!(
-                "this edit would leave {scope} with {count} nodes (max {MAX_NODES_PER_LAYER}). Nothing was queued. Split the logic into smaller `function name(...) {{ ... }}` declarations — each function layer has its own {MAX_NODES_PER_LAYER}-node budget — and call them instead"
+                "{scope} now holds {count} nodes, over the {MAX_NODES_PER_LAYER}-node guideline. The edit was applied. Consider splitting the logic into smaller `function name(...) {{ ... }}` declarations — each function layer has its own budget — and calling them instead"
             )
         })
         .collect();
@@ -8759,6 +8761,7 @@ impl<'a> StructuralPlanner<'a> {
         let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
         self.check_required_inputs_after_planning(call, &entity, &meta);
         self.specialize_container_element_output(&mut entity, call);
+        self.specialize_struct_field_output(&mut entity, call);
         self.synthesize_schema_driven_outputs(&mut entity, call);
 
         Some((entity, input_sources))
@@ -8900,6 +8903,48 @@ impl<'a> StructuralPlanner<'a> {
     /// the container at runtime. The planner has to do the same, or an element read is `Generic`
     /// forever — `map::get(...).value == "x"` then reports "ambiguous operand type" even though
     /// the map is declared `Map<string, string>`.
+    /// `struct::get(struct, field).value` is declared `Generic`; its real type is the named
+    /// property of the struct's schema. Without this a field read off a typed struct stays
+    /// `Generic` forever and anything downstream that needs an exact contract — `array::sumField`,
+    /// a function return pin — refuses the connection.
+    fn specialize_struct_field_output(&mut self, entity: &mut NodeEntity, call: &Call) {
+        let is_struct_get =
+            matches!(&entity, NodeEntity::New { meta, .. } if meta.name == "struct_get");
+        if !is_struct_get {
+            return;
+        }
+        let field = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("field", &arg.name))
+            .and_then(|arg| literal_expr_to_value(&arg.value))
+            .and_then(|value| value.as_str().map(str::to_string));
+        let schema = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("struct", &arg.name))
+            .and_then(|arg| self.expr_receiver_hint(&arg.value))
+            .and_then(|hint| hint.schema);
+        let (Some(field), Some(schema)) = (field, schema) else {
+            return;
+        };
+        let Some(property) = schema_property_hint(&schema, &field) else {
+            return;
+        };
+        if let NodeEntity::New { meta, .. } = entity {
+            for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "value") {
+                pin.data_type = property.data_type.clone();
+                pin.value_type = property.value_type.clone();
+                // Deliberately NOT the property's schema. Refining the type is what downstream
+                // contracts need; attaching a schema as well would turn a previously permissive
+                // "only one side declares a contract" connection into a strict two-contract
+                // comparison, and refuse edges that are fine (a struct field feeding a pin that
+                // enforces a different named shape).
+                pin.is_generic = property.data_type == "Generic";
+            }
+        }
+    }
+
     fn specialize_container_element_output(&mut self, entity: &mut NodeEntity, call: &Call) {
         const CONTAINER_ELEMENT_OUTPUTS: &[(&str, &str, &str)] = &[
             ("map_get", "map_in", "value"),
@@ -11266,7 +11311,18 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     SymbolValue::Literal(_) => return None,
                 };
-                match self.resolve_entity_output_pin(&source.node, Some(pin)) {
+                // Only a symbol that is NOT already narrowed to one output pin can select a
+                // sibling output with `.field`. A function parameter, a destructured binding or a
+                // `for…of` element already names its pin, so `x.field` on one of those is a struct
+                // DATA key — resolving it as an output pin let a function's own RETURN pin shadow
+                // a field of its parameter (`raw.stops` inside `normalize(raw): (stops, …)`).
+                // `const x = call(...)` binds `output_pin: None`, so `x.response` still works.
+                match source
+                    .output_pin
+                    .is_none()
+                    .then(|| self.resolve_entity_output_pin(&source.node, Some(pin)))
+                    .flatten()
+                {
                     Some(output) => {
                         source.output_pin = Some(output);
                         Some(SymbolValue::Source(source))
@@ -12297,23 +12353,27 @@ impl<'a> StructuralPlanner<'a> {
                         .map(|pin| pin.name.clone()),
                 }
             }
-            NodeEntity::Existing(id) => self.resolve_source_output_pin(source).or_else(|| {
-                // Multi-output live node without a default alias: the consuming pin's type can
-                // still disambiguate (e.g. `return user` into a `bool` return pin selects the one
-                // Boolean output).
-                let node = find_board_node(self.existing, id)?;
-                let meta = node_to_metadata(node);
-                let compatible: Vec<&PinMetadata> = meta
-                    .outputs
-                    .iter()
-                    .filter(|pin| pin.data_type != "Execution")
-                    .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
-                    .collect();
-                match compatible.as_slice() {
-                    [pin] => Some(pin.name.clone()),
-                    _ => None,
-                }
-            }),
+            NodeEntity::Existing(id) => {
+                // The consuming pin's type disambiguates FIRST: `return probe` into a `bool`
+                // return pin selects the one Boolean output even when the node also carries a
+                // conventionally-named default like `response`. Falling back to the default
+                // alias before checking types picked a pin the consumer cannot accept.
+                let by_type = find_board_node(self.existing, id).and_then(|node| {
+                    let meta = node_to_metadata(node);
+                    let compatible: Vec<String> = meta
+                        .outputs
+                        .iter()
+                        .filter(|pin| pin.data_type != "Execution")
+                        .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
+                        .map(|pin| pin.name.clone())
+                        .collect();
+                    match compatible.as_slice() {
+                        [pin] => Some(pin.clone()),
+                        _ => None,
+                    }
+                });
+                by_type.or_else(|| self.resolve_source_output_pin(source))
+            }
             NodeEntity::Layer { .. } => self.resolve_source_output_pin(source),
         }
     }
@@ -24249,13 +24309,13 @@ eventsSimple() {
         let diagnostics = layer_node_limit_violations(&board, &root_adds)
             .expect("empty layer ids and explicit root additions share one budget");
         assert!(diagnostics[0].contains(&format!(
-            "the root layer with {} nodes",
+            "the root layer now holds {} nodes",
             MAX_NODES_PER_LAYER + 1
         )));
     }
 
     #[test]
-    fn layer_node_limit_rejects_oversized_edit() {
+    fn layer_node_limit_warns_on_oversized_edit() {
         let board = empty_board();
         let catalog = vec![
             catalog_meta(
@@ -24282,17 +24342,26 @@ eventsSimple() {
         flowscript.push_str("}\n");
 
         let result = reconcile_text_with_catalog(&board, &flowscript, &catalog);
+        // The layer budget is a LINT, not a gate: the edit still applies and the advice arrives
+        // as a correction. Blocking it stranded authors with a document that could not be
+        // applied at all.
         assert!(
-            result.commands.is_empty(),
-            "oversized edit must queue nothing"
+            !result.commands.is_empty(),
+            "an oversized edit must still queue its work"
+        );
+        assert!(
+            result.diagnostics.is_empty(),
+            "the layer budget must not block: {:?}",
+            result.diagnostics
         );
         assert!(
             result
-                .diagnostics
+                .corrections
                 .iter()
-                .any(|diagnostic| diagnostic.contains(&format!("max {MAX_NODES_PER_LAYER}"))),
+                .any(|correction| correction
+                    .contains(&format!("{MAX_NODES_PER_LAYER}-node guideline"))),
             "{:?}",
-            result.diagnostics
+            result.corrections
         );
     }
 

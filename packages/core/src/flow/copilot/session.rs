@@ -542,6 +542,15 @@ impl WorkflowSession {
         }
     }
 
+    /// True while the ledger's most recent attempt made forward progress (fresh artifact,
+    /// validation, or prepared state), progress has occurred at least once, and no circuit is
+    /// open. Budget-exhaustion checks consult this before terminating a converging loop.
+    pub fn is_progressing(&self) -> bool {
+        self.circuit.is_none()
+            && self.consecutive_zero_progress_attempts == 0
+            && self.last_progress_fingerprint.is_some()
+    }
+
     pub fn manifest(&self) -> &BoardContextManifest {
         &self.manifest
     }

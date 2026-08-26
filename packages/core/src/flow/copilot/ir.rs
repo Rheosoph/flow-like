@@ -1242,23 +1242,9 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
             body_count
         };
         module_node_counts.insert(scope.to_string(), count);
-        if matches!(module, FlowIrModule::Function { .. }) && count > MAX_NODES_PER_LAYER {
-            let mut diagnostic = FlowIrDiagnostic::new(
-                "IR_NODE_BUDGET_EXCEEDED",
-                format!("/modules/{module_index}/steps"),
-                Some(scope),
-                format!(
-                    "module {scope:?} requires {count} nodes; the per-layer limit is {MAX_NODES_PER_LAYER}"
-                ),
-            );
-            diagnostic.expected = Some(format!("<= {MAX_NODES_PER_LAYER} nodes"));
-            diagnostic.actual = Some(format!("{count} nodes"));
-            diagnostic.fix = Some(
-                "move one responsibility into a separate function module and call it here"
-                    .to_string(),
-            );
-            diagnostics.push(diagnostic);
-        }
+        // Layer size is a lint, not a gate: `module_node_counts` carries the number for any
+        // caller that wants to warn on it, but an oversized module still compiles.
+        let _ = count;
         validate_unreachable_steps(
             module.steps(),
             &format!("/modules/{module_index}/steps"),
@@ -1456,23 +1442,6 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
 
     if root_node_count > 0 {
         module_node_counts.insert("$root".to_string(), root_node_count);
-    }
-    if root_node_count > MAX_NODES_PER_LAYER {
-        let mut diagnostic = FlowIrDiagnostic::new(
-            "IR_NODE_BUDGET_EXCEEDED",
-            "/modules",
-            Some("$root"),
-            format!(
-                "all Event entries and bodies require {root_node_count} root-layer nodes; the limit is {MAX_NODES_PER_LAYER}"
-            ),
-        );
-        diagnostic.expected = Some(format!("<= {MAX_NODES_PER_LAYER} root nodes"));
-        diagnostic.actual = Some(format!("{root_node_count} root nodes"));
-        diagnostic.fix = Some(
-            "move Event body responsibilities into function modules and keep each Event as a thin entry"
-                .to_string(),
-        );
-        diagnostics.push(diagnostic);
     }
 
     let flowscript = render(

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	agentDebugPreview,
 	agentDebugReportAsMarkdown,
 	agentDebugRunSummaries,
 	createAgentDebugReport,
@@ -14,6 +15,30 @@ import {
 	markRestoredMessageDebugReportStale,
 	useGlobalChatStore,
 } from "./global-chat-store";
+
+describe("interaction diagnostic privacy", () => {
+	test("redacts values entered into app pages while retaining the target", () => {
+		const preview = agentDebugPreview({
+			app_id: "checkout",
+			actions: [
+				{
+					action: "set_value",
+					component_id: "password",
+					value: "correct horse battery staple",
+				},
+				{
+					action: "trigger",
+					component_id: "submit",
+					event: "click",
+				},
+			],
+		});
+
+		expect(preview).toContain('"component_id":"password"');
+		expect(preview).toContain('"value":"[REDACTED]"');
+		expect(preview).not.toContain("correct horse battery staple");
+	});
+});
 
 function workspaceArtifact(
 	source: string,

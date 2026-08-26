@@ -40,6 +40,10 @@ import {
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import {
+	type FrontendToolApprovalScope,
+	resolveFrontendToolApprovalScope,
+} from "../../lib/frontend-tool-approval-scope";
+import {
 	type IFlowPilotConversation,
 	addMessage,
 	createConversation,
@@ -185,6 +189,12 @@ const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
 const BOARD_EDIT_JOB_POLL_INTERVAL_MS = 2_500;
 const HOST_BOARD_APPLY_FEEDBACK_PREFIX = "Host board apply result:";
+// Auto mode closes the build loop: after a review auto-applies, one bounded verification turn
+// runs the persisted board (run_board_tests / targeted events) and repairs failures. Capped per
+// user turn so a board that keeps failing cannot verify-and-repair forever.
+const MAX_AUTO_VERIFY_ROUNDS = 2;
+const AUTO_VERIFY_PROMPT =
+	"Verify the changes you just applied, at runtime. If the board has test events, call run_board_tests; otherwise execute the touched events with execute_event/execute_node and read their logs with query_execution_logs. If verification fails, fix the FlowScript, commit again, and re-verify. Finish with a short verdict of what was checked and what passed or failed.";
 const HOST_BOARD_APPLY_FAILURE_PREFIX = `${HOST_BOARD_APPLY_FEEDBACK_PREFIX}\nThe queued board change was not fully applied.`;
 
 function isSettledBoardEditJob(job: BoardEditJob): boolean {
@@ -328,6 +338,8 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Executing event";
 		case "execute_node":
 			return "Executing node";
+		case "run_board_tests":
+			return "Running board tests";
 		case "query_execution_logs":
 			return "Reading execution logs";
 		case "ask_user":
@@ -405,6 +417,7 @@ type FrontendToolDialogState =
 			type: "approval";
 			request: FrontendToolRequest;
 			remember: boolean;
+			rememberable: boolean;
 	  }
 	| {
 			type: "ask";
@@ -630,6 +643,9 @@ function FlowPilotImpl({
 	const flowIrApplyInFlightRef = useRef(false);
 	const autoApplyAttemptRef = useRef<string | null>(null);
 	const autoApplyComponentsAttemptRef = useRef<string | null>(null);
+	const [autoVerifyRequest, setAutoVerifyRequest] = useState(0);
+	const autoVerifyHandledRef = useRef(0);
+	const autoVerifyRoundsRef = useRef(0);
 	const currentBoardIdRef = useRef<string | undefined>(board?.id);
 	const currentBoardNodeCountRef = useRef<number | undefined>(
 		flowPilotBoardNodeCount(board),
@@ -695,6 +711,9 @@ function FlowPilotImpl({
 			finalBoardNodeCount?: number,
 			reason?: unknown,
 		) => {
+			if (disposition === "applied" && autoModeRef.current) {
+				setAutoVerifyRequest((count) => count + 1);
+			}
 			const run = generationMetricsRunRef.current;
 			if (!run) return;
 			run.disposeReview(
@@ -1143,14 +1162,25 @@ function FlowPilotImpl({
 		[],
 	);
 
+	const approvalScopeForRequest = useCallback(
+		(request: FrontendToolRequest): FrontendToolApprovalScope =>
+			resolveFrontendToolApprovalScope({
+				requestId: request.requestId,
+				toolName: request.toolName,
+				arguments: request.arguments,
+				approvalKind: request.approval?.kind,
+				approvalSessionKey: request.approval?.sessionKey,
+				contextAppId: activeAppId,
+			}),
+		[activeAppId],
+	);
+
 	const requestFrontendToolApproval = useCallback(
 		(
 			request: FrontendToolRequest,
 		): Promise<{ approved: boolean; remember: boolean }> => {
 			const approval = request.approval;
-			const sessionKey =
-				approval?.sessionKey ||
-				`${request.toolName}:${approval?.kind ?? "none"}`;
+			const approvalScope = approvalScopeForRequest(request);
 			// Auto mode is read through a ref so toggling it never changes this callback's
 			// identity: the Tauri bridge listener would otherwise tear down and cancel every
 			// in-flight request. `remember: false` keeps auto-approvals out of the session
@@ -1163,7 +1193,8 @@ function FlowPilotImpl({
 					request.arguments,
 					activeAppId,
 				) ||
-				approvedFrontendToolKeysRef.current.has(sessionKey)
+				(approvalScope.rememberable &&
+					approvedFrontendToolKeysRef.current.has(approvalScope.sessionKey))
 			) {
 				return Promise.resolve({ approved: true, remember: false });
 			}
@@ -1174,12 +1205,13 @@ function FlowPilotImpl({
 						type: "approval",
 						request,
 						remember: false,
+						rememberable: approvalScope.rememberable,
 					},
 					resolve,
 				);
 			});
 		},
-		[activeAppId, openFrontendToolDialog],
+		[activeAppId, approvalScopeForRequest, openFrontendToolDialog],
 	);
 
 	const requestFrontendUserInput = useCallback(
@@ -1267,12 +1299,14 @@ function FlowPilotImpl({
 						error: "User denied the request.",
 					};
 				}
-				const sessionKey =
-					request.approval?.sessionKey ||
-					`${request.toolName}:${request.approval?.kind ?? "none"}`;
-				if (approval.remember && request.approval?.kind !== "none") {
+				const approvalScope = approvalScopeForRequest(request);
+				if (
+					approval.remember &&
+					request.approval?.kind !== "none" &&
+					approvalScope.rememberable
+				) {
 					lease.assertActive("approval persistence");
-					approvedFrontendToolKeysRef.current.add(sessionKey);
+					approvedFrontendToolKeysRef.current.add(approvalScope.sessionKey);
 				}
 
 				lease.assertActive("tool execution");
@@ -1283,6 +1317,7 @@ function FlowPilotImpl({
 					case "ui_inspect":
 					case "execute_event":
 					case "execute_node":
+					case "run_board_tests":
 					case "query_execution_logs":
 					case "interact_app_page":
 					case "call_app_chat":
@@ -1309,7 +1344,12 @@ function FlowPilotImpl({
 				};
 			}
 		},
-		[executeRuntimeTool, requestFrontendToolApproval, requestFrontendUserInput],
+		[
+			approvalScopeForRequest,
+			executeRuntimeTool,
+			requestFrontendToolApproval,
+			requestFrontendUserInput,
+		],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
 
@@ -2319,6 +2359,9 @@ function FlowPilotImpl({
 
 			let currentImages = [...attachedImages];
 			const currentInput = input;
+			if (currentInput !== AUTO_VERIFY_PROMPT) {
+				autoVerifyRoundsRef.current = 0;
+			}
 			const currentContextNodes = [...selectedNodeIds];
 			const scope: CopilotScope =
 				agentMode === "board"
@@ -2735,7 +2778,8 @@ function FlowPilotImpl({
 								toolName === "commit_flowscript" ||
 								toolName === "edit_flowscript" ||
 								toolName === "execute_event" ||
-								toolName === "execute_node"
+								toolName === "execute_node" ||
+								toolName === "run_board_tests"
 							) {
 								setLoadingPhase("generating");
 							} else if (
@@ -3755,6 +3799,25 @@ function FlowPilotImpl({
 		void executePendingCommands();
 	}, [autoApplyKey, executePendingCommands]);
 
+	// After an auto-mode apply settles, send one synthetic verification turn. Skipped while a run
+	// is active (mid-run segment applies), while the user has a draft typed, and once the bounded
+	// per-user-turn budget is spent — a repair commit from the verification turn re-enters the
+	// same queued → auto-apply → verify cycle.
+	useEffect(() => {
+		if (autoVerifyRequest === 0) return;
+		if (autoVerifyHandledRef.current === autoVerifyRequest) return;
+		if (loading) return;
+		autoVerifyHandledRef.current = autoVerifyRequest;
+		if (!autoModeRef.current) return;
+		if (autoVerifyRoundsRef.current >= MAX_AUTO_VERIFY_ROUNDS) return;
+		if (input.trim().length > 0) return;
+		autoVerifyRoundsRef.current += 1;
+		setInput(AUTO_VERIFY_PROMPT);
+		setTimeout(() => {
+			handleSubmitRef.current?.();
+		}, 100);
+	}, [autoVerifyRequest, loading, input]);
+
 	// Components stream in batches during generation, so this waits for `!loading` rather
 	// than applying partial batches.
 	const autoApplyComponentsKey =
@@ -4261,18 +4324,24 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 							<pre className="max-h-56 overflow-auto rounded-lg border border-border/50 bg-background/80 p-3 text-xs text-muted-foreground">
 								{JSON.stringify(dialog.request.arguments, null, 2)}
 							</pre>
-							<label className="flex items-center gap-2 text-sm text-muted-foreground">
-								<Checkbox
-									checked={dialog.remember}
-									onCheckedChange={(checked) =>
-										onDialogChange({
-											...dialog,
-											remember: checked === true,
-										})
-									}
-								/>
-								Don&apos;t ask again for this action this session
-							</label>
+							{dialog.rememberable ? (
+								<label
+									htmlFor="frontend-tool-remember"
+									className="flex items-center gap-2 text-sm text-muted-foreground"
+								>
+									<Checkbox
+										id="frontend-tool-remember"
+										checked={dialog.remember}
+										onCheckedChange={(checked) =>
+											onDialogChange({
+												...dialog,
+												remember: checked === true,
+											})
+										}
+									/>
+									Don&apos;t ask again for this action this session
+								</label>
+							) : null}
 						</>
 					) : (
 						<AskUserQuestions

@@ -4,6 +4,7 @@ import { normalizeDatabaseTableIdentifier } from "../lib/database-table-name";
 import {
 	executeNodeRuntime,
 	resolveUiInspectWidgetEntries,
+	runBoardTestsRuntime,
 } from "./use-frontend-runtime-tool-executor";
 
 describe("normalizeDatabaseTableIdentifier", () => {
@@ -129,5 +130,80 @@ describe("executeNodeRuntime", () => {
 				args,
 			),
 		).rejects.toThrow("was not found on board");
+	});
+});
+
+/**
+ * Remote backends resolve executeBoard with undefined metadata by design. A
+ * run the tool cannot grade must never count as a pass — it recovers the
+ * metadata by run id, and errors when even that fails.
+ */
+describe("runBoardTestsRuntime", () => {
+	const args = { appId: "app-1", boardId: "board-1" };
+	const board = {
+		nodes: {
+			a: {
+				id: "a",
+				name: "events_simple",
+				friendly_name: "testEmptyCart",
+				start: true,
+			},
+		},
+	};
+	const executeBoard = async (
+		_appId: string,
+		_boardId: string,
+		_payload: unknown,
+		_streamState: boolean,
+		onId?: (id: string) => void,
+	) => {
+		onId?.("run-1");
+		return undefined;
+	};
+	type ToolResult = {
+		status: string;
+		passed: number;
+		failed: number;
+		tests: Array<{
+			verdict: string;
+			run_id?: string;
+			execution_error?: string;
+		}>;
+	};
+
+	test("errors instead of passing when metadata cannot be recovered", async () => {
+		const result = (await runBoardTestsRuntime(
+			{
+				getBoard: () => Promise.resolve(board),
+				queryRun: () => Promise.resolve([]),
+				listRuns: () => Promise.resolve([]),
+			} as never,
+			executeBoard as never,
+			args,
+		)) as ToolResult;
+
+		expect(result.status).toBe("ok");
+		expect(result.failed).toBe(1);
+		expect(result.tests[0].verdict).toBe("error");
+		expect(result.tests[0].execution_error).toContain("no metadata");
+	});
+
+	test("recovers metadata by run id and grades the run", async () => {
+		const result = (await runBoardTestsRuntime(
+			{
+				getBoard: () => Promise.resolve(board),
+				queryRun: (_meta: unknown, query: string) =>
+					Promise.resolve(
+						query.startsWith("message") ? [{ message: "ASSERT_OK total" }] : [],
+					),
+				listRuns: () => Promise.resolve([{ run_id: "run-1" }]),
+			} as never,
+			executeBoard as never,
+			args,
+		)) as ToolResult;
+
+		expect(result.passed).toBe(1);
+		expect(result.tests[0].verdict).toBe("pass");
+		expect(result.tests[0].run_id).toBe("run-1");
 	});
 });

@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	type ComponentPropsWithoutRef,
+	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useRef,
@@ -16,11 +17,13 @@ import {
 	type InlineAppPage,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
+import { PortalContainerProvider } from "../ui/portal-container";
 import {
 	type InlineAppPageTarget,
 	getInlineAppPageTarget,
+	observeInlineAppPageSlot,
 	registerInlineAppPageRuntime,
-	registerInlineAppPageSlot,
+	subscribeInlineAppPagePlacement,
 } from "./inline-app-page-runtime-registry";
 
 const INLINE_APP_PAGE_PRESENT_EVENT = "flowpilot:inline-app-page-present";
@@ -69,7 +72,8 @@ export function InlineAppPageSlot({
 	useLayoutEffect(() => {
 		const slot = slotRef.current;
 		if (!slot) return;
-		return registerInlineAppPageSlot(pageId, slot);
+		const observation = observeInlineAppPageSlot(pageId, slot);
+		return observation.disconnect;
 	}, [pageId]);
 
 	return (
@@ -108,15 +112,54 @@ function InlineAppPageRuntime({ page }: { page: InlineAppPage }) {
 	const [target, setTarget] = useState<InlineAppPageTarget>({
 		routePath: "/",
 		eventId: page.eventId ?? null,
+		queryParams: {},
 	});
+	const initialSnapshotEventIdRef = useRef(page.eventId);
+
+	const handleNavigate = useCallback(
+		(next: {
+			routePath?: string | null;
+			eventId?: string | null;
+			queryParams?: Record<string, string>;
+		}) => {
+			setTarget((current) => ({
+				routePath: next.routePath ?? current.routePath,
+				eventId: next.eventId === undefined ? current.eventId : next.eventId,
+				queryParams: next.queryParams ?? current.queryParams,
+			}));
+		},
+		[],
+	);
+	const handleResolvedPage = useCallback(
+		(next: { eventId: string }) => {
+			useGlobalChatStore
+				.getState()
+				.retargetInlineAppPage(page.id, next.eventId);
+		},
+		[page.id],
+	);
 
 	useLayoutEffect(() => {
 		if (typeof document === "undefined") return;
 		const host = document.createElement("div");
-		configurePortalHost(host, page.id, page.appId, page.eventId);
+		configurePortalHost(
+			host,
+			page.id,
+			page.appId,
+			initialSnapshotEventIdRef.current,
+		);
 		setPortalHost(host);
 		return () => host.remove();
-	}, [page.id, page.appId, page.eventId]);
+	}, [page.id, page.appId]);
+
+	useLayoutEffect(() => {
+		if (!portalHost) return;
+		for (const [attribute, value] of Object.entries(
+			inlineAppPageSnapshotAttribute(page.appId, page.eventId),
+		)) {
+			portalHost.setAttribute(attribute, value);
+		}
+	}, [page.appId, page.eventId, portalHost]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: target updates through the stable registration below; re-registering would move the host needlessly.
 	useLayoutEffect(() => {
@@ -142,6 +185,15 @@ function InlineAppPageRuntime({ page }: { page: InlineAppPage }) {
 		registrationRef.current?.updateTarget(target);
 	}, [target]);
 
+	// A parked page is mounted but off screen. Its timed workflows must idle while it is
+	// there, or a page opened once keeps billing a board run every interval for a surface
+	// nobody can see.
+	const [placed, setPlaced] = useState(false);
+	useEffect(
+		() => subscribeInlineAppPagePlacement(page.id, setPlaced),
+		[page.id],
+	);
+
 	return (
 		<>
 			<div
@@ -162,29 +214,33 @@ function InlineAppPageRuntime({ page }: { page: InlineAppPage }) {
 			/>
 			{portalHost &&
 				createPortal(
-					<UsePageContent
-						eventConfig={EVENT_CONFIG}
-						notFound={
-							<div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-								{t(
-									"thisAppPageIsNoLongerAvailable",
-									"This app page is no longer available.",
-								)}
-							</div>
-						}
-						appId={page.appId}
-						routePath={target.routePath}
-						eventId={target.eventId}
-						embedded
-						eventIdTakesPrecedence
-						onNavigate={(next) =>
-							setTarget((current) => ({
-								routePath: next.routePath ?? current.routePath,
-								eventId:
-									next.eventId === undefined ? current.eventId : next.eventId,
-							}))
-						}
-					/>,
+					// Radix portals default to the top document's body, which puts a page's
+					// dialogs, drawers, popovers and selects outside the host that moves and
+					// parks: they cover the whole chat instead of the card, ignore its
+					// containment, and stay on screen after the page has parked. Anchoring
+					// them to the host keeps trigger and overlay in one moving subtree.
+					<PortalContainerProvider container={portalHost}>
+						<UsePageContent
+							eventConfig={EVENT_CONFIG}
+							notFound={
+								<div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
+									{t(
+										"thisAppPageIsNoLongerAvailable",
+										"This app page is no longer available.",
+									)}
+								</div>
+							}
+							appId={page.appId}
+							routePath={target.routePath}
+							eventId={target.eventId}
+							queryParams={target.queryParams}
+							embedded
+							eventIdTakesPrecedence
+							active={placed}
+							onNavigate={handleNavigate}
+							onResolvedPage={handleResolvedPage}
+						/>
+					</PortalContainerProvider>,
 					portalHost,
 					page.id,
 				)}

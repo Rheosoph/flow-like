@@ -68,6 +68,7 @@ describe("global chat overlay dismissal", () => {
 			queue: [],
 			isStreaming: false,
 			streamingMessages: [],
+			inlineAppPages: [],
 		});
 	});
 
@@ -139,6 +140,88 @@ describe("global chat overlay dismissal", () => {
 			mode: "overlay",
 			overlayAutoOpenDismissed: true,
 		});
+	});
+
+	test("retargets an inline page without replacing its card identity", () => {
+		useGlobalChatStore.setState({
+			inlineAppPages: [
+				{
+					id: "live-card",
+					appId: "orders-app",
+					eventId: "orders-list",
+					name: "Orders",
+				},
+				{
+					id: "other-app-card",
+					appId: "reports-app",
+					eventId: "order-detail",
+					name: "Reports",
+				},
+			],
+		});
+
+		useGlobalChatStore
+			.getState()
+			.retargetInlineAppPage("live-card", "order-detail");
+
+		expect(useGlobalChatStore.getState().inlineAppPages).toEqual([
+			{
+				id: "live-card",
+				appId: "orders-app",
+				eventId: "order-detail",
+				name: "Orders",
+			},
+			{
+				id: "other-app-card",
+				appId: "reports-app",
+				eventId: "order-detail",
+				name: "Reports",
+			},
+		]);
+	});
+
+	test("keeps the navigating card when its destination already has a card", () => {
+		useGlobalChatStore.setState({
+			inlineAppPages: [
+				{
+					id: "destination-card",
+					appId: "orders-app",
+					eventId: "order-detail",
+					name: "Old detail card",
+				},
+				{
+					id: "navigating-card",
+					appId: "orders-app",
+					eventId: "orders-list",
+					name: "Live orders card",
+				},
+				{
+					id: "unrelated-card",
+					appId: "orders-app",
+					eventId: "order-create",
+					name: "Create order",
+				},
+			],
+		});
+
+		useGlobalChatStore
+			.getState()
+			.retargetInlineAppPage("navigating-card", "order-detail");
+
+		expect(useGlobalChatStore.getState().inlineAppPages).toEqual([
+			{
+				id: "navigating-card",
+				appId: "orders-app",
+				eventId: "order-detail",
+				name: "Live orders card",
+			},
+			{
+				id: "unrelated-card",
+				appId: "orders-app",
+				eventId: "order-create",
+				name: "Create order",
+			},
+		]);
 	});
 
 	test("restores the dismissal latch from session storage", () => {

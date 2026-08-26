@@ -18,6 +18,7 @@ import {
 	ClockIcon,
 	CloudCog,
 	DatabaseIcon,
+	FlaskConicalIcon,
 	MonitorIcon,
 	PencilLineIcon,
 	PlayCircleIcon,
@@ -52,6 +53,7 @@ import {
 	IValueType,
 	cacheIndicatorLabel,
 	formatCacheTtl,
+	isTestEventNode,
 	moveNodeCommand,
 	removeNodeCommand,
 	updateNodeCommand,
@@ -294,6 +296,11 @@ const FlowNodeInner = memo(
 		const isReroute = useMemo(() => {
 			return props.data.node.name === "reroute";
 		}, [props.data.node.name]);
+
+		const isTestEvent = useMemo(
+			() => isTestEventNode(props.data.node),
+			[props.data.node],
+		);
 
 		const isWasmNode = useMemo(
 			() => Boolean(props.data.node.wasm?.package_id),
@@ -1146,10 +1153,12 @@ const FlowNodeInner = memo(
 				{renderFnRefOutputs}
 				{!isReroute && (
 					<div
-						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-primary/50 to-primary"} ${isReroute && "w-6"}`}
+						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && (isTestEvent ? "bg-linear-to-r  from-card via-cyan-500/50 to-cyan-500" : "bg-linear-to-r  from-card via-primary/50 to-primary")} ${isReroute && "w-6"}`}
 					>
 						<div className={"flex flex-row items-center gap-1 min-w-0"}>
-							{props.data.node?.icon ? (
+							{isTestEvent ? (
+								<FlaskConicalIcon className="w-2 h-2 shrink-0" />
+							) : props.data.node?.icon ? (
 								<DynamicImage
 									className="w-2 h-2 bg-foreground shrink-0"
 									url={props.data.node.icon}

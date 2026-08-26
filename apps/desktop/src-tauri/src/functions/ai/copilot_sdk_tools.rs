@@ -1110,56 +1110,25 @@ fn frontend_tool_result_with_timeout(
 ) -> ToolResultObject {
     let mut result =
         run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
-    let supplied_image_count = result
-        .get(PLATFORM_TOOL_IMAGE_URLS_FIELD)
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
-    let image_urls = take_platform_tool_image_urls(&mut result);
-    let expected_image_count = image_urls.len();
-    let mut image_result = if image_urls.is_empty() {
+    let FrontendToolImageInput {
+        field_present,
+        images,
+        mut errors,
+    } = take_frontend_tool_image_input(&mut result);
+    let expected_image_count = images.len();
+    let mut image_result = if images.is_empty() {
         PlatformToolImageDownloads::default()
     } else {
-        block_on_tool(download_platform_tool_images(image_urls))
+        block_on_tool(download_platform_tool_images(images))
     };
-    if supplied_image_count > expected_image_count {
-        image_result.errors.push(format!(
-            "{} capture attachment reference(s) were rejected because their type, source, size, or encoding was invalid.",
-            supplied_image_count - expected_image_count
-        ));
-    }
-    if (supplied_image_count > 0 || !image_result.errors.is_empty())
-        && let Some(object) = result.as_object_mut()
-    {
-        object.insert(
-            "screenshot_count".to_string(),
-            json!(image_result.images.len()),
-        );
-        let was_complete = object
-            .get("screenshot_complete")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        object.insert(
-            "screenshot_complete".to_string(),
-            json!(
-                was_complete
-                    && image_result.images.len() == expected_image_count
-                    && image_result.errors.is_empty()
-            ),
-        );
-        if !image_result.errors.is_empty() {
-            object.insert(
-                "screenshot_attachment_errors".to_string(),
-                json!(image_result.errors.iter().take(3).collect::<Vec<_>>()),
-            );
-        }
-        if image_result.images.is_empty() {
-            object.insert(
-                    "message".to_string(),
-                    json!("The page rendered, but its visual captures could not be attached to this agent. Do not claim to have read the page visually."),
-                );
-        }
-    }
+    errors.append(&mut image_result.errors);
+    image_result.errors = errors;
+    reconcile_frontend_tool_image_result(
+        &mut result,
+        field_present,
+        expected_image_count,
+        &mut image_result,
+    );
     let mut output = ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
@@ -1191,6 +1160,107 @@ struct PlatformToolImageDownloads {
     errors: Vec<String>,
 }
 
+#[derive(Default)]
+struct FrontendToolImageInput {
+    field_present: bool,
+    images: Vec<PlatformToolImageUrl>,
+    errors: Vec<String>,
+}
+
+fn take_frontend_tool_image_input(result: &mut Value) -> FrontendToolImageInput {
+    let Some(raw_images) = result.get(PLATFORM_TOOL_IMAGE_URLS_FIELD) else {
+        return FrontendToolImageInput::default();
+    };
+    let supplied_image_count = raw_images.as_array().map(Vec::len);
+    let images = take_platform_tool_image_urls(result);
+    let mut errors = Vec::new();
+    if supplied_image_count.is_none() {
+        errors.push(
+            "The capture attachment payload was rejected because it was not an array.".to_string(),
+        );
+    } else if supplied_image_count.is_some_and(|count| count > images.len()) {
+        errors.push(format!(
+            "{} capture attachment reference(s) were rejected or skipped to preserve top-to-bottom ordering because their type, source, size, or encoding was invalid.",
+            supplied_image_count.unwrap_or_default() - images.len()
+        ));
+    }
+    FrontendToolImageInput {
+        field_present: true,
+        images,
+        errors,
+    }
+}
+
+fn mark_frontend_tool_attachment_partial(object: &mut serde_json::Map<String, Value>) {
+    let should_mark_partial = match object.get("status").and_then(Value::as_str) {
+        None | Some("ok" | "success" | "complete") => true,
+        Some(_) => false,
+    };
+    if should_mark_partial {
+        object.insert("status".to_string(), Value::String("partial".to_string()));
+    }
+}
+
+fn reconcile_frontend_tool_image_result(
+    result: &mut Value,
+    image_field_present: bool,
+    expected_image_count: usize,
+    image_result: &mut PlatformToolImageDownloads,
+) {
+    if !image_field_present && image_result.errors.is_empty() {
+        return;
+    }
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let declared_image_count = object
+        .get("screenshot_count")
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok());
+    let actual_image_count = image_result.images.len();
+    if image_result.errors.is_empty()
+        && declared_image_count.is_some_and(|count| count != actual_image_count)
+    {
+        image_result.errors.push(format!(
+            "The declared screenshot count did not match the {actual_image_count} attached capture(s)."
+        ));
+    }
+    if image_result.errors.is_empty() && expected_image_count != actual_image_count {
+        image_result.errors.push(format!(
+            "Expected {expected_image_count} accepted capture attachment(s), but attached {actual_image_count}.",
+        ));
+    }
+    let attachment_failed = !image_result.errors.is_empty();
+    object.insert("screenshot_count".to_string(), json!(actual_image_count));
+    let was_complete = object
+        .get("screenshot_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    object.insert(
+        "screenshot_complete".to_string(),
+        json!(was_complete && !attachment_failed),
+    );
+    if attachment_failed {
+        mark_frontend_tool_attachment_partial(object);
+        let mut errors = object
+            .remove("screenshot_attachment_errors")
+            .and_then(|errors| errors.as_array().cloned())
+            .unwrap_or_default();
+        errors.extend(image_result.errors.iter().cloned().map(Value::String));
+        errors.truncate(6);
+        object.insert(
+            "screenshot_attachment_errors".to_string(),
+            Value::Array(errors),
+        );
+        if image_result.images.is_empty() {
+            object.insert(
+                "message".to_string(),
+                json!("The page rendered, but its visual captures could not be attached to this agent. Do not claim to have read the page visually."),
+            );
+        }
+    }
+}
+
 /// Copilot SDK/MCP image blocks require inline bytes. Desktop captures can arrive as bounded
 /// base64 directly; web captures retain temporary URLs and are downloaded at this boundary.
 async fn download_platform_tool_images(
@@ -1206,6 +1276,8 @@ async fn download_platform_tool_images(
         images: Vec::with_capacity(images.len()),
         errors: Vec::new(),
     };
+    let total_images = images.len();
+    let mut failed_at = None;
     for (index, image) in images.into_iter().enumerate() {
         if let Some(data) = image.data {
             match STANDARD.decode(&data) {
@@ -1230,6 +1302,10 @@ async fn download_platform_tool_images(
                     index + 1
                 )),
             }
+            if outcome.images.len() != index + 1 {
+                failed_at = Some(index);
+                break;
+            }
             continue;
         }
 
@@ -1238,7 +1314,8 @@ async fn download_platform_tool_images(
                 "Capture {} had no readable image source.",
                 index + 1
             ));
-            continue;
+            failed_at = Some(index);
+            break;
         };
         let client = match platform_tool_image_client() {
             Ok(client) => client,
@@ -1248,7 +1325,8 @@ async fn download_platform_tool_images(
                     "Capture {} could not initialize the download client.",
                     index + 1
                 ));
-                continue;
+                failed_at = Some(index);
+                break;
             }
         };
         let response = match client.get(&url).send().await {
@@ -1259,7 +1337,8 @@ async fn download_platform_tool_images(
                     "Capture {} could not be downloaded from temporary storage.",
                     index + 1
                 ));
-                continue;
+                failed_at = Some(index);
+                break;
             }
         };
         if !response.status().is_success()
@@ -1275,7 +1354,8 @@ async fn download_platform_tool_images(
                 "Capture {} was unavailable or exceeded the attachment limit.",
                 index + 1
             ));
-            continue;
+            failed_at = Some(index);
+            break;
         }
         let bytes = match response.bytes().await {
             Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => bytes,
@@ -1285,7 +1365,8 @@ async fn download_platform_tool_images(
                     "Capture {} exceeded the attachment limit.",
                     index + 1
                 ));
-                continue;
+                failed_at = Some(index);
+                break;
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to read temporary app page capture");
@@ -1293,7 +1374,8 @@ async fn download_platform_tool_images(
                     "Capture {} could not be read from temporary storage.",
                     index + 1
                 ));
-                continue;
+                failed_at = Some(index);
+                break;
             }
         };
         outcome.images.push(ToolBinaryResult {
@@ -1305,6 +1387,15 @@ async fn download_platform_tool_images(
                 index + 1
             )),
         });
+    }
+    if let Some(failed_index) = failed_at {
+        let skipped_count = total_images.saturating_sub(failed_index + 1);
+        if skipped_count > 0 {
+            outcome.errors.push(format!(
+                "{skipped_count} later capture attachment(s) were skipped after capture {} failed, preserving a contiguous top-to-bottom prefix.",
+                failed_index + 1
+            ));
+        }
     }
     outcome
 }
@@ -1430,13 +1521,6 @@ fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> St
             && diagnostic.contains("no matching function return pin")
     }) {
         return "FlowScript validation failed: a helper returns a value without declaring a matching output pin. Add a named return signature, for example `function classify(body: string): (isSupport: bool) { ...; return result.value }`.".to_string();
-    }
-
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.contains("nodes (max"))
-    {
-        return "FlowScript validation failed: a layer would exceed the 100-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 100-node budget — and call the helpers from the parent flow.".to_string();
     }
 
     if diagnostics
@@ -2898,8 +2982,9 @@ RULES:
 - Helper `function` declarations are fully supported: calling `helperName(args)` creates a Call
   Function node wired to that function's layer, impure bodies chain from the layer's `exec_in`
   boundary pin, and `return` values surface as call-node outputs. USE THEM — a single layer
-  (root, event scope, or one function) is hard-capped at 100 nodes and edits exceeding it are
-  rejected, so split big flows into small helper functions with focused responsibilities.
+  (root, event scope, or one function) should stay under the 100-node guideline (oversized edits
+  apply with an advisory correction), so split big flows into small helper functions with focused
+  responsibilities.
 - The `function` keyword is mandatory for helpers: write
   `function fetchMail(host: string) { ... }`, never bare `fetchMail(...) { ... }`. A helper call is
   valid only when its declaration remains in this same full document; do not invent helper calls
@@ -4980,6 +5065,58 @@ mod tests {
             }]));
         assert!(unavailable.images.is_empty());
         assert_eq!(unavailable.errors.len(), 1);
+
+        let ordered_prefix = block_on_tool(download_platform_tool_images(vec![
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("Zmlyc3Q=".to_string()),
+                media_type: "image/png".to_string(),
+            },
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("invalid base64".to_string()),
+                media_type: "image/png".to_string(),
+            },
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("dGhpcmQ=".to_string()),
+                media_type: "image/png".to_string(),
+            },
+        ]));
+        assert_eq!(ordered_prefix.images.len(), 1);
+        assert_eq!(ordered_prefix.images[0].data, "Zmlyc3Q=");
+        assert!(ordered_prefix.errors[0].contains("Capture 2"));
+        assert!(ordered_prefix.errors[1].contains("1 later capture attachment"));
+    }
+
+    #[test]
+    fn malformed_frontend_image_field_is_removed_and_reconciled_as_partial() {
+        let mut result = json!({
+            "status": "ok",
+            "screenshot_count": 1,
+            "screenshot_complete": true,
+            "_flowpilot_image_urls": { "data": "private-image-data" },
+        });
+
+        let image_input = take_frontend_tool_image_input(&mut result);
+        assert!(image_input.field_present);
+        assert!(image_input.images.is_empty());
+        assert_eq!(image_input.errors.len(), 1);
+        assert!(result.get(PLATFORM_TOOL_IMAGE_URLS_FIELD).is_none());
+        let mut image_result = PlatformToolImageDownloads {
+            images: Vec::new(),
+            errors: image_input.errors,
+        };
+        reconcile_frontend_tool_image_result(&mut result, true, 0, &mut image_result);
+
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result["screenshot_count"], 0);
+        assert_eq!(result["screenshot_complete"], false);
+        assert!(
+            result["screenshot_attachment_errors"][0]
+                .as_str()
+                .is_some_and(|error| error.contains("not an array"))
+        );
     }
 
     #[test]

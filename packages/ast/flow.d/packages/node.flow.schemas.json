@@ -6131,7 +6131,7 @@
       "database": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeDBConnection\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
     },
     "outputs": {
-      "indices": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigDto\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}"
+      "indices": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigMetadata\",\"description\":\"Stable metadata shape for Lance index descriptions. The execution result\\nuses the storage DTO with the same serialized fields, while metadata builds\\navoid compiling the LanceDB implementation merely to describe this pin.\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}"
     }
   },
   "list_local_db": {

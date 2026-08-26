@@ -37,6 +37,8 @@ export function InlineAppPageCard({
 	const { t } = useTranslation("chat");
 	const router = useRouter();
 	const [expanded, setExpanded] = useState(true);
+	const contentId = `inline-app-page-content-${page.id}`;
+	const titleId = `inline-app-page-title-${page.id}`;
 
 	useEffect(() => {
 		return subscribeToInlineAppPagePresentation((detail) => {
@@ -50,20 +52,29 @@ export function InlineAppPageCard({
 		const target = getInlineAppPageTarget(page.id) ?? {
 			routePath: "/",
 			eventId: page.eventId ?? null,
+			queryParams: {},
 		};
 		const params = new URLSearchParams({ id: page.appId });
-		params.set("route", target.routePath);
 		if (target.eventId) params.set("eventId", target.eventId);
+		else params.set("route", target.routePath);
+		for (const [key, value] of Object.entries(target.queryParams)) {
+			if (key !== "id" && key !== "route" && key !== "eventId") {
+				params.set(key, value);
+			}
+		}
 		onClose(page.id);
 		router.push(`/use?${params.toString()}`);
 	};
 
 	return (
 		<motion.div
-			layout
-			initial={{ opacity: 0, y: 8, scale: 0.98 }}
-			animate={{ opacity: 1, y: 0, scale: 1 }}
-			exit={{ opacity: 0, y: 8, scale: 0.98 }}
+			// Position only: a size-animating layout projection scales the card, and the live
+			// page inside has no layout of its own to counter-scale with, so expanding the card
+			// visibly squashed and stretched the rendered page for the length of the spring.
+			layout="position"
+			initial={{ opacity: 0, y: 8 }}
+			animate={{ opacity: 1, y: 0 }}
+			exit={{ opacity: 0, y: 8 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}
 			className="mx-auto mb-2 w-[calc(100%_-_1.5rem)] max-w-6xl shrink-0 overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm"
 		>
@@ -73,11 +84,12 @@ export function InlineAppPageCard({
 					className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 					onClick={() => setExpanded((open) => !open)}
 					aria-expanded={expanded}
+					aria-controls={contentId}
 				>
 					<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
 						<AppWindowIcon className="size-3.5" />
 					</span>
-					<span className="truncate text-[13px] font-semibold">
+					<span id={titleId} className="truncate text-[13px] font-semibold">
 						{page.name}
 					</span>
 					<span className="shrink-0 text-[11px] text-muted-foreground">
@@ -111,6 +123,9 @@ export function InlineAppPageCard({
 			{expanded && (
 				<InlineAppPageSlot
 					pageId={page.id}
+					id={contentId}
+					role="region"
+					aria-labelledby={titleId}
 					className={`${compact ? "h-95 max-h-[calc(50vh-3.5rem)]" : "h-120 max-h-[calc(60vh-4.5rem)]"} relative flex flex-col overflow-hidden border-t border-border/70 bg-background contain-[layout_paint]`}
 				/>
 			)}

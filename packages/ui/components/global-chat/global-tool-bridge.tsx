@@ -24,6 +24,7 @@ import {
 import { addAppToProfile } from "../../lib/add-app-to-profile";
 import {
 	captureInlineAppPageSnapshots,
+	isAppPageSnapshotSourceCurrent,
 	uploadPageSnapshots,
 } from "../../lib/app-page-snapshot";
 import {
@@ -45,7 +46,9 @@ import {
 	createFlowScriptGenerationTrace,
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
+import { resolveFrontendToolApprovalScope } from "../../lib/frontend-tool-approval-scope";
 import {
+	inspectLiveAppPage,
 	interactWithAppPage,
 	parseInteractActions,
 } from "../../lib/interact-app-page";
@@ -172,6 +175,10 @@ import {
 	resolveFlowPilotWidgetTarget,
 	slugifyRoute,
 } from "./flowpilot-widget-target";
+import {
+	InlineAppPageRuntimeHost,
+	presentInlineAppPage,
+} from "./inline-app-page-runtime";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import {
 	scoutForkPreview,
@@ -1212,10 +1219,19 @@ function promptForDialog(
 			respond: bound,
 		};
 	}
+	const approvalScope = resolveFrontendToolApprovalScope({
+		requestId: request.requestId,
+		toolName: request.toolName,
+		arguments: request.arguments,
+		approvalKind: request.approval?.kind,
+		approvalSessionKey: request.approval?.sessionKey,
+		contextAppId: request.context?.appId || request.context?.app_id,
+	});
 	return {
 		id: promptId,
 		kind: "approval" as const,
 		destructive: dialog.override?.destructive ?? false,
+		rememberable: approvalScope.rememberable,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -1234,6 +1250,8 @@ function promptForDialog(
 		appId:
 			argString(request.arguments, "app_id") ||
 			argString(request.arguments, "appId") ||
+			request.context?.appId ||
+			request.context?.app_id ||
 			undefined,
 		respond: bound,
 	};
@@ -2080,6 +2098,7 @@ export function GlobalToolBridge() {
 				case "ui_inspect":
 				case "execute_event":
 				case "execute_node":
+				case "run_board_tests":
 				case "query_execution_logs":
 				case "graph_overlay_tool":
 				case "graph_query_tool":
@@ -2558,6 +2577,9 @@ export function GlobalToolBridge() {
 						eventId: pageEvent.id,
 						name: pageEvent.name || appId,
 					});
+					// An explicit open presents an existing card too. The runtime keeps its current
+					// route and state, so this does not reload the page or rerun its on-load workflow.
+					presentInlineAppPage(appId, pageEvent.id);
 					showConversation();
 					scope.referenceApp(appId);
 					const snapshot = await captureInlineAppPageSnapshots(
@@ -2565,20 +2587,78 @@ export function GlobalToolBridge() {
 						pageEvent.id,
 					);
 					assertRequestActive(request, "app page screenshot capture");
-					const { uploaded: uploadedSnapshots, uploadErrors } =
-						await uploadPageSnapshots(backend, snapshot.images);
+					let captureFailure = snapshot.failureReason;
+					let captureSourceCurrent = snapshot.source
+						? isAppPageSnapshotSourceCurrent(
+								snapshot.source,
+								appId,
+								pageEvent.id,
+							)
+						: false;
+					if (snapshot.source && !captureSourceCurrent) {
+						captureFailure =
+							"The page instance changed while its visual state was being captured.";
+					}
+					const uploadResult = captureSourceCurrent
+						? await uploadPageSnapshots(backend, snapshot.images)
+						: { uploaded: [], uploadErrors: [] };
 					assertRequestActive(request, "app page screenshot upload");
+					if (
+						snapshot.source &&
+						!isAppPageSnapshotSourceCurrent(
+							snapshot.source,
+							appId,
+							pageEvent.id,
+						)
+					) {
+						captureSourceCurrent = false;
+						captureFailure =
+							"The page instance changed while its visual captures were being attached.";
+					}
+					const uploadedSnapshots = captureSourceCurrent
+						? uploadResult.uploaded
+						: [];
+					const uploadErrors = uploadResult.uploadErrors;
 					const screenshotCount = uploadedSnapshots.length;
 					const screenshotComplete =
-						snapshot.complete && screenshotCount === snapshot.images.length;
+						captureSourceCurrent &&
+						snapshot.complete &&
+						screenshotCount === snapshot.images.length;
+					const livePage = captureSourceCurrent
+						? snapshot.source?.handle
+						: findLivePage(appId, { eventId: pageEvent.id });
+					let inspection: ReturnType<typeof inspectLiveAppPage> | undefined;
+					let semanticInspectionFailure: string | undefined;
+					if (livePage) {
+						try {
+							inspection = inspectLiveAppPage(livePage);
+						} catch (error) {
+							semanticInspectionFailure = getErrorMessage(
+								error,
+								"The rendered component tree could not be inspected.",
+							);
+						}
+					} else {
+						semanticInspectionFailure =
+							"No matching live page registered a rendered component tree.";
+					}
+					const semanticInspectionComplete = Boolean(
+						inspection?.root_component_id,
+					);
+					const evidenceComplete =
+						screenshotComplete && semanticInspectionComplete;
 					const failureDetail =
 						screenshotCount > 0
-							? undefined
+							? captureFailure ||
+								(uploadErrors.length > 0 ? uploadErrors[0] : undefined)
 							: snapshot.images.length > 0
-								? `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be uploaded for attachment (${uploadErrors[0] ?? "unknown upload error"})`
-								: `its rendered content could not be captured${snapshot.failureReason ? ` (${snapshot.failureReason})` : ""}`;
+								? captureFailure
+									? `its captured evidence was discarded: ${captureFailure}`
+									: `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be attached (${uploadErrors[0] ?? "unknown attachment error"})`
+								: `its rendered content could not be captured${captureFailure ? ` (${captureFailure})` : ""}`;
+					const failureDetailText = failureDetail?.replace(/[.\s]+$/, "");
 					return {
-						status: "ok",
+						status: evidenceComplete ? "ok" : "partial",
 						event_id: pageEvent.id,
 						page_id: pageEvent.default_page_id,
 						...(resolution.canonicalized_from
@@ -2587,14 +2667,32 @@ export function GlobalToolBridge() {
 									requested_event_id: eventId,
 								}
 							: {}),
-						message:
-							screenshotCount > 0
-								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
-								: `Embedded the page '${pageEvent.name}' inline, but ${failureDetail}. Do not claim to have read the page visually.`,
+						message: evidenceComplete
+							? `Embedded the page '${pageEvent.name}' inline, attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"}, and inspected its rendered controls and content.`
+							: screenshotComplete
+								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} complete visual capture${screenshotCount === 1 ? "" : "s"}, but semantic inspection did not register a rendered component tree. Use the visual captures and do not claim that controls were inspected structurally.`
+								: screenshotCount > 0
+									? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"}, but the visual evidence is partial${failureDetailText ? ` (${failureDetailText})` : ""}. ${semanticInspectionComplete ? "Inspect the semantic elements too" : "Semantic inspection was also unavailable"}, and do not claim that uncaptured regions were read visually.`
+									: `Embedded the page '${pageEvent.name}' inline, but ${failureDetailText ?? "its rendered content could not be captured"}. Semantic elements are included when the live page registered successfully. Do not claim to have read the page visually.`,
 						screenshot_count: screenshotCount,
 						screenshot_complete: screenshotComplete,
+						semantic_inspection_complete: semanticInspectionComplete,
+						...(inspection
+							? {
+									root_component_id: inspection.root_component_id,
+									element_count: inspection.element_count,
+									elements: inspection.elements,
+									...(inspection.elements_truncated
+										? { elements_truncated: true }
+										: {}),
+								}
+							: {}),
+						...(captureFailure ? { capture_failure: captureFailure } : {}),
 						...(uploadErrors.length > 0
 							? { upload_errors: uploadErrors.slice(0, 3) }
+							: {}),
+						...(semanticInspectionFailure
+							? { semantic_inspection_failure: semanticInspectionFailure }
 							: {}),
 						...(screenshotCount > 0
 							? { _flowpilot_image_urls: uploadedSnapshots }
@@ -2629,38 +2727,62 @@ export function GlobalToolBridge() {
 							message:
 								"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
 						};
-					// The live target is keyed by the CANONICAL page Event id. The resolver also
-					// repairs a page id passed as event_id (canonicalized_from: "page_id"), so a
-					// raw-id miss must be re-resolved before embedding or waiting — driving and
-					// revealing under the raw id would strand a collapsed card and time out.
+					// Validate the target against the current Event inventory on every interaction,
+					// including when an older render is still mounted. A stale live handle must not
+					// keep an inactive or repurposed Event executable.
 					let resolvedEventId: string | undefined = eventId || undefined;
 					let resolvedPageId: string | undefined = pageId || undefined;
-					const requestedTarget = eventId || pageId;
-					if (requestedTarget && !findLivePage(appId, { eventId, pageId })) {
-						const lookup = await resolveOpenAppPageRequest(
-							requestedTarget,
-							(targetEventId) =>
-								backend.eventState.getEvent(appId, targetEventId),
-							() => backend.eventState.getEvents(appId, true),
-						);
-						if (
-							lookup.status !== "inventory_unavailable" &&
-							lookup.resolution.ok
-						) {
-							const pageEvent = lookup.resolution.event;
-							resolvedEventId = pageEvent.id;
-							resolvedPageId = undefined;
-							if (!findLivePage(appId, { eventId: resolvedEventId })) {
-								// No live instance — embed it inline through the same card
-								// open_app_page uses before driving it.
-								useGlobalChatStore.getState().addInlineAppPage({
-									appId,
-									eventId: pageEvent.id,
-									name: pageEvent.name || appId,
-								});
-								showConversation();
-							}
-						}
+					const currentLivePage = findLivePage(appId, { eventId, pageId });
+					const requestedTarget =
+						eventId ||
+						pageId ||
+						currentLivePage?.eventId ||
+						currentLivePage?.pageId;
+					if (!requestedTarget) {
+						return {
+							status: "error",
+							code: "page_target_missing",
+							message:
+								"No page target was supplied and no live page could provide one. Call open_app_page with a current page Event id, then retry.",
+						};
+					}
+					const lookup = await resolveOpenAppPageRequest(
+						requestedTarget,
+						(targetEventId) =>
+							backend.eventState.getEvent(appId, targetEventId),
+						() => backend.eventState.getEvents(appId, true),
+					);
+					if (lookup.status === "inventory_unavailable") {
+						return {
+							status: "error",
+							code: "event_inventory_unavailable",
+							retryable: true,
+							relist_required: true,
+							message: `Could not refresh app '${appId}' Event metadata to verify '${requestedTarget}'. Refresh list_apps once before retrying, and do not interact with the stale render.`,
+						};
+					}
+					if (!lookup.resolution.ok) {
+						return {
+							status: "error",
+							code: lookup.resolution.code,
+							retryable: false,
+							relist_required: lookup.resolution.relist_required,
+							actual_kind: lookup.resolution.actual_kind,
+							message: `The requested app page is no longer an active page interface (${lookup.resolution.code}). Refresh list_apps once when relist_required is true; do not interact with the stale render.`,
+						};
+					}
+					const pageEvent = lookup.resolution.event;
+					resolvedEventId = pageEvent.id;
+					resolvedPageId = undefined;
+					if (!findLivePage(appId, { eventId: resolvedEventId })) {
+						// No live instance. Embed it inline through the same card open_app_page uses
+						// before driving it.
+						useGlobalChatStore.getState().addInlineAppPage({
+							appId,
+							eventId: pageEvent.id,
+							name: pageEvent.name || appId,
+						});
+						showConversation();
 					}
 					assertRequestActive(request, "app page interaction");
 					scope.referenceApp(appId);
@@ -6742,9 +6864,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 				}
 
 				const approval = request.approval;
-				const sessionKey =
-					approval?.sessionKey ||
-					`${request.toolName}:${approval?.kind ?? "none"}`;
+				const approvalScope = resolveFrontendToolApprovalScope({
+					requestId: request.requestId,
+					toolName: request.toolName,
+					arguments: request.arguments,
+					approvalKind: approval?.kind,
+					approvalSessionKey: approval?.sessionKey,
+					contextAppId: request.context?.appId || request.context?.app_id,
+				});
+				const sessionKey = approvalScope.sessionKey;
 				// Read through getState() rather than a selector so `execute` keeps a stable
 				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
 				// backend is untouched, so ordered execution of mutating tools still holds.
@@ -6756,7 +6884,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						request.arguments,
 					);
 
-				if (needsApproval && !approvedKeysRef.current.has(sessionKey)) {
+				if (
+					needsApproval &&
+					(!approvalScope.rememberable ||
+						!approvedKeysRef.current.has(sessionKey))
+				) {
 					const outcome = await openDialog({ type: "approval", request });
 					assertRequestActive(request, "approval response");
 					if (!outcome || !("approved" in outcome) || !outcome.approved) {
@@ -6766,7 +6898,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 							error: "User denied the request.",
 						};
 					}
-					if (outcome.remember) approvedKeysRef.current.add(sessionKey);
+					if (outcome.remember && approvalScope.rememberable) {
+						approvedKeysRef.current.add(sessionKey);
+					}
 				}
 
 				assertRequestActive(request, "tool mutation");
@@ -7312,6 +7446,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 		setToolPrompt,
 	]);
 
-	// The pending prompt is rendered inline by the chat surfaces (InlineToolPrompt) via the store.
-	return null;
+	// The tool listeners and live page runtimes share this provider-level lifetime. A page can
+	// therefore remain rendered in its offscreen parking slot while the chat overlay is closed.
+	return <InlineAppPageRuntimeHost />;
 }

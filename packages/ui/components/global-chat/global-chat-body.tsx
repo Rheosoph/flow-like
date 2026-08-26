@@ -205,10 +205,6 @@ const GLOBAL_CHAT_TYPING_MOTION = resolveChatPlaceholderTypingMotion(
 	GLOBAL_CHAT_CONFIG.placeholder_typing_motion,
 );
 
-// FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
-// conversation column is wide enough for a useful embedded desktop surface.
-const INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH = 1280;
-
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
 }
@@ -1057,12 +1053,48 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		inlineAppPages.length > 0 ||
 		inlineAppSurfaces.length > 0 ||
 		pendingComponents !== null;
-	const splitWorkspaceBelowInlineArtifacts =
-		sideBySideWorkspace &&
-		hasInlineArtifacts &&
-		layoutWidth < INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH;
-	const fullHeightConversationColumn =
-		sideBySideWorkspace && !splitWorkspaceBelowInlineArtifacts;
+	const inlineArtifacts = useMemo(
+		() =>
+			hasInlineArtifacts ? (
+				<div className="flex w-full flex-col gap-3 py-1">
+					<PendingComponentsCard />
+					{inlineAppPages.map((page) => (
+						<InlineAppPageCard
+							key={page.id}
+							page={page}
+							onClose={removeInlineAppPage}
+							compact={compact}
+						/>
+					))}
+					{inlineAppSurfaces.map((surface) => (
+						<InlineAppSurfaceCard
+							key={surface.id}
+							surface={surface}
+							onClose={removeInlineAppSurface}
+							compact={compact}
+						/>
+					))}
+					{inlineAppChats.map((chat) => (
+						<InlineAppChatCard
+							key={chat.id}
+							chat={chat}
+							onClose={removeInlineAppChat}
+							compact={compact}
+						/>
+					))}
+				</div>
+			) : undefined,
+		[
+			compact,
+			hasInlineArtifacts,
+			inlineAppChats,
+			inlineAppPages,
+			inlineAppSurfaces,
+			removeInlineAppChat,
+			removeInlineAppPage,
+			removeInlineAppSurface,
+		],
+	);
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo<ProviderModelPickerModel[]>(
@@ -1493,70 +1525,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			<div
 				ref={layoutRef}
 				className={`min-h-0 min-w-0 flex-1 overflow-hidden ${
-					fullHeightConversationColumn
-						? "flex flex-row"
-						: splitWorkspaceBelowInlineArtifacts
-							? "grid grid-cols-[minmax(0,1fr)_clamp(420px,48%,660px)] grid-rows-[auto_minmax(0,1fr)]"
-							: "flex flex-col"
+					sideBySideWorkspace ? "flex flex-row" : "flex flex-col"
 				}`}
 			>
-				<div
-					// On a roomy desktop surface, app previews belong to the conversation column so
-					// FlowScript can use the full height beside them. `contents` lets narrower split
-					// and stacked layouts position the same mounted children without losing app state.
-					className={
-						fullHeightConversationColumn
-							? "relative flex min-h-0 min-w-0 flex-1 flex-col"
-							: "contents"
-					}
-				>
-					{hasInlineArtifacts && (
-						<div
-							className={`min-w-0 shrink-0 max-h-[60vh] overflow-y-auto pt-2 ${
-								splitWorkspaceBelowInlineArtifacts
-									? "col-span-2 row-start-1"
-									: ""
-							}`}
-						>
-							<PendingComponentsCard />
-							{inlineAppPages.map((page) => (
-								<InlineAppPageCard
-									key={page.id}
-									page={page}
-									onClose={removeInlineAppPage}
-									compact={compact}
-								/>
-							))}
-							{inlineAppSurfaces.map((surface) => (
-								<InlineAppSurfaceCard
-									key={surface.id}
-									surface={surface}
-									onClose={removeInlineAppSurface}
-									compact={compact}
-								/>
-							))}
-							{inlineAppChats.map((chat) => (
-								<InlineAppChatCard
-									key={chat.id}
-									chat={chat}
-									onClose={removeInlineAppChat}
-									compact={compact}
-								/>
-							))}
-						</div>
-					)}
-
+				<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
 					{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and
 					    without a flex parent its height collapses to content size, breaking the
 					    internal scroll area. In a narrow dock the workspace replaces the chat rather
 					    than squeezing beside it, so hide (don't unmount) the chat to keep its
 					    scroll/stream state alive underneath. */}
 					<div
-						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${
-							splitWorkspaceBelowInlineArtifacts
-								? "col-start-1 row-start-2"
-								: ""
-						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
+						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
 					>
 						{emptyStateMounted && (
 							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center overflow-hidden px-6">
@@ -1590,6 +1569,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								onRespondToInteraction={handleRespondToInteraction}
 								onMessageUpdate={handleMessageUpdate}
 								showAiDisclosure
+								inlineContent={inlineArtifacts}
 								inlinePrompt={
 									toolPrompt ? (
 										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
@@ -1599,25 +1579,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						</ChatWidgetExecutionProvider>
 					</div>
 				</div>
-				{showWorkspace &&
-					flowscriptWorkspace &&
-					(splitWorkspaceBelowInlineArtifacts ? (
-						<div className="col-start-2 row-start-2 flex min-h-0 min-w-0 overflow-hidden border-l border-border/30">
-							<FlowScriptWorkspacePanel
-								source={flowscriptWorkspace.source}
-								status={flowscriptWorkspace.status}
-								fill
-								onClose={() => setFlowscriptHidden(true)}
-							/>
-						</div>
-					) : (
-						<FlowScriptWorkspacePanel
-							source={flowscriptWorkspace.source}
-							status={flowscriptWorkspace.status}
-							fill={!canSideBySide}
-							onClose={() => setFlowscriptHidden(true)}
-						/>
-					))}
+				{showWorkspace && flowscriptWorkspace && (
+					<FlowScriptWorkspacePanel
+						source={flowscriptWorkspace.source}
+						status={flowscriptWorkspace.status}
+						fill={!canSideBySide}
+						onClose={() => setFlowscriptHidden(true)}
+					/>
+				)}
 			</div>
 
 			{profileId && (

@@ -4,6 +4,7 @@ import { registerLivePage } from "../components/a2ui/live-page-registry";
 import {
 	INLINE_PAGE_REVEAL_EVENT,
 	captureInlineAppPageSnapshots,
+	isAppPageSnapshotSourceCurrent,
 	normalizePageCaptureClone,
 	uploadPageSnapshots,
 	waitForCapturePaint,
@@ -47,8 +48,7 @@ describe("app page capture hardening", () => {
 				scrollHeight: { configurable: true, value: 600 },
 				scrollWidth: { configurable: true, value: 720 },
 			});
-			element.getBoundingClientRect = () =>
-				({ width: 720 }) as DOMRect;
+			element.getBoundingClientRect = () => ({ width: 720 }) as DOMRect;
 			document.body.append(element);
 		}
 		const handle = (element: HTMLElement, appId: string, eventId: string) => ({
@@ -88,7 +88,61 @@ describe("app page capture hardening", () => {
 		}
 	});
 
-	test("normalizes a parked capture clone without changing the live tree", () => {
+	test("ties visual evidence to the exact live instance that was captured", async () => {
+		const target = document.createElement("main");
+		Object.defineProperties(target, {
+			clientHeight: { configurable: true, value: 300 },
+			clientWidth: { configurable: true, value: 500 },
+			scrollHeight: { configurable: true, value: 300 },
+			scrollWidth: { configurable: true, value: 500 },
+		});
+		target.getBoundingClientRect = () => ({ width: 500 }) as DOMRect;
+		document.body.append(target);
+		const handle = {
+			appId: "source-app",
+			eventId: "source-event",
+			pageId: "source-page",
+			getContainer: () => target,
+			getElementValues: () => ({}),
+			getSurface: () => null,
+			isLoading: () => false,
+			setElementValue: () => undefined,
+			triggerComponentEvent: async () => ({
+				actionCount: 0,
+				runs: [],
+				source: "none" as const,
+				triggered: false,
+			}),
+		};
+		const unregister = registerLivePage(handle);
+		try {
+			const result = await captureInlineAppPageSnapshots(
+				"source-app",
+				"source-event",
+				500,
+			);
+			expect(
+				isAppPageSnapshotSourceCurrent(
+					result.source,
+					"source-app",
+					"source-event",
+				),
+			).toBe(true);
+
+			unregister();
+			expect(
+				isAppPageSnapshotSourceCurrent(
+					result.source,
+					"source-app",
+					"source-event",
+				),
+			).toBe(false);
+		} finally {
+			unregister();
+		}
+	});
+
+	test("normalizes a parked capture clone", () => {
 		const parked = document.createElement("div");
 		parked.setAttribute("data-flowpilot-page-parking", "");
 		parked.hidden = true;
@@ -112,10 +166,12 @@ describe("app page capture hardening", () => {
 
 	test("paint settling completes when animation frames are paused", async () => {
 		let cancelled = 0;
-		browserWindow.requestAnimationFrame = (() => 7) as typeof requestAnimationFrame;
+		const pausedAnimationFrame = () => 7;
+		browserWindow.requestAnimationFrame =
+			pausedAnimationFrame as unknown as Window["requestAnimationFrame"];
 		browserWindow.cancelAnimationFrame = (() => {
 			cancelled += 1;
-		}) as typeof cancelAnimationFrame;
+		}) as unknown as Window["cancelAnimationFrame"];
 
 		await waitForCapturePaint(Date.now() + 20);
 
@@ -164,6 +220,34 @@ describe("app page capture hardening", () => {
 		expect(atob(result.uploaded[0]?.data ?? "")).toBe("image bytes");
 	});
 
+	test("desktop attachments stop at the first segment that exceeds a limit", async () => {
+		Object.assign(browserWindow, { __TAURI_INTERNALS__: {} });
+		const oversized = new Blob(["oversized"], { type: "image/png" });
+		Object.defineProperty(oversized, "size", {
+			value: 8 * 1024 * 1024 + 1,
+		});
+		const backend = { helperState: {} } as never;
+
+		const result = await uploadPageSnapshots(backend, [
+			{
+				blob: new Blob(["first"], { type: "image/png" }),
+				mediaType: "image/png",
+			},
+			{ blob: oversized, mediaType: "image/png" },
+			{
+				blob: new Blob(["third"], { type: "image/png" }),
+				mediaType: "image/png",
+			},
+		]);
+
+		expect(result.uploaded).toHaveLength(1);
+		expect(atob(result.uploaded[0]?.data ?? "")).toBe("first");
+		expect(result.uploadErrors[0]).toContain("Capture 2");
+		expect(result.uploadErrors[1]).toContain(
+			"1 later capture attachment(s) were skipped",
+		);
+	});
+
 	test("web attachments retain remotely readable URLs", async () => {
 		const backend = {
 			helperState: {
@@ -181,9 +265,40 @@ describe("app page capture hardening", () => {
 		]);
 
 		expect(result.uploadErrors).toEqual([]);
-		expect(result.uploaded[0]?.url).toBe(
-			"https://temporary.test/capture.png",
-		);
+		expect(result.uploaded[0]?.url).toBe("https://temporary.test/capture.png");
 		expect(result.uploaded[0]?.data).toBeUndefined();
+	});
+
+	test("web attachments retain only the contiguous prefix after an upload failure", async () => {
+		let uploadCalls = 0;
+		const backend = {
+			helperState: {
+				fileToTemporaryFile: async () => {
+					uploadCalls += 1;
+					if (uploadCalls === 2) throw new Error("temporary storage failed");
+					return {
+						url: `https://temporary.test/capture-${uploadCalls}.png`,
+					};
+				},
+			},
+		} as never;
+		const images = ["first", "second", "third"].map((contents) => ({
+			blob: new Blob([contents], { type: "image/png" }),
+			mediaType: "image/png",
+		}));
+
+		const result = await uploadPageSnapshots(backend, images);
+
+		expect(uploadCalls).toBe(2);
+		expect(result.uploaded).toHaveLength(1);
+		expect(result.uploaded[0]?.url).toBe(
+			"https://temporary.test/capture-1.png",
+		);
+		expect(result.uploadErrors[0]).toContain(
+			"Capture 2: temporary storage failed",
+		);
+		expect(result.uploadErrors[1]).toContain(
+			"1 later capture attachment(s) were skipped",
+		);
 	});
 });

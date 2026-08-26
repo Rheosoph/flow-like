@@ -1069,11 +1069,12 @@ signatures before writing.
 "#;
 
 /// Board size/organization contract shared by board prompts. Mirrored by a reconcile-time
-/// diagnostic (`MAX_NODES_PER_LAYER`) so oversized layers are rejected, not just discouraged.
+/// advisory correction (`MAX_NODES_PER_LAYER`) so oversized layers are flagged, not rejected.
 pub const BOARD_ORGANIZATION_GUIDANCE: &str = r#"
-## BOARD ORGANIZATION (HARD LIMIT: 100 NODES PER LAYER)
-A single layer — the root, an event body, or one function layer — must never hold more than 100
-nodes. `check_flowscript` REJECTS source that would exceed this, so design within it from the start:
+## BOARD ORGANIZATION (GUIDELINE: 100 NODES PER LAYER)
+A single layer — the root, an event body, or one function layer — should never hold more than 100
+nodes. `check_flowscript` applies edits that exceed this but returns an advisory correction, so
+design within the guideline from the start:
 
 - Decompose by responsibility: one entry function per event/page plus small helper `function`
   declarations (each becomes its own Function layer with its own 100-node budget).
@@ -1112,6 +1113,25 @@ default once a board covers more than one domain: one module per domain (`module
   moves out of a module to the root are additionally gated like deletions.
 - Keep an existing board's module structure unless the user asks for reorganization or the edit
   clearly belongs in a new domain.
+"#;
+
+/// Board-test convention shared by board prompts: `test`-prefixed simple events assert with
+/// `test::assert`, and `run_board_tests` executes them post-apply for a structured verdict.
+pub const TESTING_GUIDANCE: &str = r#"
+## BOARD TESTS (test EVENTS + test::assert)
+A board test is a normal simple event whose name starts with `test`
+(`eventsSimple testEmptyCart() { … }`). Cover each critical behavior of a non-trivial board with
+one small test event: build the fixture inline from literals, call the same helper `function`s the
+production events use, and check outcomes with `test::assert({ condition, label, details })` — pass
+logs `ASSERT_OK {label}` and continues; fail logs `ASSERT_FAIL {label} {details}` and halts that
+run as an error. Give every assert a stable, unique `label`.
+- One behavior per test event; shared fixtures belong in helper functions. Test nodes count toward
+  the 100-node layer guideline.
+- Tests run against live app state (storage/DB): create scratch rows instead of mutating real data.
+- `run_board_tests` executes every `test*` event on the PERSISTED board and returns a per-test
+  verdict (assertion counts plus error logs). Like all runtime verification it runs in a later
+  turn after the edit is applied, never against a merely queued draft. When it reports failures,
+  fix the board, re-commit, and run it again.
 "#;
 
 /// Function-layer result-cache syntax and safety contract shared by every board-capable prompt.
@@ -1339,8 +1359,8 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
 - `use ns::*` at the TOP of the file (before interfaces and variables, nowhere else) opens a
   namespace so its members are called bare: `use db::*` then `open({ name: "x" })`. Open a
   namespace when you call several of its members; rendered boards open every namespace with two or
-  more call sites. `use a::b` (brings `b::…` into scope), `use a::b as c` and `use a::{ x, y }` are
-  accepted too.
+  more call sites. `use a::b` (brings `b::…` into scope), `use a::b as c`, `use a::{ x, y }` and
+  `use a::{ x as y }` are accepted too.
 - A declaration with a `this:` parameter is also a METHOD on that value: `s.trim()`,
   `s.contains("?")` (one remaining input may be positional), `s.contains({ substring: "?",
   ignoreCase: true })`, `xs.push(item)`, `date.format("%Y-%m-%d")`. The receiver binds the `this`
@@ -1360,7 +1380,8 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
   itself — write `const digest = content.md5()`, never `const { hash: digest } = content.md5()`.
   `const x = call()` binds the default output.
 - Top-level `const name = "literal"` infers `string | int | float | bool` (JSON object → `Struct`,
-  array → `any[]`); `const name: Type = …` is still required for anything else. Operators:
+  array → `any[]`; a JSON `{…}`/`[…]` initializer must be compact canonical JSON — double-quoted
+  keys, no spaces); `const name: Type = …` is still required for anything else. Operators:
   `+ - * / % **`, comparisons, `&& || !`, unary `-x`, `+= -= *= /=`, ternary `c ? a : b`.
   `'single quotes'` and trailing `;` are accepted and render as double quotes without `;`.
 
@@ -1491,7 +1512,7 @@ eventsGeneric(payload: Struct) {
 ```
 
 #### Loop bodies, impure continuation, and layer decomposition
-Aim for 20–30 nodes per helper and split before the hard 100-node layer limit. The statement after
+Aim for 20–30 nodes per helper and split before the 100-node layer guideline. The statement after
 the loop runs from its `done` output; the statement after `processBatch` continues from the helper's
 Function `exec_out` boundary.
 ```flowscript-verified
@@ -2048,6 +2069,8 @@ FlowScript through write/patch/check/commit.
 
 {organization_guidance}
 
+{testing_guidance}
+
 {function_cache_guidance}
 
 {execution_guidance}
@@ -2092,7 +2115,8 @@ storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read one
 persisted run's logs). Never use database_tool or storage_tool mutation operations from this board
 specialist — including `delete_table`, which permanently drops a table and its schema.
-**Post-apply runtime verification**: execute_event, execute_node, interact_app_page (drive a live
+**Post-apply runtime verification**: execute_event, execute_node, run_board_tests (run every
+`test*` event and return per-test assertion verdicts), interact_app_page (drive a live
 rendered page: set inputs, trigger buttons, observe runs + screenshots) and call_app_chat (send a
 real message to the app's chat Event) are only for a separate later verification request against an
 already-persisted board. They are not part of the current board build loop and must never run a
@@ -2131,6 +2155,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        testing_guidance = TESTING_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2704,6 +2729,8 @@ pub fn general_system_prompt() -> String {
 
 {organization_guidance}
 
+{testing_guidance}
+
 {function_cache_guidance}
 
 {execution_guidance}
@@ -2729,6 +2756,7 @@ pub fn general_system_prompt() -> String {
         dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        testing_guidance = TESTING_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2788,6 +2816,8 @@ FlowScript surface is required.
 
 {organization_guidance}
 
+{testing_guidance}
+
 {function_cache_guidance}
 
 {execution_guidance}
@@ -2811,6 +2841,7 @@ resend it; if the error says FlowScript is required, switch to the retained sour
         dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        testing_guidance = TESTING_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2942,6 +2973,8 @@ resend.
 
 {organization_guidance}
 
+{testing_guidance}
+
 {function_cache_guidance}
 
 {execution_guidance}
@@ -2965,7 +2998,8 @@ storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read logs
 for an exact persisted run). Never use database_tool or storage_tool mutation operations from this
 board specialist — including `delete_table`, which permanently drops a table and its schema.
-**Post-apply runtime verification**: execute_event, execute_node, interact_app_page (drive a live
+**Post-apply runtime verification**: execute_event, execute_node, run_board_tests (run every
+`test*` event and return per-test assertion verdicts), interact_app_page (drive a live
 rendered page: set inputs, trigger buttons, observe runs + screenshots) and call_app_chat (send a
 real message to the app's chat Event) are only for a separate later verification request against an
 already-persisted board. They are not part of the current board build loop and must never run a
@@ -2992,6 +3026,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        testing_guidance = TESTING_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,

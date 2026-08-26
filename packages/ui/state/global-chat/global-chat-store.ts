@@ -262,6 +262,8 @@ export interface GlobalToolPrompt {
 	/** A gate that must never be answered without the user (e.g. the FlowScript deletion
 	 * re-apply). Auto mode skips these — waiving permission never extends to deletions. */
 	destructive?: boolean;
+	/** False when this one request cannot be safely represented by a reusable approval scope. */
+	rememberable?: boolean;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
 	respond: (value: GlobalToolPromptResolution) => void;
@@ -429,6 +431,8 @@ interface GlobalChatState {
 	addInlineAppChat: (chat: Omit<InlineAppChat, "id">) => void;
 	removeInlineAppChat: (id: string) => void;
 	addInlineAppPage: (page: Omit<InlineAppPage, "id">) => void;
+	/** Keep a live card's identity while navigation resolves it to another page Event. */
+	retargetInlineAppPage: (id: string, eventId: string) => void;
 	removeInlineAppPage: (id: string) => void;
 	addInlineAppSurface: (surface: Omit<InlineAppSurface, "id">) => void;
 	removeInlineAppSurface: (id: string) => void;
@@ -822,6 +826,25 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			return {
 				inlineAppPages: [...state.inlineAppPages, { ...page, id: createId() }],
 			};
+		}),
+	retargetInlineAppPage: (id, eventId) =>
+		set((state) => {
+			const current = state.inlineAppPages.find((page) => page.id === id);
+			if (!current) return state;
+
+			let changed = current.eventId !== eventId;
+			const inlineAppPages = state.inlineAppPages.flatMap((page) => {
+				if (page.id === id) {
+					return page.eventId === eventId ? [page] : [{ ...page, eventId }];
+				}
+				if (page.appId === current.appId && page.eventId === eventId) {
+					changed = true;
+					return [];
+				}
+				return [page];
+			});
+
+			return changed ? { inlineAppPages } : state;
 		}),
 	removeInlineAppPage: (id) =>
 		set((state) => ({

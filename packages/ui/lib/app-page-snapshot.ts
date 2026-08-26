@@ -6,7 +6,10 @@
  * slices, which avoids allocating one browser canvas at the full content height.
  */
 
-import { findLivePage } from "../components/a2ui/live-page-registry";
+import {
+	type LivePageHandle,
+	findLivePage,
+} from "../components/a2ui/live-page-registry";
 import type { IHelperState } from "../state/backend-state/helper-state";
 import { isTauri } from "./platform";
 
@@ -34,6 +37,13 @@ export interface AppPageSnapshotResult {
 	totalHeight: number;
 	/** Why a capture failed or contains only a top-to-bottom prefix of the page. */
 	failureReason?: string;
+	/** Exact live instance used for this capture. Kept private to the frontend tool executor. */
+	source?: AppPageSnapshotSource;
+}
+
+export interface AppPageSnapshotSource {
+	handle: LivePageHandle;
+	element: HTMLElement;
 }
 
 export interface UploadedPageSnapshot {
@@ -67,20 +77,31 @@ export async function uploadPageSnapshots(
 ): Promise<{ uploaded: UploadedPageSnapshot[]; uploadErrors: string[] }> {
 	const uploaded: UploadedPageSnapshot[] = [];
 	const uploadErrors: string[] = [];
+	const capturePrefix = images.slice(0, MAX_SEGMENTS);
+	const recordSkippedTail = (failedIndex: number) => {
+		const skippedCount = capturePrefix.length - failedIndex - 1;
+		if (skippedCount > 0) {
+			uploadErrors.push(
+				`${skippedCount} later capture attachment(s) were skipped after capture ${failedIndex + 1} failed, preserving a contiguous top-to-bottom prefix.`,
+			);
+		}
+	};
 	if (isTauri()) {
 		let inlineBytes = 0;
-		for (const [index, image] of images.slice(0, MAX_SEGMENTS).entries()) {
+		for (const [index, image] of capturePrefix.entries()) {
 			if (image.blob.size > MAX_INLINE_IMAGE_BYTES) {
 				uploadErrors.push(
 					`Capture ${index + 1} is ${image.blob.size} bytes, above the ${MAX_INLINE_IMAGE_BYTES}-byte desktop attachment limit.`,
 				);
-				continue;
+				recordSkippedTail(index);
+				break;
 			}
 			if (inlineBytes + image.blob.size > MAX_INLINE_TOTAL_BYTES) {
 				uploadErrors.push(
 					`Capture ${index + 1} would exceed the ${MAX_INLINE_TOTAL_BYTES}-byte desktop attachment budget.`,
 				);
-				continue;
+				recordSkippedTail(index);
+				break;
 			}
 			try {
 				const data = await blobToBase64(image.blob);
@@ -90,6 +111,8 @@ export async function uploadPageSnapshots(
 				uploadErrors.push(
 					`Capture ${index + 1} could not be encoded for desktop attachment: ${error instanceof Error ? error.message : String(error)}`,
 				);
+				recordSkippedTail(index);
+				break;
 			}
 		}
 		if (images.length > MAX_SEGMENTS) {
@@ -100,62 +123,50 @@ export async function uploadPageSnapshots(
 		return { uploaded, uploadErrors };
 	}
 
-	const results = await Promise.all(
-		images.slice(0, MAX_SEGMENTS).map(
-			async (
-				image,
-				index,
-			): Promise<UploadedPageSnapshot | { error: string }> => {
-				const extension =
-					image.mediaType === "image/webp"
-						? "webp"
-						: image.mediaType === "image/jpeg"
-							? "jpg"
-							: "png";
-				const file = new File(
-					[image.blob],
-					`flowpilot-page-${index + 1}.${extension}`,
-					{ type: image.mediaType },
-				);
-				try {
-					const temporaryFile = backend.helperState.fileToTemporaryFile
-						? await backend.helperState.fileToTemporaryFile(
-								file,
-								false,
-								undefined,
-								"remote",
-							)
-						: {
-								url: await backend.helperState.fileToUrl(
-									file,
-									false,
-									undefined,
-									"remote",
-								),
-							};
-					if (!/^https?:\/\//i.test(temporaryFile.url)) {
-						throw new Error(
-							"Temporary upload did not return a remotely readable URL.",
-						);
-					}
-					return { url: temporaryFile.url, media_type: image.mediaType };
-				} catch (error) {
-					console.warn(
-						"[AppPageSnapshot] failed to upload page capture",
-						error,
-					);
-					return {
-						error: error instanceof Error ? error.message : String(error),
+	for (const [index, image] of capturePrefix.entries()) {
+		const extension =
+			image.mediaType === "image/webp"
+				? "webp"
+				: image.mediaType === "image/jpeg"
+					? "jpg"
+					: "png";
+		const file = new File(
+			[image.blob],
+			`flowpilot-page-${index + 1}.${extension}`,
+			{ type: image.mediaType },
+		);
+		try {
+			const temporaryFile = backend.helperState.fileToTemporaryFile
+				? await backend.helperState.fileToTemporaryFile(
+						file,
+						false,
+						undefined,
+						"remote",
+					)
+				: {
+						url: await backend.helperState.fileToUrl(
+							file,
+							false,
+							undefined,
+							"remote",
+						),
 					};
-				}
-			},
-		),
-	);
-	for (const [index, result] of results.entries()) {
-		if ("error" in result) {
-			uploadErrors.push(`Capture ${index + 1}: ${result.error}`);
-		} else {
-			uploaded.push(result);
+			if (!/^https?:\/\//i.test(temporaryFile.url)) {
+				throw new Error(
+					"Temporary upload did not return a remotely readable URL.",
+				);
+			}
+			uploaded.push({
+				url: temporaryFile.url,
+				media_type: image.mediaType,
+			});
+		} catch (error) {
+			console.warn("[AppPageSnapshot] failed to upload page capture", error);
+			uploadErrors.push(
+				`Capture ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			recordSkippedTail(index);
+			break;
 		}
 	}
 	if (images.length > MAX_SEGMENTS) {
@@ -242,7 +253,7 @@ async function waitForRenderedPage(
 	appId: string,
 	eventId: string | undefined,
 	timeoutMs: number,
-): Promise<HTMLElement | null> {
+): Promise<AppPageSnapshotSource | null> {
 	const deadline = Date.now() + timeoutMs;
 	while (true) {
 		const handle = findLivePage(appId, { eventId });
@@ -265,7 +276,7 @@ async function waitForRenderedPage(
 				!currentHandle.isLoading() &&
 				pageCanvas.dataset.flowpilotPageLoading !== "true"
 			) {
-				return pageCanvas;
+				return { handle, element: pageCanvas };
 			}
 		}
 		const remaining = deadline - Date.now();
@@ -273,6 +284,22 @@ async function waitForRenderedPage(
 		await delay(Math.min(100, remaining));
 	}
 	return null;
+}
+
+/** True only while the exact page instance used for a capture remains the selected live page. */
+export function isAppPageSnapshotSourceCurrent(
+	source: AppPageSnapshotSource | undefined,
+	appId: string,
+	eventId?: string,
+): boolean {
+	if (!source?.element.isConnected) return false;
+	const current = findLivePage(appId, {
+		eventId,
+		pageId: source.handle.pageId,
+	});
+	return (
+		current === source.handle && current.getContainer?.() === source.element
+	);
 }
 
 function canvasToSnapshot(
@@ -352,10 +379,10 @@ export function normalizePageCaptureClone(
 		forceCaptureStyle(ancestor, "clip", "auto");
 		forceCaptureStyle(ancestor, "clip-path", "none");
 
-		const computedDisplay = clonedDocument.defaultView?.getComputedStyle(
-			ancestor,
-		).display;
-		if (computedDisplay === "none") forceCaptureStyle(ancestor, "display", "block");
+		const computedDisplay =
+			clonedDocument.defaultView?.getComputedStyle(ancestor).display;
+		if (computedDisplay === "none")
+			forceCaptureStyle(ancestor, "display", "block");
 
 		if (ancestor.hasAttribute("data-flowpilot-page-parking")) {
 			forceCaptureStyle(ancestor, "position", "absolute");
@@ -384,15 +411,20 @@ export async function captureInlineAppPageSnapshots(
 	eventId?: string,
 	timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
 ): Promise<AppPageSnapshotResult> {
-	const element = await waitForRenderedPage(appId, eventId, timeoutMs);
-	if (!element)
+	const source = await waitForRenderedPage(appId, eventId, timeoutMs);
+	if (!source)
 		return {
 			images: [],
 			complete: false,
 			totalHeight: 0,
 			failureReason: `The page runtime did not finish rendering within ${Math.round(timeoutMs / 1000)}s (its on-load workflow may still be running, or no matching page instance is registered).`,
 		};
-	return capturePageElementSnapshots(element, appId, eventId);
+	const result = await capturePageElementSnapshots(
+		source.element,
+		appId,
+		eventId,
+	);
+	return { ...result, source };
 }
 
 /**
@@ -460,11 +492,7 @@ export async function capturePageElementSnapshots(
 						imageTimeout: 3_000,
 						logging: false,
 						onclone: (clonedDocument) =>
-							normalizePageCaptureClone(
-								clonedDocument,
-								captureMarker,
-								width,
-							),
+							normalizePageCaptureClone(clonedDocument, captureMarker, width),
 						scale,
 						useCORS: true,
 						width,

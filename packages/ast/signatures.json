@@ -46153,7 +46153,7 @@
     {
       "node_type": "df_register_athena",
       "display": "dfRegisterAthena",
-      "friendly": "Register Athena Table",
+      "friendly": "Register AWS Athena",
       "category": "Data/DataFusion/Databases",
       "inputs": [
         {
@@ -46163,7 +46163,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "DataFusion session to register the table in",
+          "doc": "DataFusion session",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DataFusionSession\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
         },
         {
@@ -46173,16 +46173,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "AWS region where Athena is configured"
-        },
-        {
-          "name": "credential_mode",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": true,
-          "doc": "How to authenticate: 'explicit' (access keys), 'environment' (env vars/Lambda IAM role/profile via AWS_PROFILE env var)"
+          "doc": "AWS region (e.g., us-east-1)"
         },
         {
           "name": "access_key_id",
@@ -46191,7 +46182,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "AWS access key ID (only used when credential_mode is 'explicit')"
+          "doc": "AWS Access Key ID"
         },
         {
           "name": "secret_access_key",
@@ -46200,16 +46191,16 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "AWS secret access key (only used when credential_mode is 'explicit')"
+          "doc": "AWS Secret Access Key"
         },
         {
-          "name": "session_token",
+          "name": "s3_output_location",
           "ty": {
             "base": "string",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Optional AWS session token for temporary credentials"
+          "doc": "S3 path for query results (e.g., s3://my-bucket/athena-results/)"
         },
         {
           "name": "catalog",
@@ -46218,34 +46209,25 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Athena data catalog name (default: AwsDataCatalog)"
+          "doc": "Athena data catalog name"
         },
         {
-          "name": "athena_database",
+          "name": "database",
           "ty": {
             "base": "string",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Database name in Athena"
+          "doc": "Athena/Glue database name"
         },
         {
-          "name": "athena_table",
+          "name": "source_table",
           "ty": {
             "base": "string",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Table name in Athena to query"
-        },
-        {
-          "name": "output_location",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "S3 location for query results (e.g., s3://my-bucket/athena-results/)"
+          "doc": "Name of the table in Athena"
         },
         {
           "name": "table_name",
@@ -46254,7 +46236,25 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Name to register the table as in DataFusion"
+          "doc": "Name to register in DataFusion"
+        },
+        {
+          "name": "workgroup",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Athena workgroup (optional)"
+        },
+        {
+          "name": "odbc_driver",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Simba Athena ODBC driver name/path"
         }
       ],
       "outputs": [
@@ -46265,12 +46265,21 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "DataFusion session with registered table",
+          "doc": "DataFusion session",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DataFusionSession\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
+        },
+        {
+          "name": "connection_info",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Connection details (without secrets)"
         }
       ],
       "impure": true,
-      "doc": "Register an AWS Athena table in DataFusion. Query S3 data via Athena's catalog. Supports explicit credentials or environment variables (including Lambda IAM roles).",
+      "doc": "Register an AWS Athena table for federated queries via ODBC. Query data in S3 using serverless SQL.",
       "namespace": "df",
       "alias": "registerAthena",
       "receiver": "session"
@@ -59674,6 +59683,46 @@
       "alias": "subtract"
     },
     {
+      "node_type": "flow_assert",
+      "display": "flowAssert",
+      "friendly": "Assert",
+      "category": "Utils/Testing",
+      "inputs": [
+        {
+          "name": "condition",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "The condition that must hold."
+        },
+        {
+          "name": "label",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Stable name for this assertion, echoed in the ASSERT_OK/ASSERT_FAIL log markers."
+        },
+        {
+          "name": "details",
+          "ty": {
+            "base": "any",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional context logged when the assertion fails."
+        }
+      ],
+      "outputs": [],
+      "impure": true,
+      "doc": "Asserts a condition inside a flow. On pass it logs `ASSERT_OK {label}` (Info) and continues; on fail it logs `ASSERT_FAIL {label} {details}` (Error) and halts the run with an error. Test runners grep these stable marker prefixes. Name test events with a `test` prefix so they are discoverable by test tooling.",
+      "namespace": "test",
+      "alias": "assert"
+    },
+    {
       "node_type": "flush_local_db",
       "display": "flushLocalDb",
       "friendly": "Flush Database",
@@ -67630,7 +67679,7 @@
           },
           "optional": false,
           "doc": "List of indices on the table",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigDto\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigMetadata\",\"description\":\"Stable metadata shape for Lance index descriptions. The execution result\\nuses the storage DTO with the same serialized fields, while metadata builds\\navoid compiling the LanceDB implementation merely to describe this pin.\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}"
         }
       ],
       "impure": true,

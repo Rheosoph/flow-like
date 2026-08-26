@@ -44,26 +44,14 @@ pub fn count_matching_pins(node: &Node, sig: &DynamicPinSig) -> usize {
 /// Supports:
 /// - Exact match: "surfaceId/componentId"
 /// - Component ID suffix match: "componentId" (matches any "*/componentId")
+/// - Page retarget: "otherPageId/componentId" resolves to the current surface's
+///   component of the same name, unless the prefix names a widget instance.
 pub fn find_element<'a>(
     elements: &'a Map<String, Value>,
     element_id: &str,
 ) -> Option<(&'a String, &'a Value)> {
-    // First try exact match
-    if let Some(val) = elements.get(element_id) {
-        return Some((elements.keys().find(|k| *k == element_id).unwrap(), val));
-    }
-
-    // If no exact match and element_id doesn't contain "/", try suffix matching
-    if !element_id.contains('/') {
-        let suffix = format!("/{}", element_id);
-        for (key, val) in elements.iter() {
-            if key.ends_with(&suffix) {
-                return Some((key, val));
-            }
-        }
-    }
-
-    None
+    let key = flow_like::a2ui::resolve_element_key(elements, element_id)?;
+    elements.get(key).map(|value| (key, value))
 }
 
 /// Extracts element ID from either a string or an element object with __element_id field.
