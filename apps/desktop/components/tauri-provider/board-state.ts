@@ -1385,14 +1385,15 @@ export class BoardState implements IBoardState {
 
 		const promise = injectDataFunction(
 			async () => {
+				// The route reads version_type from the query string only, so a
+				// body here silently degrades every Major and Minor to a Patch.
 				const remoteData = await fetcher<[number, number, number]>(
 					this.backend.profile!,
-					`apps/${appId}/board/${boardId}`,
+					`apps/${appId}/board/${boardId}?version_type=${encodeURIComponent(
+						versionType,
+					)}`,
 					{
 						method: "PATCH",
-						body: JSON.stringify({
-							version_type: versionType,
-						}),
 					},
 					this.backend.auth,
 				);

@@ -299,7 +299,17 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 		[appId, boardId, backend, versions, invalidate, t],
 	);
 
-	const latest = (board.version ?? [0, 0, 0]).join(".");
+	// While a version is pinned, `board` is that immutable snapshot and its
+	// version field is the pinned number — naming it "Latest" would hide the
+	// draft entirely. Read the draft separately, and only while pinned; the
+	// unpinned key is the one the editor already holds, so this hits cache.
+	const draft = useInvoke(
+		backend.boardState.getBoard,
+		backend.boardState,
+		[appId, boardId],
+		typeof version !== "undefined",
+	);
+	const latest = version ? draft.data?.version : board.version;
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -321,9 +331,11 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 					</SelectTrigger>
 					<SelectContent>
 						<SelectItem value="Latest">
-							{t("latestVersion", "Latest ({{version}})", {
-								version: latest,
-							})}
+							{latest
+								? t("latestVersion", "Latest ({{version}})", {
+										version: latest.join("."),
+									})
+								: t("latest", "Latest")}
 						</SelectItem>
 						{(versions.data ?? []).map((entry) => (
 							<SelectItem key={entry.join(".")} value={entry.join(".")}>

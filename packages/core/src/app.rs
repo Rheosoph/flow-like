@@ -1059,6 +1059,8 @@ impl App {
                 }
             }
         }
+
+        versions.sort_unstable_by(|a, b| b.cmp(a));
         Ok(versions)
     }
 

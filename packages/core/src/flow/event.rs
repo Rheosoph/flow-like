@@ -405,6 +405,10 @@ impl Event {
             }
         }
 
+        // Newest first, matching Board::get_versions. Beyond display order this
+        // keeps the desktop's local and remote listings comparable: the hybrid
+        // provider diffs them with an order-sensitive deep equal.
+        versions.sort_unstable_by(|a, b| b.cmp(a));
         Ok(versions)
     }
 
