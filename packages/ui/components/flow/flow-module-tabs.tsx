@@ -8,7 +8,7 @@ import {
 	Trash2Icon,
 	XIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IGenericCommand } from "../../lib";
 import {
@@ -118,26 +118,33 @@ function ModuleNameField({
 	);
 }
 
+// Extra props (and ref) must reach the root span so `ContextMenuTrigger asChild`
+// can attach its right-click handler.
 function ModuleTabButton({
 	label,
 	active,
 	onSelect,
 	onClose,
+	className,
+	...rest
 }: Readonly<{
 	label: string;
 	active: boolean;
 	onSelect: () => void;
 	/** Absent for `main.flow`, which is the board itself and always open. */
 	onClose?: () => void;
-}>) {
+}> &
+	Omit<ComponentProps<"span">, "children">) {
 	const { t } = useTranslation("flow");
 	return (
 		<span
+			{...rest}
 			className={cn(
 				"group/tab flex shrink-0 items-center rounded-md border pr-1 transition-colors",
 				active
 					? "border-border bg-background text-foreground shadow-sm"
 					: "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+				className,
 			)}
 		>
 			<button

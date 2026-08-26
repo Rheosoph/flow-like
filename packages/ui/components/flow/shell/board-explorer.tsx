@@ -85,6 +85,8 @@ function buildModuleTree(layers: Record<string, ILayer> | undefined): {
 	return { roots, all: modules };
 }
 
+// Extra props (and ref) must reach the root div so `ContextMenuTrigger asChild`
+// can attach its right-click handler.
 function TreeRow({
 	depth,
 	icon,
@@ -94,6 +96,8 @@ function TreeRow({
 	trailing,
 	expander,
 	onSelect,
+	className,
+	...rest
 }: Readonly<{
 	depth: number;
 	icon: React.ReactNode;
@@ -103,12 +107,15 @@ function TreeRow({
 	trailing?: React.ReactNode;
 	expander?: React.ReactNode;
 	onSelect?: () => void;
-}>) {
+}> &
+	Omit<React.ComponentProps<"div">, "children">) {
 	return (
 		<div
+			{...rest}
 			className={cn(
 				"group/row flex items-center gap-1 rounded-sm pr-1 text-xs",
 				active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+				className,
 			)}
 			style={{ paddingLeft: `${depth * 12 + 4}px` }}
 		>
@@ -123,7 +130,11 @@ function TreeRow({
 				<span
 					className={cn(
 						"shrink-0 [&>svg]:size-3.5",
-						muted ? "text-muted-foreground" : "text-primary",
+						active
+							? "text-accent-foreground"
+							: muted
+								? "text-muted-foreground"
+								: "text-primary",
 					)}
 				>
 					{icon}
@@ -331,12 +342,13 @@ export function BoardExplorer({
 		}
 
 		const isOpen = !collapsed.has(layer.id);
+		const isActive = currentFileId === layer.id;
 		const row = (
 			<TreeRow
 				depth={depth}
 				icon={<FileCode2Icon />}
 				label={`${layer.name}${MODULE_FILE_EXTENSION}`}
-				active={currentFileId === layer.id}
+				active={isActive}
 				onSelect={() => onSelectFile(layer.id)}
 				expander={
 					children.length > 0 ? (
@@ -344,7 +356,9 @@ export function BoardExplorer({
 							type="button"
 							aria-label={layer.name}
 							onClick={() => toggle(layer.id)}
-							className="text-muted-foreground"
+							className={
+								isActive ? "text-accent-foreground/70" : "text-muted-foreground"
+							}
 						>
 							{isOpen ? (
 								<ChevronDownIcon className="size-3" />
@@ -454,7 +468,12 @@ export function BoardExplorer({
 				onSelect={() => onSelectFile(null)}
 				trailing={
 					<LockIcon
-						className="size-3 shrink-0 text-muted-foreground/50"
+						className={cn(
+							"size-3 shrink-0",
+							currentFileId === MAIN_FILE_ID
+								? "text-accent-foreground/60"
+								: "text-muted-foreground/50",
+						)}
 						aria-label={t(
 							"theRootFileCannotBeChanged",
 							"The root file cannot be changed",

@@ -7,8 +7,8 @@
 <h1 align="center">Flow-Like</h1>
 
 <p align="center">
-  <strong>Edit the same executable Flow in typed FlowScript or on a live canvas.</strong><br/>
-  Flow-Like records where each entry runs and what its nodes need from the runtime.
+  <strong>Build Apps around typed Flows in FlowScript or on a live canvas.</strong><br/>
+  Keep executable logic with its interfaces, data, packages, access, releases, and run evidence.
 </p>
 
 <p align="center">
@@ -33,13 +33,21 @@ Most software work starts in the middle. The database already exists. The API ha
 never made it into the docs. A useful change still has to fit that system and remain understandable
 after it ships.
 
-Flow-Like is a developer platform for typed application logic. A **Flow** is one executable process,
-and its persisted graph is the **Board** that the Rust runtime executes locally or in a configured
-remote environment. An **App** groups the Flows that ship together and records how callers reach
-them.
+Flow-Like is a source-available developer platform for building and running application logic. A
+**Flow** is one executable process, and its persisted graph is the **Board** that the Rust runtime
+executes locally or on configured infrastructure.
+
+An **App** is the unit a team owns and ships. It keeps Flows beside the Events and Pages that expose
+them, the data they use, reusable packages, members, roles, and release settings. An App Event
+selects a Flow entry, version, and execution location for an API, schedule, chat, form, Page, REST
+endpoint, MCP server, or another supported caller.
+
+**Studio** is the complete desktop application. Developers use it to manage Apps, edit Flows,
+inspect data and packages, run logic locally, and trace results back to the Board. The browser app
+and configured backend provide shared access and remote execution.
 
 <p align="center">
-  <img src="apps/website/src/images/parallax/workflow-core.png" alt="Flow-Like Studio showing a Flow on the canvas with its FlowScript source open beside it." width="100%" />
+  <img src="apps/docs/src/assets/FlowLikeAppAnatomy.svg" alt="A Flow-Like App groups Flows with experiences, data, reusable building blocks, access, and releases." width="100%" />
 </p>
 
 ## Text and canvas edit the same Flow
@@ -90,9 +98,9 @@ round-trip boundaries.
 
 ## Run Flow-Like
 
-| Online | Desktop | Source |
-| --- | --- | --- |
-| [Open the web app](https://app.flow-like.com) | [Download Studio](https://flow-like.com/download) for macOS, Windows, or Linux | Build the current `dev` branch with the steps below |
+| Online | Desktop | Self-hosted | Source |
+| --- | --- | --- | --- |
+| [Open the web app](https://app.flow-like.com) | [Download Studio](https://flow-like.com/download) for macOS, Windows, or Linux | [Run the Compose stack](https://docs.flow-like.com/self-hosting/docker-compose/installation/) | Build the current `dev` branch with the steps below |
 
 ### Build from source
 
@@ -127,9 +135,55 @@ mise run fix
 The detailed setup guide lives at
 [docs.flow-like.com/dev/build](https://docs.flow-like.com/dev/build/).
 
+### Self-host with Docker Compose
+
+The checked-in [Compose directory](./apps/backend/docker-compose/) builds the browser app, API
+gateway and API replicas, Rust runtime workers, WASM compiler, realtime signaling, server-side
+Event services, PostgreSQL, Redis, and database initialization on one host. Studio remains the
+desktop application and can connect to that backend.
+
+<p align="center">
+  <img src="apps/docs/src/assets/DockerComposeArchitecture.svg" alt="The Docker Compose stack connects browser and desktop clients to the web app, API, execution workers, persistence, collaboration, and optional monitoring services." width="100%" />
+</p>
+
+Start with these files:
+
+| File | Purpose |
+| --- | --- |
+| [`docker-compose.yml`](./apps/backend/docker-compose/docker-compose.yml) | Service topology, health checks, ports, volumes, and optional monitoring profile |
+| [`.env.example`](./apps/backend/docker-compose/.env.example) | Image, URL, identity, storage, replica, and signing-key settings |
+| [`flow-like.config.example.json`](./apps/backend/docker-compose/flow-like.config.example.json) | Hub identity provider, domains, feature flags, legal links, and Event sinks |
+| [`monitoring/`](./apps/backend/docker-compose/monitoring/) | Prometheus, Grafana, Tempo, exporters, dashboards, and rules |
+
+The documented installation path is:
+
+```bash
+git clone --branch dev https://github.com/Rheosoph/flow-like.git
+cd flow-like/apps/backend/docker-compose
+cp .env.example .env
+cp flow-like.config.example.json flow-like.config.json
+
+../../../tools/gen-execution-keys.sh --export
+# Add the generated keys, OIDC settings, public URLs, and storage configuration to .env.
+# Point FLOW_LIKE_CONFIG and FLOW_LIKE_RUNTIME_CONFIG_FILE at flow-like.config.json.
+
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps --all
+```
+
+The stack expects external object storage and does not create its buckets or containers. The
+copied environment template currently selects AWS, while the stock API image omits the AWS
+runtime-credential feature. Select a provider supported by that image or rebuild the API target
+with the required feature. Read the complete
+[Docker Compose installation guide](https://docs.flow-like.com/self-hosting/docker-compose/installation/)
+before exposing the stack publicly. The optional `monitoring` profile adds Prometheus, Grafana,
+Tempo, and PostgreSQL and Redis exporters.
+
 ## Runtime requirements stay with the Flow
 
-Before a run starts, Flow-Like checks the complete Flow against its execution target.
+Before a run starts, Flow-Like's pre-run analysis walks the complete Flow and reports the runtime
+variables, OAuth requirements, local-only nodes, and WebAssembly permissions it finds.
 
 | Runtime question | Where the answer lives |
 | --- | --- |
@@ -138,13 +192,14 @@ Before a run starts, Flow-Like checks the complete Flow against its execution ta
 | What changes by environment? | Runtime values and Event overrides provide configured input. |
 | What may the code access? | Nodes and packages declare capabilities; credentials are scoped separately. |
 
-If any node, including one inside a nested layer, requires local access, the Flow requires local
-execution. A single run remains in one environment. Device-local secret values stay outside the
-Board and are omitted from remote execution payloads.
+The App Event and Board modes currently select local or remote execution. Pre-run reports when any
+node, including one inside a nested layer, requires local access. The current dispatcher does not
+yet reject every incompatible remote selection from that aggregate flag. A single run remains in
+one environment, and device-local secret values stay outside the Board and remote payloads.
 
-A Board can run in Studio or on a remote runtime when that environment provides every required
-capability. This repository includes deployments for local development, Docker Compose,
-Kubernetes, AWS, Azure, and GCP.
+A Board can run in Studio or on configured remote runtimes. The maintained self-hosting guides
+cover Docker Compose and Kubernetes. Backend directories also contain deployment work for AWS,
+Azure, and GCP; check each target's documentation and status before relying on equivalent behavior.
 
 ## Start with the system you have
 
@@ -155,19 +210,10 @@ current system can keep owning its data while a Flow validates input or coordina
 Start with the integration that costs the team the most time. If it fails, run evidence points
 back to a node on the Board. Capability declarations show what that operation needs from the host.
 
-<p align="center">
-  <img src="apps/book/src/assets/platform-map.svg" alt="Studio edits Apps and Flows. A Rust runtime executes a selected Board version and reaches existing systems through typed nodes and packages." width="100%" />
-</p>
-
-## A Flow is one part of an App
-
-An App is the unit a team owns and ships. Several Flows can share its storage, interfaces,
-packages, and release settings.
-
-Pages and APIs can reuse the same Flow logic. Model calls use typed nodes, so their inputs and
-outputs remain in the graph and run evidence is attributed to the node that executed them.
-Supported models can run locally when their runtime and files are installed, or through a
-configured provider.
+App Events expose a pinned Flow entry to callers without duplicating its logic. Pages and APIs can
+reuse the same Flow, while model calls remain explicit typed nodes with node-attributed run
+evidence. Supported models can run locally when their runtime and files are installed, or through
+a configured provider.
 
 ## Find your way around the repository
 
