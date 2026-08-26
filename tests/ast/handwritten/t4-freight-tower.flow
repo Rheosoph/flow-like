@@ -1,19 +1,17 @@
-// WORK IN PROGRESS -- does not apply yet (56 diagnostics). Kept for the constructs it documents:
-// an MQTT subscription entry point, a while loop terminating on a plan-hash stability comparison,
-// control::forEachBatch / parallelForEachBatch nested inside that while body, Set/Map typed
-// declarations, destructuring on multi-output geo and df calls, a @cache function, template-literal
-// SQL, and excel on the write side.
+// Freight execution and settlement control tower (modelled on Shipsy). Order tenders arrive by
+// API and by mail, stops are geocoded and H3 cell-indexed, allocation re-decides as telemetry
+// lands, and a nightly settlement joins carrier invoices against executed shipments.
 //
-// The blocking problem is structural, not a single bug: the root layer would land 257 nodes against
-// a hard max of 100, so the event bodies must be split into function layers (each layer carries its
-// own budget) before the remaining diagnostics are worth chasing. Three real defects also show up
-// here and have their own repros: the Nullable_MailAddress schema pairing, `imap::markSeen` needing
-// `email::toReference` rather than an Email, and several impure calls used as plain statements when
-// their node has two exec outputs.
-use control::{ forEachBatch, parallelForEachBatch, whileLoop }
+// Event bodies delegate to function layers: the root layer carries a hard 100-node budget and
+// events live in it, so a fixture this size cannot inline its work.
 use hash::{ blake3 }
 use log::{ error, info, warn }
 
+interface TenderPayload {
+    tender_id: string;
+    stops: TenderStop[];
+    total_weight_kg?: float;
+}
 interface TenderStop {
     stop_id: string;
     kind: "pickup" | "drop";
@@ -81,9 +79,29 @@ let lastSettlementRunId = ""
 
 @cache({ namespace: "freight-geocode-v4", ttlSeconds: 86400, scope: "app" })
 function geocodeStop(address: string, resolution: int): (cell: string, label: string) {
-    const { firstResult: best } = geo::searchLocation({ query: address, limit: 1, countryCodes: "de,at,ch,nl" })
-    const cell = h3::latlngToCell({ coordinate: best, resolution: resolution })
-    const { displayName: label } = geo::reverseGeocode({ coordinate: best, zoom: 16 })
+    let cell = ""
+    let label = address
+    const lookup = geo::searchLocation({ query: address, limit: 1, countryCodes: "de,at,ch,nl" })
+    lookup {
+        execSuccess: {
+            // `firstResult` is a `SearchResult`; the H3 and reverse-geocode pins take a
+            // `GeoCoordinate`, so project the two fields rather than passing the whole hit.
+            const point = { latitude: lookup.firstResult.lat, longitude: lookup.firstResult.lon }
+            cell = h3::latlngToCell({ coordinate: point, resolution: resolution })
+            const named = geo::reverseGeocode({ coordinate: point, zoom: 16 })
+            named {
+                execSuccess: {
+                    label = named.displayName
+                }
+                execError: {
+                    warn({ message: `no reverse geocode for ${address}`, toast: false })
+                }
+            }
+        }
+        execError: {
+            warn({ message: `could not geocode ${address}`, toast: false })
+        }
+    }
     return cell, label
 }
 
@@ -106,17 +124,34 @@ function laneScore(bid: Struct, detourMeters: float, dwellSeconds: float): (scor
 }
 
 function corridorMatrix(stops: Struct[]): (slowestSeconds: float, nearestName: string, hops: int) {
-    const { durations, distances } = geo::osrmTable({ coordinates: stops, profile: "Car", includeDurations: true, includeDistances: true })
-    const flatDurations = array::flatten({ arrayIn: durations, depth: 2 })
-    const { result: slowestSeconds } = float::maxOf({ floats: flatDurations })
-    const flatDistances = array::flatten({ arrayIn: distances, depth: 2 })
-    const { result: longestLeg } = float::maxOf({ floats: flatDistances })
-    const { element: firstStop } = array::get({ arrayIn: stops, index: 0 })
-    const { nearest, waypoints } = geo::osrmNearest({ coordinate: firstStop, number: 3 })
-    const hops = array::length({ array: waypoints })
-    const legLabel = fmt::number({ value: longestLeg, decimals: 0, suffix: " m" })
-    let nearestName = nearest.name
-    info({ message: `corridor spans ${legLabel} across ${hops} snapped waypoint(s)`, toast: false })
+    let slowestSeconds = 0.0
+    let nearestName = "unknown"
+    let hops = 0
+    const matrix = geo::osrmTable({ coordinates: stops, profile: "Car", includeDurations: true, includeDistances: true })
+    matrix {
+        execSuccess: {
+            const flatDurations = array::flatten({ arrayIn: matrix.durations, depth: 2 })
+            slowestSeconds = float::maxOf({ floats: flatDurations }).result
+            const flatDistances = array::flatten({ arrayIn: matrix.distances, depth: 2 })
+            const longestLeg = float::maxOf({ floats: flatDistances }).result
+            const { element: firstStop } = array::get({ arrayIn: stops, index: 0 })
+            const snapped = geo::osrmNearest({ coordinate: firstStop, number: 3 })
+            snapped {
+                execSuccess: {
+                    hops = array::length({ array: snapped.waypoints })
+                    nearestName = snapped.nearest.name
+                    const legLabel = fmt::number({ value: longestLeg, decimals: 0, suffix: " m" })
+                    info({ message: `corridor spans ${legLabel} across ${hops} snapped waypoint(s)`, toast: false })
+                }
+                execError: {
+                    warn({ message: "could not snap the corridor origin", toast: false })
+                }
+            }
+        }
+        execError: {
+            warn({ message: "corridor matrix unavailable", toast: false })
+        }
+    }
     return slowestSeconds, nearestName, hops
 }
 
@@ -199,7 +234,7 @@ function rebalanceAllocations(shipments: Struct[], bids: Struct[], revisionCap: 
 }
 
 module tender {
-    function normalize(raw: Struct): (tenderId: string, stops: Struct[], totalWeight: float) {
+    function normalize(raw: TenderPayload): (tenderId: string, stops: Struct[], totalWeight: float) {
         let tenderId = raw.tender_id
         let stops = raw.stops
         const { sum: totalWeight } = array::sumField({ arrayIn: stops, field: "weight_kg" })
@@ -319,9 +354,34 @@ module settlement {
 }
 
 detached {
-    const spoolSize = fmt::bytes({ bytes: 734003200, standard: "Binary", decimals: 1 })
+    const spoolSize = fmt::bytes({ bytes: 734003200, standard: "Binary", decimals: 1 }).text
     const idleFor = fmt::duration({ seconds: 5400.0, style: "Short", maxParts: 2 })
     warn({ message: `telemetry spool holds ${spoolSize} after ${idleFor} without a drain`, toast: false })
+}
+
+function ingestTender(raw: TenderPayload): (tenderId: string) {
+    const { tenderId, stops, totalWeight } = tender::normalize(raw)
+    let geocoded = array::make()
+    for (const stop of stops) {
+        const { cell, label } = geocodeStop(stop.address, planningResolution)
+        const { district, areaKm2 } = stopFootprint(cell, 2)
+        const described = { stop_id: stop.stop_id, h3_cell: cell, district_cell: district, resolved_address: label, weight_kg: stop.weight_kg }
+        info({ message: `${stop.stop_id} resolved to ${label} in district ${district} (${areaKm2} km2)`, toast: false })
+        geocoded = array::push({ arrayIn: geocoded, value: described })
+    }
+    const { accepted, reason } = tender::validate(tenderId, geocoded, totalWeight)
+    if (accepted) {
+        const { slowestSeconds, nearestName, hops } = corridorMatrix(geocoded)
+        const dwellLabel = fmt::duration({ seconds: slowestSeconds, style: "Short", maxParts: 2 })
+        info({ message: `slowest corridor leg ${dwellLabel} from ${nearestName} over ${hops} waypoint(s)`, toast: false })
+        const stored = tender::persist(tenderId, geocoded)
+        openTenderIds = set::insert({ setIn: openTenderIds, value: tenderId }).setOut
+        const weightLabel = fmt::number({ value: totalWeight, decimals: 1, suffix: " kg" })
+        info({ message: `tender ${tenderId}: ${stored} stop(s) stored, ${weightLabel}`, toast: false })
+        return tenderId
+    }
+    warn({ message: reason, toast: true })
+    return "rejected"
 }
 
 eventsGeneric tenderIntake(payload: Struct, tenderRef: string) {
@@ -331,33 +391,7 @@ eventsGeneric tenderIntake(payload: Struct, tenderRef: string) {
     const apiCall = http::fetch({ request: prepared })
     apiCall {
         execSuccess: {
-            const raw = apiCall.response.toJson()
-            const { tenderId, stops, totalWeight } = tender::normalize(raw)
-            // BUG: typed local declaration is inert on a fresh board (see persist()).
-            let geocoded = array::make()
-            for (const stop of stops) {
-                const { cell, label } = geocodeStop(stop.address, planningResolution)
-                const { district, areaKm2 } = stopFootprint(cell, 2)
-                let located = struct::set({ structIn: stop, field: "h3_cell", value: cell }).structOut
-                let zoned = struct::set({ structIn: located, field: "district_cell", value: district }).structOut
-                let described = struct::set({ structIn: zoned, field: "resolved_address", value: label }).structOut
-                info({ message: `${stop.stop_id} resolved to ${label} in district ${district} (${areaKm2} km2)`, toast: false })
-                geocoded = array::push({ arrayIn: geocoded, value: described })
-            }
-            const { accepted, reason } = tender::validate(tenderId, geocoded, totalWeight)
-            if (accepted) {
-                const { slowestSeconds, nearestName, hops } = corridorMatrix(geocoded)
-                const dwellLabel = fmt::duration({ seconds: slowestSeconds, style: "Short", maxParts: 2 })
-                info({ message: `slowest corridor leg ${dwellLabel} from ${nearestName} over ${hops} waypoint(s)`, toast: false })
-                const stored = tender::persist(tenderId, geocoded)
-                openTenderIds = set::insert({ setIn: openTenderIds, value: tenderId }).setOut
-                const weightLabel = fmt::number({ value: totalWeight, decimals: 1, suffix: " kg" })
-                info({ message: `tender ${tenderId}: ${stored} stop(s) stored, ${weightLabel}`, toast: false })
-                return tenderId
-            } else {
-                warn({ message: reason, toast: true })
-                return "rejected"
-            }
+            return ingestTender(apiCall.response.toJson())
         }
         execError: {
             const status = apiCall.response.status()
@@ -385,14 +419,9 @@ eventsSimple tenderApiSink() {
     }
 }
 
-eventsGeneric telemetryFrame(topic: string, payload: string) {
-    const frame = json::parse({ string: payload })
+function trackFrame(topic: string, frame: Struct): (shipmentId: string) {
     let shipmentId = frame.shipment_id
-    // BUG: an object literal whose fields come from node outputs cannot be lowered
-    // (bug-t1-faker-seed-object-literal-dynamic-field.flow) -- build the coordinate with structSet.
-    const emptyPoint = struct::make()
-    const pointLatitude = struct::set({ structIn: emptyPoint, field: "latitude", value: frame.latitude }).structOut
-    const framePoint = struct::set({ structIn: pointLatitude, field: "longitude", value: frame.longitude }).structOut
+    const framePoint = { latitude: frame.latitude, longitude: frame.longitude }
     const cell = h3::latlngToCell({ coordinate: framePoint, resolution: planningResolution })
     set::insertRef({ varRef: "coveredCells", value: cell })
     const { value: carrier, found: assigned } = map::get({ mapIn: carrierByShipment, key: shipmentId })
@@ -402,18 +431,17 @@ eventsGeneric telemetryFrame(topic: string, payload: string) {
             const { path: recovery, length: recoveryLength } = h3::gridPath({ cellA: cell, cellB: carrier.plan_cell })
             warn({ message: `${shipmentId} drifted ${drift} cell(s) off plan on ${topic}; ${recoveryLength} cell recovery path`, toast: false })
             const shipments = db::open({ name: "shipments", userScoped: false })
-            // BUG: dynamic object literal -- assembled with structSet instead.
-            const emptyDrift = struct::make()
-            const driftShipment = struct::set({ structIn: emptyDrift, field: "shipment_id", value: shipmentId }).structOut
-            const driftCells = struct::set({ structIn: driftShipment, field: "drift_cells", value: drift }).structOut
-            const driftPath = struct::set({ structIn: driftCells, field: "recovery_path", value: recovery }).structOut
-            const driftRow = struct::set({ structIn: driftPath, field: "last_cell", value: cell }).structOut
+            const driftRow = { shipment_id: shipmentId, drift_cells: drift, recovery_path: recovery, last_cell: cell }
             db::upsert({ database: shipments, idRow: "shipment_id", value: driftRow })
         }
     } else {
         info({ message: `telemetry for unplanned shipment ${shipmentId} on ${topic}`, toast: false })
     }
     return shipmentId
+}
+
+eventsGeneric telemetryFrame(topic: string, framePayload: string) {
+    return trackFrame(topic, json::parse({ string: framePayload }))
 }
 
 eventsSimple telemetryTower() {
@@ -434,7 +462,7 @@ eventsSimple telemetryTower() {
     }
 }
 
-eventsSimple mailedTenderSweep() {
+function sweepMailbox(): (handled: int) {
     const mailbox = imap::connect({ host: "imap.freight.internal", port: 993, username: "tenders@freight.internal", password: tenderMailboxPassword, encryption: "Tls" })
     const inbox = imap::inbox({ connection: mailbox, inbox: "INBOX/Tenders" })
     const mails = imap::listMails({ inbox: inbox, filter: "UNSEEN" })
@@ -453,17 +481,22 @@ eventsSimple mailedTenderSweep() {
                 openTenderIds = set::insert({ setIn: openTenderIds, value: candidate }).setOut
             }
         }
-        imap::markSeen({ email: message, markAsSeen: true })
-        imap::moveMessage({ email: message, destination: "INBOX/Tenders/Processed", createIfMissing: true, expungeMode: "Deferred" })
+        // `markSeen`/`moveMessage` take an EmailRef, not the fetched Email.
+        const { reference: handle } = email::toReference({ mail: message })
+        imap::markSeen({ email: handle, markAsSeen: true })
+        imap::moveMessage({ email: handle, destination: "INBOX/Tenders/Processed", createIfMissing: true, expungeMode: "Deferred" })
         handled = handled + 1
     }
+    return handled
+}
+
+eventsSimple mailedTenderSweep() {
+    const handled = sweepMailbox()
     const still = set::size({ setIn: openTenderIds })
     info({ message: `mailed tender sweep handled ${handled} message(s); ${still} tender(s) open`, toast: false })
 }
 
-eventsSimple nightlySettlement() {
-    const runStart = datetime::now()
-    const stamp = runStart.format("%Y-%m-%d")
+function reconcileInvoices(runStart: Date, stamp: string): (rowCount: int, overbilled: Struct[], overbilledCount: int, driver: string, mounted: string[]) {
     const session = df::createSession({ sessionName: `settlement-${stamp}`, targetPartitions: 8, batchSize: 8192, repartitionJoins: true, collectStatistics: true })
     const warehouse = files::storageDir({ nodeScope: false }).child("warehouse")
     df::mountParquet({ session: session, path: warehouse.child("executed"), tableName: "executed_shipments" })
@@ -476,12 +509,7 @@ eventsSimple nightlySettlement() {
     const { rollup, carriers, meanVariance } = settlement::carrierRollup(rows, invoiceRows)
     info({ message: `reconciled ${rowCount} line(s) against ${carriers} carrier(s) as of ${cutoff} (${cutoffMicros}); invoice cache hit: ${fromCache}`, toast: false })
 
-    const variances = array::pluck({ arrayIn: rows, key: "variance_eur", skipMissing: true })
-    const { result: totalVariance } = float::sum({ floats: variances })
-    const { result: medianVariance } = float::median({ floats: variances })
-    const { result: tailVariance } = float::percentile({ floats: variances, percentile: 95.0 })
     const { arrayOut: overbilled, kept: overbilledCount } = array::filterBy({ arrayIn: rows, key: "variance_eur", operator: "Greater Than", value: "0.5", compare: "Number", ignoreCase: false, invert: false })
-
     const periodStart = runStart.startOf("month")
     const workingDays = datetime::businessDaysBetween({ start: periodStart, end: runStart, includeEnd: true })
     const dailyMean = float::divide({ dividend: meanVariance, divisor: workingDays.toFloat() }).round(3)
@@ -491,8 +519,16 @@ eventsSimple nightlySettlement() {
     const modelPath = files::storageDir({ nodeScope: false }).child("models").child("carrier-variance.mlmodel")
     const model = ml::load({ path: modelPath })
     const { topFeature: driver } = ml::featureImportance({ model: model, featureNames: ["detour_km", "dwell_minutes", "fuel_surcharge", "reliability"] })
-    ml::predict({ model: model, source: "Database", batchSize: 2048 })
+    const variancePredictions = db::open({ name: "carrier_variance", userScoped: false })
+    ml::predict({ model: model, source: "Database", database: variancePredictions, records: "feature_vector", predictionsCol: "predicted_variance", batchSize: 2048 })
+    return rowCount, overbilled, overbilledCount, driver, mounted
+}
 
+function publishSettlement(stamp: string, runStart: Date, rowCount: int, overbilled: Struct[], overbilledCount: int, driver: string, mounted: string[]): (runId: string) {
+    const variances = array::pluck({ arrayIn: overbilled, key: "variance_eur", skipMissing: true })
+    const { result: totalVariance } = float::sum({ floats: variances })
+    const { result: medianVariance } = float::median({ floats: variances })
+    const { result: tailVariance } = float::percentile({ floats: variances, percentile: 95.0 })
     const { workbook, written } = settlement::writeVarianceWorkbook(overbilled, stamp)
     const markdown = "# Carrier settlement {stamp}\n\n- tables mounted: {mounted}\n- rows reconciled: {rows}\n- overbilled lines: {over}\n- total variance: {total}\n- median variance: {median}\n- p95 variance: {tail}\n- dominant cost driver: {driver}\n".format({ stamp: stamp, mounted: mounted, rows: rowCount, over: overbilledCount, total: totalVariance, median: medianVariance, tail: tailVariance, driver: driver })
     const { report, pages } = settlement::summaryPdf(markdown, stamp)
@@ -502,60 +538,76 @@ eventsSimple nightlySettlement() {
     const { totalSeconds: elapsed } = datetime::diff({ start: runStart, end: runEnd })
     const elapsedLabel = fmt::duration({ seconds: elapsed.toFloat(), style: "Short", maxParts: 2 })
     notify::user({ title: "Settlement ready", description: `${written} variance row(s) in ${pages} page(s), built in ${elapsedLabel}`, icon: icon, link: "/settlement?run={run}".format({ run: stamp }), showDesktop: true })
-    lastSettlementRunId = stamp
     const workbookPath = path::rawPath({ path: workbook })
     const reportPath = path::rawPath({ path: report })
     info({ message: `settlement ${stamp} written to ${workbookPath} alongside ${reportPath}`, toast: false })
+    return stamp
+}
+
+eventsSimple nightlySettlement() {
+    const runStart = datetime::now()
+    const stamp = runStart.format("%Y-%m-%d")
+    const { rowCount, overbilled, overbilledCount, driver, mounted } = reconcileInvoices(runStart, stamp)
+    lastSettlementRunId = publishSettlement(stamp, runStart, rowCount, overbilled, overbilledCount, driver, mounted)
+}
+
+function reassignCarrier(actionContext: Struct, banner: Struct): (placed: bool) {
+    let shipmentId = actionContext.shipment_id
+    const { value: carrier, found: known } = map::get({ mapIn: carrierByShipment, key: shipmentId })
+    if (known) {
+        const pickupPoint = { latitude: actionContext.pickup_lat, longitude: actionContext.pickup_lon }
+        const dropPoint = { latitude: actionContext.drop_lat, longitude: actionContext.drop_lon }
+        const detour = geo::planRoute({ start: pickupPoint, end: dropPoint, profile: "Car", alternatives: true })
+        detour {
+            execSuccess: {
+                const { score, label: costLabel } = laneScore(carrier, detour.distance, detour.duration)
+                const etaLabel = fmt::duration({ seconds: detour.duration, style: "Short", maxParts: 2 })
+                ui::setElementText({ elementRef: banner, text: `${shipmentId} -> ${carrier.carrier_id} at ${costLabel} (${etaLabel})` })
+                ui::setPageState({ key: "dispatch.selected_score", value: score })
+                const { element: laneTable } = ui::getElement({ elementRef: "lane-table" })
+                const laneRows = map::values({ mapIn: carrierByShipment })
+                ui::updateTable({ elementRef: laneTable, operation: "Set Data", data: { rows: laneRows } })
+            }
+            execError: {
+                ui::setElementText({ elementRef: banner, text: `no route between the ${shipmentId} stops` })
+            }
+        }
+        return true
+    }
+    ui::setElementText({ elementRef: banner, text: `${shipmentId} has no winning bid yet` })
+    ui::setPageState({ key: "dispatch.error", value: shipmentId })
+    return false
+}
+
+function resweepDock(laneQuery: string, banner: Struct): (planHash: string) {
+    const shipments = db::open({ name: "shipments", userScoped: false })
+    const openLegs = db::filter({ database: shipments, filter: "status = $status", params: { status: "tendered" }, limit: 500, offset: 0 })
+    const bidBook = db::open({ name: "carrier_bids", userScoped: false })
+    const bids = db::ftsSearch({ database: bidBook, search: laneQuery, fields: ["lane"], limit: 250, offset: 0 })
+    const queueDepth = array::length({ array: openLegs })
+    const { startOffset, slots, saturated } = dockWindow(30, queueDepth, 6)
+    const { element: progressBar } = ui::getElement({ elementRef: "resweep-progress" })
+    ui::setProgress({ elementRef: progressBar, value: 5.0 })
+    const { planHash, revisions, freshlyPlaced } = rebalanceAllocations(openLegs, bids, maxPlanRevisions)
+    ui::setProgress({ elementRef: progressBar, value: 100.0 })
+    info({ message: `dock plan: ${slots} slot(s) from +${startOffset} min, saturated: ${saturated}`, toast: false })
+    ui::setElementText({ elementRef: banner, text: `plan ${planHash} settled after ${revisions} revision(s); ${freshlyPlaced} newly placed` })
+    const { element: coverage } = ui::getElement({ elementRef: "coverage-map" })
+    const districts = set::toArray({ setIn: coveredCells })
+    ui::updateGeomap({ elementRef: coverage, property: "Markers", markers: districts })
+    return planHash
 }
 
 eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
-    let shipmentId = actionContext.shipment_id
     const { element: banner } = ui::getElement({ elementRef: "dispatch-banner" })
     if (eventName == "reassign") {
-        const { value: carrier, found: known } = map::get({ mapIn: carrierByShipment, key: shipmentId })
-        if (known) {
-            // BUG: dynamic object literal -- both coordinates are assembled with structSet.
-            const emptyStart = struct::make()
-            const startLatitude = struct::set({ structIn: emptyStart, field: "latitude", value: actionContext.pickup_lat }).structOut
-            const pickupPoint = struct::set({ structIn: startLatitude, field: "longitude", value: actionContext.pickup_lon }).structOut
-            const emptyEnd = struct::make()
-            const endLatitude = struct::set({ structIn: emptyEnd, field: "latitude", value: actionContext.drop_lat }).structOut
-            const dropPoint = struct::set({ structIn: endLatitude, field: "longitude", value: actionContext.drop_lon }).structOut
-            const detour = geo::planRoute({ start: pickupPoint, end: dropPoint, profile: "Car", alternatives: true })
-            const { score, label: costLabel } = laneScore(carrier, detour.distance, detour.duration)
-            const etaLabel = fmt::duration({ seconds: detour.duration, style: "Short", maxParts: 2 })
-            ui::setElementText({ elementRef: banner, text: `${shipmentId} -> ${carrier.carrier_id} at ${costLabel} (${etaLabel})` })
-            ui::setPageState({ key: "dispatch.selected_score", value: score })
-            const { element: laneTable } = ui::getElement({ elementRef: "lane-table" })
-            const laneRows = map::values({ mapIn: carrierByShipment })
-            // BUG: dynamic object literal -- the table payload is assembled with structSet.
-            const emptyTable = struct::make()
-            const laneTableData = struct::set({ structIn: emptyTable, field: "rows", value: laneRows }).structOut
-            ui::updateTable({ elementRef: laneTable, operation: "Set Data", data: laneTableData })
-        } else {
-            ui::setElementText({ elementRef: banner, text: `${shipmentId} has no winning bid yet` })
-            ui::setPageState({ key: "dispatch.error", value: shipmentId })
-        }
+        reassignCarrier(actionContext, banner)
     } else if (eventName == "resweep") {
-        const shipments = db::open({ name: "shipments", userScoped: false })
-        const openLegs = db::filter({ database: shipments, filter: "status = $status", params: { status: "tendered" }, limit: 500, offset: 0 })
-        const bidBook = db::open({ name: "carrier_bids", userScoped: false })
-        const bids = db::ftsSearch({ database: bidBook, search: inputValues.lane_query, fields: ["lane"], limit: 250, offset: 0 })
-        const queueDepth = array::length({ array: openLegs })
-        const { startOffset, slots, saturated } = dockWindow(30, queueDepth, 6)
-        const { element: progressBar } = ui::getElement({ elementRef: "resweep-progress" })
-        ui::setProgress({ elementRef: progressBar, value: 5.0 })
-        const { planHash, revisions, freshlyPlaced } = rebalanceAllocations(openLegs, bids, maxPlanRevisions)
-        ui::setProgress({ elementRef: progressBar, value: 100.0 })
-        info({ message: `dock plan: ${slots} slot(s) from +${startOffset} min, saturated: ${saturated}`, toast: false })
-        ui::setElementText({ elementRef: banner, text: `plan ${planHash} settled after ${revisions} revision(s); ${freshlyPlaced} newly placed` })
-        const { element: coverage } = ui::getElement({ elementRef: "coverage-map" })
-        const districts = set::toArray({ setIn: coveredCells })
-        ui::updateGeomap({ elementRef: coverage, property: "Markers", markers: districts })
+        resweepDock(inputValues.lane_query, banner)
     } else {
         const { value: requestedRun, exists: hasRun } = ui::getQueryParam({ paramName: "run" })
         if (hasRun) {
-            const encoded = ui::urlEncode({ input: shipmentId })
+            const encoded = ui::urlEncode({ input: actionContext.shipment_id })
             ui::setElementText({ elementRef: banner, text: `showing settlement run ${requestedRun} for ${encoded}` })
         } else {
             ui::setElementText({ elementRef: banner, text: `last settlement run ${lastSettlementRunId}` })
