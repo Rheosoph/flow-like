@@ -96,6 +96,9 @@ export interface UsePageContentProps {
 	routePath?: string | null;
 	eventId?: string | null;
 	embedded?: boolean;
+	/** Use an explicit event target before resolving the current route. Route navigation can
+	 * restore normal route resolution by sending a null event id. */
+	eventIdTakesPrecedence?: boolean;
 	onNavigate?: (next: {
 		routePath?: string | null;
 		eventId?: string | null;
@@ -236,6 +239,7 @@ export function UsePageContent({
 	routePath: routePathProp,
 	eventId: eventIdProp,
 	embedded = false,
+	eventIdTakesPrecedence = false,
 	onNavigate,
 }: Readonly<UsePageContentProps>) {
 	const { t } = useTranslation("interfaces");
@@ -555,8 +559,9 @@ export function UsePageContent({
 	}, [redirectCheckPending, shouldRedirectToStore, goToStore]);
 
 	const effectiveRouteEvent = useMemo(() => {
+		if (eventIdTakesPrecedence && eventId) return null;
 		return canUseEvent(routeEvent) ? routeEvent : null;
-	}, [canUseEvent, routeEvent]);
+	}, [canUseEvent, eventId, eventIdTakesPrecedence, routeEvent]);
 
 	const effectiveRouteMapping = useMemo(() => {
 		return effectiveRouteEvent ? routeMapping : null;
