@@ -2059,6 +2059,11 @@ impl Board {
 
             version_list.push(version);
         }
+
+        // Newest first. Store listings are ordered by object key, which sorts
+        // 0_0_10 ahead of 0_0_5 and otherwise carries no version meaning, so a
+        // consumer rendering this list would show a jumbled order.
+        version_list.sort_unstable_by(|a, b| b.cmp(a));
         Ok(version_list)
     }
 
@@ -2963,6 +2968,8 @@ impl Board {
 
             version_list.push(version);
         }
+
+        version_list.sort_unstable_by(|a, b| b.cmp(a));
         Ok(version_list)
     }
 }
@@ -3825,6 +3832,31 @@ mod tests {
                 (first_published.0, first_published.1, 2)
             ],
             "each publication must occupy exactly one version slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_versions_returns_newest_first_across_the_ten_boundary() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+
+        for _ in 0..11 {
+            board
+                .create_version(super::VersionType::Patch, None)
+                .await
+                .unwrap();
+        }
+
+        let versions = board.get_versions(None).await.unwrap();
+        assert!(
+            versions.iter().any(|version| version.2 >= 10),
+            "the fixture must cross the lexicographic 0_0_10 / 0_0_5 boundary, got {versions:?}"
+        );
+        assert!(
+            versions.windows(2).all(|pair| pair[0] > pair[1]),
+            "versions must be returned newest first, got {versions:?}"
         );
     }
 

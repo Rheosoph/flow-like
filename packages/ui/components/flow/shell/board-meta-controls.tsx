@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { CloudIcon, MonitorIcon, ShuffleIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
 import {
 	type IBoard,
@@ -267,6 +268,7 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 }>) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
 	const patch = useBoardMetaPatch(appId, boardId, board);
 	const [creating, setCreating] = useState(false);
 	const versions = useInvoke(
@@ -275,17 +277,26 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 		[appId, boardId],
 	);
 
+	// Publishing bumps the board's own version, so the draft the editor holds is
+	// stale the moment the snapshot lands — without this the status bar and the
+	// "Latest" entry keep naming the version that was just superseded.
 	const createVersion = useCallback(
 		async (type: IVersionType) => {
 			setCreating(true);
 			try {
 				await backend.boardState.createBoardVersion(appId, boardId, type);
-				await versions.refetch();
+				await Promise.all([
+					versions.refetch(),
+					invalidate(backend.boardState.getBoard, [appId, boardId]),
+				]);
+			} catch (error) {
+				console.error("Failed to create board version", error);
+				toast.error(t("failedToCreateVersion", "Failed to create version"));
 			} finally {
 				setCreating(false);
 			}
 		},
-		[appId, boardId, backend, versions],
+		[appId, boardId, backend, versions, invalidate, t],
 	);
 
 	const latest = (board.version ?? [0, 0, 0]).join(".");

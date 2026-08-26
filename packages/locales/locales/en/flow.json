@@ -374,6 +374,7 @@
 	"failedToCaptureScreenshot": "Failed to capture screenshot",
 	"failedToConvertTheLayerIntoAFunction": "Failed to convert the layer into a function",
 	"failedToCreatePage": "Failed to create page",
+	"failedToCreateVersion": "Failed to create version",
 	"failedToDeletePage": "Failed to delete page",
 	"failedToExecuteBoard": "Failed to execute board",
 	"failedToExecuteBoardOnServer": "Failed to execute board on server",

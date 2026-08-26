@@ -47,7 +47,7 @@ inspect data and packages, run logic locally, and trace results back to the Boar
 and configured backend provide shared access and remote execution.
 
 <p align="center">
-  <img src="apps/docs/src/assets/FlowLikeAppAnatomy.svg" alt="A Flow-Like App groups Flows with experiences, data, reusable building blocks, access, and releases." width="100%" />
+  <img src="apps/website/src/images/parallax/workflow-core.png" alt="Flow-Like Studio showing FlowScript and the matching Flow canvas side by side." width="100%" />
 </p>
 
 ## Text and canvas edit the same Flow
@@ -214,6 +214,10 @@ App Events expose a pinned Flow entry to callers without duplicating its logic. 
 reuse the same Flow, while model calls remain explicit typed nodes with node-attributed run
 evidence. Supported models can run locally when their runtime and files are installed, or through
 a configured provider.
+
+<p align="center">
+  <img src="apps/docs/src/assets/FlowLikeAppAnatomy.svg" alt="A Flow-Like App groups Flows with experiences, data, reusable building blocks, access, and releases." width="100%" />
+</p>
 
 ## Find your way around the repository
 

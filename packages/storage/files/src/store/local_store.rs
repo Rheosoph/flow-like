@@ -88,6 +88,36 @@ impl ObjectStore for LocalObjectStore {
                 .map_err(|_| object_store::Error::NotImplemented)?;
         }
 
+        // LocalFileSystem rejects PutMode::Update with NotImplemented. Emulate the
+        // compare-and-swap with head + overwrite; the desktop store is effectively
+        // single-process, so the head/put window is acceptable.
+        if let PutMode::Update(expected) = &opts.mode {
+            let current = self.store.head(location).await?;
+            if expected.e_tag.is_some() && current.e_tag != expected.e_tag {
+                return Err(object_store::Error::Precondition {
+                    path: location.to_string(),
+                    source: "Local object ETag did not match update precondition".into(),
+                });
+            }
+            if expected.version.is_some() && current.version != expected.version {
+                return Err(object_store::Error::Precondition {
+                    path: location.to_string(),
+                    source: "Local object version did not match update precondition".into(),
+                });
+            }
+            return self
+                .store
+                .put_opts(
+                    location,
+                    payload,
+                    PutOptions {
+                        mode: PutMode::Overwrite,
+                        ..opts
+                    },
+                )
+                .await;
+        }
+
         // On Android, PutMode::Create uses hard_link() which fails due to SELinux.
         // Use existence check + overwrite instead.
         if self.android_safe && matches!(opts.mode, PutMode::Create) {
@@ -251,5 +281,77 @@ impl ObjectStore for LocalObjectStore {
             }
         }
         self.store.rename_if_not_exists(from, to).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::UpdateVersion;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_store() -> (LocalObjectStore, PathBuf) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "flow-like-local-store-cas-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = LocalObjectStore::new(dir.clone()).unwrap();
+        (store, dir)
+    }
+
+    #[tokio::test]
+    async fn put_update_swaps_on_matching_etag_and_rejects_stale() {
+        let (store, dir) = temp_store();
+        let location = Path::from("board.board");
+
+        store
+            .put(&location, PutPayload::from_static(b"v1"))
+            .await
+            .unwrap();
+        let first = store.head(&location).await.unwrap();
+
+        store
+            .put_opts(
+                &location,
+                PutPayload::from_static(b"v2"),
+                PutOptions {
+                    mode: PutMode::Update(UpdateVersion {
+                        e_tag: first.e_tag.clone(),
+                        version: first.version.clone(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let bytes = store.get(&location).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"v2");
+
+        let stale = store
+            .put_opts(
+                &location,
+                PutPayload::from_static(b"v3"),
+                PutOptions {
+                    mode: PutMode::Update(UpdateVersion {
+                        e_tag: first.e_tag,
+                        version: first.version,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            stale,
+            Err(object_store::Error::Precondition { .. })
+        ));
+        let bytes = store.get(&location).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"v2");
+
+        fs::remove_dir_all(dir).ok();
     }
 }

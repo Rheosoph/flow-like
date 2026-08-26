@@ -300,6 +300,18 @@ export function BoardExplorer({
 		});
 	}, []);
 
+	// Nesting is what makes a module a folder, so the draft must be visible —
+	// expand a collapsed parent before opening the name field inside it.
+	const startDraftInside = useCallback((parentId: string) => {
+		setCollapsed((old) => {
+			if (!old.has(parentId)) return old;
+			const next = new Set(old);
+			next.delete(parentId);
+			return next;
+		});
+		setDraftParent(parentId);
+	}, []);
+
 	const renderNameField = (
 		initial: string,
 		parentId: string | null,
@@ -350,6 +362,27 @@ export function BoardExplorer({
 				label={`${layer.name}${MODULE_FILE_EXTENSION}`}
 				active={isActive}
 				onSelect={() => onSelectFile(layer.id)}
+				trailing={
+					!readOnly ? (
+						<button
+							type="button"
+							title={t("newModuleInside", "New module inside")}
+							aria-label={t("newModuleInside", "New module inside")}
+							onClick={(event) => {
+								event.stopPropagation();
+								startDraftInside(layer.id);
+							}}
+							className={cn(
+								"flex size-4 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity group-hover/row:opacity-100",
+								isActive
+									? "text-accent-foreground/70 hover:text-accent-foreground"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							<PlusIcon className="size-3" />
+						</button>
+					) : undefined
+				}
 				expander={
 					children.length > 0 ? (
 						<button
@@ -383,7 +416,7 @@ export function BoardExplorer({
 								<PencilLineIcon className="size-3.5" />
 								{t("rename", "Rename")}
 							</ContextMenuItem>
-							<ContextMenuItem onSelect={() => setDraftParent(layer.id)}>
+							<ContextMenuItem onSelect={() => startDraftInside(layer.id)}>
 								<PlusIcon className="size-3.5" />
 								{t("newModuleInside", "New module inside")}
 							</ContextMenuItem>
