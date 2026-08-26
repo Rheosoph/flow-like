@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import {
 	ResizableHandle,
 	ResizablePanel,
@@ -30,6 +31,7 @@ export const BoardShell = memo(function BoardShell({
 	script,
 	panel,
 	secondary,
+	secondaryWide,
 	statusBar,
 	overlays,
 }: Readonly<{
@@ -41,9 +43,22 @@ export const BoardShell = memo(function BoardShell({
 	script?: ReactNode;
 	panel?: ReactNode;
 	secondary?: ReactNode;
+	/**
+	 * The secondary view needs room for a second column — FlowPilot opening its
+	 * FlowScript workspace. Sizes are persisted, so the panel is resized
+	 * imperatively; changing `defaultSize` would not move a mounted panel.
+	 */
+	secondaryWide?: boolean;
 	statusBar: ReactNode;
 	overlays?: ReactNode;
 }>) {
+	const secondaryPanel = useRef<ImperativePanelHandle>(null);
+
+	useEffect(() => {
+		if (!secondary) return;
+		secondaryPanel.current?.resize(secondaryWide ? 48 : 22);
+	}, [secondaryWide, secondary]);
+
 	return (
 		<div className="relative flex min-h-0 w-full flex-1 grow flex-col overflow-hidden">
 			<div className="flex min-h-0 flex-1">

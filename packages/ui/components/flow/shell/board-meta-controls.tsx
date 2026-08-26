@@ -170,6 +170,23 @@ export const BoardRuntimeForm = memo(function BoardRuntimeForm({
 	const patch = useBoardMetaPatch(appId, boardId, board);
 	const values = valuesOf(board);
 
+	// What each mode actually does. Choosing between them is consequential —
+	// Remote is what a board with secrets needs — so the copy stays with the control.
+	const MODE_HINT: Record<IExecutionMode, string> = {
+		[IExecutionMode.Hybrid]: t(
+			"runsLocallyWhenPossibleFallsBackToRemoteExecution",
+			"Runs locally when possible, falls back to remote execution.",
+		),
+		[IExecutionMode.Remote]: t(
+			"alwaysRunsOnRemoteServersRequiredForBoardsWithSecrets",
+			"Always runs on remote servers. Required for boards with secrets.",
+		),
+		[IExecutionMode.Local]: t(
+			"alwaysRunsLocallyBestForHighperformanceWorkloadsLikeEmbeddings",
+			"Always runs locally. Best for high-performance workloads like embeddings.",
+		),
+	};
+
 	return (
 		<div className="flex flex-col gap-3">
 			<Field
@@ -180,7 +197,7 @@ export const BoardRuntimeForm = memo(function BoardRuntimeForm({
 								"offlineProjectsOnlySupportLocalExecution",
 								"Offline projects only support local execution.",
 							)
-						: undefined
+						: MODE_HINT[values.executionMode]
 				}
 			>
 				<Select

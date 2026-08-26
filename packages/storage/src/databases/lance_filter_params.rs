@@ -26,10 +26,11 @@
 //! be a column or a table name — those are identifiers, and no amount of binding makes a
 //! caller-authored identifier safe.
 
-use datafusion::sql::sqlparser::dialect::{Dialect, GenericDialect};
-use datafusion::sql::sqlparser::keywords::Keyword;
-use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
-use flow_like_types::{Result, Value, anyhow};
+use anyhow::{Result, anyhow};
+use serde_json::Value;
+use sqlparser::dialect::{Dialect, GenericDialect};
+use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::{Location, Token, Tokenizer};
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -286,7 +287,7 @@ fn sql_string_literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::json::json;
+    use serde_json::json;
 
     fn bind(filter: &str, params: Value) -> Result<String> {
         let resolved = resolve_filter_params(filter, &params)?;

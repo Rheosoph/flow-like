@@ -40,6 +40,8 @@ export function getCommandIcon(cmd: BoardCommand, size = "w-4 h-4") {
 		case "DeleteComment":
 			return <MessageSquareIcon className={size} />;
 		case "CreateLayer":
+		case "RenameLayer":
+		case "MoveToLayer":
 		case "UpdateLayerCache":
 		case "AddNodesToLayer":
 		case "RemoveNodesFromLayer":

@@ -13,6 +13,7 @@ import {
 	PencilLineIcon,
 	PlusIcon,
 	Trash2Icon,
+	TriangleAlertIcon,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -191,7 +192,7 @@ export function BoardExplorer({
 	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [draftParent, setDraftParent] = useState<string | null | undefined>();
-	const [creatingPage, setCreatingPage] = useState(false);
+	const [draftingPage, setDraftingPage] = useState(false);
 
 	const { roots, all } = useMemo(
 		() => buildModuleTree(board?.layers),
@@ -241,25 +242,30 @@ export function BoardExplorer({
 		[board?.layers, renameModule],
 	);
 
-	const createPage = useCallback(async () => {
-		setCreatingPage(true);
-		try {
-			const name = t("newPage", "New page");
-			await backend.pageState.createPage(
-				appId,
-				createId(),
-				name,
-				`/${name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`,
-				boardId,
-			);
-			await pages.refetch();
-		} catch (error) {
-			console.error("Failed to create page", error);
-			toast.error(t("failedToCreatePage", "Failed to create page"));
-		} finally {
-			setCreatingPage(false);
-		}
-	}, [appId, boardId, backend.pageState, pages, t]);
+	// A page's route is not its name — the home page lives at "/" — so both are
+	// asked for up front. Route editing after the fact needs a full IPage
+	// round-trip, so getting it wrong here is expensive to undo.
+	const createPage = useCallback(
+		async (name: string, route: string) => {
+			setDraftingPage(false);
+			const trimmed = name.trim();
+			if (!trimmed) return;
+			try {
+				await backend.pageState.createPage(
+					appId,
+					createId(),
+					trimmed,
+					route.trim() || "/",
+					boardId,
+				);
+				await pages.refetch();
+			} catch (error) {
+				console.error("Failed to create page", error);
+				toast.error(t("failedToCreatePage", "Failed to create page"));
+			}
+		},
+		[appId, boardId, backend.pageState, pages, t],
+	);
 
 	const deletePage = useCallback(
 		async (pageId: string) => {
@@ -470,23 +476,28 @@ export function BoardExplorer({
 			<SectionHeader
 				label={t("ui", "UI")}
 				action={
-					!readOnly && (
-						<Button
-							size="icon"
-							variant="ghost"
-							className="size-5 text-muted-foreground"
-							title={t("createPage", "Create Page")}
-							aria-label={t("createPage", "Create Page")}
-							disabled={creatingPage}
-							onClick={() => void createPage()}
-						>
-							<PlusIcon className="size-3.5" />
-						</Button>
-					)
+					// Pages are not versioned with the board, so pinning a board version
+					// must not lock them the way it locks the flow files.
+					<Button
+						size="icon"
+						variant="ghost"
+						className="size-5 text-muted-foreground"
+						title={t("createPage", "Create Page")}
+						aria-label={t("createPage", "Create Page")}
+						onClick={() => setDraftingPage(true)}
+					>
+						<PlusIcon className="size-3.5" />
+					</Button>
 				}
 			/>
 
-			{(pages.data?.length ?? 0) === 0 && (
+			{draftingPage && (
+				<PageDraftForm
+					onSubmit={(name, route) => void createPage(name, route)}
+					onCancel={() => setDraftingPage(false)}
+				/>
+			)}
+			{(pages.data?.length ?? 0) === 0 && !draftingPage && (
 				<p className="px-2 py-1 text-[11px] text-muted-foreground">
 					{t("noPagesYet", "No pages yet")}
 				</p>
@@ -501,11 +512,23 @@ export function BoardExplorer({
 						muted
 						onSelect={() => onOpenPage(page.pageId, boardId)}
 						trailing={
-							<ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100" />
+							page.unavailable ? (
+								// The board still lists it, so it is not deleted — its content
+								// just is not readable here. Naming that beats a row that opens
+								// onto nothing.
+								<TriangleAlertIcon
+									className="size-3 shrink-0 text-amber-600 dark:text-amber-400"
+									aria-label={t(
+										"contentUnavailableOnThisDevice",
+										"Content unavailable on this device",
+									)}
+								/>
+							) : (
+								<ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100" />
+							)
 						}
 					/>
 				);
-				if (readOnly) return row;
 				return (
 					<ContextMenu key={page.pageId}>
 						<ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
@@ -581,6 +604,83 @@ function NameField({
 				}}
 			/>
 			{error && <span className="text-[10px] text-destructive">{error}</span>}
+		</div>
+	);
+}
+
+/** `Incident desk` -> `/incident-desk`; the default route until one is typed. */
+function routeFromName(name: string): string {
+	const slug = name
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/gi, "-")
+		.replace(/^-|-$/g, "");
+	return `/${slug}`;
+}
+
+function PageDraftForm({
+	onSubmit,
+	onCancel,
+}: Readonly<{
+	onSubmit: (name: string, route: string) => void;
+	onCancel: () => void;
+}>) {
+	const { t } = useTranslation("flow");
+	const [name, setName] = useState("");
+	const [route, setRoute] = useState("");
+	const [routeEdited, setRouteEdited] = useState(false);
+
+	const effectiveRoute = routeEdited ? route : routeFromName(name);
+	const canSubmit = Boolean(name.trim());
+	const submit = () => {
+		if (canSubmit) onSubmit(name, effectiveRoute);
+	};
+
+	return (
+		<div className="flex flex-col gap-1 py-1 pl-6 pr-1">
+			<Input
+				autoFocus
+				value={name}
+				placeholder={t("pageName", "Page Name")}
+				className="h-6 px-1.5 text-xs"
+				onChange={(event) => setName(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Enter") submit();
+					if (event.key === "Escape") onCancel();
+				}}
+			/>
+			<Input
+				value={effectiveRoute}
+				placeholder="/"
+				aria-label={t("route", "Route")}
+				className="h-6 px-1.5 font-mono text-[11px]"
+				onChange={(event) => {
+					setRouteEdited(true);
+					setRoute(event.target.value);
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter") submit();
+					if (event.key === "Escape") onCancel();
+				}}
+			/>
+			<div className="flex items-center gap-1">
+				<Button
+					size="sm"
+					className="h-6 px-2 text-xs"
+					disabled={!canSubmit}
+					onClick={submit}
+				>
+					{t("create", "Create")}
+				</Button>
+				<Button
+					size="sm"
+					variant="ghost"
+					className="h-6 px-2 text-xs"
+					onClick={onCancel}
+				>
+					{t("cancel", "Cancel")}
+				</Button>
+			</div>
 		</div>
 	);
 }

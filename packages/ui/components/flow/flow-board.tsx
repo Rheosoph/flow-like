@@ -120,6 +120,9 @@ import { useFlowScriptFiles } from "../../components/flow/flowscript/use-flowscr
 import { MediaNode } from "../../components/flow/media-node";
 import { BoardActivityRail } from "../../components/flow/shell/board-activity-rail";
 import type { IBoardRailItem } from "../../components/flow/shell/board-activity-rail";
+import { BoardBreadcrumb } from "../../components/flow/shell/board-breadcrumb";
+import { BoardEditorActions } from "../../components/flow/shell/board-editor-actions";
+import type { IBoardEditorAction } from "../../components/flow/shell/board-editor-actions";
 import { BoardExplorer } from "../../components/flow/shell/board-explorer";
 import { BoardInspector } from "../../components/flow/shell/board-inspector";
 import {
@@ -135,8 +138,15 @@ import {
 	BoardStatusBar,
 	BoardStatusItem,
 } from "../../components/flow/shell/board-status-bar";
+import {
+	fileAfterClose,
+	withFileClosed,
+	withFileOpen,
+	withMissingFilesDropped,
+} from "../../components/flow/shell/open-files";
 import type { IBoardCommand } from "../../components/flow/shell/use-board-commands";
 import {
+	commandsFor,
 	formatShortcut,
 	useBoardCommands,
 } from "../../components/flow/shell/use-board-commands";
@@ -201,6 +211,8 @@ import {
 } from "../../lib/flow-board-utils";
 import {
 	FLOWSCRIPT_KEYWORDS,
+	MAIN_FILE_LABEL,
+	MODULE_FILE_EXTENSION,
 	activeModuleId,
 	boardFlowScriptScope,
 	boardModules,
@@ -228,7 +240,6 @@ import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
 import { buildTemplateCopyPasteCommand } from "../../lib/template-copy-paste";
 import { convertJsonToUint8Array } from "../../lib/uint8";
-import { cn } from "../../lib/utils";
 import {
 	type AssistantBoardSurface,
 	useAssistantSurface,
@@ -768,6 +779,28 @@ export function FlowBoard({
 	);
 	/** The FlowScript file the canvas is on — `main` or the module it is inside. */
 	const currentFileId = moduleFileId(currentModuleId);
+	const currentModuleIdRef = useRef(currentModuleId);
+	currentModuleIdRef.current = currentModuleId;
+
+	// Reaching a module any other way — entering it on canvas, following a peer,
+	// a deep link — opens its tab as well, or the strip would disagree with the
+	// canvas about what is open.
+	useEffect(() => {
+		if (!currentModuleId) return;
+		setOpenFileIds((old) =>
+			old.includes(currentModuleId) ? old : [...old, currentModuleId],
+		);
+	}, [currentModuleId]);
+
+	// A module that no longer exists cannot keep a tab.
+	useEffect(() => {
+		const layers = board.data?.layers;
+		if (!layers) return;
+		setOpenFileIds((old) => {
+			const next = withMissingFilesDropped(old, (id) => Boolean(layers[id]));
+			return next.length === old.length ? old : next;
+		});
+	}, [board.data?.layers]);
 	// A module named after a catalog namespace root would make every qualified call inside it
 	// ambiguous, so the catalog's roots are reserved alongside the language's keywords. The roots
 	// are only complete once the FlowScript names snapshot is in — nothing here loads it (the
@@ -971,9 +1004,28 @@ export function FlowBoard({
 		[board.data?.layers, currentLayer, pushLayer, saveViewport],
 	);
 
+	// Which files have a tab. `main` is the board itself and is always open; every
+	// other entry is a module the user opened, so the strip lists what is open
+	// while the explorer lists what exists.
+	const [openFileIds, setOpenFileIds] = useState<string[]>([]);
+	const openFileIdsRef = useRef(openFileIds);
+	openFileIdsRef.current = openFileIds;
+
 	const handleSelectModule = useCallback(
 		(moduleId: string | null) => {
+			if (moduleId) setOpenFileIds((old) => withFileOpen(old, moduleId));
 			void selectModule(moduleId);
+		},
+		[selectModule],
+	);
+
+	const handleCloseFile = useCallback(
+		(moduleId: string) => {
+			// Closing the file on screen moves to its neighbour; `null` is main.flow.
+			if (currentModuleIdRef.current === moduleId) {
+				void selectModule(fileAfterClose(openFileIdsRef.current, moduleId));
+			}
+			setOpenFileIds((old) => withFileClosed(old, moduleId));
 		},
 		[selectModule],
 	);
@@ -3722,7 +3774,18 @@ export function FlowBoard({
 	const boardCommands = useMemo<IBoardCommand[]>(
 		() => [
 			{
+				id: "back",
+				surface: "rail",
+				title: t("back", "Back"),
+				icon: ArrowBigLeftDashIcon,
+				when:
+					typeof parentRegister.boardParents[boardId] === "string" &&
+					!currentLayer,
+				run: () => router.push(parentRegister.boardParents[boardId]),
+			},
+			{
 				id: "explorer",
+				surface: "rail",
 				title: t("explorer", "Explorer"),
 				icon: FilesIcon,
 				shortcut: "mod+shift+e",
@@ -3730,6 +3793,7 @@ export function FlowBoard({
 			},
 			{
 				id: "search",
+				surface: "rail",
 				title: t("searchBoard", "Search board"),
 				icon: SearchIcon,
 				shortcut: "mod+shift+f",
@@ -3737,6 +3801,7 @@ export function FlowBoard({
 			},
 			{
 				id: "search-dialog",
+				surface: "palette",
 				title: t("findOnBoard", "Find on board"),
 				icon: SearchIcon,
 				shortcut: "mod+f",
@@ -3744,6 +3809,7 @@ export function FlowBoard({
 			},
 			{
 				id: "variables",
+				surface: "rail",
 				title: t("variablesFunctions", "Variables & Functions"),
 				icon: VariableIcon,
 				shortcut: "mod+shift+v",
@@ -3751,18 +3817,21 @@ export function FlowBoard({
 			},
 			{
 				id: "events",
+				surface: "rail",
 				title: t("entryPoints", "Entry points"),
 				icon: ZapIcon,
 				run: () => surfaceActions.toggleSidebar("events"),
 			},
 			{
 				id: "comments",
+				surface: "rail",
 				title: t("comments", "Comments"),
 				icon: MessageSquareIcon,
 				run: () => surfaceActions.toggleSidebar("comments"),
 			},
 			{
 				id: "flowscript",
+				surface: "editor",
 				title: t("flowscript", "FlowScript"),
 				icon: FileCode2Icon,
 				shortcut: "mod+\\",
@@ -3770,6 +3839,7 @@ export function FlowBoard({
 			},
 			{
 				id: "runs",
+				surface: "rail",
 				title: t("runHistory", "Run History"),
 				icon: HistoryIcon,
 				shortcut: "mod+shift+r",
@@ -3777,6 +3847,7 @@ export function FlowBoard({
 			},
 			{
 				id: "traces",
+				surface: "rail",
 				title: t("logs", "Logs"),
 				icon: ScrollIcon,
 				shortcut: "mod+j",
@@ -3784,6 +3855,7 @@ export function FlowBoard({
 			},
 			{
 				id: "inspector",
+				surface: "rail-bottom",
 				title: t("nodeInfo", "Node Info"),
 				icon: SlidersHorizontalIcon,
 				shortcut: "mod+alt+i",
@@ -3791,18 +3863,21 @@ export function FlowBoard({
 			},
 			{
 				id: "templates",
+				surface: "editor",
 				title: t("templates", "Templates"),
 				icon: LayoutTemplateIcon,
 				run: () => setTemplateSelectorOpen(true),
 			},
 			{
 				id: "auto-layout",
+				surface: "editor",
 				title: t("autoLayout", "Auto Layout"),
 				icon: WaypointsIcon,
 				run: () => setAutoLayoutDialogOpen(true),
 			},
 			{
 				id: "layer-up",
+				surface: "rail-bottom",
 				title: t("layerUp", "Layer Up"),
 				icon: SquareChevronUpIcon,
 				when: Boolean(currentLayer) && !insideModule,
@@ -3810,6 +3885,9 @@ export function FlowBoard({
 			},
 			{
 				id: "flowpilot",
+				// Bubble hosts already have an entry point, so the rail shows nothing —
+				// but the chord and the palette still reach the assistant there.
+				surface: externalAssistant ? "palette" : "rail-bottom",
 				title: t("flowpilot", "FlowPilot"),
 				icon: SparklesIcon,
 				shortcut: "mod+alt+b",
@@ -3818,6 +3896,9 @@ export function FlowBoard({
 		],
 		[
 			t,
+			router,
+			parentRegister.boardParents,
+			boardId,
 			togglePages,
 			toggleVars,
 			toggleFlowScript,
@@ -3828,67 +3909,99 @@ export function FlowBoard({
 			insideModule,
 			popLayer,
 			openAssistant,
+			externalAssistant,
 		],
 	);
 	useBoardCommands(boardCommands);
 
-	const railItems = useMemo<IBoardRailItem[]>(() => {
-		const byId = new Map(boardCommands.map((command) => [command.id, command]));
-		const entry = (
-			id: string,
-			active: boolean,
-			extra?: Partial<IBoardRailItem>,
-		): IBoardRailItem | null => {
-			const command = byId.get(id);
-			if (!command || command.when === false) return null;
+	// Which surface a command shows on is declared on the command itself, so the
+	// rail and the editor strip are derived rather than hand-listed — adding a
+	// command cannot leave it reachable only by search.
+	const isCommandActive = useCallback(
+		(id: string) => {
+			switch (id) {
+				case "flowscript":
+					return shell.script;
+				case "runs":
+				case "traces":
+				case "problems":
+					return shell.panel === id;
+				case "inspector":
+				case "flowpilot":
+					return shell.secondary === id;
+				default:
+					return shell.sidebar === id;
+			}
+		},
+		[shell],
+	);
+
+	const railItems = useMemo<IBoardRailItem[]>(
+		() =>
+			commandsFor(boardCommands, "rail").map((command) => {
+				const Icon = command.icon;
+				return {
+					id: command.id,
+					title: command.title,
+					icon: Icon ? <Icon /> : null,
+					shortcut: command.shortcut
+						? formatShortcut(command.shortcut)
+						: undefined,
+					active: isCommandActive(command.id),
+					badge:
+						command.id === "comments"
+							? Object.keys(board.data?.comments ?? {}).length
+							: undefined,
+					onSelect: command.run,
+				};
+			}),
+		[boardCommands, isCommandActive, board.data?.comments],
+	);
+
+	// Actions on the open document, beside the file tabs.
+	const editorActions = useMemo<IBoardEditorAction[]>(
+		() =>
+			commandsFor(boardCommands, "editor").map((command) => {
+				const Icon = command.icon;
+				const isScript = command.id === "flowscript";
+				return {
+					id: command.id,
+					title: command.title,
+					label: command.title,
+					icon: isScript ? <Columns2Icon /> : Icon ? <Icon /> : null,
+					shortcut: command.shortcut
+						? formatShortcut(command.shortcut)
+						: undefined,
+					active: isCommandActive(command.id),
+					// A published version is read-only, so document mutations are off;
+					// opening the script beside it still is not a mutation.
+					disabled: !isScript && typeof version !== "undefined",
+					onSelect: command.run,
+				};
+			}),
+		[boardCommands, isCommandActive, version],
+	);
+
+	const railBottomItems = useMemo<IBoardRailItem[]>(() => {
+		const items: IBoardRailItem[] = commandsFor(
+			boardCommands,
+			"rail-bottom",
+		).map((command) => {
 			const Icon = command.icon;
 			return {
-				id,
+				id: command.id,
 				title: command.title,
 				icon: Icon ? <Icon /> : null,
 				shortcut: command.shortcut
 					? formatShortcut(command.shortcut)
 					: undefined,
-				active,
+				active: isCommandActive(command.id),
 				onSelect: command.run,
-				...extra,
 			};
-		};
-		return [
-			entry("explorer", shell.sidebar === "explorer"),
-			entry("search", shell.sidebar === "search"),
-			entry("variables", shell.sidebar === "variables"),
-			entry("events", shell.sidebar === "events"),
-			entry("comments", shell.sidebar === "comments", {
-				badge: Object.keys(board.data?.comments ?? {}).length,
-			}),
-			entry("flowscript", shell.script),
-			entry("runs", shell.panel === "runs"),
-			entry("traces", shell.panel === "traces"),
-		].filter(Boolean) as IBoardRailItem[];
-	}, [boardCommands, shell, board.data?.comments]);
-
-	const railBottomItems = useMemo<IBoardRailItem[]>(() => {
-		const items: IBoardRailItem[] = [
-			{
-				id: "inspector",
-				title: t("nodeInfo", "Node Info"),
-				icon: <SlidersHorizontalIcon />,
-				shortcut: formatShortcut("mod+alt+i"),
-				active: shell.secondary === "inspector",
-				onSelect: () => surfaceActions.toggleSecondary("inspector"),
-			},
-		];
-		if (currentLayer && !insideModule) {
-			items.push({
-				id: "layer-up",
-				title: t("layerUp", "Layer Up"),
-				icon: <SquareChevronUpIcon />,
-				onSelect: () => popLayer(),
-			});
-		}
+		});
 		// Host-provided entries (the desktop RPA recorder) keep their place now
-		// that the dock they used to live in is gone.
+		// that the dock they used to live in is gone. They are not board commands,
+		// so they are appended rather than registered.
 		for (const [index, item] of (extraDockItems ?? []).entries()) {
 			items.push({
 				id: `host-${index}`,
@@ -3898,30 +4011,8 @@ export function FlowBoard({
 				onSelect: () => void item.onClick(),
 			});
 		}
-		// Hosts with the floating FlowPilot bubble already have an entry point;
-		// only embedded hosts, which have none, get a rail entry.
-		if (!externalAssistant) {
-			items.push({
-				id: "flowpilot",
-				title: t("flowpilot", "FlowPilot"),
-				icon: <SparklesIcon />,
-				shortcut: formatShortcut("mod+alt+b"),
-				active: shell.secondary === "flowpilot",
-				onSelect: () => openAssistant(),
-			});
-		}
 		return items;
-	}, [
-		shell.secondary,
-		externalAssistant,
-		currentLayer,
-		insideModule,
-		popLayer,
-		openAssistant,
-		extraDockItems,
-		surfaceActions,
-		t,
-	]);
+	}, [boardCommands, isCommandActive, extraDockItems]);
 
 	const problemNodes = useMemo(
 		() =>
@@ -4142,7 +4233,6 @@ export function FlowBoard({
 				awareness={awareness}
 				sub={sub}
 				peerUsers={peerUsers}
-				presenceEnabled={!isMobile}
 				revealRequest={flowScriptRevealRequest}
 				onRunEventNode={onRunEventNode}
 				runnableEventNodes={runnableEventNodes}
@@ -4230,29 +4320,27 @@ export function FlowBoard({
 						<FlowModuleTabs
 							board={board.data}
 							activeModuleId={currentModuleId}
+							openFileIds={openFileIds}
 							onSelect={handleSelectModule}
+							onCloseFile={handleCloseFile}
 							executeCommand={executeCommand}
 							readOnly={typeof version !== "undefined"}
 							reservedRoots={moduleReservedRoots}
-							trailing={
-								<button
-									type="button"
-									onClick={toggleFlowScript}
-									aria-pressed={shell.script}
-									title={t("flowscript", "FlowScript")}
-									className={cn(
-										"flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
-										shell.script && "bg-accent text-foreground",
-									)}
-								>
-									<Columns2Icon className="size-3.5" />
-									<span className="hidden sm:inline">
-										{t("flowscript", "FlowScript")}
-									</span>
-								</button>
-							}
+							trailing={<BoardEditorActions actions={editorActions} />}
 						/>
 					) : undefined
+				}
+				breadcrumb={
+					<BoardBreadcrumb
+						fileLabel={
+							currentModuleId
+								? `${board.data?.layers?.[currentModuleId]?.name ?? ""}${MODULE_FILE_EXTENSION}`
+								: MAIN_FILE_LABEL
+						}
+						layerPath={layerPath}
+						layerNames={layerNames}
+						onJumpToLayer={jumpToLayer}
+					/>
 				}
 				script={isMobile ? undefined : scriptPane}
 				panel={
@@ -4279,6 +4367,9 @@ export function FlowBoard({
 					) : undefined
 				}
 				secondary={isMobile ? undefined : secondaryPane}
+				secondaryWide={
+					shell.secondary === "flowpilot" && copilotWorkspaceVisible
+				}
 				statusBar={
 					<BoardStatusBar
 						left={

@@ -4,38 +4,31 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-flow-like-types.workspace = true
-object_store = {version="0.12.4", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"] }
-chrono.workspace = true
-smb2 = "0.11.3"
+anyhow = { version = "1", optional = true }
+flow-like-storage-files = { workspace = true, optional = true }
+flow-like-storage-contracts = { workspace = true, features = ["all"], optional = true }
+flow-like-types = { workspace = true, optional = true }
+object_store = { version = "0.12.4", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"], optional = true }
+chrono = { workspace = true, optional = true }
 # fp16kernels are not supported on Windows (lance skips compiling the C kernels for MSVC)
-lancedb = { version = "=0.27.2", features = ["remote", "aws", "azure", "gcs"] }
-lance-io = { version = "=4.0.0" }
-lance = { version = "=4.0.0", default-features = false }
-lance-file = { version = "=4.0.0" }
-arrow-array = "=57.2.0"
-arrow-schema = { version = "=57.2.0", features = ["serde"] }
-arrow = "=57.2.0"
-serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
-blake3 = {workspace=true, features = ["rayon"]}
-futures.workspace = true
-async-trait.workspace = true
-serde = { workspace = true, features = ["derive", "rc"] }
-futures-channel = "0.3.31"
-crossbeam-channel = "0.5.15"
-futures-util = "0.3.31"
-urlencoding.workspace = true
-schemars.workspace = true
-base64.workspace = true
-# `sql` is required for `ctx.sql`, `DFParser` and the `sqlparser` re-export this crate
-# parses placeholders with. It was previously only present because `lance` happens to
-# enable it; declaring it here keeps a Lance bump from silently breaking the build.
-datafusion = { version = "=52.5.0", default-features = false, features = ["sql", "recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"] }
-num_cpus = "1.16"
-percent-encoding.workspace = true
-infer = "0.19.0"
-rig.workspace = true
-rmcp.workspace = true
+lancedb = { version = "=0.27.2", features = ["remote", "aws", "azure", "gcs"], optional = true }
+lance-io = { version = "=4.0.0", optional = true }
+lance = { version = "=4.0.0", default-features = false, optional = true }
+lance-file = { version = "=4.0.0", optional = true }
+arrow-array = { version = "=57.2.0", optional = true }
+arrow-schema = { version = "=57.2.0", features = ["serde"], optional = true }
+arrow = { version = "=57.2.0", optional = true }
+serde_arrow = { version = "0.13.7", features = ["arrow-57"], optional = true }
+blake3 = { workspace = true, features = ["rayon"], optional = true }
+futures = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive", "rc"], optional = true }
+schemars = { workspace = true, optional = true }
+sqlparser = { workspace = true, optional = true }
+# `sql` is required for `ctx.sql` and `DFParser`. Placeholder discovery uses the direct,
+# lightweight `sqlparser` dependency above and therefore does not activate DataFusion.
+datafusion = { version = "=52.5.0", default-features = false, features = ["sql", "recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"], optional = true }
+num_cpus = { version = "1.16", optional = true }
 
 # Graph query engine
 # Pinned to a commit so upstream rebases cannot change behavior underneath us.
@@ -56,7 +49,7 @@ iceberg = { version = "=0.9.0", optional = true }
 iceberg-datafusion = { version = "=0.9.0", optional = true }
 
 [target.'cfg(all(any(target_os = "macos", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-lancedb = { version = "=0.27.2", features = ["fp16kernels"] }
+lancedb = { version = "=0.27.2", features = ["fp16kernels"], optional = true }
 
 [dev-dependencies]
 # `tokio` is only a regular dependency under `graph`, but the parameter-binding tests
@@ -64,19 +57,55 @@ lancedb = { version = "=0.27.2", features = ["fp16kernels"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
-tauri = []
-default = []
+default = ["files", "database-runtime", "smb"]
+
+# Object/file stores without Lance, Arrow, or DataFusion. This is the feature to use for
+# metadata, board, media, and artifact paths that only need object storage.
+files = ["dep:flow-like-storage-files"]
+smb = ["files", "flow-like-storage-files/smb"]
+
+# SQL/filter placeholder discovery is kept independent of the database runtime because
+# FlowScript reconciliation needs it while editing metadata.
+query-parser = ["dep:anyhow", "dep:serde_json", "dep:sqlparser"]
+
+# Lance/Arrow/DataFusion implementation layer. Default-on preserves the historical public
+# surface; focused consumers can opt into only `files` or `query-parser`.
+database-runtime = [
+    "files",
+    "query-parser",
+    "dep:flow-like-types",
+    "dep:object_store",
+    "dep:chrono",
+    "dep:blake3",
+    "dep:futures",
+    "dep:serde",
+    "dep:schemars",
+    "dep:flow-like-storage-contracts",
+    "dep:lancedb",
+    "dep:lance-io",
+    "dep:lance",
+    "dep:lance-file",
+    "dep:arrow-array",
+    "dep:arrow-schema",
+    "dep:arrow",
+    "dep:serde_arrow",
+    "dep:async-trait",
+    "dep:datafusion",
+    "dep:num_cpus",
+]
+
+tauri = ["files", "flow-like-storage-files/tauri"]
 
 # Data lake features
-delta = ["deltalake"]
-iceberg = ["dep:iceberg", "dep:iceberg-datafusion"]
+delta = ["database-runtime", "dep:deltalake"]
+iceberg = ["database-runtime", "dep:iceberg", "dep:iceberg-datafusion"]
 all-lakes = ["delta", "iceberg"]
 
 # Graph query engine
-graph = ["dep:lance-graph", "dep:serde_json", "dep:tokio", "dep:petgraph", "dep:tracing"]
+graph = ["database-runtime", "dep:lance-graph", "dep:serde_json", "dep:tokio", "dep:petgraph", "dep:tracing"]
 
 # Federation feature for query push-down
-federation = ["datafusion-federation"]
+federation = ["database-runtime", "dep:datafusion-federation"]
 
 # Full feature set
 full = ["all-lakes", "federation", "graph"]

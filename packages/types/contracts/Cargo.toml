@@ -1,0 +1,20 @@
+[package]
+name = "flow-like-types-contracts"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["all"]
+all = ["cache", "dispatch", "maintenance"]
+cache = ["dep:schemars"]
+dispatch = ["dep:blake3", "dep:serde_json"]
+maintenance = ["cache"]
+
+[dependencies]
+blake3 = { version = "1.8.2", optional = true }
+schemars = { version = "1.1.0", features = ["preserve_order"], optional = true }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.134", optional = true }
+
+[dev-dependencies]
+serde_json = "1.0.134"

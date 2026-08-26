@@ -255,8 +255,6 @@ export interface FlowScriptPanelProps {
 	sub?: string;
 	/** Peer identity cache (colors/names) shared with the canvas. */
 	peerUsers?: Map<string, PeerUserInfo>;
-	/** Only the visible mount publishes presence (desktop panel vs mobile sheet). */
-	presenceEnabled?: boolean;
 	/** Follow mode: reveal + flash this node's line whenever `token` changes. */
 	revealRequest?: { nodeId: string; token: number };
 	/** Run an event from its header lens; absent = no run lenses at all. */
@@ -335,7 +333,6 @@ export function FlowScriptPanel({
 	awareness,
 	sub,
 	peerUsers,
-	presenceEnabled,
 	revealRequest,
 	onRunEventNode,
 	runnableEventNodes,
@@ -582,7 +579,7 @@ export function FlowScriptPanel({
 	// across editor blur; withdrawn on scope exit, panel close, and unmount.
 	useFlowScriptScopeBroadcast({
 		awareness,
-		enabled: (presenceEnabled ?? true) && scoped,
+		enabled: scoped,
 		nodeIds: scopeMode.kind === "scoped" ? scopeMode.nodeIds : undefined,
 	});
 
@@ -1482,7 +1479,7 @@ export function FlowScriptPanel({
 	const { store: presenceStore } = useFlowScriptPresence({
 		awareness,
 		sub,
-		enabled: (presenceEnabled ?? true) && !readOnly && !loading,
+		enabled: !readOnly && !loading,
 		editor: editorReady ? editorRef.current : null,
 		anchorIndexRef,
 		text,

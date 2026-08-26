@@ -1,0 +1,25 @@
+[package]
+name = "flow-like-wasm-schema"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+manifest = ["dep:toml"]
+nodes = ["manifest", "dep:flow-like"]
+bundle = ["manifest", "dep:anyhow", "dep:sha2", "dep:zip"]
+openapi = ["dep:utoipa", "flow-like?/openapi"]
+
+[dependencies]
+anyhow = { version = "1", optional = true }
+bitflags.workspace = true
+flow-like = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = { version = "0.10", optional = true }
+toml = { workspace = true, optional = true }
+utoipa = { version = "5", optional = true }
+zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"

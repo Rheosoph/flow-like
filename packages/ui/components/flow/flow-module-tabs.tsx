@@ -6,6 +6,7 @@ import {
 	PencilLineIcon,
 	PlusIcon,
 	Trash2Icon,
+	XIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -121,27 +122,52 @@ function ModuleTabButton({
 	label,
 	active,
 	onSelect,
+	onClose,
 }: Readonly<{
 	label: string;
 	active: boolean;
 	onSelect: () => void;
+	/** Absent for `main.flow`, which is the board itself and always open. */
+	onClose?: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
-		<button
-			type="button"
-			onClick={onSelect}
-			title={label}
-			aria-current={active ? "page" : undefined}
+		<span
 			className={cn(
-				"flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-xs transition-colors",
+				"group/tab flex shrink-0 items-center rounded-md border pr-1 transition-colors",
 				active
 					? "border-border bg-background text-foreground shadow-sm"
 					: "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
 			)}
 		>
-			<FileCode2Icon className="size-3 shrink-0" />
-			<span className="max-w-48 truncate">{label}</span>
-		</button>
+			<button
+				type="button"
+				onClick={onSelect}
+				title={label}
+				aria-current={active ? "page" : undefined}
+				className="flex items-center gap-1.5 py-1 pl-2.5 pr-1 font-mono text-xs"
+			>
+				<FileCode2Icon className="size-3 shrink-0" />
+				<span className="max-w-48 truncate">{label}</span>
+			</button>
+			{onClose && (
+				<button
+					type="button"
+					aria-label={t("closeFile", "Close file")}
+					title={t("closeFile", "Close file")}
+					onClick={(event) => {
+						event.stopPropagation();
+						onClose();
+					}}
+					className={cn(
+						"flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground",
+						active ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100",
+					)}
+				>
+					<XIcon className="size-3" />
+				</button>
+			)}
+		</span>
 	);
 }
 
@@ -150,6 +176,7 @@ function ModuleTab({
 	active,
 	readOnly,
 	onSelect,
+	onClose,
 	onRename,
 	onDelete,
 	onDeleteWithContents,
@@ -158,6 +185,7 @@ function ModuleTab({
 	active: boolean;
 	readOnly: boolean;
 	onSelect: () => void;
+	onClose: () => void;
 	onRename: () => void;
 	onDelete: () => void;
 	onDeleteWithContents: () => void;
@@ -168,6 +196,7 @@ function ModuleTab({
 			label={module.pathLabel}
 			active={active}
 			onSelect={onSelect}
+			onClose={onClose}
 		/>
 	);
 
@@ -177,6 +206,11 @@ function ModuleTab({
 		<ContextMenu>
 			<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
 			<ContextMenuContent className="w-56">
+				<ContextMenuItem onSelect={onClose}>
+					<XIcon className="size-3.5" />
+					{t("closeFile", "Close file")}
+				</ContextMenuItem>
+				<ContextMenuSeparator />
 				<ContextMenuItem onSelect={onRename}>
 					<PencilLineIcon className="size-3.5" />
 					{t("rename", "Rename")}
@@ -203,7 +237,9 @@ function ModuleTab({
 export function FlowModuleTabs({
 	board,
 	activeModuleId,
+	openFileIds,
 	onSelect,
+	onCloseFile,
 	executeCommand,
 	readOnly,
 	reservedRoots = FLOWSCRIPT_KEYWORDS,
@@ -211,7 +247,13 @@ export function FlowModuleTabs({
 }: Readonly<{
 	board: IBoard;
 	activeModuleId: string | null;
+	/**
+	 * Module ids with a tab. The strip shows what is *open*, the explorer shows
+	 * what *exists* — so a tab can be closed and reopened by clicking the file.
+	 */
+	openFileIds: readonly string[];
 	onSelect: (moduleId: string | null) => void;
+	onCloseFile: (moduleId: string) => void;
 	executeCommand: (
 		command: IGenericCommand,
 		append: boolean,
@@ -226,11 +268,22 @@ export function FlowModuleTabs({
 	const { createModule, renameModule, deleteModule } =
 		useModuleCommands(executeCommand);
 
-	const modules = useMemo(() => boardModules(board.layers), [board.layers]);
+	const allModules = useMemo(() => boardModules(board.layers), [board.layers]);
 	const [drafting, setDrafting] = useState(false);
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [pendingDelete, setPendingDelete] = useState<IBoardModule | null>(null);
 	const [pendingSelect, setPendingSelect] = useState<string | null>(null);
+
+	const open = useMemo(() => new Set(openFileIds), [openFileIds]);
+	// A module being renamed keeps its tab even if it was never opened, so the
+	// inline editor it is hosting does not vanish mid-edit.
+	const modules = useMemo(
+		() =>
+			allModules.filter(
+				(module) => open.has(module.id) || renamingId === module.id,
+			),
+		[allModules, open, renamingId],
+	);
 
 	// A module created a moment ago is not on the board the parent is rendering yet, and
 	// opening a layer it cannot resolve would leave the canvas on a broken path. Waiting for
@@ -348,6 +401,7 @@ export function FlowModuleTabs({
 							active={activeModuleId === module.id}
 							readOnly={readOnly}
 							onSelect={() => onSelect(module.id)}
+							onClose={() => onCloseFile(module.id)}
 							onRename={() => setRenamingId(module.id)}
 							onDelete={() => void removeModule(module.id, true)}
 							onDeleteWithContents={() => setPendingDelete(module)}

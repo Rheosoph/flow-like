@@ -4,6 +4,26 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { useSpotlightStore } from "../../../state/spotlight-state";
 
+/**
+ * Where a command is visible, besides the palette.
+ *
+ * Required, and deliberately so: a command with no declared surface is reachable
+ * only by search, which is how Templates and Auto Layout silently lost their
+ * buttons when the dock was replaced. `"palette"` is still a valid answer — it
+ * just has to be an answer.
+ */
+export type IBoardCommandSurface =
+	/** Activity rail, upper group — regions of the shell. */
+	| "rail"
+	/** Activity rail, lower group — navigation and assistants. */
+	| "rail-bottom"
+	/** Editor tab strip — actions on the open document. */
+	| "editor"
+	/** Status bar, wired by the shell itself. */
+	| "status"
+	/** Reachable by chord and search only. */
+	| "palette";
+
 export interface IBoardCommand {
 	id: string;
 	title: string;
@@ -12,9 +32,20 @@ export interface IBoardCommand {
 	shortcut?: string;
 	keywords?: string[];
 	description?: string;
+	surface: IBoardCommandSurface;
 	run: () => void;
 	/** Commands are hidden from the palette while this is false, and their chord is inert. */
 	when?: boolean;
+}
+
+/** The commands a given surface renders, in registry order. */
+export function commandsFor(
+	commands: readonly IBoardCommand[],
+	surface: IBoardCommandSurface,
+): IBoardCommand[] {
+	return commands.filter(
+		(command) => command.surface === surface && command.when !== false,
+	);
 }
 
 const SPOTLIGHT_SOURCE = "flow-board";

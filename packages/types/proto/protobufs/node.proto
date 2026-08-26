@@ -59,4 +59,3 @@ message NodeWasm {
 message StringList {
     repeated string values = 1;
 }
-

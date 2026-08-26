@@ -1,6 +1,6 @@
 // ---------- HTTP(S) ----------
 
-use crate::files::store::mime_guess::mime;
+use crate::store::mime_guess::mime;
 use base64::{Engine, engine::general_purpose};
 use flow_like_types::{
     Bytes, Result, anyhow,

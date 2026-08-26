@@ -16,6 +16,7 @@ use std::{
 use urlencoding::{decode, encode};
 mod helper;
 pub mod local_store;
+#[cfg(feature = "smb")]
 pub mod smb_store;
 
 /// How an object on a [`FlowLikeStore::Local`] store is addressed when signing.

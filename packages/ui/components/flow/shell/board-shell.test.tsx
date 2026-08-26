@@ -109,16 +109,14 @@ describe("board shell surfaces", () => {
 	test("a pane exposes its title and one close affordance", () => {
 		let closed = false;
 		const container = render(
-			createElement(
-				BoardPane,
-				{
-					title: "Inspector",
-					onClose: () => {
-						closed = true;
-					},
-				},
-				"body",
-			),
+			<BoardPane
+				title="Inspector"
+				onClose={() => {
+					closed = true;
+				}}
+			>
+				body
+			</BoardPane>,
 		);
 		expect(container.textContent).toContain("Inspector");
 		act(() => container.querySelector("button")?.click());
@@ -128,26 +126,24 @@ describe("board shell surfaces", () => {
 	test("the panel switches tabs and reports its badge", () => {
 		let active = "problems";
 		const container = render(
-			createElement(
-				BoardPanel,
-				{
-					tabs: [
-						{
-							id: "problems",
-							label: "Problems",
-							badge: 2,
-							badgeTone: "danger",
-						},
-						{ id: "runs", label: "Runs" },
-					],
-					active: "problems",
-					onSelect: (id: string) => {
-						active = id;
+			<BoardPanel
+				tabs={[
+					{
+						id: "problems",
+						label: "Problems",
+						badge: 2,
+						badgeTone: "danger" as const,
 					},
-					onClose: () => {},
-				},
-				"body",
-			),
+					{ id: "runs", label: "Runs" },
+				]}
+				active="problems"
+				onSelect={(id: string) => {
+					active = id;
+				}}
+				onClose={() => {}}
+			>
+				body
+			</BoardPanel>,
 		);
 		expect(container.textContent).toContain("Problems");
 		expect(container.textContent).toContain("2");
@@ -171,16 +167,14 @@ describe("board shell surfaces", () => {
 		}
 
 		const container = render(
-			createElement(
-				BoardPanel,
-				{
-					tabs: [{ id: "runs", label: "Runs" }],
-					active: "runs",
-					onSelect: () => {},
-					onClose: () => {},
-				},
-				createElement(ViewWithToolbar),
-			),
+			<BoardPanel
+				tabs={[{ id: "runs", label: "Runs" }]}
+				active="runs"
+				onSelect={() => {}}
+				onClose={() => {}}
+			>
+				<ViewWithToolbar />
+			</BoardPanel>,
 		);
 
 		// The control belongs to the view but renders in the strip, so a short

@@ -1,4 +1,4 @@
-// Producer-side (strict, canonical) mirror of packages/wasm/src/widget.rs;
+// Producer-side (strict, canonical) mirror of packages/wasm/schema/src/widget.rs;
 // @flow-like/widget-sdk ships the consumer-side (loose) mirror. The
 // assignability assertion at the bottom keeps the two from drifting.
 
@@ -92,7 +92,7 @@ function defaultMatchesType(value: JsonValue, input: ContractInput): boolean {
 	}
 }
 
-/** Mirrors `WidgetContract::validate` in packages/wasm/src/widget.rs */
+/** Mirrors `WidgetContract::validate` in packages/wasm/schema/src/widget.rs */
 export function validateContract(contract: WidgetContract): string[] {
 	const errors: string[] = [];
 

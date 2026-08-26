@@ -1,4 +1,4 @@
-// Mirrors packages/wasm/src/widget_bundle.rs (serde camelCase) exactly.
+// Mirrors packages/wasm/schema/src/widget_bundle.rs (serde camelCase) exactly.
 
 export const BUNDLE_FORMAT_VERSION = 1;
 export const BUNDLE_MANIFEST_PATH = "bundle.json";
