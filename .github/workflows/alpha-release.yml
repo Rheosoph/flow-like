@@ -101,14 +101,18 @@ jobs:
             release_bundle_dir: "target/x86_64-apple-darwin/release/bundle"
             retry_runner_arch: "X64"
             args: "--target x86_64-apple-darwin --config src-tauri/configs/tauri.macos.intel.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
-          # Pinned, not ubuntu-latest: the AppImage snapshots whatever the runner
-          # provides on build day (glibc floor, bundled WebKitGTK and support
-          # libraries), so the label flipping would silently move our supported
-          # distribution baseline.
-          - platform: "ubuntu-24.04"
+          # Pin the runner label because Linux artifacts inherit its glibc floor
+          # and the AppImage copies its WebKitGTK support libraries. Build on the
+          # oldest supported distribution so one artifact also runs on newer
+          # glibc versions.
+          - platform: "ubuntu-22.04"
+            cache_key: "linux-x64-glibc-2.35"
+            max_glibc_version: "2.35"
             release_bundle_dir: "target/release/bundle"
             args: "--config src-tauri/configs/tauri.linux.x64.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
-          - platform: "ubuntu-24.04-arm"
+          - platform: "ubuntu-22.04-arm"
+            cache_key: "linux-arm64-glibc-2.35"
+            max_glibc_version: "2.35"
             release_bundle_dir: "target/release/bundle"
             args: "--config src-tauri/configs/tauri.ci.conf.json --verbose"
           # windows-latest currently resolves to the VS 2026 image, which breaks
@@ -229,7 +233,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
+          sudo apt-get install -y binutils libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
           lib_dir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
           if [ ! -e "$lib_dir/libOpenCL.so" ] && [ -e "$lib_dir/libOpenCL.so.1" ]; then
               sudo ln -sf "$lib_dir/libOpenCL.so.1" "$lib_dir/libOpenCL.so"
@@ -418,9 +422,17 @@ jobs:
         run: |
           echo "::warning::Tauri's initial release upload failed, but all built installer assets were recovered and verified by digest."
 
-      # Runs after the upload because tauri-action builds and publishes in one
-      # step. Failing here keeps the release a draft and blocks the updater
-      # metadata job, so a broken AppImage never reaches the update channel.
+      # These run after the upload because tauri-action builds and publishes in
+      # one step. A failure keeps the release as a draft and blocks the updater
+      # metadata job, so incompatible Linux artifacts do not reach the channel.
+      - name: Verify Linux glibc compatibility
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          MAX_GLIBC_VERSION: ${{ matrix.max_glibc_version }}
+          RELEASE_BUNDLE_DIR: ${{ matrix.release_bundle_dir }}
+        run: bash .github/scripts/verify-linux-glibc.sh
+
       - name: Verify AppImage bundle (Linux)
         if: runner.os == 'Linux'
         shell: bash
