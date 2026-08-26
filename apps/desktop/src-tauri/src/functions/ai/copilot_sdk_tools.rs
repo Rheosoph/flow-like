@@ -63,7 +63,8 @@ use flow_like::flow::ast::{
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::{
-    PlatformToolImageUrl, run_internet_search, run_memory_tool, take_platform_tool_image_urls,
+    PLATFORM_TOOL_IMAGE_URLS_FIELD, PlatformToolImageUrl, run_internet_search, run_memory_tool,
+    take_platform_tool_image_urls,
 };
 use flow_like::flow::copilot::public_web::{
     WebResearchSession, run_archive_lookup_for_session, run_open_url_for_session,
@@ -1109,29 +1110,53 @@ fn frontend_tool_result_with_timeout(
 ) -> ToolResultObject {
     let mut result =
         run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
+    let supplied_image_count = result
+        .get(PLATFORM_TOOL_IMAGE_URLS_FIELD)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
     let image_urls = take_platform_tool_image_urls(&mut result);
     let expected_image_count = image_urls.len();
-    let images = if image_urls.is_empty() {
-        Vec::new()
+    let mut image_result = if image_urls.is_empty() {
+        PlatformToolImageDownloads::default()
     } else {
         block_on_tool(download_platform_tool_images(image_urls))
     };
-    if expected_image_count > 0
+    if supplied_image_count > expected_image_count {
+        image_result.errors.push(format!(
+            "{} capture attachment reference(s) were rejected because their type, source, size, or encoding was invalid.",
+            supplied_image_count - expected_image_count
+        ));
+    }
+    if (supplied_image_count > 0 || !image_result.errors.is_empty())
         && let Some(object) = result.as_object_mut()
     {
-        object.insert("screenshot_count".to_string(), json!(images.len()));
+        object.insert(
+            "screenshot_count".to_string(),
+            json!(image_result.images.len()),
+        );
         let was_complete = object
             .get("screenshot_complete")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         object.insert(
             "screenshot_complete".to_string(),
-            json!(was_complete && images.len() == expected_image_count),
+            json!(
+                was_complete
+                    && image_result.images.len() == expected_image_count
+                    && image_result.errors.is_empty()
+            ),
         );
-        if images.is_empty() {
+        if !image_result.errors.is_empty() {
+            object.insert(
+                "screenshot_attachment_errors".to_string(),
+                json!(image_result.errors.iter().take(3).collect::<Vec<_>>()),
+            );
+        }
+        if image_result.images.is_empty() {
             object.insert(
                     "message".to_string(),
-                    json!("The page rendered, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
+                    json!("The page rendered, but its visual captures could not be attached to this agent. Do not claim to have read the page visually."),
                 );
         }
     }
@@ -1139,8 +1164,8 @@ fn frontend_tool_result_with_timeout(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
     );
-    if !images.is_empty() {
-        output.binary_results_for_llm = Some(images);
+    if !image_result.images.is_empty() {
+        output.binary_results_for_llm = Some(image_result.images);
     }
     output
 }
@@ -1160,30 +1185,80 @@ fn platform_tool_image_client() -> &'static Result<reqwest::Client, reqwest::Err
     })
 }
 
-/// Copilot SDK/MCP image blocks require inline bytes. Resolve temporary URLs only at this final
-/// provider boundary so screenshots never travel as base64 through the frontend bridge or backend.
-async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec<ToolBinaryResult> {
+#[derive(Default)]
+struct PlatformToolImageDownloads {
+    images: Vec<ToolBinaryResult>,
+    errors: Vec<String>,
+}
+
+/// Copilot SDK/MCP image blocks require inline bytes. Desktop captures can arrive as bounded
+/// base64 directly; web captures retain temporary URLs and are downloaded at this boundary.
+async fn download_platform_tool_images(
+    images: Vec<PlatformToolImageUrl>,
+) -> PlatformToolImageDownloads {
     use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 
-    // Nearly every frontend tool result has no visual captures. In particular, do not initialize
-    // an HTTP client while finalizing ordinary results such as `ask_user` or `database_tool`.
     if images.is_empty() {
-        return Vec::new();
+        return PlatformToolImageDownloads::default();
     }
 
-    let client = match platform_tool_image_client() {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "failed to initialize temporary capture download client");
-            return Vec::new();
-        }
+    let mut outcome = PlatformToolImageDownloads {
+        images: Vec::with_capacity(images.len()),
+        errors: Vec::new(),
     };
-    let mut results = Vec::with_capacity(images.len());
     for (index, image) in images.into_iter().enumerate() {
-        let response = match client.get(&image.url).send().await {
+        if let Some(data) = image.data {
+            match STANDARD.decode(&data) {
+                Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => {
+                    outcome.images.push(ToolBinaryResult {
+                        data,
+                        mime_type: image.media_type,
+                        result_type: "image".to_string(),
+                        description: Some(format!(
+                            "Rendered app page capture {} (top to bottom)",
+                            index + 1
+                        )),
+                    });
+                }
+                Ok(_) => outcome.errors.push(format!(
+                    "Capture {} exceeded the {}-byte attachment limit.",
+                    index + 1,
+                    MAX_PLATFORM_TOOL_IMAGE_BYTES
+                )),
+                Err(_) => outcome.errors.push(format!(
+                    "Capture {} had invalid base64 image data.",
+                    index + 1
+                )),
+            }
+            continue;
+        }
+
+        let Some(url) = image.url else {
+            outcome.errors.push(format!(
+                "Capture {} had no readable image source.",
+                index + 1
+            ));
+            continue;
+        };
+        let client = match platform_tool_image_client() {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(%error, "failed to initialize temporary capture download client");
+                outcome.errors.push(format!(
+                    "Capture {} could not initialize the download client.",
+                    index + 1
+                ));
+                continue;
+            }
+        };
+        let response = match client.get(&url).send().await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(%error, "failed to download temporary app page capture");
+                outcome.errors.push(format!(
+                    "Capture {} could not be downloaded from temporary storage.",
+                    index + 1
+                ));
                 continue;
             }
         };
@@ -1196,20 +1271,32 @@ async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec
                 status = %response.status(),
                 "temporary app page capture was unavailable or too large"
             );
+            outcome.errors.push(format!(
+                "Capture {} was unavailable or exceeded the attachment limit.",
+                index + 1
+            ));
             continue;
         }
         let bytes = match response.bytes().await {
             Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => bytes,
             Ok(_) => {
                 tracing::warn!("temporary app page capture exceeded the size limit");
+                outcome.errors.push(format!(
+                    "Capture {} exceeded the attachment limit.",
+                    index + 1
+                ));
                 continue;
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to read temporary app page capture");
+                outcome.errors.push(format!(
+                    "Capture {} could not be read from temporary storage.",
+                    index + 1
+                ));
                 continue;
             }
         };
-        results.push(ToolBinaryResult {
+        outcome.images.push(ToolBinaryResult {
             data: STANDARD.encode(bytes),
             mime_type: image.media_type,
             result_type: "image".to_string(),
@@ -1219,7 +1306,7 @@ async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec
             )),
         });
     }
-    results
+    outcome
 }
 
 fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
@@ -4871,16 +4958,28 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn platform_tool_image_download_is_safe_on_the_sdk_runtime() {
         let no_images = block_on_tool(download_platform_tool_images(Vec::new()));
-        assert!(no_images.is_empty());
+        assert!(no_images.images.is_empty());
+        assert!(no_images.errors.is_empty());
+
+        let inline = block_on_tool(download_platform_tool_images(vec![PlatformToolImageUrl {
+            url: None,
+            data: Some("aW1hZ2U=".to_string()),
+            media_type: "image/png".to_string(),
+        }]));
+        assert_eq!(inline.images.len(), 1);
+        assert_eq!(inline.images[0].data, "aW1hZ2U=");
+        assert!(inline.errors.is_empty());
 
         // A malformed temporary URL exercises client initialization and request failure without
         // depending on an external server. Result enrichment is best-effort and must not unwind.
         let unavailable =
             block_on_tool(download_platform_tool_images(vec![PlatformToolImageUrl {
-                url: "not-a-valid-capture-url".to_string(),
+                url: Some("not-a-valid-capture-url".to_string()),
+                data: None,
                 media_type: "image/png".to_string(),
             }]));
-        assert!(unavailable.is_empty());
+        assert!(unavailable.images.is_empty());
+        assert_eq!(unavailable.errors.len(), 1);
     }
 
     #[test]
