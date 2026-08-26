@@ -9,7 +9,7 @@ use flow_like::flow::{
     board::{Board, commands::GenericCommand},
     node::{Node, NodeWasm},
 };
-use flow_like_wasm::manifest::PackageNodeEntry;
+use flow_like_wasm_schema::manifest::PackageNodeEntry;
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 use std::sync::Arc;
 

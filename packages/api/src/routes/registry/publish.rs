@@ -18,7 +18,7 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TwoStepPublishRequest {
-    pub manifest: flow_like_wasm::manifest::PackageManifest,
+    pub manifest: flow_like_wasm_schema::manifest::PackageManifest,
 }
 
 /// POST /registry/publish

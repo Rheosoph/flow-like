@@ -915,6 +915,7 @@ impl SummaryDetailLevel {
         }
     }
 
+    #[cfg(feature = "execute")]
     fn system_prompt(&self, include_toc: bool) -> String {
         let detail_instruction = match self {
             Self::Low => {
@@ -1379,6 +1380,7 @@ impl NodeLogic for SummarizeDocumentNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn parse_summary_response(response: &str) -> (String, Vec<String>, Vec<PageReference>) {
     let mut keywords = Vec::new();
     let mut page_refs = Vec::new();
@@ -1411,6 +1413,7 @@ fn parse_summary_response(response: &str) -> (String, Vec<String>, Vec<PageRefer
     )
 }
 
+#[cfg(feature = "execute")]
 fn parse_page_reference_line(line: &str) -> Option<PageReference> {
     if !line.contains("Page") && !line.contains("page") {
         return None;
@@ -1673,6 +1676,7 @@ Extract specific, domain-relevant keywords that would help identify this content
     }
 }
 
+#[cfg(feature = "execute")]
 fn parse_sections_response(response: &str) -> Vec<ContentSection> {
     let mut sections = Vec::new();
     let section_pattern = regex::Regex::new(r"===SECTION===(.*?)===END_SECTION===").ok();
@@ -1696,6 +1700,7 @@ fn parse_sections_response(response: &str) -> Vec<ContentSection> {
     sections
 }
 
+#[cfg(feature = "execute")]
 fn parse_single_section(content: &str) -> Option<ContentSection> {
     let mut title = String::new();
     let mut summary = String::new();

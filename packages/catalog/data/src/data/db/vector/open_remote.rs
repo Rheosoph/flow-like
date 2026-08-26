@@ -1,17 +1,27 @@
+#[cfg(feature = "execute")]
 use crate::remote_util::open_remote_project_database_lease;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_catalog_core::{CachedDBRefreshHook, CachedDBRefresher};
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::{
     buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
-use flow_like_types::{Cacheable, Value, async_trait, json::json, sync::RwLock};
+#[cfg(feature = "execute")]
+use flow_like_types::{Cacheable, Value, sync::RwLock};
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
-use super::{CachedDB, NodeDBConnection};
+#[cfg(feature = "execute")]
+use super::CachedDB;
+use super::NodeDBConnection;
 
 /// Pin names are special-cased by the flow editor to render interactive
 /// dropdowns: the project pin lists all apps this app is connected to, the
@@ -23,11 +33,13 @@ const PIN_REMOTE_DATABASE: &str = "_flow_remote_database";
 #[derive(Default)]
 pub struct OpenRemoteDatabaseNode {}
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 struct RemoteDatabaseInitializationSlot {
     lock: Arc<flow_like_types::tokio::sync::Mutex<()>>,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for RemoteDatabaseInitializationSlot {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -38,6 +50,7 @@ impl Cacheable for RemoteDatabaseInitializationSlot {
     }
 }
 
+#[cfg(feature = "execute")]
 struct RemoteDatabaseRefresher {
     cache_key: String,
     remote_app_id: String,
@@ -48,6 +61,7 @@ struct RemoteDatabaseRefresher {
     generation: std::sync::atomic::AtomicU64,
 }
 
+#[cfg(feature = "execute")]
 impl RemoteDatabaseRefresher {
     fn is_fresh(&self) -> bool {
         *self
@@ -58,6 +72,7 @@ impl RemoteDatabaseRefresher {
     }
 }
 
+#[cfg(feature = "execute")]
 #[async_trait]
 impl CachedDBRefresher for RemoteDatabaseRefresher {
     async fn refresh(&self, context: &ExecutionContext) -> flow_like_types::Result<()> {
@@ -195,6 +210,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -295,29 +311,29 @@ impl NodeLogic for OpenRemoteDatabaseNode {
             let fallback_origin = CachedDB::write_origin(context);
             let completion_refresher = refresher.clone();
             context
-                .hook_completion_event(Arc::new(move |run| {
-                    let db = completion_db.clone();
-                    let fallback_origin = fallback_origin.clone();
-                    let refresher = completion_refresher.clone();
-                    let context = refresh_context.clone();
-                    Box::pin(async move {
-                        if db.has_buffered_writes().await
-                            && let Err(error) = refresher.refresh(&context).await
-                        {
-                            db.log_pending_write_error(
-                                run,
-                                &fallback_origin,
-                                &format!(
-                                    "Database write failed before completion flush: buffered rows were not persisted because credentials could not be refreshed: {error:#}"
-                                ),
-                            )
-                            .await;
-                            return Err(error);
-                        }
-                        db.flush_on_completion(run, &fallback_origin).await
-                    })
-                }))
-                .await;
+            .hook_completion_event(Arc::new(move |run| {
+                let db = completion_db.clone();
+                let fallback_origin = fallback_origin.clone();
+                let refresher = completion_refresher.clone();
+                let context = refresh_context.clone();
+                Box::pin(async move {
+                    if db.has_buffered_writes().await
+                        && let Err(error) = refresher.refresh(&context).await
+                    {
+                        db.log_pending_write_error(
+                            run,
+                            &fallback_origin,
+                            &format!(
+                                "Database write failed before completion flush: buffered rows were not persisted because credentials could not be refreshed: {error:#}"
+                            ),
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                    db.flush_on_completion(run, &fallback_origin).await
+                })
+            }))
+            .await;
 
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached.clone());
             let refresh_hook: Arc<dyn Cacheable> = Arc::new(CachedDBRefreshHook::new(refresher));
@@ -344,5 +360,12 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         context.set_pin_value("database", db).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

@@ -61,6 +61,9 @@ impl Command for MoveToLayerCommand {
         board: &mut Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
+        // A stale `previous` from an earlier execute must never survive into this run's undo,
+        // including when the early return below skips the move entirely.
+        self.previous.clear();
         if let Some(target) = &self.target {
             let targets_a_module = matches!(
                 board.layers.get(target).map(|layer| &layer.r#type),
@@ -76,11 +79,14 @@ impl Command for MoveToLayerCommand {
             }
         }
 
-        self.previous.clear();
         let ids = self.ids.clone();
         let target = self.target.clone();
 
         for id in &ids {
+            // A duplicated id must not overwrite its recorded origin with the moved value.
+            if self.previous.contains_key(id) {
+                continue;
+            }
             if let Some(node) = board.nodes.get_mut(id) {
                 self.previous.insert(id.clone(), node.layer.clone());
                 node.layer = target.clone();
@@ -93,15 +99,7 @@ impl Command for MoveToLayerCommand {
                 continue;
             }
 
-            if let Some(layer_type) = board.layers.get(id).map(|layer| layer.r#type.clone()) {
-                if matches!(layer_type, LayerType::Module) {
-                    tracing::warn!(
-                        "MoveToLayer skipping layer {} — moving modules is not supported",
-                        id
-                    );
-                    continue;
-                }
-
+            if board.layers.contains_key(id) {
                 if let Some(target) = &target
                     && (target == id || is_ancestor(board, id, target))
                 {
@@ -261,7 +259,7 @@ mod tests {
     }
 
     #[flow_like_types::tokio::test]
-    async fn a_module_among_the_ids_is_skipped() {
+    async fn a_module_among_the_ids_nests_under_the_target_module() {
         let mut board = Board::new_detached(Some("b".into()), Path::default());
         module(&mut board, "mod_target", None);
         module(&mut board, "mod_other", None);
@@ -273,8 +271,46 @@ mod tests {
         );
         command.execute(&mut board, state()).await.expect("move");
 
-        assert_eq!(board.layers["mod_other"].parent_id, None);
+        assert_eq!(
+            board.layers["mod_other"].parent_id.as_deref(),
+            Some("mod_target")
+        );
         assert_eq!(board.nodes[&node_id].layer.as_deref(), Some("mod_target"));
+
+        command.undo(&mut board, state()).await.expect("undo");
+        assert_eq!(board.layers["mod_other"].parent_id, None);
+        assert_eq!(board.nodes[&node_id].layer, None);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_moved_to_the_root_loses_its_parent() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        module(&mut board, "mod_parent", None);
+        module(&mut board, "mod_child", Some("mod_parent"));
+
+        let mut command = MoveToLayerCommand::new(vec!["mod_child".into()], None);
+        command.execute(&mut board, state()).await.expect("move");
+        assert_eq!(board.layers["mod_child"].parent_id, None);
+
+        command.undo(&mut board, state()).await.expect("undo");
+        assert_eq!(
+            board.layers["mod_child"].parent_id.as_deref(),
+            Some("mod_parent")
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_module_move_under_its_own_descendant_is_refused() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        module(&mut board, "mod_parent", None);
+        module(&mut board, "mod_child", Some("mod_parent"));
+
+        let mut command =
+            MoveToLayerCommand::new(vec!["mod_parent".into()], Some("mod_child".into()));
+        command.execute(&mut board, state()).await.expect("move");
+
+        assert_eq!(board.layers["mod_parent"].parent_id, None);
+        assert!(command.previous.is_empty());
     }
 
     #[flow_like_types::tokio::test]

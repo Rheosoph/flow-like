@@ -18,7 +18,10 @@ use crate::{
                 comments::{
                     remove_comment::RemoveCommentCommand, upsert_comment::UpsertCommentCommand,
                 },
-                layer::{remove_layer::RemoveLayerCommand, upsert_layer::UpsertLayerCommand},
+                layer::{
+                    move_to_layer::MoveToLayerCommand, remove_layer::RemoveLayerCommand,
+                    upsert_layer::UpsertLayerCommand,
+                },
                 nodes::{
                     add_node::AddNodeCommand, move_node::MoveNodeCommand,
                     remove_node::RemoveNodeCommand, update_node::UpdateNodeCommand,
@@ -67,6 +70,17 @@ pub fn destructive_flowscript_command_summaries(commands: &[BoardCommand]) -> Ve
             BoardCommand::RemoveComment { comment_id, .. } => {
                 Some(format!("comment `{comment_id}`"))
             }
+            // A move out of every module to the board root is what a document whose `module { }`
+            // wrapper was dropped reconciles to; it dissolves a namespace exactly as silently as
+            // a missing `//@n` anchor deletes a node, so it is held behind the same gate.
+            BoardCommand::MoveToLayer {
+                ids,
+                target_layer: None,
+                ..
+            } if !ids.is_empty() => Some(format!(
+                "move of {} board item(s) out of their module to the board root",
+                ids.len()
+            )),
             _ => None,
         })
         .collect()
@@ -87,7 +101,7 @@ pub fn blocked_destructive_flowscript_message(summaries: &[String]) -> String {
         .unwrap_or_default();
 
     format!(
-        "FlowScript edit would delete {} existing board item(s): {preview}{more}. Deletions are blocked by default so incomplete model edits cannot remove existing work. Re-submit the full current FlowScript with every kept `//@n:<id>` anchor preserved, or set `allow_deletions` only for an explicit delete request.",
+        "FlowScript edit would delete or relocate {} existing board item(s): {preview}{more}. Deletions are blocked by default so incomplete model edits cannot remove existing work, and moves out of a module to the board root are held to the same rule so a dropped `module {{ }}` wrapper cannot silently dissolve a namespace. Re-submit the full current FlowScript with every kept `//@n:<id>` and `//@l:<id>` anchor and every `module` wrapper preserved, or set `allow_deletions` only for an explicit delete/move request.",
         summaries.len()
     )
 }
@@ -184,6 +198,39 @@ pub async fn apply_flowscript_to_board_file(
         "df_execute_sql",
         "df_write_delta",
         "graph_sql_query",
+        "fit_adaboost",
+        "fit_dbscan",
+        "fit_decision_tree",
+        "fit_elastic_net",
+        "fit_feature_scaler",
+        "fit_gaussian_mixture",
+        "fit_glm",
+        "fit_kmeans",
+        "fit_knn_classifier",
+        "fit_knn_regressor",
+        "fit_linear_regression",
+        "fit_logistic_regression",
+        "fit_multinomial_naive_bayes",
+        "fit_naive_bayes",
+        "fit_one_class_svm",
+        "fit_ordinal_adjacent_category",
+        "fit_ordinal_continuation_ratio",
+        "fit_ordinal_frank_hall",
+        "fit_ordinal_logistic",
+        "fit_ordinal_neural",
+        "fit_ordinal_ridge",
+        "fit_pca",
+        "fit_random_forest",
+        "fit_svm_multi_class",
+        "fit_svm_regression",
+        "fit_tfidf_vectorizer",
+        "fit_tsne",
+        "ml_apply_transform",
+        "ml_predict",
+        "ai_ml_tuning_auto_classifier",
+        "ai_ml_tuning_auto_ordinal",
+        "ai_ml_tuning_grid_search",
+        "ai_ml_tuning_ordinal_grid_search",
     ];
     let logic_by_type: HashMap<String, Arc<dyn NodeLogic>> = {
         let registry = state.node_registry.read().await.node_registry.clone();
@@ -356,6 +403,33 @@ pub fn ensure_module_layer(board: &Board, module_id: &str) -> Result<(), String>
             "FlowScript file `{module_id}` does not name a layer on board `{}`",
             board.id
         )),
+    }
+}
+
+#[cfg(test)]
+mod destructive_summary_tests {
+    use super::destructive_flowscript_command_summaries;
+    use crate::flow::copilot::BoardCommand;
+
+    #[test]
+    fn a_move_out_of_a_module_to_the_root_is_gated() {
+        let summaries = destructive_flowscript_command_summaries(&[BoardCommand::MoveToLayer {
+            ids: vec!["event".to_string(), "log".to_string()],
+            target_layer: None,
+            summary: None,
+        }]);
+        assert_eq!(summaries.len(), 1, "{summaries:?}");
+        assert!(summaries[0].contains("board root"), "{summaries:?}");
+    }
+
+    #[test]
+    fn a_move_into_a_module_is_not_gated() {
+        let summaries = destructive_flowscript_command_summaries(&[BoardCommand::MoveToLayer {
+            ids: vec!["fn-1".to_string()],
+            target_layer: Some("mod-b".to_string()),
+            summary: None,
+        }]);
+        assert!(summaries.is_empty(), "{summaries:?}");
     }
 }
 
@@ -778,7 +852,7 @@ impl FlowScriptApplyPlanner {
 
                     let mut command = UpsertLayerCommand::new(layer.clone());
                     command.current_layer =
-                        self.target_layer_or_current(board, target_layer.as_deref())?;
+                        self.new_layer_parent(board, &layer.r#type, target_layer.as_deref())?;
 
                     // Keep the staged view identical to what UpsertLayer will persist so later
                     // setup commands can safely target this layer in the same batch.
@@ -826,6 +900,53 @@ impl FlowScriptApplyPlanner {
                     command.current_layer = layer.parent_id.clone();
                     self.staged_layers.insert(layer_id, layer);
                     generic_commands.push(GenericCommand::UpsertLayer(command));
+                }
+                BoardCommand::RenameLayer { layer_id, name, .. } => {
+                    let layer_id = self.resolve_node_id(board, layer_id)?;
+                    let Some(existing_layer) = self
+                        .staged_layers
+                        .get(&layer_id)
+                        .or_else(|| board.layers.get(&layer_id))
+                    else {
+                        return Err(flow_like_types::anyhow!("Layer `{layer_id}` not found"));
+                    };
+                    let mut layer = existing_layer.clone();
+                    layer.name = name.clone();
+
+                    let mut command = UpsertLayerCommand::new(layer.clone());
+                    // Renaming must never re-home the layer; upsert keeps an existing layer's
+                    // parent regardless of current_layer, so mirror it for the staged view only.
+                    command.current_layer = layer.parent_id.clone();
+                    self.register_node_aliases(&[Some(name.as_str())], &layer_id);
+                    self.staged_layers.insert(layer_id, layer);
+                    generic_commands.push(GenericCommand::UpsertLayer(command));
+                }
+                BoardCommand::MoveToLayer {
+                    ids, target_layer, ..
+                } => {
+                    let resolved_ids = self.resolve_node_ids(board, ids)?;
+                    let target = self.resolve_optional_layer(board, target_layer.as_deref())?;
+                    if let Some(target_id) = target.as_deref() {
+                        let target_is_module = self
+                            .staged_layers
+                            .get(target_id)
+                            .or_else(|| board.layers.get(target_id))
+                            .is_some_and(|layer| matches!(layer.r#type, LayerType::Module));
+                        if !target_is_module {
+                            return Err(flow_like_types::anyhow!(
+                                "MoveToLayer target `{target_id}` is not a Module layer"
+                            ));
+                        }
+                    }
+                    for id in &resolved_ids {
+                        if let Some(layer) = self.staged_layers.get_mut(id) {
+                            layer.parent_id = target.clone();
+                        }
+                    }
+                    generic_commands.push(GenericCommand::MoveToLayer(MoveToLayerCommand::new(
+                        resolved_ids,
+                        target,
+                    )));
                 }
                 BoardCommand::CreateVariable {
                     variable_id,
@@ -1062,6 +1183,8 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::UpdateVariable { .. }
                 | BoardCommand::UpdateNodePin { .. }
                 | BoardCommand::RenameNode { .. }
+                | BoardCommand::RenameLayer { .. }
+                | BoardCommand::MoveToLayer { .. }
                 | BoardCommand::UpdateLayerCache { .. } => {}
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
@@ -1201,10 +1324,11 @@ impl FlowScriptApplyPlanner {
                     layer.pins = layer_pins(pins.as_deref());
                     layer.cache = cache.clone();
                     let node_ids = self.resolve_node_ids(board, node_ids)?;
+                    let layer_type = layer.r#type.clone();
                     let mut command = UpsertLayerCommand::new(layer);
                     command.node_ids = node_ids;
                     command.current_layer =
-                        self.target_layer_or_current(board, target_layer.as_deref())?;
+                        self.new_layer_parent(board, &layer_type, target_layer.as_deref())?;
                     generic_commands.push(GenericCommand::UpsertLayer(command));
                 }
                 BoardCommand::RemoveLayer { layer_id, .. } => {
@@ -1514,6 +1638,21 @@ impl FlowScriptApplyPlanner {
     ) -> flow_like_types::Result<Option<String>> {
         self.resolve_optional_layer(board, target_layer)
             .map(|layer| layer.or_else(|| self.current_layer.clone()))
+    }
+
+    /// Parent for a layer this batch creates. A module without an explicit `target_layer` is a
+    /// ROOT module: reconcile resolved its qualified `::` path from the root, so the
+    /// current-layer fallback would silently re-root the namespace tree.
+    fn new_layer_parent(
+        &self,
+        board: &Board,
+        layer_type: &LayerType,
+        target_layer: Option<&str>,
+    ) -> flow_like_types::Result<Option<String>> {
+        if matches!(layer_type, LayerType::Module) {
+            return self.resolve_optional_layer(board, target_layer);
+        }
+        self.target_layer_or_current(board, target_layer)
     }
 
     fn resolve_node_ids(

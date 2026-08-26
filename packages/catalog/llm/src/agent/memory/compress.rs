@@ -1,4 +1,5 @@
 use super::config::MemoryConfig;
+#[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -6,12 +7,18 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_model_provider::response::{LLMUsageStats, Usage};
+use flow_like_model_provider::response::LLMUsageStats;
+#[cfg(feature = "execute")]
+use flow_like_model_provider::response::Usage;
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
 use flow_like_types::{
-    Value, async_trait, bail,
+    Value, bail,
     json::{self, json},
 };
+#[cfg(feature = "execute")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "execute")]

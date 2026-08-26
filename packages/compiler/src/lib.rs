@@ -26,5 +26,7 @@ pub mod router;
 pub use compile::compile;
 pub use config::CompilerConfig;
 pub use error::CompilerError;
-pub use flow_like_types::dispatch::{CompilationJob, CompilationResult, CompilationStatus};
+pub use flow_like_types_contracts::dispatch::{
+    CompilationJob, CompilationResult, CompilationStatus,
+};
 pub use router::{compiler_router, process_job, CompilerState};

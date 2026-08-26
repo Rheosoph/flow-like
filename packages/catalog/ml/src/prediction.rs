@@ -7,13 +7,17 @@
 //! Adds / upserts predictions back into the Database.
 
 #[cfg(feature = "execute")]
+use crate::ml::MLPrediction;
+use crate::ml::NodeMLModel;
+#[cfg(feature = "execute")]
 use crate::ml::make_new_field;
-use crate::ml::{MLPrediction, NodeMLModel};
+#[cfg(feature = "execute")]
 use flow_like::flow::pin::ValueType;
+#[cfg(feature = "execute")]
+use flow_like::flow::{board::Board, execution::LogLevel, node::remove_pin_by_name};
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
-    node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
+    execution::context::ExecutionContext,
+    node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
@@ -26,8 +30,10 @@ use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
 #[cfg(feature = "execute")]
+use flow_like_types::Value;
+#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 

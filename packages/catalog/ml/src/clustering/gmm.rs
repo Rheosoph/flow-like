@@ -9,9 +9,10 @@
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array2_f64};
+#[cfg(feature = "execute")]
+use flow_like::flow::{board::Board, execution::LogLevel};
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -21,10 +22,12 @@ use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
+use flow_like_types::Value;
+#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]

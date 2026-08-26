@@ -204,6 +204,7 @@ impl NodeLogic for SearchLocationNode {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimResult {
     display_name: String,

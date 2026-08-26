@@ -163,6 +163,7 @@ impl NodeLogic for RegisterAthenaNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -199,11 +200,11 @@ impl NodeLogic for RegisterAthenaNode {
                 );
                 format!(
                     r#"CREATE EXTERNAL TABLE {}
-               STORED AS ATHENA
-               LOCATION 'athena://{}/{}/{}'
-               OPTIONS (
-                   {}
-               )"#,
+           STORED AS ATHENA
+           LOCATION 'athena://{}/{}/{}'
+           OPTIONS (
+               {}
+           )"#,
                     table_name, catalog, athena_database, athena_table, options
                 )
             }
@@ -233,11 +234,11 @@ impl NodeLogic for RegisterAthenaNode {
                 }
                 format!(
                     r#"CREATE EXTERNAL TABLE {}
-               STORED AS ATHENA
-               LOCATION 'athena://{}/{}/{}'
-               OPTIONS (
-                   {}
-               )"#,
+           STORED AS ATHENA
+           LOCATION 'athena://{}/{}/{}'
+           OPTIONS (
+               {}
+           )"#,
                     table_name, catalog, athena_database, athena_table, options
                 )
             }
@@ -250,10 +251,10 @@ impl NodeLogic for RegisterAthenaNode {
             Err(e) => {
                 return Err(flow_like_types::anyhow!(
                     "Athena direct integration not available. Error: {}. \
-                     Alternative approaches:\n\
-                     1. Use Athena to export results to S3 as Parquet, then mount the S3 path\n\
-                     2. Use AWS Data Wrangler to sync Athena tables to local Parquet files\n\
-                     3. Query Athena via the AWS SDK and load results as a table",
+                 Alternative approaches:\n\
+                 1. Use Athena to export results to S3 as Parquet, then mount the S3 path\n\
+                 2. Use AWS Data Wrangler to sync Athena tables to local Parquet files\n\
+                 3. Query Athena via the AWS SDK and load results as a table",
                     e
                 ));
             }
@@ -262,6 +263,13 @@ impl NodeLogic for RegisterAthenaNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {
@@ -440,6 +448,7 @@ impl NodeLogic for MountAthenaQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::csv::CsvFormat;
         use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -553,6 +562,13 @@ impl NodeLogic for MountAthenaQueryNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {

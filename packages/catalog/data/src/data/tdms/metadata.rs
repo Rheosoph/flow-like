@@ -4,9 +4,11 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 use flow_like_types::{
     JsonSchema, async_trait,
-    json::{Deserialize, Serialize, json},
+    json::{Deserialize, Serialize},
 };
 
 use crate::data::path::FlowPath;

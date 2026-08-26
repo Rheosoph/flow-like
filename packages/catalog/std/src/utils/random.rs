@@ -6,7 +6,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
 
 const ALPHABETS: [(&str, &str); 5] = [
     (

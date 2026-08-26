@@ -6,8 +6,10 @@
 #[cfg(feature = "execute")]
 use crate::ml::MLModel;
 use crate::ml::NodeMLModel;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,

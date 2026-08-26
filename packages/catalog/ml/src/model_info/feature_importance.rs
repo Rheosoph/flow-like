@@ -4,8 +4,10 @@
 //! where the per-tree importances are folded back onto the columns of the original training matrix.
 
 use crate::ml::NodeMLModel;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,

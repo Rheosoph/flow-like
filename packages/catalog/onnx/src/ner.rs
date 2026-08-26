@@ -20,7 +20,9 @@ use flow_like_model_provider::ml::{
         value::{Value, ValueType as OrtValueType},
     },
 };
-use flow_like_types::{Result, anyhow, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::anyhow;
+use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

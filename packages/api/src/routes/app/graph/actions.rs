@@ -248,7 +248,7 @@ async fn ensure_action_board_published(
                         })?;
                 if !unchanged {
                     let snapshot = guard
-                        .prepare_snapshot_at_fresh_patch_version(None)
+                        .prepare_snapshot_recovering_from_races(None)
                         .await
                         .map_err(|error| {
                             ApiError::internal(format!(
@@ -275,24 +275,31 @@ async fn ensure_action_board_published(
                         "Could not inspect the action's board version slot: {error}"
                     ))
                 })?;
-            if compatible {
+            // A slot another draft owns, and a slot this attempt writes but
+            // then loses to a racing editor save, resolve the same way: pin the
+            // reloaded draft at the next free patch instead.
+            let moved = if compatible {
                 guard
-                    .snapshot_at_version(pinned, None)
+                    .snapshot_at_version_recovering_from_races(pinned, None)
                     .await
                     .map_err(|error| {
                         ApiError::internal(format!(
                             "Could not publish the action's board version: {error}"
                         ))
-                    })?;
+                    })?
             } else {
-                let snapshot = guard
-                    .prepare_snapshot_at_fresh_patch_version(None)
-                    .await
-                    .map_err(|error| {
-                        ApiError::internal(format!(
-                            "Could not recover the action's interrupted board snapshot: {error}"
-                        ))
-                    })?;
+                Some(
+                    guard
+                        .prepare_snapshot_recovering_from_races(None)
+                        .await
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "Could not recover the action's interrupted board snapshot: {error}"
+                            ))
+                        })?,
+                )
+            };
+            if let Some(snapshot) = moved {
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
                 prepared = Some(snapshot);
@@ -334,7 +341,7 @@ async fn ensure_action_board_published(
             );
         } else {
             let snapshot = guard
-                .prepare_snapshot_at_fresh_patch_version(None)
+                .prepare_snapshot_recovering_from_races(None)
                 .await
                 .map_err(|error| {
                     ApiError::internal(format!(

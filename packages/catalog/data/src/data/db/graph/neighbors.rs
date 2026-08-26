@@ -100,7 +100,7 @@ impl NodeLogic for GraphNeighborsNode {
             VariableType::Struct,
         )
         .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<flow_like_storage::databases::graph::SubgraphNode>();
+        .set_schema::<flow_like_storage_contracts::graph::SubgraphNode>();
         node.add_output_pin(
             "result_edges",
             "Edges",
@@ -108,7 +108,7 @@ impl NodeLogic for GraphNeighborsNode {
             VariableType::Struct,
         )
         .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<flow_like_storage::databases::graph::SubgraphEdge>();
+        .set_schema::<flow_like_storage_contracts::graph::SubgraphEdge>();
 
         node
     }

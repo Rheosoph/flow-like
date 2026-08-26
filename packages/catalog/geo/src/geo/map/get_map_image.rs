@@ -235,6 +235,7 @@ impl NodeLogic for GetMapImageNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn lat_lon_to_tile(lat: f64, lon: f64, zoom: u32) -> (u32, u32, u32, u32) {
     let n = 2.0_f64.powi(zoom as i32);
     let x = (lon + 180.0) / 360.0 * n;

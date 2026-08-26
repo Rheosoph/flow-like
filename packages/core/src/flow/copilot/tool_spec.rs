@@ -2638,7 +2638,10 @@ mod tests {
         // +0.2 KB the same day for the stylesheet-budget clause on `flowpilot_widget`: without the
         // real 40k figure the orchestrator invents a smaller one and instructs the specialist to
         // trim CSS it never needed to trim.
-        for (memory_enabled, budget) in [(false, 33_200usize), (true, 35_200usize)] {
+        // Reviewed 2026-08-25: +~0.2 KB of accumulated description drift since 2026-08-22 pushed
+        // the memory-off payload to 33,375; re-based just above the measurement (memory-on
+        // measured 34,119, still inside its budget).
+        for (memory_enabled, budget) in [(false, 33_400usize), (true, 35_200usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()

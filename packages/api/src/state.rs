@@ -235,7 +235,6 @@ impl BoardMutationGuard {
 }
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
-const JWKS: &str = include_str!(concat!(env!("OUT_DIR"), "/jwks.json"));
 const JWKS_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const JWKS_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -626,8 +625,10 @@ impl State {
                 .expect("OpenID validation configuration must be complete and exact");
         }
 
-        let jwks = flow_like_types::json::from_str::<JwkSet>(JWKS).expect("Failed to parse JWKS");
-        validate_jwks_set(&jwks).expect("Embedded OpenID JWKS must be safe and unambiguous");
+        // JWKS used to be downloaded by build.rs, making clean and cross builds depend on a
+        // live identity-provider endpoint. Start with a fail-closed empty cache instead; the
+        // existing bounded HTTPS refresh in `configured_jwk` fills it on first use.
+        let jwks = JwkSet { keys: Vec::new() };
 
         // Create content + meta buckets from master credentials (same mechanism
         // that board/storage already uses — works with IAM roles, STS, etc.)
@@ -973,10 +974,12 @@ impl State {
 
         let settings = self.openid_validation_settings()?;
         let refreshed = fetch_jwks(&settings.jwks_url).await?;
-        let jwk = find_unique_jwk(&refreshed, kid)?
-            .ok_or_else(|| flow_like_types::anyhow!("OpenID signing key is not published"))?;
+        // Cache every successfully validated set even when this particular `kid` is unknown.
+        // Otherwise a bogus first request after startup discards the valid key set and the
+        // refresh throttle blocks legitimate tokens until the next interval.
+        let jwk = find_unique_jwk(&refreshed, kid)?;
         *self.jwks.write().await = refreshed;
-        Ok(jwk)
+        jwk.ok_or_else(|| flow_like_types::anyhow!("OpenID signing key is not published"))
     }
 
     pub(crate) async fn validate_token(&self, token: &str) -> Result<ValidatedOpenIdToken> {

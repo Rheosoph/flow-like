@@ -16,7 +16,9 @@ use flow_like_model_provider::{
     history::History,
     response::{LLMUsageStats, Response},
 };
-use flow_like_types::{async_trait, json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json;
 #[cfg(feature = "execute")]
 use std::collections::HashMap;
 

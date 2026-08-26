@@ -304,6 +304,7 @@ pub fn bind_filter(filter: &str, params: &[(String, Value)]) -> Result<String> {
 
 /// Binds `params` onto a planned DataFrame. A query with no placeholders is left alone, so
 /// the binding call is safe to make unconditionally.
+#[cfg(feature = "execute")]
 pub fn bind(
     df: flow_like_storage::datafusion::dataframe::DataFrame,
     params: &[(String, Value)],

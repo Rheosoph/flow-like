@@ -193,6 +193,7 @@ impl NodeLogic for ReverseGeocodeNode {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimReverseResult {
     display_name: String,
@@ -203,6 +204,7 @@ struct NominatimReverseResult {
     osm_type: Option<String>,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimAddress {
     house_number: Option<String>,

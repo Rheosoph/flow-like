@@ -6,7 +6,9 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{anyhow, async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::{anyhow, json::json};
 #[cfg(feature = "execute")]
 use std::io::Cursor;
 

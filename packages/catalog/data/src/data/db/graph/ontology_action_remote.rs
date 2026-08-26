@@ -1,5 +1,7 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::ValueType,
     variable::VariableType,
@@ -12,6 +14,7 @@ use crate::remote_util::{
 };
 
 const DEFAULT_REMOTE_ACTION_TIMEOUT_SECS: i64 = 120;
+#[cfg(feature = "execute")]
 const MAX_REMOTE_ACTION_TIMEOUT_SECS: i64 = 1800;
 
 #[crate::register_node]

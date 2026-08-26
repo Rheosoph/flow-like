@@ -3,11 +3,13 @@
 //! Nodes for creating, managing, and configuring Copilot sessions.
 
 #[cfg(feature = "execute")]
+use super::COPILOT_SESSION_PREFIX;
+#[cfg(feature = "execute")]
 use super::CachedCopilotSession;
 use super::{
-    COPILOT_SESSION_PREFIX, CopilotClientHandle, CopilotSessionConfig, CopilotSessionHandle,
-    CopilotToolConfig, CustomAgentConfig, InfiniteSessionConfig, ProviderConfig,
-    SystemMessageConfig, SystemMessageMode,
+    CopilotClientHandle, CopilotSessionConfig, CopilotSessionHandle, CopilotToolConfig,
+    CustomAgentConfig, InfiniteSessionConfig, ProviderConfig, SystemMessageConfig,
+    SystemMessageMode,
 };
 use flow_like::flow::{
     execution::context::ExecutionContext,

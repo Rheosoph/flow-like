@@ -5,7 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeGraphConnection;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 /// # Graph Schema
 /// Retrieves the schema (labels and properties) of a graph overlay.
@@ -54,7 +56,7 @@ impl NodeLogic for GraphSchemaNode {
             "Graph schema with labels and properties",
             VariableType::Struct,
         )
-        .set_schema::<flow_like_storage::databases::graph::GraphSchemaResult>();
+        .set_schema::<flow_like_storage_contracts::graph::GraphSchemaResult>();
 
         node
     }

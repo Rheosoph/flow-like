@@ -123,6 +123,132 @@ pub struct GraphContext {
     pub selected_nodes: Vec<String>,
 }
 
+/// Spatial facts for one node that the FlowScript render cannot express.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeLayoutContext {
+    #[serde(rename = "p")]
+    pub position: (i32, i32),
+    #[serde(rename = "s")]
+    pub estimated_size: (u16, u16),
+    /// Containing layer ID, absent for root-level nodes
+    #[serde(rename = "l", skip_serializing_if = "Option::is_none")]
+    pub layer_id: Option<String>,
+}
+
+/// Layout-only board context for authoring prompts where the anchored FlowScript render already
+/// carries every node, pin, default, and edge. Only position/size/layer membership survive here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoardLayoutContext {
+    pub nodes: std::collections::BTreeMap<String, NodeLayoutContext>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerContext>,
+    pub selected_nodes: Vec<String>,
+}
+
+fn estimate_node_size(node: &Node) -> (u16, u16) {
+    let input_count = node
+        .pins
+        .values()
+        .filter(|p| p.pin_type == PinType::Input)
+        .count();
+    let output_count = node
+        .pins
+        .values()
+        .filter(|p| p.pin_type == PinType::Output)
+        .count();
+    let max_pins = input_count.max(output_count);
+    (200u16, 32u16 + (max_pins as u16 * 20))
+}
+
+fn node_position(node: &Node) -> (i32, i32) {
+    node.coordinates
+        .map(|(x, y, _)| (x as i32, y as i32))
+        .unwrap_or((0, 0))
+}
+
+fn build_layer_contexts(board: &Board) -> Vec<LayerContext> {
+    board
+        .layers
+        .values()
+        .map(|layer| {
+            let (x, y) = (layer.coordinates.0 as i32, layer.coordinates.1 as i32);
+
+            let inputs: Vec<PinContext> = layer
+                .pins
+                .values()
+                .filter(|p| p.pin_type == PinType::Input)
+                .map(|p| PinContext {
+                    name: p.name.clone(),
+                    type_name: format!("{:?}", p.data_type),
+                    default_value: None,
+                })
+                .collect();
+
+            let outputs: Vec<PinContext> = layer
+                .pins
+                .values()
+                .filter(|p| p.pin_type == PinType::Output)
+                .map(|p| PinContext {
+                    name: p.name.clone(),
+                    type_name: format!("{:?}", p.data_type),
+                    default_value: None,
+                })
+                .collect();
+
+            LayerContext {
+                id: layer.id.clone(),
+                name: layer.name.clone(),
+                layer_type: match &layer.r#type {
+                    LayerType::Function => "Function",
+                    LayerType::Macro => "Macro",
+                    LayerType::Collapsed => "Collapsed",
+                    LayerType::Module => "Module",
+                }
+                .to_string(),
+                parent_id: layer.parent_id.clone(),
+                node_ids: layer.nodes.keys().cloned().collect(),
+                position: (x, y),
+                inputs,
+                outputs,
+                cache: layer.cache.as_ref().map(|cache| LayerCacheContext {
+                    enabled: cache.enabled,
+                    namespace: cache.prefix.clone(),
+                    ttl_seconds: cache.ttl_seconds,
+                    scope: cache.scope.as_str().to_string(),
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Prepare the layout-only context embedded in the authoring prompt next to the FlowScript render.
+pub fn prepare_layout_context(board: &Board, selected_node_ids: &[String]) -> BoardLayoutContext {
+    let mut nodes = std::collections::BTreeMap::new();
+    let mut insert_nodes = |source: &std::collections::HashMap<String, Node>,
+                            layer_id: Option<&str>| {
+        for node in source.values() {
+            nodes.insert(
+                node.id.clone(),
+                NodeLayoutContext {
+                    position: node_position(node),
+                    estimated_size: estimate_node_size(node),
+                    layer_id: layer_id.map(str::to_string),
+                },
+            );
+        }
+    };
+    insert_nodes(&board.nodes, None);
+    for layer in board.layers.values() {
+        insert_nodes(&layer.nodes, Some(&layer.id));
+    }
+
+    BoardLayoutContext {
+        nodes,
+        layers: build_layer_contexts(board),
+        selected_nodes: selected_node_ids.to_vec(),
+    }
+}
+
 /// Prepare graph context from a board
 pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<GraphContext> {
     let mut node_contexts = Vec::new();
@@ -177,26 +303,14 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
                 })
                 .collect();
 
-            // Estimate node size based on pin count
-            let input_count = inputs.len();
-            let output_count = outputs.len();
-            let max_pins = input_count.max(output_count);
-            let estimated_width = 200u16;
-            let estimated_height = 32u16 + (max_pins as u16 * 20);
-
-            let (x, y) = node
-                .coordinates
-                .map(|(x, y, _)| (x as i32, y as i32))
-                .unwrap_or((0, 0));
-
             node_contexts.push(NodeContext {
                 id: node.id.clone(),
                 node_type: node.name.clone(),
                 friendly_name: node.friendly_name.clone(),
+                position: node_position(node),
+                estimated_size: estimate_node_size(node),
                 inputs,
                 outputs,
-                position: (x, y),
-                estimated_size: (estimated_width, estimated_height),
             });
         }
     };
@@ -234,60 +348,7 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
         process_edges(&layer.nodes);
     }
 
-    // Build layer contexts
-    let layer_contexts: Vec<LayerContext> = board
-        .layers
-        .values()
-        .map(|layer| {
-            let (x, y) = (layer.coordinates.0 as i32, layer.coordinates.1 as i32);
-
-            // Build input and output pin lists for the layer
-            let inputs: Vec<PinContext> = layer
-                .pins
-                .values()
-                .filter(|p| p.pin_type == PinType::Input)
-                .map(|p| PinContext {
-                    name: p.name.clone(),
-                    type_name: format!("{:?}", p.data_type),
-                    default_value: None,
-                })
-                .collect();
-
-            let outputs: Vec<PinContext> = layer
-                .pins
-                .values()
-                .filter(|p| p.pin_type == PinType::Output)
-                .map(|p| PinContext {
-                    name: p.name.clone(),
-                    type_name: format!("{:?}", p.data_type),
-                    default_value: None,
-                })
-                .collect();
-
-            LayerContext {
-                id: layer.id.clone(),
-                name: layer.name.clone(),
-                layer_type: match &layer.r#type {
-                    LayerType::Function => "Function",
-                    LayerType::Macro => "Macro",
-                    LayerType::Collapsed => "Collapsed",
-                    LayerType::Module => "Module",
-                }
-                .to_string(),
-                parent_id: layer.parent_id.clone(),
-                node_ids: layer.nodes.keys().cloned().collect(),
-                position: (x, y),
-                inputs,
-                outputs,
-                cache: layer.cache.as_ref().map(|cache| LayerCacheContext {
-                    enabled: cache.enabled,
-                    namespace: cache.prefix.clone(),
-                    ttl_seconds: cache.ttl_seconds,
-                    scope: cache.scope.as_str().to_string(),
-                }),
-            }
-        })
-        .collect();
+    let layer_contexts = build_layer_contexts(board);
 
     // Build variable contexts
     let variable_contexts: Vec<VariableContext> = board
@@ -323,7 +384,90 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
 mod tests {
     use super::*;
     use crate::flow::board::{Layer, LayerCache, LayerCacheScope, LayerType};
+    use crate::flow::variable::VariableType;
     use flow_like_storage::Path;
+
+    fn layout_fixture_board() -> (Board, String, String, String) {
+        let mut board = Board::new_detached(Some("layout-context".to_string()), Path::default());
+
+        let mut fetch = Node::new("http_fetch", "Fetch Data", "", "web");
+        fetch.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        fetch
+            .add_input_pin("url", "Url", "", VariableType::String)
+            .default_value = Some(b"\"https://example.com/some/long/default/path\"".to_vec());
+        fetch.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        fetch.add_output_pin("body", "Body", "", VariableType::String);
+        fetch.coordinates = Some((120.0, -40.0, 0.0));
+        let fetch_id = fetch.id.clone();
+
+        let mut layer = Layer::new(
+            "pricing-layer".to_string(),
+            "calculatePricing".to_string(),
+            LayerType::Function,
+        );
+        let mut log = Node::new("log_info", "Log", "", "logging");
+        log.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        let log_id = log.id.clone();
+        layer.nodes.insert(log.id.clone(), log);
+        let layer_id = layer.id.clone();
+
+        board.nodes.insert(fetch.id.clone(), fetch);
+        board.layers.insert(layer.id.clone(), layer);
+        (board, fetch_id, log_id, layer_id)
+    }
+
+    #[test]
+    fn layout_context_maps_node_ids_to_spatial_facts_only() {
+        let (board, fetch_id, log_id, layer_id) = layout_fixture_board();
+
+        let layout = prepare_layout_context(&board, std::slice::from_ref(&fetch_id));
+        let fetch_layout = &layout.nodes[&fetch_id];
+        assert_eq!(fetch_layout.position, (120, -40));
+        assert_eq!(fetch_layout.estimated_size, (200, 32 + 2 * 20));
+        assert_eq!(fetch_layout.layer_id, None);
+        assert_eq!(
+            layout.nodes[&log_id].layer_id.as_deref(),
+            Some(layer_id.as_str())
+        );
+        assert_eq!(layout.layers.len(), 1);
+        assert_eq!(layout.layers[0].id, layer_id);
+        assert_eq!(layout.selected_nodes, vec![fetch_id.clone()]);
+
+        let json = serde_json::to_value(&layout).expect("serialized layout context");
+        let fetch_json = &json["nodes"][fetch_id.as_str()];
+        assert_eq!(fetch_json["p"][0], 120);
+        assert_eq!(fetch_json["s"][0], 200);
+        assert!(fetch_json.get("i").is_none(), "no pin lists in layout");
+        assert!(fetch_json.get("v").is_none(), "no defaults in layout");
+        assert!(json.get("edges").is_none(), "no edges in layout");
+        assert!(json.get("variables").is_none(), "no variables in layout");
+    }
+
+    #[test]
+    fn layout_context_embedding_is_smaller_than_graph_context() {
+        let (board, fetch_id, _, _) = layout_fixture_board();
+
+        let rich = flow_like_types::json::to_string_pretty(
+            &prepare_context(&board, std::slice::from_ref(&fetch_id)).expect("graph context"),
+        )
+        .expect("rich json");
+        let slim = flow_like_types::json::to_string_pretty(&prepare_layout_context(
+            &board,
+            std::slice::from_ref(&fetch_id),
+        ))
+        .expect("slim json");
+        eprintln!(
+            "layout embedding: slim {} bytes vs rich {} bytes",
+            slim.len(),
+            rich.len()
+        );
+        assert!(
+            slim.len() < rich.len(),
+            "layout embedding must shrink the prompt: slim {} bytes vs rich {} bytes",
+            slim.len(),
+            rich.len()
+        );
+    }
 
     #[test]
     fn default_function_cache_is_exposed_in_graph_context_with_flowscript_names() {

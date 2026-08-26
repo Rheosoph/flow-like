@@ -5,6 +5,7 @@
 //! Note: The `execute` feature must be enabled for actual ML model training and inference.
 //! Without it, only node metadata (get_node()) is available.
 
+#[cfg(feature = "execute")]
 use flow_like_storage::arrow_schema::{DataType, Field};
 use flow_like_types::{Error, Result, Value, anyhow};
 use ndarray::{Array1, Array2};
@@ -2003,6 +2004,7 @@ pub fn values_to_array1_ordinal(
 
 /// Infer Schema of New Columns to be added to Lance Tables
 /// We map the JSON type of value.attr to a corresponding Arrow type
+#[cfg(feature = "execute")]
 pub fn make_new_field(value: &Value, attr: &str) -> Result<Field> {
     if let Some(v) = value.get(attr) {
         match v {

@@ -411,7 +411,8 @@ draft unless the user explicitly asks you to wait.
 - Never ask the user to say "Create draft", "go ahead", "confirm", or similar before creating a
   workflow draft. If the user requested a workflow, create it in the same turn.
 - Never end with "tell me if you want me to expand/convert/apply it". Expand, convert, and apply
-  through `write_flowscript` → `patch_flowscript` → `check_flowscript` → `commit_flowscript` until
+  through `write_flowscript` → `patch_flowscript` → `commit_flowscript` (with `check_flowscript`
+  where staged growth, catalog drift, or a host-applied segment requires it) until
   board commands are queued or structured validation diagnostics identify a real blocker.
 - Do not create draft files, edit local files, use shell/file tools, or request filesystem
   permission. Your virtual workspace is the retained FlowScript document managed by the source
@@ -533,7 +534,7 @@ once. It costs one call and decides how the build reaches the board.
   - `"staged"` — grow ONE draft: write segment 1 alone, check it, then rewrite the same draft_id
     with segment 1+2, check, and so on. Commit ONCE at the end. The live board stays untouched
     until the whole plan validates, so this is the default for a decomposed build.
-  - `"incremental"` — author, check and commit ONE segment per draft. After a `queued` commit,
+  - `"incremental"` — author, repair until diagnostic-free, and commit ONE segment per draft. After a `queued` commit,
     STOP: the host applies that segment and starts the next one on a fresh draft_id. Use it when
     the build is large enough that a single commit would not be reached in time. Partial progress
     stays on the board if a later segment fails, so the user sees real, honest partial results.
@@ -1092,6 +1093,25 @@ nodes. `check_flowscript` REJECTS source that would exceed this, so design withi
 - Check the finished FlowScript against every behavior in the user's request before the first
   submission. A foundation-only slice (for example, polling mail without drafting, approval,
   revision, and reply paths that were also requested) is not a successful full-workflow edit.
+
+### MODULE BLOCKS (NAMESPACE FILES)
+`module name { ... }` groups events and functions into a named namespace — the board renders each
+module as its own virtual file, so modules are how a larger app stays readable. Use them by
+default once a board covers more than one domain: one module per domain (`module checkout { }`,
+`module reporting { }`), nested blocks for sub-domains. Rules:
+- Cross-module calls always spell the ABSOLUTE path from the root (`checkout::payments::retry()`);
+  bare names resolve within the current module, then to global functions — never sideways.
+- `const`/variable declarations are board-global regardless of the module they are written in;
+  they render in the main file.
+- The written text is authoritative for module structure: renaming an anchored `module` block
+  renames the module, and moving an anchored `function`, event, or nested `module` block into a
+  different module block moves it there. Anchors (`//@l:`, `//@n:`) keep identity — preserve them
+  when restructuring, and reorganizing existing code is then safe and reviewable.
+- The same rule applies toward the root: writing an anchored section at the top level moves it
+  OUT of its module. Never drop a `module { }` wrapper you are not deliberately dissolving —
+  moves out of a module to the root are additionally gated like deletions.
+- Keep an existing board's module structure unless the user asks for reorganization or the edit
+  clearly belongs in a new domain.
 "#;
 
 /// Function-layer result-cache syntax and safety contract shared by every board-capable prompt.
@@ -1936,9 +1956,11 @@ graph. This is your DEFAULT editing surface. Each statement that maps to a real 
 `//@n:<id>` anchor comment that ties it back to that node's stable identity.
 
 For every NEW or EXISTING executable workflow, author the result as FlowScript:
-1. Treat the FlowScript below as the complete editable document. For an existing board, call
-   `get_current_flowscript` immediately before authoring and preserve anchors from that source.
-   For a new or empty board, start a complete source document from the requested behavior.
+1. Treat the FlowScript below as the complete editable document — it IS the current board, rendered
+   byte-identically to what `get_current_flowscript` would return. Author directly from it and
+   preserve its anchors; do not call `get_current_flowscript` before authoring. Call that tool only
+   to re-read the board after the host applies an incremental segment, never after write/check
+   diagnostics. For a new or empty board, start a complete source document from the requested behavior.
 2. Plan the WHOLE workflow, then make ONE bounded, focused `get_declarations` call for the
    highest-leverage catalog signatures needed to establish its end-to-end shape. Do not enumerate
    every utility operation. Never guess node names, pins, or types.
@@ -1974,15 +1996,21 @@ For every NEW or EXISTING executable workflow, author the result as FlowScript:
    occurs exactly once for a focused change. For a coherent whole-document rewrite, call
    `write_flowscript` with the same draft id and `replace_existing: true`; scope-regressing rewrites
    are rejected unless the user explicitly asked to remove behavior.
-6. Call `check_flowscript` with the exact current revision. It parses FlowScript into the compiler's
-   internal typed AST, reconciles it against the exact catalog, and retains the resulting command
-   batch. Fix every structured diagnostic and check again; a failed check changes no board state.
+6. Every write/patch result already carries the full structured diagnostics for that revision. If the
+   latest write/patch returned ZERO diagnostics, commit directly at that exact revision — no separate
+   check round is needed, because commit runs the identical evaluation inline and, on failure, queues
+   nothing and returns the same structured `validation_errors` to repair. Call `check_flowscript`
+   (exact current revision; it parses FlowScript into the compiler's internal typed AST, reconciles
+   it against the exact catalog, and retains the resulting command batch) only as the growth gate
+   under a `staged` plan, or to re-validate an unchanged revision after catalog drift or a
+   host-applied segment; a failed check changes no board state.
 7. Under a `staged` plan, once the active segment checks cleanly write the SAME draft id again with
    that segment plus the next one and check that. Growing a draft is never a scope regression. Only
    after the LAST segment checks `valid` do you commit.
-8. Call `commit_flowscript` only after status `valid`, using that exact revision. Commit queues the
-   exact already-checked command batch for user review and never accepts model-authored command JSON.
-9. REPAIR BUDGET: if the SAME diagnostics survive three consecutive `check_flowscript` calls, stop
+8. Call `commit_flowscript` at the latest diagnostic-free revision. Commit queues the exact validated
+   command batch for user review and never accepts model-authored command JSON.
+9. REPAIR BUDGET: if the SAME diagnostics survive three consecutive validations (`check_flowscript`
+   calls or inline-validated commits), stop
    editing. Report the remaining diagnostics and what you tried in one short text response — an
    honest blocked report is the correct terminal move, not another blind rewrite.
 10. AFTER a `commit_flowscript` result with status `queued`: STOP calling workflow tools for this
@@ -2000,10 +2028,10 @@ variables, function layers/references, and every other executable operation; aut
 FlowScript through write/patch/check/commit.
 - **Repositioning nodes on the canvas** (MoveNode) — positions are visual and are NOT part of the
   FlowScript text, so use emit_commands+MoveNode for layout/reposition requests.
-  - Each node's CURRENT coordinates live in the Graph Context JSON below: every node has an `id`
-    plus `p` (current `[x, y]` position) and `s` (`[width, height]` size). Use those to compute new
+  - Each node's CURRENT coordinates live in the Graph Context JSON below: `nodes` maps every node
+    id to `p` (current `[x, y]` position) and `s` (`[width, height]` size). Use those to compute new
     targets (e.g. spacing, alignment, avoiding overlaps) and emit one MoveNode per node with its
-    `id` and the new absolute position.
+    id and the new absolute position.
 
 {autonomy_guidance}
 
@@ -2038,7 +2066,13 @@ FlowScript through write/patch/check/commit.
 {flowscript}
 ```
 
-## Graph Context (abbreviated keys: t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value, p=parent; function-layer `cache` uses enabled/namespace/ttl_seconds/scope)
+## Graph Context
+In authoring runs this is a compact LAYOUT map — `nodes` maps each node id to `p` (`[x, y]`
+position), `s` (`[width, height]` estimated size) and optional `l` (containing layer id) — plus
+`layers` and `selected_nodes`; every other node, pin, default, and edge fact lives in the
+FlowScript render above. Read-only runs embed the full graph form instead (abbreviated keys:
+t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value,
+p=parent; function-layer `cache` uses enabled/namespace/ttl_seconds/scope).
 {context}
 
 ## Layers Are Read-Only Context
@@ -2229,11 +2263,15 @@ const GENERAL_PROMPT_HEADER: &str = r#"You are FlowPilot, an expert development 
 
 Analyze the user's request and immediately call the appropriate tool:
 - UI work → call `emit_ui` with complete A2UI JSON (it validates internally)
-- Workflow work with a board/FlowScript context → call `get_current_flowscript`, make ONE bounded,
+- Workflow work with a board/FlowScript context → the embedded FlowScript render (when present) IS
+  the current board; call `get_current_flowscript` only when no render is embedded or after a
+  host-applied segment. Make ONE bounded,
   focused `get_declarations` call for the highest-leverage catalog calls, call `plan_board_scope`
   exactly once after any usable response, then immediately retain its active segment with
   `write_flowscript`. Defer omitted or unmatched searches until compiler diagnostics, repair with
-  `patch_flowscript`, and `check_flowscript` + `commit_flowscript` at the exact current revision
+  `patch_flowscript`, and `commit_flowscript` at the exact current revision once diagnostics are
+  clear (commit validates inline; `check_flowscript` gates staged growth and re-validation after
+  catalog drift or a host-applied segment)
 - Workflow visual-only work → call `emit_commands` only for position-only MoveNode or canvas comments
 - Both → call both tools in sequence
 - Unclear workflow mutation → use the current FlowScript and one bounded, focused
@@ -2819,12 +2857,16 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
 ```
 
 ## HOW TO BUILD OR MODIFY A WORKFLOW WITH FLOWSCRIPT (execute in order)
-1. Treat the FlowScript above as the complete editable document. For an existing-board edit, call
-   `get_current_flowscript` immediately before authoring and preserve anchors from that source.
-   For a new or empty board, start a complete source document from the requested behavior.
+1. Treat the FlowScript above as the complete editable document — it IS the current board, rendered
+   byte-identically to what `get_current_flowscript` would return. Author directly from it and
+   preserve its anchors; do not call `get_current_flowscript` before authoring. Call that tool only
+   to re-read the board after the host applies an incremental segment, never after write/check
+   diagnostics. For a new or empty board, start a complete source document from the requested behavior.
 2. Plan the WHOLE change first, then make ONE bounded, focused `get_declarations` call for the
-   highest-leverage catalog signatures needed to establish its end-to-end shape (camelCase name,
-   typed params, `// impure` marker come back per search). Do not enumerate every utility operation.
+   highest-leverage catalog signatures needed to establish its end-to-end shape. Each search returns
+   qualified `function ns::alias(this: T, ...)` signatures, the `// use ns::*` line that enables the
+   bare alias, and `// impure` markers; write the qualified spelling — flat legacy camelCase names
+   still resolve but are deprecated. Do not enumerate every utility operation.
    Never use a blank query and never guess a node name or pin.
 3. Call `plan_board_scope` once. An ordinary edit is one segment (`strategy: "single"`) and proceeds
    exactly as it always has; a build too large to compose in one pass is split so that the FIRST
@@ -2853,17 +2895,22 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
      exact declarations and concrete node calls.
 5. Fix focused diagnostics with `patch_flowscript`; its `old_text` must occur exactly once. A
    coherent whole-document rewrite may use `write_flowscript` with `replace_existing: true`.
-6. Call `check_flowscript` at the exact current revision. It parses the source into an internal
-   typed AST, reconciles exact catalog/pin/execution semantics, and retains the derived commands.
-   If it returns diagnostics, nothing is queued: patch the same retained document and check again.
+6. Every write/patch result already carries the full structured diagnostics for that revision. If the
+   latest write/patch returned ZERO diagnostics, commit directly at that exact revision — no separate
+   check round is needed, because commit runs the identical evaluation inline and, on failure, queues
+   nothing and returns the same structured `validation_errors` to repair. Call `check_flowscript`
+   (exact current revision; it parses the source into an internal typed AST, reconciles exact
+   catalog/pin/execution semantics, and retains the derived commands) only as the growth gate under
+   a `staged` plan, or to re-validate an unchanged revision after catalog drift or a host-applied
+   segment; a failed check queues nothing and changes no board state.
 7. Under a `staged` plan, once the active segment checks cleanly write the SAME draft id again with
    that segment plus the next one and check that. Growing a draft is never a scope regression. Only
    after the LAST segment checks `valid` do you commit.
-8. Call `commit_flowscript` only after status `valid`. It queues the exact checked command batch for
-   review; never hand-author or copy its internal JSON representation.
-9. REPAIR BUDGET: if the SAME diagnostics survive three consecutive `check_flowscript` calls, stop
-   editing and report the remaining diagnostics honestly in one short response instead of another
-   blind rewrite.
+8. Call `commit_flowscript` at the latest diagnostic-free revision. It queues the exact validated
+   command batch for review; never hand-author or copy its internal JSON representation.
+9. REPAIR BUDGET: if the SAME diagnostics survive three consecutive validations (`check_flowscript`
+   calls or inline-validated commits), stop editing and report the remaining diagnostics honestly in
+   one short response instead of another blind rewrite.
 10. AFTER `commit_flowscript` returns status `queued`: STOP calling workflow tools for this request
    and summarize what was queued. Never re-check, re-commit, or rewrite an already-queued batch.
    Under an `incremental` plan the host applies that segment and starts the next one for you.
@@ -3227,6 +3274,26 @@ mod tests {
             .iter()
             .map(metadata_from_signature)
             .collect()
+    }
+
+    #[test]
+    fn board_organization_guidance_covers_module_blocks() {
+        // Every board-capable prompt embeds this constant; the module contract must not silently
+        // drop out of it. "Module" alone is ambiguous here — typed Flow IR uses the same word for
+        // its function/event units — so the section is keyed by its namespace-file framing.
+        for marker in [
+            "MODULE BLOCKS (NAMESPACE FILES)",
+            "module name { ... }",
+            "ABSOLUTE path from the root",
+            "board-global",
+            "written text is authoritative",
+            "OUT of its module",
+        ] {
+            assert!(
+                BOARD_ORGANIZATION_GUIDANCE.contains(marker),
+                "module-block guidance lost `{marker}`"
+            );
+        }
     }
 
     #[test]

@@ -1969,6 +1969,7 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
         flowpilot_debug_log!("[QueryLogsTool] Using limit={}, filter='{}'", limit, filter);
 
         // Build LogMeta from RunContext
+        #[cfg(feature = "flow-runtime")]
         let log_meta = crate::flow::execution::LogMeta {
             app_id: run_context.app_id.clone(),
             run_id: run_context.run_id.clone(),
@@ -2074,9 +2075,13 @@ impl Tool for GetCurrentFlowScriptTool {
             name: "get_current_flowscript".to_string(),
             description: r#"Return the current live board as anchored FlowScript.
 
-Use this once before starting a new retained draft for an existing board. The returned document is
-the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` anchors
-and every `@cache` decorator on functions you keep. Cache settings use
+The system prompt already embeds this exact render — do not call this before authoring; use it only
+to re-read the board after the host applies an incremental segment. The returned document is
+the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` and
+`//@l:<id>` anchors and every `@cache` decorator on functions you keep. `module name { ... }`
+blocks are the board's namespaces; the written structure is authoritative: renaming an anchored
+module block renames it, and moving an anchored function/event/module block into a different
+module block moves it there — anchors keep identity, so reorganizing for readability is safe. Cache settings use
 `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })`; bare `@cache` defaults to the
 `global` namespace, a 300-second lifetime, and app scope. Use `ttlSeconds: 0` for no expiry.
 If existing context reports `ttl_seconds: null`, it is a permanent cache; preserve it as
@@ -4077,6 +4082,8 @@ mod tests {
             "DeleteVariable",
             "CreateLayer",
             "RemoveLayer",
+            "RenameLayer",
+            "MoveToLayer",
         ] {
             assert!(
                 !encoded.contains(executable),

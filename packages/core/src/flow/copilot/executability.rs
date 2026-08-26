@@ -916,6 +916,8 @@ fn project_graph(
             | BoardCommand::CreateLayer { .. }
             | BoardCommand::CreateVariable { .. }
             | BoardCommand::MoveNode { .. }
+            | BoardCommand::MoveToLayer { .. }
+            | BoardCommand::RenameLayer { .. }
             | BoardCommand::UpdateLayerCache { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
             | BoardCommand::AddComment { .. }

@@ -76,7 +76,7 @@ impl NodeLogic for GraphSearchNode {
             VariableType::Struct,
         )
         .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<flow_like_storage::databases::graph::SubgraphNode>();
+        .set_schema::<flow_like_storage_contracts::graph::SubgraphNode>();
 
         node
     }

@@ -12,9 +12,13 @@
 //! (`list_runs`, `query_run`, `GET .../runs`, `GET .../logs`) need no changes.
 
 use flow_like_storage::Path;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatchIterator, RecordBatchReader};
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::Connection;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::table::WriteOptions;
 use flow_like_types::json::to_vec;
 use flow_like_types::{Value, create_id};
@@ -220,6 +224,7 @@ impl RejectedRun {
 
     /// Write both artifacts into the board's log database. The connection must
     /// already point at `runs/{app_id}/{board_id}`.
+    #[cfg(feature = "flow-runtime")]
     pub async fn write(
         &self,
         db: Connection,
@@ -264,6 +269,7 @@ pub fn runs_base_path(app_id: &str, board_id: &str) -> Path {
 
 /// Convenience for callers that hold a log-database builder rather than an
 /// open connection (the API routes, the desktop state, the executor).
+#[cfg(feature = "flow-runtime")]
 pub async fn record_rejection(
     db_fn: &(dyn Fn(Path) -> ConnectBuilder + Send + Sync),
     rejection: &RejectedRun,
@@ -325,6 +331,7 @@ mod tests {
     /// knowing they exist: a `runs` summary row plus a table named after the
     /// run id, exactly as `InternalRun` leaves behind.
     #[tokio::test]
+    #[cfg(feature = "flow-runtime")]
     async fn a_rejection_writes_the_same_artifacts_a_run_does() {
         use crate::flow::execution::log::StoredLogMessage;
         use flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};

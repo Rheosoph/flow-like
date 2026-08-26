@@ -156,8 +156,12 @@ pub fn record_flowscript_apply_failure(state: &AppState, failure: FlowScriptAppl
         return;
     }
 
+    // Agent rows from the typed-IR commit path legitimately carry no source; everything else
+    // with an empty redaction is noise.
+    let source_less_agent_report =
+        failure.flowscript.trim().is_empty() && failure.origin == ORIGIN_AGENT;
     let redacted = redact_flowscript(&failure.flowscript);
-    if redacted.text.trim().is_empty() {
+    if redacted.text.trim().is_empty() && !source_less_agent_report {
         return;
     }
 
@@ -291,7 +295,9 @@ pub async fn report_flowscript_apply_failure(
             "app_id and board_id are required to report a FlowScript apply failure",
         ));
     }
-    if body.flowscript.trim().is_empty() {
+    // Agent reports from the typed-IR commit path carry no source (the renderer holds only a
+    // commit token); their diagnostics/error rows are still worth keeping.
+    if body.flowscript.trim().is_empty() && origin != ORIGIN_AGENT {
         return Ok(Json(ReportFlowScriptApplyFailureResponse {
             recorded: false,
         }));

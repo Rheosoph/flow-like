@@ -1,7 +1,9 @@
 use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
 use crate::data::path::FlowPath;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -246,6 +248,7 @@ impl NodeLogic for CloneGitHubRepoNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn build_repo_subpath(base: &str, repo: &str) -> String {
     if base.is_empty() {
         repo.to_string()

@@ -7,6 +7,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{

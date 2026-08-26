@@ -3,13 +3,19 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::{
     buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
-use flow_like_types::{Cacheable, Value, async_trait, sync::RwLock};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::{Cacheable, Value, sync::RwLock};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
-pub use flow_like_catalog_core::{CachedDB, NodeDBConnection};
+#[cfg(feature = "execute")]
+pub use flow_like_catalog_core::CachedDB;
+pub use flow_like_catalog_core::NodeDBConnection;
 
 pub mod add_column;
 pub mod count;
@@ -98,6 +104,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -203,5 +210,12 @@ impl NodeLogic for CreateLocalDatabaseNode {
         context.set_pin_value("database", db).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

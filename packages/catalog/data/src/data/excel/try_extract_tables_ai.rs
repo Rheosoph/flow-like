@@ -11,12 +11,11 @@
 //! shared detection core, so values are never hallucinated.
 
 use crate::data::excel::CSVTable;
-use crate::data::excel::table_detect::ExtractConfig;
 use crate::data::path::FlowPath;
 use flow_like::bit::Bit;
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow::{
-    execution::{ExecutionEnvironment, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::Node,
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -40,11 +39,11 @@ use crate::data::excel::sheet_compressor::{
 use crate::data::excel::styles::{SheetStyles, color_matches, load_workbook_styles};
 #[cfg(feature = "execute")]
 use crate::data::excel::table_detect::{
-    BuildOverrides, DetectedTable, Rect, build_table_from_rect, detect_table_regions,
-    detected_to_csv, extract_tables_from_grid, tighten,
+    BuildOverrides, DetectedTable, ExtractConfig, Rect, build_table_from_rect,
+    detect_table_regions, detected_to_csv, extract_tables_from_grid, tighten,
 };
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::LogLevel;
+use flow_like::flow::execution::{ExecutionEnvironment, LogLevel};
 #[cfg(feature = "execute")]
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "execute")]

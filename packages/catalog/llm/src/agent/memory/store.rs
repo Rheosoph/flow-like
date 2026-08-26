@@ -1,4 +1,5 @@
 use super::config::MemoryConfig;
+#[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -6,10 +7,16 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{async_trait, bail, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::bail;
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::collections::hash_map::DefaultHasher;
+#[cfg(feature = "execute")]
 use std::hash::{Hash, Hasher};
+#[cfg(feature = "execute")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[crate::register_node]
@@ -102,6 +109,7 @@ impl NodeLogic for StoreMemoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -170,5 +178,12 @@ impl NodeLogic for StoreMemoryNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Memory storage requires the 'execute' feature"
+        ))
     }
 }

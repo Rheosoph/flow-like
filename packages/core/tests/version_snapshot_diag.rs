@@ -5,7 +5,8 @@ use flow_like_storage::object_store::ObjectStore;
 use flow_like_types::FromProto;
 use std::sync::Arc;
 
-const APP_DIR: &str = "/Users/felix/Library/Application Support/flow-like/projects/apps/kdx5aylm4sh49a6hf8y5xoou";
+const APP_DIR: &str =
+    "/Users/felix/Library/Application Support/flow-like/projects/apps/kdx5aylm4sh49a6hf8y5xoou";
 
 async fn store() -> Arc<dyn ObjectStore> {
     Arc::new(
@@ -34,7 +35,11 @@ fn report(label: &str, a: &Board, b: &Board) {
     println!("refs {:?} vs {:?}", a.refs.len(), b.refs.len());
     println!("page_ids {:?} vs {:?}", a.page_ids, b.page_ids);
     println!("name {:?} vs {:?}", a.name, b.name);
-    println!("desc len {} vs {}", a.description.len(), b.description.len());
+    println!(
+        "desc len {} vs {}",
+        a.description.len(),
+        b.description.len()
+    );
     println!("viewport {:?} vs {:?}", a.viewport, b.viewport);
     println!("stage {:?} vs {:?}", a.stage, b.stage);
     println!("exec mode {:?} vs {:?}", a.execution_mode, b.execution_mode);
@@ -53,7 +58,9 @@ fn report(label: &str, a: &Board, b: &Board) {
                     println!("   A pins {} B pins {}", node.pins.len(), other.pins.len());
                     for (pid, p) in &node.pins {
                         match other.pins.get(pid) {
-                            None => println!("      pin only in A: {pid} {} idx {}", p.name, p.index),
+                            None => {
+                                println!("      pin only in A: {pid} {} idx {}", p.name, p.index)
+                            }
                             Some(op) => {
                                 let a = format!("{:?}", p);
                                 let b = format!("{:?}", op);
@@ -84,15 +91,26 @@ fn report(label: &str, a: &Board, b: &Board) {
             None => println!("layer only in A: {id} ({})", layer.name),
             Some(other) => {
                 if other.hash != layer.hash {
-                    println!("layer hash differs: {id} ({}) pins {} vs {}", layer.name, layer.pins.len(), other.pins.len());
+                    println!(
+                        "layer hash differs: {id} ({}) pins {} vs {}",
+                        layer.name,
+                        layer.pins.len(),
+                        other.pins.len()
+                    );
                     for (pid, p) in &layer.pins {
                         if !other.pins.contains_key(pid) {
-                            println!("      layer pin only in A: {pid} {} {:?}", p.name, p.pin_type);
+                            println!(
+                                "      layer pin only in A: {pid} {} {:?}",
+                                p.name, p.pin_type
+                            );
                         }
                     }
                     for (pid, p) in &other.pins {
                         if !layer.pins.contains_key(pid) {
-                            println!("      layer pin only in B: {pid} {} {:?}", p.name, p.pin_type);
+                            println!(
+                                "      layer pin only in B: {pid} {} {:?}",
+                                p.name, p.pin_type
+                            );
                         }
                     }
                 }
@@ -109,8 +127,14 @@ fn report(label: &str, a: &Board, b: &Board) {
 #[tokio::test]
 #[ignore]
 async fn consecutive_orphan_snapshots_should_be_identical() {
-    let a = load(Path::from("versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4720.board")).await;
-    let b = load(Path::from("versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4721.board")).await;
+    let a = load(Path::from(
+        "versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4720.board",
+    ))
+    .await;
+    let b = load(Path::from(
+        "versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4721.board",
+    ))
+    .await;
     let ha = content_hash(&a, (0, 0, 0));
     let hb = content_hash(&b, (0, 0, 0));
     println!("stored hash A {:?} B {:?}", a.hash, b.hash);
@@ -125,7 +149,10 @@ async fn consecutive_orphan_snapshots_should_be_identical() {
 #[ignore]
 async fn floating_draft_matches_last_orphan_snapshot() {
     let floating = load(Path::from("w3hd3eg9d6pxo8qsyczfhwug.board")).await;
-    let snap = load(Path::from("versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4721.board")).await;
+    let snap = load(Path::from(
+        "versions/w3hd3eg9d6pxo8qsyczfhwug/0_0_4721.board",
+    ))
+    .await;
     let hf = content_hash(&floating, (0, 0, 0));
     let hs = content_hash(&snap, (0, 0, 0));
     println!("floating {hf} snapshot {hs}");
@@ -140,7 +167,10 @@ async fn floating_draft_matches_last_orphan_snapshot() {
 async fn jrednwnd_floating_matches_orphan() {
     let floating = load(Path::from("jrednwnd3spe9jzcwiym92ol.board")).await;
     let snap = load(Path::from("versions/jrednwnd3spe9jzcwiym92ol/0_0_1.board")).await;
-    println!("floating version {:?} snapshot version {:?}", floating.version, snap.version);
+    println!(
+        "floating version {:?} snapshot version {:?}",
+        floating.version, snap.version
+    );
     let hf = content_hash(&floating, (0, 0, 0));
     let hs = content_hash(&snap, (0, 0, 0));
     println!("floating {hf} snapshot {hs}");

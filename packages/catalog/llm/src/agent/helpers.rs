@@ -1,5 +1,6 @@
 #[cfg(feature = "execute")]
 use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
+#[cfg(feature = "execute")]
 use crate::generative::agent::{Agent, ContextManagementMode};
 #[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
@@ -10,11 +11,13 @@ use crate::generative::embedding::CachedEmbeddingModelObject;
 use ahash::AHashSet;
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::LogLevel;
+#[cfg(feature = "execute")]
 use flow_like::flow::{
     execution::{context::ExecutionContext, internal_node::InternalNode},
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_model_provider::{
     history::{
         Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool,
@@ -23,6 +26,7 @@ use flow_like_model_provider::{
     response::{LLMUsageStats, Response, Usage as ResponseUsage},
     response_chunk::ResponseChunk,
 };
+#[cfg(feature = "execute")]
 use flow_like_types::{
     Value, anyhow, async_trait, json,
     sync::{DashMap, Mutex},
@@ -47,9 +51,12 @@ use rmcp::{
         PaginatedRequestParams,
     },
 };
+#[cfg(feature = "execute")]
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
+#[cfg(feature = "execute")]
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
+#[cfg(feature = "execute")]
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 
 /// Bound network waits on remote MCP servers so a hung peer can never stall the

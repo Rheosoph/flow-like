@@ -3,7 +3,9 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 #[cfg(feature = "execute")]
 use fake::{Fake, faker::address::en::*};

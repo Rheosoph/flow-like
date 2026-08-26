@@ -6,7 +6,9 @@
 //! - **Local Client**: Uses stdio connection to local Copilot CLI (desktop/local execution)
 //! - **Server Client**: Uses TCP connection to remote Copilot endpoint (server/distributed execution)
 
-use super::{COPILOT_CLIENT_PREFIX, CopilotClientHandle, CopilotLogLevel};
+#[cfg(feature = "execute")]
+use super::COPILOT_CLIENT_PREFIX;
+use super::{CopilotClientHandle, CopilotLogLevel};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},

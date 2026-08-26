@@ -8,10 +8,15 @@ use flow_like::flow::{
     pin::ValueType,
     variable::VariableType,
 };
-use flow_like_types::{Value as JsonValue, async_trait, json::json, reqwest::Url};
+#[cfg(feature = "iceberg")]
+use flow_like_types::Value as JsonValue;
+#[cfg(any(feature = "execute", feature = "delta", feature = "iceberg"))]
+use flow_like_types::reqwest::Url;
+use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(feature = "execute", feature = "delta", feature = "iceberg", test))]
 fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
 }
@@ -223,6 +228,7 @@ impl NodeLogic for RegisterDeltaTableNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -403,6 +409,7 @@ impl NodeLogic for DeltaTimeTravelNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -577,6 +584,7 @@ impl NodeLogic for DeltaTableInfoNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -669,6 +677,7 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetFormat;
         use flow_like_storage::datafusion::datasource::listing::{
@@ -711,6 +720,13 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -803,6 +819,7 @@ impl NodeLogic for RegisterPartitionedJsonNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::json::JsonFormat;
         use flow_like_storage::datafusion::datasource::listing::{
@@ -848,6 +865,13 @@ impl NodeLogic for RegisterPartitionedJsonNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -1070,6 +1094,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))

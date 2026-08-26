@@ -1,8 +1,14 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
+#[cfg(feature = "flow-runtime")]
+use crate::credentials::{LogsDbBuilder, db_path_from_base};
+use crate::credentials::{SharedCredentialsTrait, StoreType};
+use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::lancedb;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store;
 use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
-use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -130,6 +136,7 @@ impl AzureSharedCredentials {
     /// that is the intended identity; under a scoped credential it would trade
     /// the isolation the token exists to enforce for availability, silently, so
     /// it fails closed here exactly as `to_store_type` does.
+    #[cfg(feature = "flow-runtime")]
     fn lance_sas_or_ambient(&self, token: Option<&String>, what: &str) -> Result<String> {
         match token
             .map(|value| value.trim())
@@ -233,6 +240,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
     }
 
     #[tracing::instrument(name = "AzureSharedCredentials::to_db", skip(self), level = "debug")]
+    #[cfg(feature = "flow-runtime")]
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = self
             .content_path_prefix
@@ -256,6 +264,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
         skip(self, sub),
         level = "debug"
     )]
+    #[cfg(feature = "flow-runtime")]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = format!("users/{}/apps/{}", sub, app_id);
         let sas_token = self.lance_sas_or_ambient(
@@ -275,6 +284,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
         Ok(connection)
     }
 
+    #[cfg(feature = "flow-runtime")]
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
         if self.logs_container.is_empty() {
             return Err(anyhow!(
@@ -292,6 +302,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
     }
 }
 
+#[cfg(feature = "flow-runtime")]
 fn make_azure_builder(
     account_name: String,
     container: String,
@@ -503,6 +514,7 @@ mod tests {
     /// `unwrap_or_default()` shape, and `make_azure_builder` drops a blank token
     /// so `MicrosoftAzureBuilder` resolved the workload's managed identity —
     /// unrestricted across the whole container.
+    #[cfg(feature = "flow-runtime")]
     #[flow_like_types::tokio::test]
     async fn test_scoped_credentials_never_build_a_database_on_the_ambient_identity() {
         let creds = user_scoped_credentials();
@@ -536,6 +548,7 @@ mod tests {
 
     /// Master credentials have no SAS by design and must keep resolving the
     /// workload identity, which is the whole point of that mode.
+    #[cfg(feature = "flow-runtime")]
     #[flow_like_types::tokio::test]
     async fn test_master_credentials_still_build_databases_without_a_sas() {
         let creds = master_credentials();

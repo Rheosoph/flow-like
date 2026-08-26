@@ -12,15 +12,18 @@
 //! It is the exhaustive counterpart to Auto Ordinal. Auto Ordinal compares the *families* at
 //! sensible defaults; this node takes one family and searches its hyperparameters properly.
 
-use crate::ml::{GridSearchEntry, NodeMLModel, OrdinalLevels, ParameterSpec};
+#[cfg(feature = "execute")]
+use crate::ml::ParameterSpec;
+use crate::ml::{GridSearchEntry, NodeMLModel, OrdinalLevels};
 #[cfg(feature = "execute")]
 use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, OrdinalOrdering, values_to_array1_ordinal,
     values_to_array2_f64,
 };
+#[cfg(feature = "execute")]
+use flow_like::flow::{board::Board, execution::LogLevel};
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,

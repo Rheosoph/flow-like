@@ -1,10 +1,13 @@
+#[cfg(feature = "execute")]
 use crate::data::datafusion::query::batches_to_csv_table;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use crate::data::query_params as params;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::ValueType,
     variable::VariableType,
@@ -108,6 +111,7 @@ impl NodeLogic for ListTablesNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -153,6 +157,13 @@ impl NodeLogic for ListTablesNode {
         context.set_pin_value("summary", json!(summary)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -229,6 +240,7 @@ impl NodeLogic for DescribeTableNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -265,6 +277,13 @@ impl NodeLogic for DescribeTableNode {
         context.set_pin_value("schema", json!(result)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -363,6 +382,7 @@ impl NodeLogic for ExecuteSqlNode {
         params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -372,10 +392,10 @@ impl NodeLogic for ExecuteSqlNode {
         // Agent-authored SQL: this tool is an exploration surface, and Lance
         // tables registered in the session accept DML — keep it read-only.
         flow_like_storage::databases::sql_guard::validate_readonly_sql(&query).map_err(|error| {
-            flow_like_types::anyhow!(
-                "Execute SQL is a read-only exploration tool; use the SQL Query node for INSERT/UPDATE/DELETE: {error}"
-            )
-        })?;
+        flow_like_types::anyhow!(
+            "Execute SQL is a read-only exploration tool; use the SQL Query node for INSERT/UPDATE/DELETE: {error}"
+        )
+    })?;
 
         let query_params =
             params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
@@ -410,8 +430,16 @@ impl NodeLogic for ExecuteSqlNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
+#[cfg(feature = "execute")]
 fn format_table_as_markdown(table: &CSVTable) -> String {
     let headers = table.headers();
     let rows = table.rows_as_strings();

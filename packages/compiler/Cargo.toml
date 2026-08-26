@@ -5,7 +5,7 @@ edition = "2021"
 description = "WASM compilation worker for Flow-Like"
 
 [dependencies]
-flow-like-types.workspace = true
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
 flow-like-wasm = { workspace = true, features = ["all-arch"] }
 
 blake3.workspace = true

@@ -6,9 +6,11 @@
 #[cfg(feature = "execute")]
 use ahash::AHashSet;
 #[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
+#[cfg(feature = "execute")]
 use flow_like::flow::execution::internal_node::InternalNode;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,

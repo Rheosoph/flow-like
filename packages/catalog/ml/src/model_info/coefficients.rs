@@ -3,13 +3,17 @@
 //! Returns the coefficients and intercept from a trained Linear Regression model.
 
 use crate::ml::{LinearCoefficients, NodeMLModel};
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Result, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{Result, async_trait};
 
 #[crate::register_node]
 #[derive(Default)]

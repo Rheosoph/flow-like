@@ -53,8 +53,60 @@ pub const INTERNAL_BOARD_REF_PREFIX: &str = "__flow_like_internal_v1/";
 /// a queue instead of whole-board passes.
 const MAX_UPDATE_PASSES: usize = 10;
 
+/// How many patch slots a publication may skip before it gives up.
+///
+/// Slots are skipped when another publisher owns them, which is rare and bounded in practice.
+/// Every attempt writes a full board plus its pages, so an unbounded scan turns a systematic
+/// validation failure into thousands of orphan snapshots instead of one error.
+const MAX_PATCH_SLOT_SCAN: u32 = 64;
+
+/// How often a publication re-attempts after a racing draft save.
+///
+/// Every attempt writes a full board plus its pages, so this stays small: the
+/// retry exists to survive one editor save landing mid-publication, not to
+/// grind against a draft that is being typed into.
+const MAX_PUBLISH_RACE_RETRIES: usize = 2;
+
 pub fn is_internal_board_ref(key: &str) -> bool {
     key.starts_with(INTERNAL_BOARD_REF_PREFIX)
+}
+
+/// A publication that wrote its immutable objects but lost the final check
+/// against the floating draft: another writer saved the draft while the
+/// snapshot was being copied.
+///
+/// The written version is an inert orphan - nothing points at it - so the
+/// operation is safe to retry from the reloaded draft at a fresh patch. Typed
+/// rather than a bare message so callers can tell this transient race apart
+/// from a genuine storage failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoardDraftChanged {
+    pub version: (u32, u32, u32),
+}
+
+impl std::fmt::Display for BoardDraftChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Board draft changed while publishing immutable version {}.{}.{}",
+            self.version.0, self.version.1, self.version.2
+        )
+    }
+}
+
+impl std::error::Error for BoardDraftChanged {}
+
+/// Whether `error` is the retryable [`BoardDraftChanged`] publication race,
+/// including when it was propagated through a patch-slot scan.
+pub fn is_board_draft_race(error: &flow_like_types::Error) -> bool {
+    error.downcast_ref::<BoardDraftChanged>().is_some()
+}
+
+/// Whether the persisted draft demonstrably changed between two revision
+/// readings. Missing revision tokens prove nothing, so they answer `false`:
+/// re-publishing on a hunch writes another full snapshot.
+fn draft_was_replaced(before: &Option<String>, after: &Option<String>) -> bool {
+    matches!((before, after), (Some(before), Some(after)) if before != after)
 }
 
 #[derive(Debug, Clone)]
@@ -1436,12 +1488,7 @@ impl Board {
             .snapshot_matches_persisted_draft(version, Some(store))
             .await?
         {
-            return Err(flow_like_types::anyhow!(
-                "Board draft changed while publishing immutable version {}.{}.{}",
-                version.0,
-                version.1,
-                version.2
-            ));
+            return Err(BoardDraftChanged { version }.into());
         }
 
         Ok(())
@@ -1527,9 +1574,14 @@ impl Board {
         )
         .await?;
         let snapshot = Self::from_proto(proto);
-        let mut current = self.clone();
+        // Compare what persistence keeps, not what the draft holds in memory. Protobuf stores
+        // several `Option<bool>` / `Option<f64>` fields as bare proto3 scalars, so an explicit
+        // `Some(false)` or `Some(0.0)` (a2ui element pins carry `enforce_schema: Some(false)`)
+        // is indistinguishable from unset and reads back as `None`. Hashing the live draft
+        // directly would report every such board as different from the snapshot just written
+        // from it, and the publisher would never recognize its own output.
+        let mut current = Self::from_proto(self.to_proto());
         current.version = version;
-        current.hash();
         if snapshot.content_hash() != current.content_hash() {
             return Ok(false);
         }
@@ -1564,18 +1616,132 @@ impl Board {
             Err(error) => return Err(error.into()),
         }
 
+        // Read the draft exactly as it is stored. Re-deriving it through `from_loaded_proto`
+        // would run a full `node_updates` sweep, which settles schema propagation further than
+        // the scoped sweep an interactive edit performs — an unedited board would then look
+        // "changed" on every publish. The question here is only whether another writer replaced
+        // the draft, and that shows up in the stored bytes.
         let proto: proto::Board = from_compressed(store.clone(), floating_path).await?;
-        let mut floating = if let Some(app_state) = self.app_state.clone() {
-            Self::from_loaded_proto(proto, self.board_dir.clone(), app_state).await
-        } else {
-            let mut floating = Self::from_proto(proto);
-            floating.board_dir = self.board_dir.clone();
-            floating
-        };
+        let mut floating = Self::from_proto(proto);
+        floating.board_dir = self.board_dir.clone();
         floating.app_state = self.app_state.clone();
         floating
             .snapshot_matches_current(version, Some(store))
             .await
+    }
+
+    /// Storage revision of the persisted floating draft.
+    ///
+    /// Publishers compare this across a failed publication to tell a racing
+    /// writer apart from a snapshot comparison that can never succeed. `None`
+    /// when the draft is absent or the backend offers no revision token, which
+    /// callers must read as "cannot prove a race".
+    pub async fn persisted_draft_revision(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Option<String>> {
+        let store = self.get_store(store).await?;
+        let floating_path = Self::proto_path(&self.board_dir, &self.id, None);
+        match store.head(&floating_path).await {
+            Ok(meta) => Ok(meta.e_tag.clone().or_else(|| meta.version.clone())),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Read the authoritative floating draft as its own board, exactly as
+    /// stored - `from_loaded_proto` would re-derive it and settle schema
+    /// propagation further than an interactive edit, which is the difference
+    /// that makes an unedited board look changed.
+    async fn reloaded_persisted_draft(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Self> {
+        let store = self.get_store(store).await?;
+        let floating_path = Self::proto_path(&self.board_dir, &self.id, None);
+        let proto: proto::Board = from_compressed(store, floating_path).await?;
+        let mut floating = Self::from_proto(proto);
+        floating.board_dir = self.board_dir.clone();
+        floating.app_state = self.app_state.clone();
+        Ok(floating)
+    }
+
+    /// Prepare a fresh immutable patch snapshot, recovering from an editor save
+    /// that lands mid-publication.
+    ///
+    /// Only a publication the draft actually moved under is retried: the
+    /// persisted revision is compared across the failure, so a
+    /// [`BoardDraftChanged`] that no writer caused - a snapshot comparison that
+    /// cannot succeed for this board - fails immediately instead of writing one
+    /// orphan snapshot per attempt.
+    pub async fn prepare_snapshot_recovering_from_races(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<PreparedBoardSnapshot> {
+        let store = self.get_store(store).await?;
+        let mut reloaded: Option<Self> = None;
+        let mut attempt = 0;
+        loop {
+            let (result, before, after) = {
+                let publisher = reloaded.as_ref().unwrap_or(self);
+                let before = publisher
+                    .persisted_draft_revision(Some(store.clone()))
+                    .await?;
+                let result = publisher
+                    .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
+                    .await;
+                let after = match result {
+                    Ok(_) => None,
+                    Err(_) => {
+                        publisher
+                            .persisted_draft_revision(Some(store.clone()))
+                            .await?
+                    }
+                };
+                (result, before, after)
+            };
+            let error = match result {
+                Ok(prepared) => return Ok(prepared),
+                Err(error) => error,
+            };
+            if attempt >= MAX_PUBLISH_RACE_RETRIES
+                || !is_board_draft_race(&error)
+                || !draft_was_replaced(&before, &after)
+            {
+                return Err(error);
+            }
+            reloaded = Some(self.reloaded_persisted_draft(Some(store.clone())).await?);
+            attempt += 1;
+        }
+    }
+
+    /// Publish the draft into `version`'s slot, moving to a fresh patch when an
+    /// editor save invalidates it mid-publication. `None` means the requested
+    /// version was published; `Some` carries the fresh snapshot the publication
+    /// had to move to, which the caller must re-pin.
+    pub async fn snapshot_at_version_recovering_from_races(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Option<PreparedBoardSnapshot>> {
+        let store = self.get_store(store).await?;
+        let before = self.persisted_draft_revision(Some(store.clone())).await?;
+        let error = match self.snapshot_at_version(version, Some(store.clone())).await {
+            Ok(()) => return Ok(None),
+            Err(error) => error,
+        };
+        if !is_board_draft_race(&error) {
+            return Err(error);
+        }
+        let after = self.persisted_draft_revision(Some(store.clone())).await?;
+        if !draft_was_replaced(&before, &after) {
+            return Err(error);
+        }
+        self.reloaded_persisted_draft(Some(store.clone()))
+            .await?
+            .prepare_snapshot_recovering_from_races(Some(store))
+            .await
+            .map(Some)
     }
 
     /// Validate an already-created snapshot as the current draft's prepared
@@ -1610,7 +1776,7 @@ impl Board {
             .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
         let mut next = (self.version.0, self.version.1, first_patch);
 
-        loop {
+        for _ in 0..MAX_PATCH_SLOT_SCAN {
             if self
                 .snapshot_version_slot_is_compatible_with_store(next, store.clone())
                 .await?
@@ -1639,6 +1805,17 @@ impl Board {
                 .checked_add(1)
                 .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
         }
+
+        Err(flow_like_types::anyhow!(
+            "Board {} found no free patch slot in {} attempts starting at {}.{}.{}; every attempt \
+             published an immutable snapshot that then failed to validate, so the scan was \
+             stopped instead of filling the version store",
+            self.id,
+            MAX_PATCH_SLOT_SCAN,
+            self.version.0,
+            self.version.1,
+            first_patch
+        ))
     }
 
     /// Advance the floating board to a prepared immutable snapshot after the
@@ -3569,12 +3746,97 @@ mod tests {
             .await
             .expect_err("stale cached content must never become a publishable snapshot");
         assert!(error.to_string().contains("Board draft changed"));
+        // Publishers retry this race instead of failing the whole save, which
+        // only works while the error stays downcastable.
+        assert!(super::is_board_draft_race(&error));
         assert!(
             !stale
                 .snapshot_matches_persisted_draft(candidate, None)
                 .await
                 .unwrap(),
             "the immutable orphan must not be mistaken for the authoritative draft"
+        );
+    }
+
+    /// A board carrying pin options that protobuf cannot distinguish from unset.
+    ///
+    /// `enforce_schema: Some(false)` is what the ~100 a2ui element nodes declare, and proto3
+    /// writes it as the field default, so it reads back as `None`. Any publication check that
+    /// hashes the live draft rather than its persisted projection reports such a board as
+    /// different from the snapshot just written from it.
+    fn board_with_protobuf_flattened_pin_options(
+        state: Arc<crate::state::FlowLikeState>,
+        base_dir: Path,
+    ) -> super::Board {
+        use crate::flow::{node::Node, pin::PinOptions, variable::VariableType};
+
+        let mut board = super::Board::new(None, base_dir, state);
+        let mut node = Node::new("a2ui_set_element_text", "Set Element Text", "", "test");
+        node.add_input_pin("value_in", "Value", "", VariableType::Struct)
+            .set_options(
+                PinOptions::new()
+                    .set_enforce_schema(false)
+                    .set_enforce_generic_value_type(false)
+                    .set_step(0.0)
+                    .build(),
+            );
+        board.nodes.insert(node.id.clone(), node);
+        board.mark_changed();
+        board
+    }
+
+    #[tokio::test]
+    async fn a_draft_recognizes_the_snapshot_written_from_it() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let version = board.version;
+
+        board.snapshot_at_version(version, None).await.unwrap();
+
+        assert!(
+            board.snapshot_matches_current(version, None).await.unwrap(),
+            "a draft must recognize the snapshot written from it"
+        );
+        assert!(
+            board
+                .snapshot_matches_persisted_draft(version, None)
+                .await
+                .unwrap(),
+            "an unedited draft must not read as changed during its own publication"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_patch_publication_advances_one_slot_at_a_time() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let first_published = board.version;
+
+        let after_first = board
+            .create_version(super::VersionType::Patch, None)
+            .await
+            .unwrap();
+        let after_second = board
+            .create_version(super::VersionType::Patch, None)
+            .await
+            .unwrap();
+
+        assert_eq!(after_first, (first_published.0, first_published.1, 2));
+        assert_eq!(after_second, (first_published.0, first_published.1, 3));
+
+        let mut versions = board.get_versions(None).await.unwrap();
+        versions.sort();
+        assert_eq!(
+            versions,
+            vec![
+                (first_published.0, first_published.1, 1),
+                (first_published.0, first_published.1, 2)
+            ],
+            "each publication must occupy exactly one version slot"
         );
     }
 

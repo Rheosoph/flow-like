@@ -10,7 +10,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::history::{Tool, ToolCall, ToolCallFunction};
-use flow_like_types::{Error, Value, anyhow, async_trait, json, jsonschema};
+use flow_like_types::{Error, Value, anyhow, async_trait, json};
 
 //#[derive(Debug, Deserialize, Serialize)]
 //pub struct OpenAIFunction {

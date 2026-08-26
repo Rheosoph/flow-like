@@ -4,7 +4,88 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+# Preserve the historical aggregate API for direct/default callers, including
+# the CachedDB re-export. Workspace products inherit default-features=false and
+# should prefer the friendly bundles below, so everyday metadata checks stay
+# off the database implementation.
+default = ["all-metadata", "compat"]
+compat = ["flow-like-catalog-core/execute"]
+
+package-std = ["dep:flow-like-catalog-std"]
+package-data = ["dep:flow-like-catalog-data"]
+package-web = ["dep:flow-like-catalog-web"]
+package-media = ["dep:flow-like-catalog-media"]
+package-ml = ["dep:flow-like-catalog-ml"]
+package-onnx = ["dep:flow-like-catalog-onnx"]
+package-llm = ["dep:flow-like-catalog-llm"]
+package-processing = ["dep:flow-like-catalog-processing"]
+package-geo = ["dep:flow-like-catalog-geo"]
+package-automation = ["dep:flow-like-catalog-automation"]
+portable-metadata = [
+    "package-std",
+    "package-data",
+    "package-web",
+    "package-media",
+    "package-ml",
+    "package-onnx",
+    "package-llm",
+    "package-processing",
+    "package-geo",
+]
+all-metadata = [
+    "portable-metadata",
+    "package-automation",
+]
+
+# Product-oriented bundles keep the CLI/task UX simple. Applications select one intent rather
+# than reproducing a long and easy-to-drift feature list.
+desktop = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local"]
+desktop-apple = [
+    "desktop",
+    "local-tts-metal",
+    "local-tts-accelerate",
+    "local-stt-metal",
+    "local-stt-accelerate",
+]
+mobile = [
+    "portable-all",
+    "portable-execute",
+    "tauri",
+    "local-ml",
+    "local-tts",
+    "local-stt",
+    "local",
+]
+mobile-apple = [
+    "mobile",
+    "local-tts-metal",
+    "local-tts-accelerate",
+    "local-stt-metal",
+    "local-stt-accelerate",
+]
+# Remote-only headless bundle used by deployments that deliberately do not
+# ship a native inference runtime. The historical `server-execute` feature
+# remains compatibility-complete below; product crates should use this bundle.
+server = ["portable-all", "portable-execute", "remote"]
+server-local-ml = ["server", "local-ml"]
+executor = [
+    "all",
+    "portable-execute",
+    "flow-like-catalog-automation/execute",
+    "remote",
+]
+executor-local-ml = ["executor", "local-ml"]
+# Self-contained local runtime bundle. Depending on this feature alone must
+# enable both the package cfg flags used by get_catalog() and their execution
+# implementations; relying on a sibling executor dependency to unify `all`
+# made the advertised bundle silently empty in isolation.
+local-runtime = [
+    "all",
+    "portable-execute",
+    "flow-like-catalog-automation/execute",
+    "remote",
+]
+local-runtime-ml = ["local-runtime", "local-ml"]
 
 # Execution environment - determines how interactions are handled
 # local: Desktop app with polling-based interactions
@@ -45,9 +126,12 @@ tauri = [
 mimalloc = ["dep:mimalloc"]
 
 
-# Execution feature - enables heavy dependencies for node execution
-# APIs that only serve catalog metadata should NOT enable this
-execute = [
+# Portable execution support shared by desktop, mobile, and headless runtimes.
+# Automation is deliberately separate because that package has no iOS/Android
+# nodes. ONNX execution is also separate: it is local inference and is enabled
+# by `local-ml`; keeping only its metadata here makes the base `server` and
+# `executor` bundles genuinely remote-only.
+portable-execute = [
     "remote-ml",
     "flow-like-catalog-core/execute",
     "flow-like-catalog-std/execute",
@@ -55,28 +139,26 @@ execute = [
     "flow-like-catalog-web/execute",
     "flow-like-catalog-media/execute",
     "flow-like-catalog-ml/execute",
-    "flow-like-catalog-onnx/execute",
     "flow-like-catalog-llm/execute",
     "flow-like-catalog-processing/execute",
     "flow-like-catalog-geo/execute",
-    "flow-like-catalog-automation/execute",
 ]
 
-# Server execution - same as execute but without desktop/RPA automation nodes
-# Use this for headless server deployments (ECS, Lambda, etc.)
-server-execute = [
-    "remote-ml",
-    "flow-like-catalog-core/execute",
-    "flow-like-catalog-std/execute",
-    "flow-like-catalog-data/execute",
-    "flow-like-catalog-web/execute",
-    "flow-like-catalog-media/execute",
-    "flow-like-catalog-ml/execute",
-    "flow-like-catalog-onnx/execute",
-    "flow-like-catalog-llm/execute",
-    "flow-like-catalog-processing/execute",
-    "flow-like-catalog-geo/execute",
+# Historical execution feature: enables every node implementation, including
+# local ONNX inference and desktop/RPA automation. APIs that only serve catalog
+# metadata should NOT enable this. New products should prefer the named bundles
+# above so their local-inference intent is visible in their manifest.
+execute = [
+    "portable-execute",
+    "flow-like-catalog-automation/execute",
+    "local-ml",
 ]
+
+# Historical server execution surface: all portable implementations, including
+# local ONNX inference, but no desktop/RPA automation. `server` is the new
+# remote-only product bundle; `server-local-ml` states the old behavior
+# explicitly.
+server-execute = ["portable-execute", "local-ml"]
 
 # Data lake formats
 delta = ["flow-like-catalog-data/delta"]
@@ -110,27 +192,28 @@ all-databases-federation-with-odbc = ["all-databases-federation", "odbc-federati
 
 # Full feature bundle (all databases + federation + data lakes) - catalog metadata only
 # ODBC excluded by default to avoid runtime crashes if unixodbc is not installed
-all = ["all-lakes", "all-databases", "all-databases-federation"]
-all-with-odbc = ["all-lakes", "all-databases-with-odbc", "all-databases-federation-with-odbc"]
+all = ["all-metadata", "all-lakes", "all-databases", "all-databases-federation"]
+all-with-odbc = ["all-metadata", "all-lakes", "all-databases-with-odbc", "all-databases-federation-with-odbc"]
+portable-all = ["portable-metadata", "all-lakes", "all-databases", "all-databases-federation"]
 
 # Full with execution (for executors and desktop app)
 all-execute = ["all", "execute"]
 
 # Full with server execution (no RPA/desktop automation)
-all-server-execute = ["all", "server-execute"]
+all-server-execute = ["portable-all", "server-execute"]
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like-catalog-std.workspace = true
-flow-like-catalog-data.workspace = true
-flow-like-catalog-web.workspace = true
-flow-like-catalog-media.workspace = true
-flow-like-catalog-ml.workspace = true
-flow-like-catalog-onnx.workspace = true
-flow-like-catalog-llm.workspace = true
-flow-like-catalog-processing.workspace = true
-flow-like-catalog-geo.workspace = true
-flow-like-catalog-automation.workspace = true
+flow-like-catalog-std = { workspace = true, optional = true }
+flow-like-catalog-data = { workspace = true, optional = true }
+flow-like-catalog-web = { workspace = true, optional = true }
+flow-like-catalog-media = { workspace = true, optional = true }
+flow-like-catalog-ml = { workspace = true, optional = true }
+flow-like-catalog-onnx = { workspace = true, optional = true }
+flow-like-catalog-llm = { workspace = true, optional = true }
+flow-like-catalog-processing = { workspace = true, optional = true }
+flow-like-catalog-geo = { workspace = true, optional = true }
+flow-like-catalog-automation = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -160,9 +243,3 @@ harness = false
 [[bench]]
 name = "exec_bench"
 harness = false
-
-[profile.bench]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-debug = false

@@ -1218,7 +1218,7 @@ impl FlowIrDraftStore {
         FlowScriptDraftResponse::for_draft(
             status,
             if stored.evaluation.diagnostics.is_empty() {
-                "FlowScript source is retained. Run check_flowscript at this revision before commit."
+                "FlowScript source is retained with zero diagnostics. Commit this revision directly; check_flowscript is only needed before growing a staged draft further."
             } else {
                 "FlowScript source is retained with structured diagnostics. Patch this exact revision in place."
             },
@@ -1437,7 +1437,7 @@ impl FlowIrDraftStore {
         FlowScriptDraftResponse::for_draft(
             status,
             if retained.evaluation.diagnostics.is_empty() {
-                "Patch retained. Run check_flowscript at this revision before commit."
+                "Patch retained with zero diagnostics. Commit this revision directly; check_flowscript is only needed before growing a staged draft further."
             } else {
                 "Patch retained with structured diagnostics; repair this same source revision."
             },
@@ -9934,19 +9934,19 @@ impl FlowScriptDraftResponse {
         response
     }
 
-    /// Render the retained source on every successful write/patch/check so a streaming client can
-    /// preview the same FlowScript document inline. Queued commits reuse the existing command tag.
-    /// Structured envelope for the model, with `source` replaced by its size. The identical text is
-    /// already present once in the `<flowscript_workspace>` tag beside it and, for
-    /// `write_flowscript`, a third time in the model's own retained tool-call arguments. The
-    /// struct's own `Serialize` is deliberately untouched: SDK adapters hand
-    /// `to_string_pretty(&response)` to the model and the desktop workspace panel is built from
-    /// that JSON's `source` field.
+    /// Structured envelope for the model, with `source` replaced by its size. On the rig path the
+    /// identical text is already present once in the `<flowscript_workspace>` tag beside it and,
+    /// for `write_flowscript`, again in the model's own retained tool-call arguments. Desktop SDK
+    /// adapters return this projection for write/check/commit, whose retained source is exactly
+    /// what the model submitted; the host observes that source out-of-band (tool-argument
+    /// workspace frames, the queued-workspace channel, draft snapshots). Patch results keep the
+    /// struct's own `Serialize` because the merged document is host-computed and the desktop
+    /// workflow state and workspace panel read it from that JSON's `source` field.
     ///
     /// The projection is built by explicit insertion rather than by removing a key: `serde_json` is
     /// compiled with `preserve_order` in this workspace (via `schemars`), so `Map::remove` is
     /// `swap_remove` and would reorder the surviving fields.
-    fn model_envelope(&self) -> String {
+    pub fn model_envelope(&self) -> String {
         let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
             return self.message.clone();
         };

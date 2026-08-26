@@ -4,9 +4,12 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use rake::{KeywordSort, Rake, StopWords};
+#[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
 use whatlang::detect;

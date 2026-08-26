@@ -1,7 +1,7 @@
 use crate::config::CompilerConfig;
 use crate::error::CompilerError;
 use crate::jwt::{verify_jwt_async, CompilerClaims};
-use flow_like_types::dispatch::{
+use flow_like_types_contracts::dispatch::{
     compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
     CompilationStorageProvider,
 };
@@ -879,7 +879,7 @@ async fn send_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::dispatch::{compilation_job_payload_hash, CompilationTarget};
+    use flow_like_types_contracts::dispatch::{compilation_job_payload_hash, CompilationTarget};
 
     fn azure_config() -> CompilerConfig {
         CompilerConfig {

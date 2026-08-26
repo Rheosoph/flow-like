@@ -1,3 +1,4 @@
+#[cfg(feature = "execute")]
 use crate::generative::agent::{Agent, ContextManagementMode};
 /// # Simple Agent Node
 /// This is an LLM-controlled while loop over an arbitrary number of flow-leafes with back-propagation of leaf outputs into the agent.

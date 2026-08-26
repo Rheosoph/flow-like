@@ -14,9 +14,10 @@ use crate::ml::{
     values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+#[cfg(feature = "execute")]
+use flow_like::flow::{board::Board, execution::LogLevel};
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,

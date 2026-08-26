@@ -6,13 +6,12 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
-use flow_like_types::image::{DynamicImage, GenericImageView, imageops::FilterType};
+use flow_like_types::anyhow;
 #[cfg(feature = "execute")]
-use flow_like_types::{
-    anyhow,
-    rxing::{BarcodeFormat, EncodeHints, MultiFormatWriter, Writer},
-};
+use flow_like_types::image::{DynamicImage, GenericImageView, imageops::FilterType};
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
+use rxing::{BarcodeFormat, EncodeHints, MultiFormatWriter, Writer};
 
 const WRITABLE_BARCODE_FORMATS: &[&str] = &[
     "AZTEC",

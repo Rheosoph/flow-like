@@ -5,6 +5,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
 use whatlang::detect;

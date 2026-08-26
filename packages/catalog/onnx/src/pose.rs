@@ -6,10 +6,11 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_catalog_core::{
-    COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, NodeImage, PoseDetection,
-    SkeletonConnection,
+    COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, SkeletonConnection,
 };
+use flow_like_catalog_core::{NodeImage, PoseDetection};
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
     ndarray::{Array3, Array4, Axis, s},

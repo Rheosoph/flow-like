@@ -21,7 +21,7 @@
 //! never guesses identities or ambiguous catalog matches: a partial or ambiguous edit produces
 //! diagnostics instead of destructive commands.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
@@ -363,6 +363,16 @@ struct ModuleResolution {
     /// Lowercase `::` path of every module layer on the board plus every module this document
     /// creates, keyed by layer id (existing) — new modules carry their path in `created`.
     board_paths: HashMap<String, Vec<String>>,
+    /// Anchored module layers whose written block name differs from the board layer name
+    /// (normalized): `(layer id, written name)`. The written name wins — the anchor is identity,
+    /// the text is the source of truth for presentation.
+    renames: Vec<(String, String)>,
+    /// Anchored module layers written under a different parent than the one they have on the
+    /// board: `(layer id, written parent)`. The written nesting position wins.
+    reparents: Vec<(String, ModuleTarget)>,
+    /// Module layer ids already claimed by an anchored block, so a duplicated anchor is a
+    /// diagnostic instead of two conflicting moves.
+    claimed_anchors: HashSet<String>,
     corrections: Vec<String>,
     diagnostics: Vec<String>,
 }
@@ -446,7 +456,144 @@ fn resolve_modules(board: &Board, doc: &FlatDocument, base: Option<&str>) -> Mod
     for scope in &doc.module_blocks {
         resolve_module_scope(board, scope, &mut resolution);
     }
+    apply_written_module_structure(board, &mut resolution);
     resolution
+}
+
+/// Make the document's written module structure authoritative for path resolution: refuse any
+/// reparent that would cycle through the board's remaining structure, then recompute every module
+/// path (existing and created) with the surviving renames/reparents applied, so qualified `::`
+/// calls in this document resolve against the tree the text describes.
+fn apply_written_module_structure(board: &Board, resolution: &mut ModuleResolution) {
+    let name_overrides: HashMap<String, String> = resolution.renames.iter().cloned().collect();
+    let mut parent_overrides: HashMap<String, ModuleTarget> = HashMap::new();
+    let mut kept_reparents: Vec<(String, ModuleTarget)> = Vec::new();
+    for (moved, parent) in std::mem::take(&mut resolution.reparents) {
+        if written_module_ancestors(board, &parent_overrides, &resolution.created, &parent)
+            .contains(moved.as_str())
+        {
+            resolution.diagnostics.push(format!(
+                "module `{moved}` cannot move under one of its own descendants; fix the written module nesting"
+            ));
+            continue;
+        }
+        parent_overrides.insert(moved.clone(), parent.clone());
+        kept_reparents.push((moved, parent));
+    }
+    resolution.reparents = kept_reparents;
+
+    let module_ids: Vec<String> = resolution.board_paths.keys().cloned().collect();
+    let mut patched: HashMap<String, Vec<String>> = HashMap::new();
+    for id in module_ids {
+        let path = written_target_path(
+            board,
+            &name_overrides,
+            &parent_overrides,
+            &resolution.created,
+            &ModuleTarget::Existing(id.clone()),
+        );
+        patched.insert(id, path);
+    }
+    resolution.board_paths = patched;
+    for index in 0..resolution.created.len() {
+        resolution.created[index].path = written_target_path(
+            board,
+            &name_overrides,
+            &parent_overrides,
+            &resolution.created,
+            &ModuleTarget::New(index),
+        );
+    }
+}
+
+/// The lowercase `::` path of `target` (its own segment included) under the WRITTEN module
+/// structure: renames replace segments, reparents replace parent links. Cycle-guarded.
+fn written_target_path(
+    board: &Board,
+    name_overrides: &HashMap<String, String>,
+    parent_overrides: &HashMap<String, ModuleTarget>,
+    created: &[CreatedModule],
+    target: &ModuleTarget,
+) -> Vec<String> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut current = target.clone();
+    loop {
+        match current {
+            ModuleTarget::Root => break,
+            ModuleTarget::New(index) => {
+                if !seen.insert(index) {
+                    break;
+                }
+                let Some(module) = created.get(index) else {
+                    break;
+                };
+                segments.push(to_camel_case(&module.name).to_lowercase());
+                current = module.parent.clone();
+            }
+            ModuleTarget::Existing(id) => {
+                if !seen_ids.insert(id.clone()) {
+                    break;
+                }
+                let Some(layer) = board.layers.get(&id) else {
+                    break;
+                };
+                let name = name_overrides
+                    .get(&id)
+                    .map(String::as_str)
+                    .unwrap_or(layer.name.as_str());
+                segments.push(to_camel_case(name).to_lowercase());
+                current = match parent_overrides.get(&id) {
+                    Some(next) => next.clone(),
+                    None => board
+                        .layers
+                        .get(&id)
+                        .and_then(|layer| owning_module(board, layer.parent_id.as_deref()))
+                        .map(ModuleTarget::Existing)
+                        .unwrap_or(ModuleTarget::Root),
+                };
+            }
+        }
+    }
+    segments.reverse();
+    segments
+}
+
+/// Every existing module layer id on the parent chain of `target`, following the written
+/// overrides. Cycle-guarded; used to refuse a reparent under a descendant.
+fn written_module_ancestors(
+    board: &Board,
+    parent_overrides: &HashMap<String, ModuleTarget>,
+    created: &[CreatedModule],
+    target: &ModuleTarget,
+) -> HashSet<String> {
+    let mut chain: HashSet<String> = HashSet::new();
+    let mut current = target.clone();
+    loop {
+        match current {
+            ModuleTarget::Root => break,
+            ModuleTarget::New(index) => match created.get(index) {
+                Some(module) => current = module.parent.clone(),
+                None => break,
+            },
+            ModuleTarget::Existing(id) => {
+                if !chain.insert(id.clone()) {
+                    break;
+                }
+                current = match parent_overrides.get(&id) {
+                    Some(next) => next.clone(),
+                    None => board
+                        .layers
+                        .get(&id)
+                        .and_then(|layer| owning_module(board, layer.parent_id.as_deref()))
+                        .map(ModuleTarget::Existing)
+                        .unwrap_or(ModuleTarget::Root),
+                };
+            }
+        }
+    }
+    chain
 }
 
 fn resolve_module_scope(
@@ -487,6 +634,13 @@ fn resolve_module_block(
     if let Some(anchor) = block.anchor.as_deref() {
         return match board.layers.get(anchor) {
             Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                if !resolution.claimed_anchors.insert(anchor.to_string()) {
+                    resolution.diagnostics.push(format!(
+                        "module `{}` anchors to `{anchor}`, but another module block in this document already carries that anchor; every `//@l:` module anchor must be unique",
+                        block.name
+                    ));
+                    return ModuleTarget::Existing(anchor.to_string());
+                }
                 let actual_parent = owning_module(board, layer.parent_id.as_deref());
                 if module_path(board, anchor).is_empty() {
                     resolution.diagnostics.push(format!(
@@ -496,10 +650,16 @@ fn resolve_module_block(
                 } else if actual_parent.as_deref() != parent_layer
                     || matches!(parent, ModuleTarget::New(_))
                 {
-                    resolution.corrections.push(format!(
-                        "module `{}` keeps its `//@l:{anchor}` identity and stays where it is on the board; the block's written nesting position was ignored.",
-                        block.name
-                    ));
+                    // The anchor keeps identity; the written nesting position decides where the
+                    // module lives. The move applies as an explicit reviewable command.
+                    resolution
+                        .reparents
+                        .push((anchor.to_string(), parent.clone()));
+                }
+                if to_camel_case(&layer.name) != to_camel_case(&block.name) {
+                    resolution
+                        .renames
+                        .push((anchor.to_string(), block.name.clone()));
                 }
                 ModuleTarget::Existing(anchor.to_string())
             }
@@ -826,8 +986,10 @@ fn reconcile_inner(
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
     //    text. Translate those to the same command format the UI already reviews/applies.
     if let Some(catalog) = catalog {
-        let structural =
-            StructuralPlanner::new(existing, catalog, enricher).plan(&submitted, &modules);
+        let mut planner = StructuralPlanner::new(existing, catalog, enricher);
+        planner.moves_authoritative =
+            !submitted.module_blocks.is_empty() || opts.base_module().is_some();
+        let structural = planner.plan(&submitted, &modules);
         if !structural.commands.is_empty() {
             let anchored_edits = std::mem::take(&mut result.commands);
             result.commands = structural.commands;
@@ -2315,6 +2477,14 @@ fn param_output_pin_def(
         schema: schema.clone(),
         enforce_schema: schema.is_some(),
     }
+}
+
+/// The concrete re-homing plan for one cross-module event move.
+struct EventMovePlan {
+    /// Node and container-layer ids to re-parent into the destination module.
+    ids: Vec<String>,
+    /// Containers that also hold foreign nodes and therefore stay behind with their contents.
+    kept_in_place: Vec<String>,
 }
 
 /// Scope-qualified identity of a FlowScript `function`: the module that owns it (`None` = the
@@ -4563,8 +4733,9 @@ struct UseScope {
     namespaces: HashMap<String, (String, usize)>,
     /// `use a::b::*`: (namespace key, use index).
     globs: Vec<(String, usize)>,
-    /// `use a::b::{ x }`: member → (namespace key, use index).
-    members: HashMap<String, (String, usize)>,
+    /// `use a::b::{ x, y as z }`: LOCAL name (the alias when renamed) → (namespace key, the
+    /// member's real name inside that namespace, use index).
+    members: HashMap<String, (String, String, usize)>,
     /// Rendered source of every `use` line, by index.
     rendered: Vec<String>,
     /// Lines that already produced a diagnostic (never reported as unused).
@@ -4592,8 +4763,8 @@ impl UseScope {
             .chain(
                 self.members
                     .get(&alias)
-                    .filter(|(opened, _)| opened == namespace_key)
-                    .map(|(_, idx)| *idx),
+                    .filter(|(opened, _, _)| opened == namespace_key)
+                    .map(|(_, _, idx)| *idx),
             )
             .min()
     }
@@ -4610,7 +4781,13 @@ fn render_use_decl(decl: &UseDecl) -> String {
         }
         UseKind::Members(members) => {
             out.push_str("::{ ");
-            out.push_str(&members.join(", "));
+            out.push_str(
+                &members
+                    .iter()
+                    .map(UseMember::render)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
             out.push_str(" }");
         }
     }
@@ -5562,6 +5739,16 @@ struct StructuralPlanner<'a> {
     function_decl_index: HashMap<FnKey, usize>,
     /// Lowercase `a::b::name` → the functions reachable under that absolute module path.
     functions_by_qualified: HashMap<String, Vec<FnKey>>,
+    /// Anchored function layers whose written module differs from the board: the layer moves to
+    /// the written module. `(layer id, written module target, display name)`; the layer ids also
+    /// gate `seed_existing_function_signatures` so a moved function is never double-seeded at its
+    /// old location.
+    pending_function_moves: Vec<(String, Option<String>, String)>,
+    /// Whether the written position of anchored sections is authoritative: true when the
+    /// document is module-aware (it contains a `module { }` block, or it IS a module file). A
+    /// source that expresses no module structure at all — typed Flow IR cannot, and a full
+    /// rewrite that lost every wrapper must not — never relocates anchored functions/events.
+    moves_authoritative: bool,
     /// The module owning the section currently being planned; `None` is the board root.
     current_module: Option<String>,
     /// Module layer id (or same-batch `$ref`) for every `module` scope of this document.
@@ -5624,6 +5811,8 @@ impl<'a> StructuralPlanner<'a> {
             function_sigs: HashMap::new(),
             function_decl_index: HashMap::new(),
             functions_by_qualified: HashMap::new(),
+            pending_function_moves: Vec::new(),
+            moves_authoritative: true,
             current_module: None,
             module_layers: HashMap::new(),
             module_name_paths: HashMap::new(),
@@ -5731,16 +5920,22 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn prepare_functions(&mut self, doc: &FlatDocument) {
+        // The written module block is authoritative: an anchored function written elsewhere
+        // moves there (detected in `prepare_function_sigs`).
+        for (layer_id, target, name) in std::mem::take(&mut self.pending_function_moves) {
+            let destination = self.module_move_label(target.as_deref());
+            self.update_commands.push(BoardCommand::MoveToLayer {
+                ids: vec![layer_id],
+                target_layer: target,
+                summary: Some(format!("Move function {name} to {destination}")),
+            });
+            self.result.corrections.push(format!(
+                "Moved function `{name}` to {destination} to match its written position."
+            ));
+        }
         let ast = &doc.ast;
         for (index, func) in ast.functions.iter().enumerate() {
             let key = self.declared_function_key(doc, index);
-            if func.anchor.is_some() && self.scope_module(&doc.function_scopes[index]) != key.module
-            {
-                self.result.corrections.push(format!(
-                    "function `{}` keeps its identity anchor and stays in the module it lives in on the board; the module it was written in was ignored.",
-                    func.name
-                ));
-            }
             self.current_module = key.module.clone();
             let mut seen = HashSet::new();
             seen.insert(key.seen_id());
@@ -6220,6 +6415,180 @@ impl<'a> StructuralPlanner<'a> {
         nested_layer == target_layer
     }
 
+    /// True when `start_layer`'s chain reaches a Function/Macro layer before any Module layer:
+    /// such a node belongs to that layer's body, never to a module file directly.
+    fn inside_function_layer(&self, start_layer: Option<&str>) -> bool {
+        let mut current = start_layer;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                return false;
+            }
+            let Some(layer) = self.existing.layers.get(id) else {
+                return false;
+            };
+            match layer.r#type {
+                LayerType::Function | LayerType::Macro => return true,
+                LayerType::Module => return false,
+                LayerType::Collapsed => current = layer.parent_id.as_deref(),
+            }
+        }
+        false
+    }
+
+    /// The nodes belonging to one event on the existing board: exec-reachable from the entry,
+    /// plus the pure data sources feeding those nodes, restricted to nodes owned by `module` and
+    /// not inside a Function layer. Other event entries bound the walk.
+    fn event_subgraph_ids(&self, entry_id: &str, module: Option<&str>) -> HashSet<String> {
+        let mut visited: HashSet<String> = HashSet::new();
+        let Some(entry) = find_board_node(self.existing, entry_id) else {
+            return visited;
+        };
+        visited.insert(entry_id.to_string());
+        let mut queue: Vec<&Node> = vec![entry];
+        while let Some(node) = queue.pop() {
+            for pin in node.pins.values() {
+                let candidates: Vec<&Node> = if pin.pin_type == PinType::Output && is_exec_pin(pin)
+                {
+                    pin.connected_to
+                        .iter()
+                        .filter_map(|pin_id| self.board_index.pin_owner.get(pin_id.as_str()))
+                        .map(|(owner, _)| *owner)
+                        .collect()
+                } else if pin.pin_type == PinType::Input && !is_exec_pin(pin) {
+                    pin.depends_on
+                        .iter()
+                        .filter_map(|pin_id| self.board_index.pin_owner.get(pin_id.as_str()))
+                        .map(|(owner, _)| *owner)
+                        // An impure source reached through a data edge belongs to whichever
+                        // execution chain drives it; only pure nodes travel with a data edge.
+                        .filter(|owner| !owner.pins.values().any(is_exec_pin))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for owner in candidates {
+                    if owner.id != entry_id && owner.start == Some(true) {
+                        continue;
+                    }
+                    if owning_module(self.existing, owner.layer.as_deref()).as_deref() != module
+                        || self.inside_function_layer(owner.layer.as_deref())
+                    {
+                        continue;
+                    }
+                    if visited.insert(owner.id.clone()) {
+                        queue.push(owner);
+                    }
+                }
+            }
+        }
+        visited
+    }
+
+    /// The last non-module layer on the chain from `start_layer` up to its owning module (or the
+    /// root): the container a cross-module move must re-parent so the grouping survives.
+    fn topmost_container_below_module(&self, start_layer: &str) -> Option<String> {
+        let mut current = Some(start_layer);
+        let mut top: Option<&str> = None;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                break;
+            }
+            let Some(layer) = self.existing.layers.get(id) else {
+                break;
+            };
+            if matches!(layer.r#type, LayerType::Module) {
+                break;
+            }
+            top = Some(id);
+            current = layer.parent_id.as_deref();
+        }
+        top.map(str::to_string)
+    }
+
+    /// True when `target` appears on the layer parent chain starting at `start`.
+    fn layer_chain_contains(&self, start: Option<&str>, target: &str) -> bool {
+        let mut current = start;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if id == target {
+                return true;
+            }
+            if !seen.insert(id) {
+                return false;
+            }
+            current = self
+                .existing
+                .layers
+                .get(id)
+                .and_then(|layer| layer.parent_id.as_deref());
+        }
+        false
+    }
+
+    /// True when every node contained (transitively) in `container` is in `movable` — the
+    /// condition for re-parenting the whole container instead of flattening it.
+    fn layer_subtree_all_movable(&self, container: &str, movable: &HashSet<String>) -> bool {
+        all_board_nodes(self.existing).into_iter().all(|node| {
+            movable.contains(&node.id)
+                || !self.layer_chain_contains(node.layer.as_deref(), container)
+        })
+    }
+
+    /// What a cross-module event move re-homes: the event's own subgraph minus any node also
+    /// belonging to another event of the same module (a shared pure source stays put — either
+    /// event renders it inline regardless of where it lives). Nodes grouped inside a
+    /// Collapsed layer move as that layer (topmost container under the module) so the grouping
+    /// survives; a container that also holds non-movable nodes stays behind with its members
+    /// (returned in `kept_in_place` for a correction).
+    fn event_move_ids(&self, entry_id: &str, module: Option<&str>) -> EventMovePlan {
+        let mine = self.event_subgraph_ids(entry_id, module);
+        let mut shared: HashSet<String> = HashSet::new();
+        for node in all_board_nodes(self.existing) {
+            if node.id != entry_id
+                && node.start == Some(true)
+                && owning_module(self.existing, node.layer.as_deref()).as_deref() == module
+            {
+                shared.extend(self.event_subgraph_ids(&node.id, module));
+            }
+        }
+        let movable: HashSet<String> = mine
+            .into_iter()
+            .filter(|id| id == entry_id || !shared.contains(id))
+            .collect();
+        let mut ids: Vec<String> = Vec::new();
+        let mut containers: BTreeSet<String> = BTreeSet::new();
+        for id in &movable {
+            let Some(node) = find_board_node(self.existing, id) else {
+                continue;
+            };
+            let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
+            match direct_layer {
+                Some(layer_id) if direct_layer != module => {
+                    match self.topmost_container_below_module(layer_id) {
+                        Some(container) => {
+                            containers.insert(container);
+                        }
+                        None => ids.push(id.clone()),
+                    }
+                }
+                _ => ids.push(id.clone()),
+            }
+        }
+        let mut kept_in_place: Vec<String> = Vec::new();
+        for container in containers {
+            if self.layer_subtree_all_movable(&container, &movable) {
+                ids.push(container);
+            } else {
+                kept_in_place.push(container);
+            }
+        }
+        ids.sort();
+        kept_in_place.sort();
+        EventMovePlan { ids, kept_in_place }
+    }
+
     fn event_entry_targets_node(&self, entry: &Node, target_node_id: &str) -> bool {
         entry
             .pins
@@ -6487,6 +6856,37 @@ impl<'a> StructuralPlanner<'a> {
                                 friendly_name: event_name.to_string(),
                                 summary: Some(format!("Rename event to {event_name}")),
                             });
+                        }
+                        // The module the event is WRITTEN in is authoritative: an anchored event
+                        // in a different module block moves there — entry and body together. Only
+                        // a top-level section can move (a handler nested in a function body plans
+                        // with the function layer as its target, which is not a module context),
+                        // and an entry parked inside a Function layer stays with that function.
+                        let is_module_context = target_layer
+                            .as_deref()
+                            .is_none_or(|id| self.module_name_paths.contains_key(id));
+                        let actual_module = owning_module(self.existing, node.layer.as_deref());
+                        if self.moves_authoritative
+                            && is_module_context
+                            && actual_module.as_deref() != target_layer.as_deref()
+                            && !self.inside_function_layer(node.layer.as_deref())
+                        {
+                            let plan = self.event_move_ids(anchor, actual_module.as_deref());
+                            let destination = self.module_move_label(target_layer.as_deref());
+                            let display = event.event_name.as_deref().unwrap_or(&event.name);
+                            self.update_commands.push(BoardCommand::MoveToLayer {
+                                ids: plan.ids,
+                                target_layer: target_layer.clone(),
+                                summary: Some(format!("Move event {display} to {destination}")),
+                            });
+                            self.result.corrections.push(format!(
+                                "Moved event `{display}` to {destination} to match its written position."
+                            ));
+                            for container in plan.kept_in_place {
+                                self.result.corrections.push(format!(
+                                    "Group `{container}` also holds nodes outside event `{display}` and stayed where it is together with its contents."
+                                ));
+                            }
                         }
                         self.claimed_event_entries.insert(anchor.clone());
                         Some(NodeEntity::Existing(anchor.clone()))
@@ -7448,7 +7848,21 @@ impl<'a> StructuralPlanner<'a> {
                 .or_else(|| self.existing.variables.values().find(name_matches))
                 .map(|existing| existing.id.clone())
         });
+        // Nothing live matches, so this is a NEW declaration in hand-written text rather than
+        // the readback of an already-promoted variable. Returning here (as this did) registered
+        // no symbol and emitted no diagnostic, so the declaration was silently inert and every
+        // later read of `name` failed with an unrelated "not a resolvable node output" error
+        // several lines away. Create the variable the declaration describes instead.
         let Some(variable_id) = variable_id else {
+            let variable_id = self.create_typed_local_variable(
+                &var.name,
+                var.default.as_ref().map(literal_to_value),
+                type_ref_data_type(&var.ty).to_string(),
+                type_ref_value_type(&var.ty).to_string(),
+                var.schema.clone(),
+                target_layer.map(str::to_string),
+            );
+            self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
             return;
         };
         self.variable_value_contracts.insert(
@@ -8018,6 +8432,29 @@ impl<'a> StructuralPlanner<'a> {
                 return None;
             }
             let receiver_pin = live_receiver_pin(&meta);
+            // An anchor pins node identity, not the receiver's type. Without this the method
+            // form binds any expression to the receiver pin and the mismatch only surfaces
+            // later as an opaque pin-type error naming a pin the author never typed — while
+            // the identical unanchored spelling is rejected here by `resolve_method_call`.
+            // Compare value-type classes only: schema identity stays with the schema checks.
+            if let Some(receiver) = call.receiver.as_deref()
+                && let Some(pin_name) = receiver_pin.as_deref()
+                && let Some(pin) = metadata_input_pin(&meta, pin_name)
+                && let Some(pin_class) =
+                    flow_like_ast::receiver_class(&pin.data_type, &pin.value_type)
+                && let Some(hint) = self.expr_receiver_hint(receiver)
+                && let Some(value_class) =
+                    flow_like_ast::receiver_class(&hint.data_type, &hint.value_type)
+                && value_class != pin_class
+            {
+                self.result.diagnostics.push(format!(
+                    "no method `{}` on `{value_class}`: anchor `{anchor}` is `{}`, whose receiver `{}` is a `{pin_class}`; remove the anchor to place a different node",
+                    call.display,
+                    meta.name,
+                    to_camel_case(pin_name)
+                ));
+                return None;
+            }
             let call = match fold_call_arguments(call, &meta, receiver_pin.as_deref()) {
                 Ok(call) => call,
                 Err(diagnostic) => {
@@ -9038,14 +9475,46 @@ impl<'a> StructuralPlanner<'a> {
             && (!variable_schema_contract
                 || variable_assignment_schemas_are_compatible(input, &output, &self.existing.refs));
         if !compatible {
+            // The rejection has three possible grounds and the reader has to be told WHICH one.
+            // When only the schemas differ, naming just `data_type/value_type` prints the same
+            // contract on both sides ("`Struct/Normal` ... requires `Struct/Normal`") — a
+            // self-contradiction that sends people hunting a phantom engine bug.
+            let types_differ =
+                input.data_type != output.data_type || input.value_type != output.value_type;
+            let reason = if types_differ {
+                format!(
+                    "source `{}` is `{}/{}`, but input `{}` requires `{}/{}`",
+                    output.source,
+                    output.data_type,
+                    output.value_type,
+                    input.name,
+                    input.data_type,
+                    input.value_type
+                )
+            } else {
+                let describe = |schema: Option<&str>| match schema {
+                    Some(schema) => flow_like_ast::schema_title(schema)
+                        .map(|title| format!("`{title}`"))
+                        .unwrap_or_else(|| "an untitled schema".to_string()),
+                    None => "no schema".to_string(),
+                };
+                format!(
+                    "source `{}` and input `{}` are both `{}/{}`, but their schemas differ: the source declares {}, the input requires {}{}",
+                    output.source,
+                    input.name,
+                    input.data_type,
+                    input.value_type,
+                    describe(output.schema.as_deref()),
+                    describe(input.schema.as_deref()),
+                    if input.enforce_schema {
+                        " and enforces it"
+                    } else {
+                        ""
+                    }
+                )
+            };
             self.result.diagnostics.push(format!(
-                "{context} has incompatible pin types or schemas: source `{}` is `{}/{}`, but input `{}` requires `{}/{}`; use a catalog-declared conversion before connecting it",
-                output.source,
-                output.data_type,
-                output.value_type,
-                input.name,
-                input.data_type,
-                input.value_type
+                "{context} has incompatible pin types or schemas: {reason}; use a catalog-declared conversion before connecting it"
             ));
             return false;
         }
@@ -10554,7 +11023,12 @@ impl<'a> StructuralPlanner<'a> {
                 otherwise,
             } => self.lower_ternary_select(cond, then, otherwise, target_layer),
             Expr::Template { parts } => self.lower_template_format(parts, target_layer),
-            Expr::Object(_) | Expr::Array(_) => None,
+            // A composite literal whose elements are all constants was already handled by
+            // `literal_expr_to_value` above. One that carries a computed element has to become
+            // real nodes instead — returning None here is what produced "argument `x` is not a
+            // literal or resolvable node output" for every `[a, b]` holding a call result.
+            Expr::Array(items) => self.lower_array_literal(items, target_layer),
+            Expr::Object(_) => None,
             Expr::Literal(_) => None,
         }
     }
@@ -10650,6 +11124,41 @@ impl<'a> StructuralPlanner<'a> {
         }))
     }
 
+    /// Lower `[a, b, …]` whose elements are not all constant into a real `construct_array`
+    /// node, one `element` argument per item. `construct_array` is pure and mints one further
+    /// `element` pin per connected pin, so it composes in expression position without needing
+    /// an execution chain — unlike `array::push`, which is impure.
+    fn lower_array_literal(
+        &mut self,
+        items: &[Expr],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let mut call = Call::placeholder();
+        if items.is_empty() {
+            call.node_type = "make_array".to_string();
+            call.display = "make".to_string();
+        } else {
+            call.node_type = "construct_array".to_string();
+            call.display = "construct".to_string();
+            call.args = items
+                .iter()
+                .map(|item| Arg {
+                    name: "element".to_string(),
+                    value: item.clone(),
+                })
+                .collect();
+        }
+        self.add_call_node(&call, target_layer).map(|node| {
+            let output_pin = self
+                .resolve_entity_output_pin(&node, None)
+                .unwrap_or_else(|| "array_out".to_string());
+            SymbolValue::Source(ValueSource {
+                node,
+                output_pin: Some(output_pin),
+            })
+        })
+    }
+
     fn resolve_binary_operator_meta(
         &mut self,
         op: &str,
@@ -10728,8 +11237,16 @@ impl<'a> StructuralPlanner<'a> {
         lhs: &Expr,
         rhs: &Expr,
     ) -> Result<Option<String>, (String, String)> {
-        let lhs_type = self.expr_data_type_hint(lhs);
-        let rhs_type = self.expr_data_type_hint(rhs);
+        // `Generic` is not a type, it is the absence of one: a Generic pin specialises to
+        // whatever it is wired to. `struct::get`, `map::get`, `array::get`, an index and a
+        // ternary all produce it, so treating it as a concrete type made every comparison
+        // against such a value fail ("incompatible operand types `Generic` and `String`") even
+        // though connection validation itself specialises a Generic side happily
+        // (`planned_output_is_compatible`). Fold it into the unknown case, which already lets
+        // the other operand decide.
+        let ungeneric = |hint: Option<String>| hint.filter(|ty| ty != "Generic");
+        let lhs_type = ungeneric(self.expr_data_type_hint(lhs));
+        let rhs_type = ungeneric(self.expr_data_type_hint(rhs));
         let is_int_literal = |expr: &Expr| matches!(expr, Expr::Literal(Literal::Int(_)));
         match (lhs_type.as_deref(), rhs_type.as_deref()) {
             (Some(lhs), Some(rhs)) if lhs == rhs => Ok(Some(lhs.to_string())),
@@ -11138,22 +11655,36 @@ impl<'a> StructuralPlanner<'a> {
                 "Normal".to_string(),
             )
         };
-        self.create_typed_local_variable(name, default_value, data_type, value_type, target_layer)
+        self.create_typed_local_variable(
+            name,
+            default_value,
+            data_type,
+            value_type,
+            None,
+            target_layer,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_typed_local_variable(
         &mut self,
         name: &str,
         default_value: Option<flow_like_types::Value>,
         data_type: String,
         value_type: String,
+        schema: Option<String>,
         target_layer: Option<String>,
     ) -> String {
         let variable_id = self.unique_local_variable_id(name);
         self.variable_refs.insert(&variable_id, name);
         self.variable_value_contracts.insert(
             variable_id.clone(),
-            variable_value_pin_metadata("value_in", data_type.clone(), value_type.clone(), None),
+            variable_value_pin_metadata(
+                "value_in",
+                data_type.clone(),
+                value_type.clone(),
+                schema.clone(),
+            ),
         );
         self.add_commands.push(BoardCommand::CreateVariable {
             variable_id: Some(variable_id.clone()),
@@ -11163,7 +11694,7 @@ impl<'a> StructuralPlanner<'a> {
             default_value,
             description: None,
             category: None,
-            schema: None,
+            schema,
             exposed: Some(false),
             secret: Some(false),
             editable: Some(true),
@@ -11327,6 +11858,7 @@ impl<'a> StructuralPlanner<'a> {
             Some(literal),
             data_type,
             value_type,
+            None,
             target_layer.clone(),
         );
         self.add_variable_get_source(&variable_id, target_layer)
@@ -11701,8 +12233,12 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 UseKind::Glob => scope.globs.push((key.clone(), idx)),
                 UseKind::Members(members) => {
-                    for member in members {
-                        let lower = member.to_lowercase();
+                    for entry in members {
+                        let member = &entry.name;
+                        // The catalog is searched by the member's REAL name; the scope is keyed
+                        // by the LOCAL one, so `use jira::{ createIssue as createJiraIssue }`
+                        // makes `createJiraIssue(...)` resolve to `jira::createIssue`.
+                        let lower = entry.local().to_lowercase();
                         if self.catalog.qualified_matches(&key, member).is_empty() {
                             scope.invalid.insert(idx);
                             let aliases = self.catalog.namespace_member_aliases(&key);
@@ -11726,15 +12262,20 @@ impl<'a> StructuralPlanner<'a> {
                         let previous = scope
                             .members
                             .get(&lower)
-                            .map(|(_, previous)| scope.rendered[*previous].clone());
-                        if let Some(diagnostic) =
-                            use_name_diagnostic(&rendered, member, &functions, previous.as_deref())
-                        {
+                            .map(|(_, _, previous)| scope.rendered[*previous].clone());
+                        if let Some(diagnostic) = use_name_diagnostic(
+                            &rendered,
+                            entry.local(),
+                            &functions,
+                            previous.as_deref(),
+                        ) {
                             scope.invalid.insert(idx);
                             self.result.diagnostics.push(diagnostic);
                             continue;
                         }
-                        scope.members.insert(lower, (key.clone(), idx));
+                        scope
+                            .members
+                            .insert(lower, (key.clone(), member.clone(), idx));
                     }
                 }
             }
@@ -11756,8 +12297,43 @@ impl<'a> StructuralPlanner<'a> {
     fn prepare_function_sigs(&mut self, doc: &FlatDocument) {
         self.function_sigs.clear();
         self.function_decl_index.clear();
+        self.pending_function_moves.clear();
         for (index, func) in doc.ast.functions.iter().enumerate() {
             let key = self.declared_function_key(doc, index);
+            // The anchor keeps a function's identity; the module block it is WRITTEN in decides
+            // where it lives. A mismatch becomes an explicit move, recorded here (before
+            // `seed_existing_function_signatures` runs) and emitted in `prepare_functions`.
+            if let Some(anchor) = func.anchor.as_deref()
+                && let Some(layer) = self.existing.layers.get(anchor)
+                && matches!(layer.r#type, LayerType::Function)
+                && owning_module(self.existing, layer.parent_id.as_deref()) != key.module
+            {
+                // A move into a module that already owns a same-named Function layer would leave
+                // two `function {name}` declarations that no later render can express; refuse it
+                // instead of wedging the module.
+                let normalized = to_camel_case(&func.name);
+                let occupied = self.existing.layers.values().find(|candidate| {
+                    candidate.id != anchor
+                        && matches!(candidate.r#type, LayerType::Function)
+                        && to_camel_case(&candidate.name) == normalized
+                        && owning_module(self.existing, candidate.parent_id.as_deref())
+                            == key.module
+                });
+                if let Some(existing) = occupied {
+                    self.result.diagnostics.push(format!(
+                        "function `{}` cannot move to {}: it already holds a function of that name (layer `{}`); rename one of them first",
+                        func.name,
+                        self.module_move_label(key.module.as_deref()),
+                        existing.id
+                    ));
+                } else {
+                    self.pending_function_moves.push((
+                        anchor.to_string(),
+                        key.module.clone(),
+                        func.name.clone(),
+                    ));
+                }
+            }
             self.function_sigs.insert(
                 key.clone(),
                 FunctionSig {
@@ -11803,9 +12379,57 @@ impl<'a> StructuralPlanner<'a> {
                 .insert(ref_id.clone(), module.path.clone());
             created.push(ref_id);
         }
+        // The written text is authoritative for module names and nesting: anchored blocks whose
+        // written name or position differs from the board become explicit rename/move commands.
+        for (layer_id, name) in &modules.renames {
+            let old_name = self
+                .existing
+                .layers
+                .get(layer_id)
+                .map(|layer| layer.name.clone())
+                .unwrap_or_else(|| layer_id.clone());
+            self.update_commands.push(BoardCommand::RenameLayer {
+                layer_id: layer_id.clone(),
+                name: name.clone(),
+                summary: Some(format!("Rename module {old_name} to {name}")),
+            });
+            self.result
+                .corrections
+                .push(format!("Renamed module `{old_name}` to `{name}`."));
+        }
+        for (layer_id, parent) in &modules.reparents {
+            let target = module_target_id(parent, &created);
+            let module_name = self
+                .existing
+                .layers
+                .get(layer_id)
+                .map(|layer| layer.name.clone())
+                .unwrap_or_else(|| layer_id.clone());
+            let destination = self.module_move_label(target.as_deref());
+            self.update_commands.push(BoardCommand::MoveToLayer {
+                ids: vec![layer_id.clone()],
+                target_layer: target,
+                summary: Some(format!("Move module {module_name} to {destination}")),
+            });
+            self.result.corrections.push(format!(
+                "Moved module `{module_name}` to {destination} to match its written position."
+            ));
+        }
         for (scope, target) in &modules.scopes {
             self.module_layers
                 .insert(scope.clone(), module_target_id(target, &created));
+        }
+    }
+
+    /// Human-readable destination of a module-membership move: the module's `::` path, or the
+    /// board root.
+    fn module_move_label(&self, target: Option<&str>) -> String {
+        match target {
+            Some(id) => match self.module_name_paths.get(id) {
+                Some(path) if !path.is_empty() => format!("module `{}`", path.join("::")),
+                _ => format!("module `{id}`"),
+            },
+            None => "the top level".to_string(),
         }
     }
 
@@ -11815,18 +12439,24 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     /// Identity of the `function` at `index` of the flattened document: its name in the module it
-    /// was written in — or, when it keeps an identity anchor, in the module the anchored layer
-    /// actually lives in. The anchor is identity; a block position is presentation.
+    /// was written in. The anchor keeps a function's IDENTITY; the written position decides the
+    /// module it belongs to — an anchored function written in a different module block moves
+    /// there (see `prepare_function_sigs`, which records the move).
     fn declared_function_key(&self, doc: &FlatDocument, index: usize) -> FnKey {
         let func = &doc.ast.functions[index];
         let written = self.scope_module(&doc.function_scopes[index]);
-        let module = func
-            .anchor
-            .as_deref()
-            .and_then(|anchor| self.existing.layers.get(anchor))
-            .filter(|layer| matches!(layer.r#type, LayerType::Function))
-            .map(|layer| owning_module(self.existing, layer.parent_id.as_deref()))
-            .unwrap_or(written);
+        let module = if self.moves_authoritative {
+            written
+        } else {
+            // A module-unaware document cannot restructure: an anchored function keeps the
+            // module its layer actually lives in on the board, whatever scope the text used.
+            func.anchor
+                .as_deref()
+                .and_then(|anchor| self.existing.layers.get(anchor))
+                .filter(|layer| matches!(layer.r#type, LayerType::Function))
+                .map(|layer| owning_module(self.existing, layer.parent_id.as_deref()))
+                .unwrap_or(written)
+        };
         FnKey {
             module,
             name: func.name.clone(),
@@ -11843,10 +12473,18 @@ impl<'a> StructuralPlanner<'a> {
             .keys()
             .map(|key| (key.module.clone(), to_camel_case(&key.name)))
             .collect::<HashSet<_>>();
+        let moved: HashSet<&str> = self
+            .pending_function_moves
+            .iter()
+            .map(|(layer_id, ..)| layer_id.as_str())
+            .collect();
         let mut layers = board
             .layers
             .values()
             .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            // A layer this document moves is declared by definition; seeding it at its OLD board
+            // location would leave the stale qualified path callable.
+            .filter(|layer| !moved.contains(layer.id.as_str()))
             .collect::<Vec<_>>();
         layers.sort_by(|left, right| left.id.cmp(&right.id));
         for layer in layers {
@@ -12464,11 +13102,12 @@ impl<'a> StructuralPlanner<'a> {
                 *idx,
             );
         }
-        if let Some((namespace, idx)) = self.use_scope.members.get(&display.to_lowercase()) {
+        if let Some((namespace, member, idx)) = self.use_scope.members.get(&display.to_lowercase())
+        {
             group_opened(
                 &mut opened,
                 &self.catalog,
-                self.catalog.qualified_matches(namespace, display),
+                self.catalog.qualified_matches(namespace, member),
                 *idx,
             );
         }
@@ -28837,5 +29476,550 @@ eventsSimple() {
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(added_node_ref(&result, "rpa_pause").is_some());
         assert!(added_node_ref(&result, "rpa_delay").is_none());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Written module structure is authoritative: anchored renames/moves become explicit commands.
+    // ------------------------------------------------------------------------------------------
+
+    fn module_layer(board: &mut Board, id: &str, name: &str, parent: Option<&str>) {
+        let mut layer = Layer::new(id.to_string(), name.to_string(), LayerType::Module);
+        layer.parent_id = parent.map(str::to_string);
+        board.layers.insert(layer.id.clone(), layer);
+    }
+
+    /// Event entry + anchored `log` body node, both members of `module_id` (None = root).
+    fn event_with_log_in_module(
+        board: &mut Board,
+        event_id: &str,
+        log_id: &str,
+        module_id: Option<&str>,
+    ) {
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = event_id.to_string();
+        event.set_start(true);
+        event.layer = module_id.map(str::to_string);
+        let exec_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = log_id.to_string();
+        log.layer = module_id.map(str::to_string);
+        let exec_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(board, event_id, &exec_out, log_id, &exec_in);
+    }
+
+    fn move_commands(result: &ReconcileResult) -> Vec<(Vec<String>, Option<String>)> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::MoveToLayer {
+                    ids, target_layer, ..
+                } => Some((ids.clone(), target_layer.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rename_layer_commands(result: &ReconcileResult) -> Vec<(String, String)> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::RenameLayer { layer_id, name, .. } => {
+                    Some((layer_id.clone(), name.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_anchored_module_written_with_a_new_name_is_renamed() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+
+        let result =
+            reconcile_text_with_catalog(&board, "module payments {   //@l:mod-a\n}\n", &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("mod-a".to_string(), "payments".to_string())]
+        );
+        assert!(move_commands(&result).is_empty());
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. })),
+            "an anchored rename must not create a second module"
+        );
+    }
+
+    #[test]
+    fn a_matching_module_roundtrip_emits_no_structure_commands() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", Some("mod-a"));
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let text = "module alpha {   //@l:mod-a\n    start() {   //@n:event\n        log()   //@n:log\n    }\n\n    module beta {   //@l:mod-b\n    }\n}\n";
+        let result = reconcile_text_with_catalog(&board, text, &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(move_commands(&result).is_empty(), "{:?}", result.commands);
+        assert!(rename_layer_commands(&result).is_empty());
+    }
+
+    #[test]
+    fn an_anchored_module_written_under_a_new_parent_moves_there() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n    module beta {   //@l:mod-b\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["mod-b".to_string()], Some("mod-a".to_string()))]
+        );
+    }
+
+    #[test]
+    fn swapping_two_anchored_modules_moves_both() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module beta {   //@l:mod-b\n    module alpha {   //@l:mod-a\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let moves = move_commands(&result);
+        assert!(
+            moves.contains(&(vec!["mod-b".to_string()], None)),
+            "{moves:?}"
+        );
+        assert!(
+            moves.contains(&(vec!["mod-a".to_string()], Some("mod-b".to_string()))),
+            "{moves:?}"
+        );
+    }
+
+    #[test]
+    fn an_anchored_function_written_in_another_module_moves_there() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. })),
+            "moving an anchored function must not recreate its layer: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_anchored_function_written_in_a_new_module_moves_into_the_created_layer() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module gamma {\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let created_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    ref_id: Some(ref_id),
+                    layer_type,
+                    ..
+                } if layer_type.as_deref() == Some("Module") => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("the new module layer is created");
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some(created_ref))]
+        );
+    }
+
+    #[test]
+    fn an_anchored_event_written_in_another_module_moves_with_its_body() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(
+                vec!["event".to_string(), "log".to_string()],
+                Some("mod-b".to_string())
+            )]
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::RemoveNode { .. } | BoardCommand::AddNode { .. }
+            )),
+            "a cross-module event move must not recreate the event: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_event_moved_to_the_root_takes_its_body_along() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "start() {   //@n:event\n    log()   //@n:log\n}\n\nmodule alpha {   //@l:mod-a\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["event".to_string(), "log".to_string()], None)]
+        );
+    }
+
+    #[test]
+    fn a_pure_source_shared_between_two_events_stays_behind_on_a_move() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        event_with_log_in_module(&mut board, "event2", "log2", Some("mod-a"));
+
+        // A pure node (no exec pins) feeding both logs' text inputs, plus one feeding only the
+        // moved event's log.
+        for (id, consumers) in [("shared", vec!["log", "log2"]), ("solo", vec!["log"])] {
+            let mut source = Node::new("make_text", "Make Text", "", "data");
+            source.id = id.to_string();
+            source.layer = Some("mod-a".to_string());
+            let out_pin = source
+                .add_output_pin("value", "Value", "", VariableType::String)
+                .id
+                .clone();
+            board.nodes.insert(source.id.clone(), source);
+            for consumer in consumers {
+                let text_pin_id = board
+                    .nodes
+                    .get(consumer)
+                    .expect("consumer")
+                    .pins
+                    .values()
+                    .find(|pin| pin.name == "text")
+                    .expect("text pin")
+                    .id
+                    .clone();
+                board
+                    .nodes
+                    .get_mut(consumer)
+                    .expect("consumer")
+                    .pins
+                    .get_mut(&text_pin_id)
+                    .expect("text pin")
+                    .depends_on
+                    .insert(out_pin.clone());
+                board
+                    .nodes
+                    .get_mut(id)
+                    .expect("source")
+                    .pins
+                    .get_mut(&out_pin)
+                    .expect("out pin")
+                    .connected_to
+                    .insert(text_pin_id);
+            }
+        }
+        module_layer(&mut board, "mod-b", "Beta", None);
+
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        // Move the first event's block from alpha into beta by reparsing and relocating it.
+        let mut ast = flow_like_ast::parse(&text).expect("rendered board parses");
+        // The render derives `use <category>::*` lines from node categories; the empty test
+        // catalog knows no namespaces, and unknown-namespace diagnostics are not under test.
+        ast.uses.clear();
+        let alpha = ast
+            .modules
+            .iter()
+            .position(|module| module.anchor.as_deref() == Some("mod-a"))
+            .expect("alpha block");
+        let event_index = ast.modules[alpha]
+            .events
+            .iter()
+            .position(|event| event.anchor.as_deref() == Some("event"))
+            .expect("moved event");
+        let event = ast.modules[alpha].events.remove(event_index);
+        let beta = ast
+            .modules
+            .iter()
+            .position(|module| module.anchor.as_deref() == Some("mod-b"))
+            .expect("beta block");
+        ast.modules[beta].events.push(event);
+
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let moves = move_commands(&result);
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        let (ids, target) = &moves[0];
+        assert_eq!(target.as_deref(), Some("mod-b"));
+        assert!(ids.contains(&"event".to_string()), "{ids:?}");
+        assert!(ids.contains(&"log".to_string()), "{ids:?}");
+        assert!(
+            ids.contains(&"solo".to_string()),
+            "an exclusive pure source travels with its event: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"shared".to_string()),
+            "a source shared with another event stays behind: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"event2".to_string()) && !ids.contains(&"log2".to_string()),
+            "the other event must not move: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn a_module_unaware_document_moves_nothing_in_either_mode() {
+        // Typed Flow IR cannot express `module` wrappers, and a full rewrite that lost every
+        // wrapper is corrupt, not a restructuring: neither may relocate anchored sections.
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let ast = flow_like_ast::parse(
+            "start() {   //@n:event\n    log()   //@n:log\n}\n\nfunction helper() {   //@l:fn-1\n}\n",
+        )
+        .expect("wrapper-less source parses");
+        for mode in [ReconcileMode::Additive, ReconcileMode::Replace] {
+            let result = reconcile_with_catalog_mode(&board, &ast, &[], mode);
+            assert!(
+                result.diagnostics.is_empty(),
+                "{mode:?}: {:?}",
+                result.diagnostics
+            );
+            assert!(
+                move_commands(&result).is_empty(),
+                "a module-unaware document must not relocate anchored sections ({mode:?}): {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn a_module_aware_additive_document_still_moves() {
+        // FlowPilot's write_flowscript drafts default to additive; a retained full document that
+        // kept its `module` wrappers is module-aware and may restructure.
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let ast = flow_like_ast::parse(
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+        )
+        .expect("module-aware source parses");
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+    }
+
+    #[test]
+    fn a_function_move_into_an_occupied_name_is_refused() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut moving = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        moving.parent_id = Some("mod-a".to_string());
+        board.layers.insert(moving.id.clone(), moving);
+        let mut occupant = Layer::new(
+            "fn-2".to_string(),
+            "Helper".to_string(),
+            LayerType::Function,
+        );
+        occupant.parent_id = Some("mod-b".to_string());
+        board.layers.insert(occupant.id.clone(), occupant);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("cannot move")
+                    && diagnostic.contains("fn-2")),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            move_commands(&result).is_empty(),
+            "an occupied destination refuses the move: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_grouped_event_body_moves_its_collapsed_container_intact() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut group = Layer::new("grp".to_string(), "Group".to_string(), LayerType::Collapsed);
+        group.parent_id = Some("mod-a".to_string());
+        board.layers.insert(group.id.clone(), group);
+        board.nodes.get_mut("log").expect("log node exists").layer = Some("grp".to_string());
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(
+                vec!["event".to_string(), "grp".to_string()],
+                Some("mod-b".to_string())
+            )],
+            "the grouping layer moves; its member nodes stay inside it"
+        );
+    }
+
+    #[test]
+    fn a_mixed_collapsed_group_stays_behind_on_an_event_move() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut group = Layer::new("grp".to_string(), "Group".to_string(), LayerType::Collapsed);
+        group.parent_id = Some("mod-a".to_string());
+        board.layers.insert(group.id.clone(), group);
+        board.nodes.get_mut("log").expect("log node exists").layer = Some("grp".to_string());
+        // A foreign node in the same group that is no part of the moving event.
+        let mut foreign = Node::new("string_trim", "Trim", "", "utils");
+        foreign.id = "foreign".to_string();
+        foreign.layer = Some("grp".to_string());
+        foreign.add_input_pin("string", "String", "", VariableType::String);
+        board.nodes.insert(foreign.id.clone(), foreign);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["event".to_string()], Some("mod-b".to_string()))],
+            "a group holding foreign nodes stays behind with its contents"
+        );
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("grp")),
+            "{:?}",
+            result.corrections
+        );
     }
 }

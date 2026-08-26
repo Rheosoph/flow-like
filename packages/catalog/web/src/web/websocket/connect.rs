@@ -7,9 +7,11 @@ use flow_like::flow::execution::{
     LogLevel, context::ExecutionContext, egress, internal_node::InternalNode, log::LogMessage,
 };
 
+#[cfg(feature = "execute")]
+use flow_like::flow::pin::PinType;
 use flow_like::flow::{
     node::{Node, NodeLogic},
-    pin::{PinOptions, PinType},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::async_trait;
