@@ -77,7 +77,7 @@
   <rect x="66" y="494" width="322" height="214" rx="22" fill="#f8eee8" stroke="#9d311f" stroke-width="3"/>
   <text x="227" y="552" text-anchor="middle" class="sans eyebrow" fill="#9d311f">ATOMIC APPLY</text>
   <text x="227" y="604" text-anchor="middle" class="sans small" fill="#3f3b40">Stage, validate, then commit</text>
-  <text x="227" y="646" text-anchor="middle" class="sans small" fill="#3f3b40">Failure attempts rollback</text>
+  <text x="227" y="646" text-anchor="middle" class="sans small" fill="#3f3b40">Failed attempts roll back</text>
   <text x="227" y="680" text-anchor="middle" class="sans small" fill="#3f3b40">and leaves a visible error</text>
 
   <path d="M 984 318 L 984 370 L 1280 370 L 1280 416" class="arrow"/>

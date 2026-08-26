@@ -35,7 +35,7 @@
   <text x="600" y="223" class="sans small" fill="#625e66">Project boundary for one or more Flows</text>
   <rect x="600" y="260" width="432" height="178" rx="18" fill="#f7f3ef" stroke="#9d311f" stroke-width="3"/>
   <text x="632" y="310" class="sans eyebrow" fill="#9d311f">FLOW</text>
-  <text x="632" y="348" class="sans small" fill="#625e66">One executable workflow</text>
+  <text x="632" y="348" class="sans small" fill="#625e66">One executable process</text>
   <rect x="632" y="370" width="368" height="48" rx="12" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
   <text x="816" y="402" text-anchor="middle" class="sans micro" fill="#18171b">PERSISTED BOARD</text>
   <text x="816" y="478" text-anchor="middle" class="sans small" fill="#625e66">App Events  |  data  |  permissions  |  versions</text>
