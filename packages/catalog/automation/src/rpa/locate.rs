@@ -25,6 +25,7 @@ impl NodeLogic for LocateByTemplateNode {
             "Finds an element on screen using template matching",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "locateTemplate");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -145,6 +146,7 @@ impl NodeLogic for LocateByColorNode {
             "Finds a pixel on screen matching a specific color",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "locateColor");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

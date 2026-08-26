@@ -1,0 +1,181 @@
+// Evening courier shift planner: pin the depot, draw an H3 service-area fence around it,
+// index every scheduled stop into that fence at two resolutions, and rank the stops by the
+// real bike distance rather than by the crow-flies hexagon count.
+use log::{ info, warn }
+
+interface ServiceStop {
+    label: string;
+    query: string;
+    dwell_minutes?: int = 10;
+}
+
+interface DistrictPlan {
+    name: string;
+    stops: ServiceStop[];
+}
+
+interface StopReport {
+    label: string;
+    district: string;
+    stop_cell: string;
+    fence_cell: string;
+    inside_fence: bool;
+    ring_offset: int;
+    detour_km: float;
+    drive_minutes: float;
+}
+
+@description("Address the courier fleet starts and ends every shift at")
+@category("Geo/Fence")
+const depotAddress: string = "Ostbahnhof, Berlin"
+
+@description("H3 resolution the service-area fence is drawn at")
+@category("Geo/Fence")
+const fenceResolution: int = 7
+
+@description("H3 resolution every individual stop is indexed at")
+@category("Geo/Fence")
+const stopResolution: int = 9
+
+@description("Rings of hexagons around the depot cell that still count as in-area")
+@category("Geo/Fence")
+let fenceRings: int = 2
+
+@description("Stops of the evening shift, grouped by district")
+@category("Geo/Fence")
+const coverage: DistrictPlan[] = [{"name":"Mitte","stops":[{"label":"Rosenthaler Platz","query":"Rosenthaler Platz, Berlin","dwell_minutes":20},{"label":"Hackescher Markt","query":"Hackescher Markt, Berlin","dwell_minutes":15}]},{"name":"Kreuzberg","stops":[{"label":"Kottbusser Tor","query":"Kottbusser Tor, Berlin","dwell_minutes":25},{"label":"Schlesisches Tor","query":"Schlesisches Tor, Berlin","dwell_minutes":30}]}]
+
+@description("Fence cell key -> the stop report that was last indexed into that cell")
+@category("Geo/Fence")
+let fenceIndex: Map<string, StopReport> = {}
+
+@description("Every stop report produced by the current run")
+@category("Geo/Fence")
+let stopReports: StopReport[] = []
+
+@description("Bike detour of every reachable stop, in kilometres")
+@category("Geo/Fence")
+let detourKilometres: float[] = []
+
+@description("Coordinates of the stops that were geocoded successfully")
+@category("Geo/Fence")
+let stopCoordinates: Struct[] = []
+
+function fenceKey(district: string, cell: string): (key: string) {
+    return `${district}/${cell}`
+}
+
+function indexStop(coordinate: Struct, stopRes: int, fenceRes: int): (stopCell: string, fenceCell: string) {
+    const stopCell = h3::latlngToCell({ coordinate: coordinate, resolution: stopRes })
+    const { parent } = h3::cellToParent({ cell: stopCell, parentResolution: fenceRes })
+    return stopCell, parent
+}
+
+function fenceFootprint(cells: string[], resolution: int): (cellAreaKm2: float, cellCount: int, edgeKm: float) {
+    const cellCount = array::length({ array: cells })
+    const { element: originCell } = array::get({ arrayIn: cells, index: 0 })
+    const { area } = h3::cellArea({ cell: originCell, unit: "SquareKilometers" })
+    const { edgeLength } = h3::edgeLength({ resolution: resolution, unit: "Kilometers" })
+    const cellAreaKm2 = area.round(3)
+    const edgeKm = edgeLength.round(3)
+    return cellAreaKm2, cellCount, edgeKm
+}
+
+function describeStop(stop: ServiceStop, district: string): (headline: string) {
+    return `${district} / ${stop.label}`
+}
+
+eventsSimple recomputeServiceArea() {
+    const depotLookup = geo::searchLocation({ query: depotAddress, limit: 1, countryCodes: "de" })
+    depotLookup {
+        execSuccess: {
+            const { value: depotCoordinate } = struct::get({ struct: depotLookup.firstResult, field: "coordinate" })
+            const depotCell = h3::latlngToCell({ coordinate: depotCoordinate, resolution: fenceResolution })
+            const { cells: fenceCells, count: fenceCellCount } = h3::gridDisk({ cell: depotCell, k: fenceRings })
+            const { cellAreaKm2, cellCount, edgeKm } = fenceFootprint(fenceCells, fenceResolution)
+            const { compacted, compactedCount } = h3::compactCells({ cells: fenceCells })
+            info({ message: `fence ${depotCell}: ${cellCount} cells (${compactedCount} compacted), ${cellAreaKm2} km2 each, ${edgeKm} km edge`, toast: false })
+
+            for (const district of coverage) {
+                const districtName = district.name
+                for (const [slot, stop] of district.stops) {
+                    const headline = describeStop(stop, districtName)
+                    const stopLookup = geo::searchLocation({ query: stop.query, limit: 1, countryCodes: "de" })
+                    stopLookup {
+                        execSuccess: {
+                            const { value: stopCoordinate } = struct::get({ struct: stopLookup.firstResult, field: "coordinate" })
+                            const { stopCell, fenceCell } = indexStop(stopCoordinate, stopResolution, fenceResolution)
+                            const insideFence = fenceCells.includes({ value: fenceCell })
+                            const ringOffset = h3::gridDistance({ cellA: depotCell, cellB: fenceCell })
+                            const leg = geo::planRoute({ start: depotCoordinate, end: stopCoordinate, profile: "Bike", alternatives: false })
+                            leg {
+                                execSuccess: {
+                                    const detourKm = leg.distance.divide(1000.0).round(2)
+                                    const driveMinutes = leg.duration.divide(60.0).round(1)
+                                    const report = struct::make()
+                                        .set("label", headline)
+                                        .set("district", districtName)
+                                        .set("slot", slot)
+                                        .set("stop_cell", stopCell)
+                                        .set("fence_cell", fenceCell)
+                                        .set("inside_fence", insideFence)
+                                        .set("ring_offset", ringOffset)
+                                        .set("detour_km", detourKm)
+                                        .set("drive_minutes", driveMinutes)
+                                    stopReports = stopReports.push({ value: report })
+                                    detourKilometres = detourKilometres.push({ value: detourKm })
+                                    stopCoordinates = stopCoordinates.push({ value: stopCoordinate })
+                                    fenceIndex = map::set({ mapIn: fenceIndex, key: fenceKey(districtName, fenceCell), value: report })
+                                    if (insideFence) {
+                                        info({ message: `${headline} is in-area: ${detourKm} km / ${driveMinutes} min`, toast: false })
+                                    } else {
+                                        warn({ message: `${headline} sits ${ringOffset} rings outside the fence`, toast: false })
+                                    }
+                                }
+                                execError: {
+                                    warn({ message: `no bike route from the depot to ${headline}`, toast: false })
+                                }
+                            }
+                        }
+                        execError: {
+                            warn({ message: `could not geocode ${stop.query}`, toast: false })
+                        }
+                    }
+                }
+            }
+
+            const rankedDetours = detourKilometres.sort({ descending: false, compare: "Number", nulls: "Last" })
+            const { result: medianDetour } = float::median({ floats: rankedDetours })
+            const { result: worstDetour, empty: noDetours } = float::maxOf({ floats: rankedDetours })
+            const { element: nearestDetour } = array::get({ arrayIn: rankedDetours, index: 0 })
+            const indexedCells = map::size({ mapIn: fenceIndex })
+            const { value: depotNeighbour, found: depotOccupied } = fenceIndex.get(fenceKey("Mitte", depotCell))
+            if (depotOccupied) {
+                const { value: neighbourLabel } = struct::get({ struct: depotNeighbour, field: "label" })
+                info({ message: `the depot hexagon is already served by ${neighbourLabel}`, toast: false })
+            }
+
+            if (noDetours) {
+                warn({ message: "not a single stop of the evening shift could be routed", toast: true })
+            } else {
+                const spread = worstDetour.subtract(nearestDetour).round(2)
+                info({ message: `${indexedCells} fence cells indexed, median ${medianDetour} km, spread ${spread} km over ${fenceCellCount} candidate cells`, toast: false })
+            }
+
+            const shiftLoop = geo::osrmTrip({ coordinates: stopCoordinates, profile: "Bike", roundtrip: true })
+            shiftLoop {
+                execSuccess: {
+                    const loopKm = shiftLoop.distance.divide(1000.0).round(2)
+                    const loopMinutes = shiftLoop.duration.divide(60.0).round(1)
+                    info({ message: `closed shift loop: ${loopKm} km in ${loopMinutes} min`, toast: false })
+                }
+                execError: {
+                    warn({ message: "OSRM refused to close the shift loop", toast: false })
+                }
+            }
+        }
+        execError: {
+            warn({ message: `depot ${depotAddress} could not be geocoded`, toast: true })
+        }
+    }
+}

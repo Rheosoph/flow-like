@@ -1,0 +1,21 @@
+// BUG: a function-local `let name: Type = <literal>` is never CREATED when the text is applied
+// to an empty board, so every read of it fails to resolve and the declaration silently vanishes.
+//
+// `reconcile.rs::register_local_variable_decl` resolves the declaration to a variable id by
+// anchor, else by name against `self.existing` layers/variables, and returns early when nothing
+// matches — no `UpsertVariable` command is ever planned for a NEW local. The symbol table
+// therefore never learns the name, so `counter` is an unknown value everywhere below.
+//
+// Board -> text renders these declarations (see `function filterSources` in
+// tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow: `let elements: Elements[] = []`), so text -> board
+// cannot round-trip its own output for any board that uses a layer-scoped variable.
+//
+// Top-level globals are unaffected: the same counter hoisted to `let counter = 0` at file scope
+// reconciles cleanly, which is the only available workaround.
+use log::{ info }
+
+eventsSimple functionLocalCounter() {
+    let counter: int = 0
+    counter = counter + 1
+    info({ message: counter, toast: false })
+}

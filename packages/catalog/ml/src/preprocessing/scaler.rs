@@ -7,9 +7,11 @@
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array2_f64};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -18,9 +20,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -49,6 +52,7 @@ impl NodeLogic for FitFeatureScalerNode {
             "Learn per-feature offsets and scales from a training table. Distance- and gradient-based models (Logistic Regression, Elastic Net, SVM, KNN, Gaussian Mixture) only behave when their features share a scale.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "fitFeatureScaler");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -288,7 +292,6 @@ impl NodeLogic for FitFeatureScalerNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

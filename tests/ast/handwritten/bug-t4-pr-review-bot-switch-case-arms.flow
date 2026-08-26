@@ -1,0 +1,33 @@
+// BUG: `control::switch` case arms cannot be wired from text — only `default` resolves.
+//
+// `Switch`'s `on_update` mints one execution OUTPUT pin per case, named `case_<sanitized>`
+// (packages/catalog/std/src/control/switch.rs), and `control_switch` is listed in
+// `flow::node::mints_pins_on_update`, whose doc says "the FlowScript reconciler predicts them
+// instead of reporting an unknown pin". It does not: reconcile's prediction machinery
+// (`dynamic_placeholder_config_pin` / `dynamic_template_placeholders`) only ever predicts dynamic
+// INPUT pins, and branch-arm resolution matches arm labels against the STATIC catalog exec
+// outputs, which for `control_switch` are just `default`.
+//
+// So every case arm is dropped with "its body was not wired", and a switch authored from text
+// can only ever take the default branch. Diagnostic:
+//   branch arm label `caseClean` does not match an execution output on `$1`
+//   (available execution outputs: default); its body was not wired
+use log::{ info }
+
+eventsSimple switchOverRiskBand() {
+    const routed = control::switch({ value: "advisory", cases: "clean,advisory,blocking" })
+    routed {
+        caseClean: {
+            info({ message: "no findings", toast: false })
+        }
+        caseAdvisory: {
+            info({ message: "comment only", toast: false })
+        }
+        caseBlocking: {
+            info({ message: "request changes", toast: false })
+        }
+        default: {
+            info({ message: "unknown band", toast: false })
+        }
+    }
+}

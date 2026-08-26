@@ -26,6 +26,7 @@ impl NodeLogic for ResponseFromStringNode {
             "Wraps a plain string into a synthetic LLM response object for downstream tooling.",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "fromString");
         node.add_icon("/flow/icons/history.svg");
 
         // Local synthetic helper, no external calls: very good privacy, security and reliability, low cost.

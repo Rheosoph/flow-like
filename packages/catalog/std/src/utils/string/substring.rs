@@ -39,6 +39,8 @@ impl NodeLogic for StringSubstringNode {
             "Extracts a range of characters from a string. Negative start counts from the end, length -1 runs to the end.",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "substring");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -101,6 +103,8 @@ impl NodeLogic for StringTruncateNode {
             "Shortens a string to a maximum number of characters, appending an ellipsis when it was cut",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "truncate");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 
@@ -181,6 +185,8 @@ impl NodeLogic for StringSplitAtNode {
             "Splits a string into two halves at a character index",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "splitAt");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 

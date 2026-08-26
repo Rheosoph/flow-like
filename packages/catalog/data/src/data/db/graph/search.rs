@@ -29,6 +29,8 @@ impl NodeLogic for GraphSearchNode {
             "Searches objects by caption or identifier across the whole graph overlay",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "search");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -74,7 +76,7 @@ impl NodeLogic for GraphSearchNode {
             VariableType::Struct,
         )
         .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<flow_like_storage::databases::graph::SubgraphNode>();
+        .set_schema::<flow_like_storage_contracts::graph::SubgraphNode>();
 
         node
     }

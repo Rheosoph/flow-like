@@ -4,6 +4,7 @@ import {
 	ChevronDown,
 	ChevronUp,
 	Eye,
+	FileCode2,
 	Layers,
 	MessageCircle,
 	MousePointerClick,
@@ -47,6 +48,8 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 	onJumpToLayer,
 	onOpenChat,
 	unreadCount,
+	peerScopes,
+	onJoinScope,
 }: {
 	peers: PeerPresence[];
 	peerUsers: Map<string, PeerUserInfo>;
@@ -58,6 +61,10 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 	onJumpToLayer: (layerPath: string) => void;
 	onOpenChat?: () => void;
 	unreadCount?: number;
+	/** Peers' shared FlowScript scope node ids, keyed by sub. */
+	peerScopes?: Map<string, string[]>;
+	/** Join a peer's shared scope (opens the FlowScript panel on those nodes). */
+	onJoinScope?: (nodeIds: string[]) => void;
 }) {
 	const { t } = useTranslation("flow");
 	const [expanded, setExpanded] = useState(false);
@@ -183,6 +190,15 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 												})}
 											</span>
 										)}
+										{peer.sub && peerScopes?.has(peer.sub) && (
+											<span className="text-muted-foreground">
+												<FileCode2 className="h-3 w-3 inline mr-0.5" />
+												{t(
+													"flowscriptSharingCodeScope",
+													"Sharing a code scope",
+												)}
+											</span>
+										)}
 										{isFollowing ? (
 											<span className="text-primary font-medium">
 												{t("followingClickToStop", "Following — click to stop")}
@@ -277,6 +293,8 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 					onToggleFollow={onToggleFollow}
 					onJumpToUser={onJumpToUser}
 					onJumpToLayer={onJumpToLayer}
+					peerScopes={peerScopes}
+					onJoinScope={onJoinScope}
 				/>
 			)}
 		</div>
@@ -292,6 +310,8 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 	onToggleFollow,
 	onJumpToUser,
 	onJumpToLayer,
+	peerScopes,
+	onJoinScope,
 }: {
 	peers: PeerPresence[];
 	peerUsers: Map<string, PeerUserInfo>;
@@ -301,6 +321,8 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 	onToggleFollow: (sub: string) => void;
 	onJumpToUser: (sub: string) => void;
 	onJumpToLayer: (layerPath: string) => void;
+	peerScopes?: Map<string, string[]>;
+	onJoinScope?: (nodeIds: string[]) => void;
 }) {
 	const { t } = useTranslation("flow");
 	const grouped = useMemo(() => {
@@ -373,6 +395,10 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 									followingSub={followingSub}
 									onToggleFollow={onToggleFollow}
 									onJumpToUser={onJumpToUser}
+									scopeNodeIds={
+										peer.sub ? peerScopes?.get(peer.sub) : undefined
+									}
+									onJoinScope={onJoinScope}
 								/>
 							))}
 						</div>
@@ -389,12 +415,17 @@ const CollaboratorRow = memo(function CollaboratorRow({
 	followingSub,
 	onToggleFollow,
 	onJumpToUser,
+	scopeNodeIds,
+	onJoinScope,
 }: {
 	peer: PeerPresence;
 	peerUsers: Map<string, PeerUserInfo>;
 	followingSub?: string;
 	onToggleFollow: (sub: string) => void;
 	onJumpToUser: (sub: string) => void;
+	/** Node ids of this peer's shared FlowScript scope, when they broadcast one. */
+	scopeNodeIds?: string[];
+	onJoinScope?: (nodeIds: string[]) => void;
 }) {
 	const { t } = useTranslation("flow");
 	const userInfo = peer.sub ? peerUsers.get(peer.sub) : undefined;
@@ -438,6 +469,22 @@ const CollaboratorRow = memo(function CollaboratorRow({
 			</div>
 			<div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
 				<TooltipProvider delayDuration={100}>
+					{onJoinScope && scopeNodeIds && scopeNodeIds.length > 0 && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={() => onJoinScope(scopeNodeIds)}
+									className="p-1 rounded hover:bg-muted/60 transition-colors cursor-pointer"
+								>
+									<FileCode2 className="h-3 w-3 text-muted-foreground" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="left" className="text-xs">
+								{t("flowscriptJoinScope", "Join code scope")}
+							</TooltipContent>
+						</Tooltip>
+					)}
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<button

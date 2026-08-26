@@ -12,8 +12,8 @@ base64.workspace = true
 # and local model weights into the image; on Azure and GCP every ML node reaches
 # a remote endpoint (`remote-ml`), and the supply-chain posture of both ports is
 # that no inference runtime ships in a serving image.
-flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
-flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
+flow-like-executor = { workspace = true, features = ["server"] }
 # Only `metadata::ensure_no_forbidden_credential_env` is used. The executor
 # holds no Google credential of its own, but a keyless `credentials` block in a
 # request falls through to object_store's credential chain and the metadata

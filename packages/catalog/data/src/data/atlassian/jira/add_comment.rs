@@ -29,6 +29,7 @@ impl NodeLogic for AddJiraCommentNode {
             "Add a comment to a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "addComment");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

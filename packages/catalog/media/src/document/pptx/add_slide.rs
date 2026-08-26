@@ -8,7 +8,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -29,6 +31,7 @@ impl NodeLogic for PptxAddSlideNode {
             "Add a blank slide to a PPTX presentation.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addSlide");
         node.add_icon("/flow/icons/file.svg");
         node.set_scores(
             NodeScores::new()

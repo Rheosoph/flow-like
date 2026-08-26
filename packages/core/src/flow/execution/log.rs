@@ -1,3 +1,4 @@
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::{
     arrow_array::RecordBatch,
     lancedb::arrow::arrow_schema::FieldRef,
@@ -6,6 +7,7 @@ use flow_like_storage::{
         schema::{SchemaLike, TracingOptions},
     },
 };
+#[cfg(feature = "flow-runtime")]
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ use std::time::SystemTime;
 
 use super::LogLevel;
 
+#[cfg(feature = "flow-runtime")]
 static STORED_LOG_MESSAGE_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     Vec::<FieldRef>::from_type::<StoredLogMessage>(
         TracingOptions::default().allow_null_fields(true),
@@ -20,6 +23,7 @@ static STORED_LOG_MESSAGE_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     .expect("derive FieldRef for StoredLogMessage")
 });
 
+#[cfg(feature = "flow-runtime")]
 pub fn into_arrow<I>(logs: I) -> flow_like_types::Result<RecordBatch>
 where
     I: IntoIterator<Item = LogMessage>,
@@ -142,6 +146,7 @@ impl LogMessage {
         self.end = SystemTime::now();
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn into_arrow<I>(logs: I) -> flow_like_types::Result<RecordBatch>
     where
         I: IntoIterator<Item = LogMessage>,

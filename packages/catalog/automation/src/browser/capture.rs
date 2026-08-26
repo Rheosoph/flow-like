@@ -26,6 +26,7 @@ impl NodeLogic for BrowserScreenshotNode {
             "Takes a screenshot of the current page",
             "Automation/Browser/Capture",
         );
+        node.set_flowscript_name("browser", "screenshot");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -148,6 +149,7 @@ impl NodeLogic for BrowserScreenshotElementNode {
             "Takes a screenshot of a specific element",
             "Automation/Browser/Capture",
         );
+        node.set_flowscript_name("browser", "screenshotElement");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

@@ -1,10 +1,14 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 use super::NodeDBConnection;
 
@@ -27,6 +31,8 @@ impl NodeLogic for FlushLocalDatabaseNode {
             "Flush any buffered writes to storage immediately",
             "Data/Database/Optimization",
         );
+        node.set_flowscript_name("db", "flush");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -57,6 +63,7 @@ impl NodeLogic for FlushLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
@@ -75,5 +82,12 @@ impl NodeLogic for FlushLocalDatabaseNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

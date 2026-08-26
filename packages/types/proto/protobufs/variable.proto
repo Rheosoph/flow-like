@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package flow_like_types;
+
+message Variable {
+    string id = 1;
+    string name = 2;
+    string category = 3;
+    string description = 4;
+    bytes default_value = 5;
+    VariableType data_type = 6;
+    ValueType value_type = 7;
+    bool exposed = 8;
+    bool secret = 9;
+    bool editable = 10;
+    optional uint64 hash = 11;
+    optional string schema = 12;
+    bool runtime_configured = 13;
+}
+
+enum VariableType {
+    EXECUTION = 0;
+    STRING = 1;
+    INTEGER = 2;
+    FLOAT = 3;
+    BOOLEAN = 4;
+    DATE = 5;
+    PATH_BUF = 6;
+    GENERIC = 7;
+    STRUCT = 8;
+    BYTE = 9;
+}
+
+enum ValueType {
+    ARRAY = 0;
+    NORMAL = 1;
+    HASH_MAP = 2;
+    HASH_SET = 3;
+}

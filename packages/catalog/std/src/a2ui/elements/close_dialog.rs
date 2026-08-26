@@ -24,6 +24,7 @@ impl NodeLogic for CloseDialog {
             "Closes an open dialog. If no dialog ID is specified, closes the topmost dialog.",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "closeDialog");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

@@ -31,9 +31,11 @@ api.config.json
 flow-like.azure.config.json
 **/flow-like.azure.config.json
 .cargo/config
-.cargo/config.toml
 **/.cargo/config
+# Keep per-example Cargo overrides out of backend build contexts, while
+# allowing the reviewed repository-wide configuration added below.
 **/.cargo/config.toml
+!.cargo/config.toml
 **/values-secrets.yaml
 **/values-secret*.yaml
 **/values-secrets.yml
@@ -69,6 +71,5 @@ api.config.json
 **/api.config.json
 *.pem
 **/*.pem
-.cargo/config.toml
 **/values-secrets.yml
 **/values-secret*.yml

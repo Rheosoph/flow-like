@@ -7,7 +7,7 @@
 
 use flow_like_storage::Path as FlowPath;
 use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
+use flow_like_wasm_schema::manifest::{PackageManifest, PackageNodeEntry};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use utoipa::ToSchema;

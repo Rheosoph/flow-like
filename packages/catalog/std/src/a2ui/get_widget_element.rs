@@ -30,6 +30,7 @@ impl NodeLogic for GetWidgetElement {
             "Resolves an element inside a widget instance (from Instantiate Widget). The output plugs into any element node (Set Element Value, Update GeoMap, Push CSV To Chart, …).",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "widgetGetElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -1,43 +1,11 @@
-// prost emits one oneof variant per component / page-content kind; their sizes differ by
-// design and the file is regenerated on every build, so the allow has to live at the include.
-#[allow(clippy::large_enum_variant)]
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/flow_like_types.rs"));
-}
-
-pub trait ToProto<T> {
-    fn to_proto(&self) -> T;
-}
-
-pub trait FromProto<T> {
-    fn from_proto(proto: T) -> Self;
-}
-
-pub trait Cacheable: Any + Send + Sync {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-impl dyn Cacheable {
-    pub fn downcast_ref<T: Cacheable>(&self) -> Option<&T> {
-        self.as_any().downcast_ref::<T>()
-    }
-
-    pub fn downcast_mut<T: Cacheable>(&mut self) -> Option<&mut T> {
-        self.as_any_mut().downcast_mut::<T>()
-    }
-}
-
-pub type Timestamp = prost_types::Timestamp;
-
-use std::any::Any;
+pub use flow_like_types_contracts::{Cacheable, OAuthTokenInput, PROXY_EVENT_AUTHORIZATION_HEADER};
+pub use flow_like_types_proto::{FromProto, Message, Timestamp, ToProto, proto};
 
 pub use anyhow::{Context, Error, Ok, Result, anyhow, bail};
 pub use async_trait::async_trait;
 pub use base64;
 pub use cuid2::create_id;
 pub use mime_guess;
-pub use prost::Message;
 pub use reqwest;
 pub use reqwest_eventsource;
 pub use schemars::JsonSchema;
@@ -53,14 +21,9 @@ pub mod json {
     };
 }
 
-pub mod dispatch;
-
-/// Header carrying registration-level credentials on app-connection proxy
-/// requests, where `Authorization` is occupied by the app-connection bearer.
-/// Shared across the API proxy (which restores it to `Authorization` for the
-/// registration auth check) and the catalog nodes that send it, so a rename
-/// can never silently desynchronize producer and consumer.
-pub const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
+pub mod dispatch {
+    pub use flow_like_types_contracts::dispatch::*;
+}
 
 pub use bytes::Bytes;
 pub use tokio;
@@ -76,29 +39,25 @@ pub mod futures {
     pub use futures::StreamExt;
 }
 pub use async_stream;
-pub mod cache;
+pub mod cache {
+    pub use flow_like_types_contracts::cache::*;
+}
 pub mod frontend_request;
 pub mod interaction;
 pub mod intercom;
-pub mod maintenance;
+pub mod maintenance {
+    pub use flow_like_types_contracts::maintenance::*;
+}
 pub mod utils;
 
-/// OAuth token input for execution requests
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct OAuthTokenInput {
-    pub access_token: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
-}
-
+#[cfg(feature = "compat-reexports")]
 pub use ab_glyph;
 pub use image;
+#[cfg(feature = "compat-reexports")]
 pub use imageproc;
+#[cfg(feature = "compat-reexports")]
 pub use jsonschema;
 pub use minijinja;
 pub use regex;
+#[cfg(feature = "compat-reexports")]
 pub use rxing;

@@ -24,6 +24,8 @@ impl NodeLogic for StringContainsNode {
             "Checks if a string contains a substring",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "contains");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
 

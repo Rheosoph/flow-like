@@ -25,6 +25,8 @@ impl NodeLogic for BoolToIntNode {
             "Converts a boolean into 1 or 0",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "toInt");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -68,6 +70,8 @@ impl NodeLogic for BoolToStringNode {
             "Converts a boolean into text",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "toString");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -123,6 +127,7 @@ impl NodeLogic for IntToBoolNode {
             "Converts an integer into a boolean, zero is false",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "fromInt");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 

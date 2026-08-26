@@ -1,0 +1,33 @@
+// BUG: binding the DEFAULT output of a node that has more than one data output loses the
+// receiver's type, so every method call on that binding falls back to name-only lookup and is
+// rejected as ambiguous:
+//   `filled.get(...)` is ambiguous between `map::get`, `struct::get`, `array::get`;
+//   write the qualified form, for example `map::get({ mapIn: filled, ... })`
+//
+// `make_map.map_out` and `map_set.map_out` are declared identically —
+// `VariableType::Generic` + `ValueType::HashMap` (packages/catalog/std/src/utils/map/make.rs:34,
+// packages/catalog/std/src/utils/map/set.rs:44) — yet only the first one is understood as a map.
+// The difference is that `map_set` also exposes `replaced`, so its default-output binding is
+// resolved without a pin and the container type never reaches method resolution.
+//
+// Both workarounds below reconcile cleanly, which pins the cause down to the default-output
+// binding rather than to `map::set` itself:
+//   * naming the pin explicitly — `registry.set("k", "v").mapOut`
+//   * writing the qualified call — `map::get({ mapIn: filled, key: "k" })`
+// The same shape breaks for any multi-output node whose method name is shared across namespaces
+// (`array::pop(...).length()`, …).
+use log::{ info }
+
+eventsSimple broken() {
+    const registry = map::make()
+    const filled = registry.set("mitte", "8928308280fffff")
+    const { value, found } = filled.get("mitte")
+    info({ message: `${found} ${value}`, toast: false })
+}
+
+eventsSimple worksWithExplicitPin() {
+    const registry = map::make()
+    const filled = registry.set("mitte", "8928308280fffff").mapOut
+    const { value, found } = filled.get("mitte")
+    info({ message: `${found} ${value}`, toast: false })
+}

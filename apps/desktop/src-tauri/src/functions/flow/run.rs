@@ -4,6 +4,7 @@ use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::compiled::TemplateCache;
 use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
@@ -12,13 +13,14 @@ use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like::flow_like_storage::{Path, serde_arrow};
 use flow_like::hub::Hub;
-use flow_like::state::RunData;
+use flow_like::state::{FlowLikeState, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{json, tokio};
 use futures::TryStreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -216,7 +218,118 @@ fn daemon_sub_from_credentials(credentials: &SharedCredentials, app_id: &str) ->
     }
 }
 
+/// A run that dies in setup never reaches the flush that would have recorded
+/// it, so the attempt disappears from the board's history entirely. Record it
+/// the way a finished run is recorded, with the failure as its only log line.
+async fn record_setup_rejection(
+    flow_like_state: &Arc<FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+    event_id: Option<&str>,
+    node_id: &str,
+    version: Option<(u32, u32, u32)>,
+    payload: Option<&flow_like_types::Value>,
+    reason: String,
+) {
+    let mut rejection = RejectedRun::new(app_id, board_id, RejectionStage::Setup, reason)
+        .with_node(node_id)
+        .with_board_version(version)
+        .with_payload(payload);
+
+    // An event-triggered run learns its board and start node from the event, so
+    // recover them the same way here instead of recording against the caller's
+    // (often empty) board id.
+    if let Some(event_id) = event_id {
+        let execution_state = Arc::new(flow_like_state.for_execution_run());
+        match App::load(app_id.to_string(), execution_state).await {
+            Ok(app) => match app.get_event(event_id, None).await {
+                Ok(event) => rejection = rejection.with_event_definition(&event),
+                Err(_) => rejection = rejection.with_event(event_id, None),
+            },
+            Err(_) => rejection = rejection.with_event(event_id, None),
+        }
+    }
+
+    if rejection.board_id.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            event_id = event_id.unwrap_or(""),
+            "Run failed before its board could be identified; nothing to record"
+        );
+        return;
+    }
+
+    if let Err(error) = flow_like_state.record_rejected_run(&rejection).await {
+        tracing::warn!(
+            app_id = %app_id,
+            board_id = %rejection.board_id,
+            error = %error,
+            "Failed to record a run that never started"
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_internal(
+    app_handle: AppHandle,
+    app_id: String,
+    board_id: String,
+    payload: RunPayload,
+    requested_version: Option<(u32, u32, u32)>,
+    events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
+    event_id: Option<String>,
+    stream_state: bool,
+    credentials: Option<SharedCredentials>,
+    token: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    overrides: ExecutionOverrides,
+) -> Result<Option<LogMeta>, TauriFunctionError> {
+    let started = Arc::new(AtomicBool::new(false));
+    let app_handle_for_rejection = app_handle.clone();
+    let recorded_payload = payload.payload.clone();
+    let recorded_board_id = board_id.clone();
+    let recorded_event_id = event_id.clone();
+    let recorded_node_id = payload.id.clone();
+
+    let result = execute_prepared(
+        app_handle,
+        app_id.clone(),
+        board_id,
+        payload,
+        requested_version,
+        events,
+        event_id,
+        stream_state,
+        credentials,
+        token,
+        oauth_tokens,
+        overrides,
+        started.clone(),
+    )
+    .await;
+
+    if let Err(error) = &result
+        && !started.load(Ordering::Relaxed)
+        && let Ok(state) = TauriFlowLikeState::construct(&app_handle_for_rejection).await
+    {
+        record_setup_rejection(
+            &state,
+            &app_id,
+            &recorded_board_id,
+            recorded_event_id.as_deref(),
+            &recorded_node_id,
+            requested_version,
+            recorded_payload.as_ref(),
+            error.to_string(),
+        )
+        .await;
+    }
+
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_prepared(
     app_handle: AppHandle,
     app_id: String,
     mut board_id: String,
@@ -229,6 +342,7 @@ async fn execute_internal(
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     overrides: ExecutionOverrides,
+    started: Arc<AtomicBool>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
@@ -387,6 +501,7 @@ async fn execute_internal(
     );
 
     shared_flow_like_state.register_run(&run_id, run_data);
+    started.store(true, Ordering::Relaxed);
 
     let run_arc = internal_run.run.clone();
 

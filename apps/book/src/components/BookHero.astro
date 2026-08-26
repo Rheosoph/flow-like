@@ -1,0 +1,501 @@
+---
+import { Image } from "astro:assets";
+import { Icon } from "@astrojs/starlight/components";
+import DraftContentNotice from "@astrojs/starlight/components/DraftContentNotice.astro";
+import workflowCore from "../../../website/src/images/parallax/workflow-core.png";
+import { getBookContentStats } from "../lib/book-content";
+import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
+
+const { entry } = Astro.locals.starlightRoute;
+const { data } = entry;
+const isNotFound = entry.id === "404" || entry.id.endsWith("/404");
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+const edition = CURRENT_BOOK_EDITION;
+const { chapterCount } = await getBookContentStats();
+const chapterNoun = chapterCount === 1 ? "CHAPTER" : "CHAPTERS";
+const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
+const resolvedActions = actions.map((action) => ({
+	...action,
+	attrs:
+		action.link === "/flowbook.pdf"
+			? {
+					...action.attrs,
+					download: pdfFileName,
+					type: "application/pdf",
+				}
+			: action.attrs,
+}));
+---
+
+
+{
+	isNotFound ? (
+		<section class="flowbook-not-found" aria-labelledby="_top">
+			<p>404 · Page not found</p>
+			<h1 id="_top" data-page-title>That page left the graph.</h1>
+			<p>
+				The address may have changed, or the chapter may not be part of the open edition yet.
+			</p>
+			<div>
+				<a class="flowbook-button flowbook-button--primary" href="/">
+					<span>Return to FlowBook</span>
+					<Icon name="right-arrow" />
+				</a>
+				<a class="flowbook-button flowbook-button--minimal" href="/introduction/">
+					<span>Start the introduction</span>
+					<Icon name="open-book" />
+				</a>
+			</div>
+		</section>
+	) : (
+		<section class="flowbook-hero" aria-labelledby="_top">
+	<div class="flowbook-hero__grid" aria-hidden="true"></div>
+	<div class="flowbook-hero__glow" aria-hidden="true"></div>
+
+	<div class="flowbook-hero__inner">
+		<div class="flowbook-hero__copy">
+			<div class="flowbook-hero__status">
+				<i aria-hidden="true"></i>
+				<span>FLOW-LIKE DEVELOPER GUIDE</span>
+				<b>{edition.editionLabel.toUpperCase()}</b>
+			</div>
+
+			<h1 id="_top" data-page-title set:html={title} />
+			{data.draft && <DraftContentNotice />}
+			{tagline && <p class="flowbook-hero__tagline" set:html={tagline} />}
+
+			{
+				resolvedActions.length > 0 && (
+					<div class="flowbook-hero__actions">
+						{resolvedActions.map(({ attrs: { class: className, ...attrs } = {}, icon, link, text, variant }) => (
+							<a
+								class:list={[
+									"flowbook-button",
+									variant === "primary" && "flowbook-button--primary",
+									variant === "minimal" && "flowbook-button--minimal",
+									className,
+								]}
+								href={link}
+								{...attrs}
+							>
+								<span>{text}</span>
+								{icon?.name && <Icon name={icon.name} />}
+								{icon?.html && <Fragment set:html={icon.html} />}
+							</a>
+						))}
+					</div>
+				)
+			}
+
+			<div class="flowbook-hero__legend" aria-label="Current edition summary">
+				<span><b>01</b> INTRODUCTION</span>
+				<span><b>02</b> {chapterCount} {chapterNoun}</span>
+				<span><b>03</b> PDF + WEB</span>
+			</div>
+		</div>
+
+		<figure class="flowbook-hero__visual">
+			<Image
+				src={workflowCore}
+				alt="Flow-Like workflow graph and FlowScript editor shown side by side"
+				width={1440}
+				widths={[480, 720, 960, 1200, 1440]}
+				sizes="(max-width: 720px) 92vw, (max-width: 1200px) 54vw, 720px"
+				quality={86}
+				loading="eager"
+				fetchpriority="high"
+				decoding="async"
+			/>
+		</figure>
+	</div>
+		</section>
+	)
+}
+
+<script>
+	const root = document.documentElement;
+	const hero = document.querySelector<HTMLElement>(".flowbook-hero");
+
+	if (hero) {
+		const setHeaderTone = (heroIsVisible: boolean) => {
+			root.classList.toggle("flowbook-header-light", !heroIsVisible);
+		};
+
+		setHeaderTone(hero.getBoundingClientRect().bottom > 64);
+
+		const observer = new IntersectionObserver(
+			([entry]) => setHeaderTone(entry?.isIntersecting ?? false),
+			{ rootMargin: "-64px 0px 0px", threshold: 0 },
+		);
+		observer.observe(hero);
+	}
+</script>
+
+<style>
+	.flowbook-not-found {
+		min-height: calc(78svh - var(--sl-nav-height));
+		padding: clamp(6rem, 14vw, 11rem) clamp(1.5rem, 9vw, 8rem);
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		background:
+			radial-gradient(circle at 24% 32%, rgba(242, 64, 42, 0.2), transparent 28rem),
+			#0c0e13;
+		color: #f6f1ed;
+	}
+
+	.flowbook-not-found > p:first-child {
+		margin: 0 0 1rem;
+		font: 700 0.7rem/1.3 var(--flowbook-mono, ui-monospace, monospace);
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: #ff8066;
+	}
+
+	.flowbook-not-found h1 {
+		max-width: 12ch;
+		margin: 0;
+		font-size: clamp(3.2rem, 8vw, 7rem);
+		line-height: 0.92;
+		letter-spacing: -0.055em;
+		color: #f6f1ed;
+	}
+
+	.flowbook-not-found h1 + p {
+		max-width: 48rem;
+		margin: 1.5rem 0 0;
+		font-size: clamp(1rem, 2vw, 1.25rem);
+		line-height: 1.65;
+		color: #b8bac1;
+	}
+
+	.flowbook-not-found > div {
+		margin-top: 2rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+
+	.flowbook-hero,
+	.flowbook-hero * {
+		box-sizing: border-box;
+	}
+
+	.flowbook-hero {
+		--hero-ink: #f6f1ed;
+		--hero-muted: #9ca0aa;
+		--hero-border: rgba(255, 255, 255, 0.12);
+		position: relative;
+		isolation: isolate;
+		min-height: calc(100svh - var(--sl-nav-height));
+		display: grid;
+		align-items: center;
+		overflow: hidden;
+		padding: clamp(5rem, 9vw, 9rem) clamp(1.375rem, 7vw, 8.375rem) 2rem;
+		background:
+			radial-gradient(circle at 18% 34%, rgba(242, 64, 42, 0.22), transparent 28rem),
+			radial-gradient(circle at 86% 72%, rgba(252, 117, 35, 0.14), transparent 32rem),
+			#0c0e13;
+		color: var(--hero-ink);
+	}
+
+	.flowbook-hero::after {
+		position: absolute;
+		inset: 0;
+		z-index: -1;
+		background: linear-gradient(90deg, rgba(12, 14, 19, 0.38), transparent 44%, rgba(12, 14, 19, 0.2));
+		content: "";
+		pointer-events: none;
+	}
+
+	.flowbook-hero__grid {
+		position: absolute;
+		inset: 0;
+		z-index: -2;
+		opacity: 0.35;
+		background-image:
+			linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+		background-size: 72px 72px;
+		mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 78%, transparent);
+	}
+
+	.flowbook-hero__glow {
+		position: absolute;
+		top: -14rem;
+		right: 10%;
+		z-index: -1;
+		width: 34rem;
+		height: 34rem;
+		border-radius: 50%;
+		background: rgba(235, 52, 44, 0.12);
+		filter: blur(100px);
+	}
+
+	.flowbook-hero__inner {
+		width: min(100%, 104rem);
+		margin-inline: auto;
+		display: grid;
+		grid-template-columns: minmax(28rem, 0.82fr) minmax(34rem, 1.18fr);
+		gap: clamp(3rem, 6vw, 8rem);
+		align-items: center;
+	}
+
+	.flowbook-hero__copy {
+		position: relative;
+		z-index: 2;
+	}
+
+	.flowbook-hero__status {
+		margin-bottom: 2rem;
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+		font: 700 0.62rem/1 var(--flowbook-mono);
+		letter-spacing: 0.16em;
+		color: #ff7658;
+	}
+
+	.flowbook-hero__status i {
+		width: 0.38rem;
+		height: 0.38rem;
+		flex: 0 0 auto;
+		border-radius: 50%;
+		background: #ff5d3d;
+		box-shadow: 0 0 1rem rgba(255, 93, 61, 0.9);
+	}
+
+	.flowbook-hero__status b {
+		margin-left: auto;
+		color: rgba(246, 241, 237, 0.64);
+		font-weight: 500;
+	}
+
+	.flowbook-hero h1 {
+		max-width: 9.5ch;
+		margin: 0;
+		font-family: var(--flowbook-sans);
+		font-size: clamp(4rem, 7.3vw, 8.2rem);
+		font-weight: 690;
+		letter-spacing: -0.075em;
+		line-height: 0.86;
+		color: var(--hero-ink);
+	}
+
+	.flowbook-hero h1 :global(em) {
+		font-family: var(--flowbook-serif);
+		font-weight: 520;
+		font-style: italic;
+		letter-spacing: -0.055em;
+		background: linear-gradient(105deg, #ffb66d, #ff6547 50%, #ed3342);
+		background-clip: text;
+		-webkit-background-clip: text;
+		color: transparent;
+	}
+
+	.flowbook-hero__tagline {
+		max-width: 35rem;
+		margin: 2rem 0 0;
+		font-family: var(--flowbook-serif);
+		font-size: clamp(1.15rem, 1.6vw, 1.45rem);
+		line-height: 1.55;
+		color: var(--hero-muted);
+	}
+
+	.flowbook-hero__actions {
+		margin-top: 2.25rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+
+	.flowbook-button {
+		min-width: 12.75rem;
+		height: 3.4rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1.25rem;
+		padding: 0 1.1rem;
+		border: 1px solid var(--hero-border);
+		border-radius: 0.65rem;
+		background: rgba(255, 255, 255, 0.045);
+		backdrop-filter: blur(1rem);
+		font: 720 0.8rem/1 var(--flowbook-sans);
+		text-decoration: none;
+		color: var(--hero-ink);
+		transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+	}
+
+	.flowbook-button :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	.flowbook-button--primary {
+		border-color: transparent;
+		background: linear-gradient(105deg, #f24d2f, #f23743);
+		box-shadow: 0 1.25rem 3.5rem rgba(234, 57, 48, 0.24);
+		color: #18171b;
+	}
+
+	.flowbook-button--minimal {
+		min-width: auto;
+		padding-inline: 0.3rem;
+		border-color: transparent;
+		background: transparent;
+		backdrop-filter: none;
+		color: rgba(246, 241, 237, 0.76);
+	}
+
+	.flowbook-button:hover {
+		transform: translateY(-3px);
+		border-color: rgba(255, 255, 255, 0.26);
+		background: rgba(255, 255, 255, 0.1);
+		color: white;
+	}
+
+	.flowbook-button--primary:hover {
+		border-color: transparent;
+		background: linear-gradient(105deg, #ff6542, #f44550);
+		color: #18171b;
+	}
+
+	.flowbook-button--minimal:hover {
+		border-color: transparent;
+		background: transparent;
+		color: white;
+	}
+
+	.flowbook-button:focus-visible {
+		outline: 2px solid #ff7658;
+		outline-offset: 4px;
+	}
+
+	.flowbook-hero__legend {
+		margin-top: clamp(3rem, 8vh, 6.5rem);
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.7rem 1.3rem;
+		font: 600 0.52rem/1.2 var(--flowbook-mono);
+		letter-spacing: 0.12em;
+		color: rgba(246, 241, 237, 0.68);
+	}
+
+	.flowbook-hero__legend span {
+		display: flex;
+		gap: 0.42rem;
+	}
+
+	.flowbook-hero__legend b {
+		color: #ff7658;
+	}
+
+	.flowbook-hero__visual {
+		position: relative;
+		z-index: 1;
+		min-width: 0;
+		margin: 0;
+	}
+
+	.flowbook-hero__visual::before {
+		position: absolute;
+		inset: 10% -5% -8% 5%;
+		z-index: -1;
+		border-radius: 50%;
+		background: rgba(240, 59, 45, 0.2);
+		filter: blur(5rem);
+		content: "";
+	}
+
+	.flowbook-hero__visual :global(img) {
+		width: 118%;
+		max-width: none;
+		height: auto;
+		display: block;
+		margin-left: -9%;
+		filter:
+			drop-shadow(0 2rem 2.5rem rgba(0, 0, 0, 0.28))
+			drop-shadow(0 0 3rem rgba(240, 59, 45, 0.08));
+	}
+
+	@media (max-width: 76rem) {
+		.flowbook-hero {
+			padding-inline: clamp(1.375rem, 5vw, 4rem);
+		}
+
+		.flowbook-hero__inner {
+			grid-template-columns: minmax(24rem, 0.85fr) minmax(30rem, 1.15fr);
+			gap: 2.5rem;
+		}
+
+		.flowbook-hero__status b {
+			display: none;
+		}
+	}
+
+	@media (max-width: 62rem) {
+		.flowbook-hero {
+			min-height: auto;
+			padding-top: 6.5rem;
+			padding-bottom: 4rem;
+		}
+
+		.flowbook-hero__inner {
+			grid-template-columns: 1fr;
+			gap: 4.5rem;
+		}
+
+		.flowbook-hero__copy {
+			max-width: 48rem;
+		}
+
+		.flowbook-hero__legend {
+			margin-top: 3rem;
+		}
+
+		.flowbook-hero__visual {
+			width: min(100%, 56rem);
+			margin-inline: auto;
+		}
+
+		.flowbook-hero__visual :global(img) {
+			width: 112%;
+			margin-left: -6%;
+		}
+	}
+
+	@media (max-width: 36rem) {
+		.flowbook-hero {
+			padding-inline: 1.375rem;
+			padding-top: 4.5rem;
+		}
+
+		.flowbook-hero h1 {
+			font-size: clamp(3.65rem, 18vw, 5.35rem);
+		}
+
+		.flowbook-hero__actions {
+			flex-direction: column;
+		}
+
+		.flowbook-button {
+			width: 100%;
+		}
+
+		.flowbook-hero__legend {
+			display: grid;
+		}
+
+		.flowbook-hero__visual :global(img) {
+			width: 112%;
+			margin-left: -6%;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.flowbook-button {
+			transition: none;
+		}
+	}
+</style>

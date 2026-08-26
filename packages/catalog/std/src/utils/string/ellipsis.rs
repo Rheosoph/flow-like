@@ -54,6 +54,8 @@ impl NodeLogic for StringEllipsisNode {
             "Shortens a string that is longer than the given number of characters and marks the cut with an ellipsis. A string that already fits is returned unchanged",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "ellipsis");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_scores(pure_scores());
 

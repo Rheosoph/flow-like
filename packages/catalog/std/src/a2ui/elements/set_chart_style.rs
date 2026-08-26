@@ -42,6 +42,7 @@ impl NodeLogic for SetChartStyle {
             "Configure Nivo chart appearance",
             "UI/Elements/Charts",
         );
+        node.set_flowscript_name("ui", "setChartStyle");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

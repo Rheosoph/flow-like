@@ -5,10 +5,10 @@ edition = "2021"
 description = "Flow-Like ECS Executor (EventBridge Pipe → ECS RunTask)"
 
 [dependencies]
-flow-like.workspace = true
-flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
-flow-like-types.workspace = true
-flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+flow-like = { workspace = true, features = ["flow-runtime", "model"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
+flow-like-executor = { workspace = true, features = ["server-local-ml"] }
 
 mimalloc.workspace = true
 tracing.workspace = true
@@ -18,11 +18,3 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 sentry.workspace = true
 sentry-tracing.workspace = true
 tokio = { version = "1", features = ["full"] }
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

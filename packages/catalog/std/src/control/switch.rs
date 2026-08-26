@@ -96,6 +96,7 @@ impl NodeLogic for SwitchNode {
             "Sends the flow down one branch per value. Wire a dropdown pin and the cases fill in by themselves, otherwise list them below",
             "Control/Flow",
         );
+        node.set_flowscript_name("control", "switch");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 

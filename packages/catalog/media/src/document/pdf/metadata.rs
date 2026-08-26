@@ -31,6 +31,7 @@ impl NodeLogic for PdfSetMetadataNode {
             "Set title, author, subject, and keywords in a PDF's Info dictionary.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "setMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()
@@ -144,6 +145,7 @@ impl NodeLogic for PdfGetMetadataNode {
             "Read title, author, subject, keywords, and page count from a PDF.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "getMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

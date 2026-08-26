@@ -1,14 +1,22 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
+#[cfg(feature = "flow-runtime")]
+use crate::credentials::{LogsDbBuilder, db_path_from_base};
+use crate::credentials::{SharedCredentialsTrait, StoreType};
+use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::lancedb;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store;
 use flow_like_storage::object_store::StaticCredentialProvider;
 use flow_like_storage::object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
-use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[cfg(feature = "flow-runtime")]
 const GCS_STORAGE_TOKEN_OPTION: &str = "google_storage_token";
+#[cfg(feature = "flow-runtime")]
 const GCS_SERVICE_ACCOUNT_KEY_OPTION: &str = "google_service_account_key";
 
 /// GCP Shared Credentials that can use either service account key or access token
@@ -197,6 +205,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
     }
 
     #[tracing::instrument(name = "GcpSharedCredentials::to_db", skip(self), level = "debug")]
+    #[cfg(feature = "flow-runtime")]
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = self
             .content_path_prefix
@@ -236,6 +245,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         Ok(connection(path.clone()))
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = format!("users/{}/apps/{}", sub, app_id);
         let path = db_path_from_base(&base_path);
@@ -264,6 +274,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         Ok(connection(path.clone()))
     }
 
+    #[cfg(feature = "flow-runtime")]
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
         if self.logs_bucket.is_empty() {
             return Err(anyhow!(
@@ -303,6 +314,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
 /// the option instead would resolve ADC and quietly substitute the unrestricted
 /// runtime identity for the credential that was supposed to constrain the
 /// caller.
+#[cfg(feature = "flow-runtime")]
 fn make_gcs_builder(
     bucket: String,
     credential: Option<(&'static str, String)>,
@@ -317,6 +329,7 @@ fn make_gcs_builder(
     }
 }
 
+#[cfg(feature = "flow-runtime")]
 fn make_gcs_builder_with_key(
     bucket: String,
     service_account_key: String,
@@ -327,6 +340,7 @@ fn make_gcs_builder_with_key(
     )
 }
 
+#[cfg(feature = "flow-runtime")]
 fn make_gcs_builder_with_token(
     bucket: String,
     access_token: String,
@@ -340,6 +354,7 @@ fn make_gcs_builder_with_token(
 /// above, and the path V4 signing reaches through
 /// `InstanceSigningCredentialProvider` — see `to_store_type` for the IAM grant
 /// that path requires.
+#[cfg(feature = "flow-runtime")]
 fn make_gcs_builder_adc(
     bucket: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
@@ -403,13 +418,17 @@ mod tests {
     async fn scoped_credentials_without_token_refuse_keyless_fallback() {
         let creds = scoped_credentials_missing_token();
 
-        assert!(creds.to_db("test-app").await.is_err());
-        assert!(creds.to_db_scoped("user-1", "test-app").await.is_err());
-        assert!(creds.to_logs_db_builder().is_err());
+        #[cfg(feature = "flow-runtime")]
+        {
+            assert!(creds.to_db("test-app").await.is_err());
+            assert!(creds.to_db_scoped("user-1", "test-app").await.is_err());
+            assert!(creds.to_logs_db_builder().is_err());
+        }
         assert!(creds.to_store(false).await.is_err());
     }
 
     /// A blank token is a broken credential, not a keyless one.
+    #[cfg(feature = "flow-runtime")]
     #[tokio::test]
     async fn blank_scoped_token_refuses_keyless_fallback() {
         let creds = GcpSharedCredentials {
@@ -423,6 +442,7 @@ mod tests {
 
     /// Workload Identity: no key, no token, and nothing scoped about it. This is
     /// the shape the keyless branch exists for and it must keep working.
+    #[cfg(feature = "flow-runtime")]
     #[tokio::test]
     async fn keyless_master_credentials_still_reach_adc() {
         let creds = GcpSharedCredentials {

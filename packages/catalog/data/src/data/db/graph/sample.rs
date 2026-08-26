@@ -29,6 +29,8 @@ impl NodeLogic for GraphSampleNode {
             "Samples objects of a given label from a graph overlay for previewing",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "sample");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

@@ -40,6 +40,7 @@ impl NodeLogic for RegressionMetricsNode {
             "Calculate MSE, RMSE, MAE, and R² for regression predictions",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "evalRegression");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

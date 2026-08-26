@@ -28,6 +28,7 @@ impl NodeLogic for PushChild {
             "Appends a child element to a container",
             "UI/Elements/Containers",
         );
+        node.set_flowscript_name("ui", "pushChild");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

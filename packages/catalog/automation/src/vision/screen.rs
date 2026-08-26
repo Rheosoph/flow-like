@@ -26,6 +26,7 @@ impl NodeLogic for ScreenshotToFileNode {
             "Captures a screenshot and saves it to a file",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "screenshotToFile");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(
@@ -154,6 +155,7 @@ impl NodeLogic for ScreenshotRegionNode {
             "Captures a region of the screen and saves it",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "screenshotRegion");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(
@@ -297,6 +299,7 @@ impl NodeLogic for GetPixelColorNode {
             "Gets the color of a pixel at a screen position",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "getPixelColor");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(
@@ -418,6 +421,7 @@ impl NodeLogic for GetScreenSizeNode {
             "Gets the dimensions of a monitor",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "getScreenSize");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(

@@ -11,8 +11,8 @@ base64.workspace = true
 # `all-execute` + `local-ml` (the Kubernetes executor) would link ONNX Runtime
 # and the desktop automation nodes, which the Azure supply-chain posture
 # excludes.
-flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
-flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
+flow-like-executor = { workspace = true, features = ["server"] }
 # Startup validates BACKEND_PUB with the exact decoder the executor uses per
 # request, so a bad key fails the revision instead of every run.
 jsonwebtoken.workspace = true

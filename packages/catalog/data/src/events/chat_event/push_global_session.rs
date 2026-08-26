@@ -25,6 +25,7 @@ impl NodeLogic for PushGlobalSessionNode {
             "Pushes a new global session to the chat. The session persists for all chat sessions.",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushGlobalSession");
         node.add_icon("/flow/icons/paperclip.svg");
         node.set_event_callback(true);
 

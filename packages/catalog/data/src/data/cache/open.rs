@@ -30,6 +30,7 @@ impl NodeLogic for OpenCacheNode {
             "Opens the app's key/value cache. Connect the result to Read, Write and Delete Cache nodes.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "open");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

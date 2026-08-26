@@ -46,6 +46,7 @@ impl NodeLogic for BrowserSetBasicAuthNode {
             "Configures HTTP Basic Authentication credentials for requests",
             "Automation/Browser/Auth",
         );
+        node.set_flowscript_name("browser", "setBasicAuth");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -160,6 +161,7 @@ impl NodeLogic for BrowserSaveCookiesNode {
             "Saves all browser cookies to a file for later restoration",
             "Automation/Browser/Auth",
         );
+        node.set_flowscript_name("browser", "saveCookies");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -294,6 +296,7 @@ impl NodeLogic for BrowserLoadCookiesNode {
             "Loads cookies from a file into the browser session",
             "Automation/Browser/Auth",
         );
+        node.set_flowscript_name("browser", "loadCookies");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -450,6 +453,7 @@ impl NodeLogic for BrowserClearCookiesNode {
             "Clears all cookies from the browser session",
             "Automation/Browser/Auth",
         );
+        node.set_flowscript_name("browser", "clearCookies");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

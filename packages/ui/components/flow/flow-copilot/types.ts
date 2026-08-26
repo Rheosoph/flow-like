@@ -48,6 +48,13 @@ export interface FlowScriptApplyOptions {
 	suppressBlockedToast?: boolean;
 	/** Who authored the source. Defaults to the editor; FlowPilot's own applies pass "agent". */
 	origin?: FlowScriptApplyOrigin;
+	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
+	scopeAnchors?: string[];
+	/**
+	 * The virtual file this text is: `"main"` or a module layer id. Set by a per-file editor;
+	 * the host turns it into the apply's `currentLayer` and its `module` identity.
+	 */
+	file?: string;
 }
 
 export interface FlowCopilotProps {

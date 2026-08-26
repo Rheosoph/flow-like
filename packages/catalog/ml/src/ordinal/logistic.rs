@@ -20,9 +20,11 @@ use crate::ml::{
     values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -33,9 +35,10 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::{Link, Margin, OrdinalLogistic, OrdinalLoss};
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -97,6 +100,7 @@ impl NodeLogic for FitOrdinalLogisticNode {
             "Fit/Train a proportional-odds model on a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Use this instead of a classifier, which treats the levels as unrelated names and so counts predicting `low` for `high` as no worse than predicting `medium`. Use it instead of a regressor, which treats the levels as real numbers and so invents distances the levels do not carry (`high` is not exactly twice `medium`). The model learns one coefficient vector plus ordered cut points, which keeps predictions monotone in the score and, under the default loss, yields calibrated per-level probabilities. Link Function, Loss and Margin widen it to the whole threshold-model family, up to support vector ordinal regression, while Free Features relaxes the shared coefficient into one slope per cut point. Scale your features first with the Fit Feature Scaler node: this is a gradient fit, and unscaled columns make it converge slowly or not at all.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "fitOrdinalLogistic");
         node.set_version(3);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -662,7 +666,6 @@ impl NodeLogic for FitOrdinalLogisticNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

@@ -19,6 +19,8 @@ impl BoolXor {
 impl NodeLogic for BoolXor {
     fn get_node(&self) -> Node {
         let mut node = Node::new("bool_xor", "^ (Bool)", "Boolean XOR", "Utils/Bool");
+        node.set_flowscript_name("bool", "xor");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/bool.svg");
 
         node.add_input_pin("boolean", "Boolean", "Input Boolean", VariableType::Boolean)

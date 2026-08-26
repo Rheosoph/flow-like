@@ -1,0 +1,25 @@
+// BUG: an ANNOTATED function-local declaration `let name: <Type> = <literal>` is never created
+// when the text is applied to an empty board, so every read of that name fails to resolve:
+//   argument `array_in` on `push` is not a literal or resolvable node output; skipped connection
+//   node `push` is missing required inputs: array_in
+// The array flavour below is exactly what board -> text renders for a layer-scoped array
+// variable (`let elements: Elements[] = []` in tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow), so
+// text -> board cannot round-trip the renderer's own output.
+//
+// Dropping the annotation (`let alignment = []`, second event) reconciles cleanly, and so does
+// hoisting the same declaration to file scope -- those are the only workarounds. Same root cause
+// as bug-t4-soc-triage-typed-local-unreadable.flow / bug-t4-pr-review-bot-function-local-let.flow,
+// recorded here because the float[]/array form is what an ONNX embedding accumulator needs.
+use log::{ info }
+
+eventsGeneric annotatedLocalArray(payload: Struct, sample: float) {
+    let alignment: float[] = []
+    alignment = alignment.push(sample)
+    info({ message: array::length({ array: alignment }), toast: false })
+}
+
+eventsGeneric bareLocalArray(payload: Struct, sample: float) {
+    let alignment = []
+    alignment = alignment.push(sample)
+    info({ message: array::length({ array: alignment }), toast: false })
+}

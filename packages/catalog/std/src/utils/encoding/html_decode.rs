@@ -24,6 +24,8 @@ impl NodeLogic for HtmlDecodeNode {
             "Decodes HTML entities back to their original characters",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "htmlDecode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin(

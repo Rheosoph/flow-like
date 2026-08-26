@@ -82,6 +82,7 @@ impl NodeLogic for GetGitHubIssueNode {
             "Get details about a specific issue",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getIssue");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -249,6 +250,7 @@ impl NodeLogic for UpdateGitHubIssueNode {
             "Update an existing issue",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "updateIssue");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -540,6 +542,7 @@ impl NodeLogic for AddGitHubIssueCommentNode {
             "Add a comment to an issue or pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "addIssueComment");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -723,6 +726,7 @@ impl NodeLogic for ListGitHubIssueCommentsNode {
             "List comments on an issue or pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listIssueComments");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

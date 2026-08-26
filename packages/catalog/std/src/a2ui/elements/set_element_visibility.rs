@@ -29,6 +29,7 @@ impl NodeLogic for SetElementVisibility {
             "Shows or hides an element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "setElementVisibility");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

@@ -25,6 +25,8 @@ impl NodeLogic for RankSelectorsNode {
             "Ranks selectors in a set by their confidence and specificity",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "rank");
+        node.set_receiver("selector_set");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -126,6 +128,8 @@ impl NodeLogic for GetBestSelectorNode {
             "Gets the highest-ranked selector from a ranked set",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "getBest");
+        node.set_receiver("ranked_set");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -203,6 +207,8 @@ impl NodeLogic for ValidateSelectorNode {
             "Validates a selector's format and structure",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "validate");
+        node.set_receiver("selector");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -311,6 +317,8 @@ impl NodeLogic for RankedSetToSelectorSetNode {
             "Converts a ranked selector set back to a regular selector set",
             "Automation/Selector",
         );
+        node.set_flowscript_name("automation.selector", "rankedToSet");
+        node.set_receiver("ranked_set");
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

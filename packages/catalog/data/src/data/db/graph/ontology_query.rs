@@ -25,6 +25,7 @@ impl NodeLogic for QueryOntologyObjectsNode {
             "Reads a bounded object preview through a saved Data Studio ontology",
             "Data Studio/Objects",
         );
+        node.set_flowscript_name("ontology", "queryObjects");
         node.set_version(1);
         node.add_icon("/flow/icons/database.svg");
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

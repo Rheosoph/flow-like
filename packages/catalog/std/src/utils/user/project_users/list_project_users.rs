@@ -23,6 +23,7 @@ impl NodeLogic for ListProjectUsersNode {
             "List Project Users",
             "Lists project users with pagination.",
         );
+        node.set_flowscript_name("user", "listProjectUsers");
         add_app_pin(&mut node);
         add_pagination_pins(&mut node);
         add_users_output(&mut node);

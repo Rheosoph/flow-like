@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package flow_like_types;
+
+import "google/protobuf/timestamp.proto";
+import "bit.proto";
+import "variable.proto";
+import "a2ui.proto";
+
+enum AppCategory {
+  OTHER = 0;
+  PRODUCTIVITY = 1;
+  SOCIAL = 2;
+  ENTERTAINMENT = 3;
+  EDUCATION = 4;
+  HEALTH = 5;
+  FINANCE = 6;
+  LIFESTYLE = 7;
+  TRAVEL = 8;
+  NEWS = 9;
+  SPORTS = 10;
+  SHOPPING = 11;
+  FOOD_AND_DRINK = 12;
+  MUSIC = 13;
+  PHOTOGRAPHY = 14;
+  UTILITIES = 15;
+  WEATHER = 16;
+  GAMES = 17;
+  BUSINESS = 18;
+  COMMUNICATION = 19;
+  ANIME = 20;
+}
+
+// What kind of thing the app is, structurally. Orthogonal to AppCategory,
+// which describes the topic the app is about.
+enum AppType {
+  APP_TYPE_UNSPECIFIED = 0;
+  AGENT = 1;
+  CUSTOM_INTERFACE = 2;
+  DATA_FOCUS = 3;
+  DATA_PIPELINE = 4;
+  ANALYTICS = 5;
+  FORM = 6;
+}
+
+enum AppStatus {
+  ACTIVE = 0;
+  INACTIVE = 1;
+  ARCHIVED = 2;
+}
+
+enum AppExecutionMode {
+  ANY = 0;
+  LOCAL = 1;
+  REMOTE = 2;
+}
+
+enum AppVisibility {
+  PUBLIC = 0;
+  PUBLIC_REQUEST_ACCESS = 1;
+  PRIVATE = 2;
+  PROTOTYPE = 3;
+  OFFLINE = 4;
+}
+
+message App {
+  string id = 1;
+  AppStatus status = 2;
+  AppVisibility visibility = 3;
+  repeated string authors = 4;
+  repeated string bits = 5;
+  repeated string boards = 6;
+  repeated string events = 7;
+  repeated string templates = 8;
+  optional string changelog = 9;
+  optional AppCategory primary_category = 10;
+  optional AppCategory secondary_category = 11;
+  optional string version = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+
+  int64 rating_sum = 15;
+  int64 rating_count = 16;
+  int64 download_count = 17;
+  int64 interaction_count = 18;
+
+  optional float avg_rating = 19;
+  optional float relevance_score = 20;
+
+  optional int32 price = 21;
+  optional AppExecutionMode execution_mode = 22;
+
+  // A2UI Integration - IDs only, actual data stored separately
+  repeated string widget_ids = 23;
+  repeated string page_ids = 24;
+
+  // Route mappings: path -> event_id (e.g., "/" -> "event123")
+  // The event determines what to display (page-target or board-target)
+  map<string, string> route_mappings = 25;
+
+  // WASM packages required by this app: package_id -> version
+  map<string, string> packages = 26;
+
+  // Whether the project owner has opted into forking (Fork-an-app feature).
+  // Default false — apps are not forkable until explicitly enabled.
+  optional bool allow_forking = 27;
+
+  // For forked apps: the source app's id, for lineage / attribution.
+  optional string forked_from = 28;
+
+  // For forked apps: when the fork happened.
+  optional google.protobuf.Timestamp forked_at = 29;
+
+  // What kind of app this is. Unset means "not yet classified" — the UI
+  // derives a suggestion from the app's contents until the owner picks one.
+  optional AppType app_type = 30;
+}

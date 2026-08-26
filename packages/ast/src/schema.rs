@@ -401,6 +401,9 @@ fn schema_value_from_type(ty: &InterfaceType) -> Option<Value> {
         InterfaceType::Map(inner) => Some(
             json!({ "type": "object", "additionalProperties": schema_value_from_type(inner)? }),
         ),
+        InterfaceType::Set(inner) => Some(
+            json!({ "type": "array", "items": schema_value_from_type(inner)?, "uniqueItems": true }),
+        ),
         InterfaceType::Union(members) => {
             if members.iter().all(|member| {
                 matches!(
@@ -458,7 +461,9 @@ fn rename_type_refs(ty: &mut InterfaceType, renames: &HashMap<String, String>) {
                 *name = renamed.clone();
             }
         }
-        InterfaceType::Array(inner) | InterfaceType::Map(inner) => rename_type_refs(inner, renames),
+        InterfaceType::Array(inner) | InterfaceType::Map(inner) | InterfaceType::Set(inner) => {
+            rename_type_refs(inner, renames)
+        }
         InterfaceType::Union(members) => {
             for member in members {
                 rename_type_refs(member, renames);
@@ -478,7 +483,9 @@ fn collect_type_refs(ty: &InterfaceType, refs: &mut BTreeSet<String>) {
         {
             refs.insert(name.clone());
         }
-        InterfaceType::Array(inner) | InterfaceType::Map(inner) => collect_type_refs(inner, refs),
+        InterfaceType::Array(inner) | InterfaceType::Map(inner) | InterfaceType::Set(inner) => {
+            collect_type_refs(inner, refs)
+        }
         InterfaceType::Union(members) => {
             for member in members {
                 collect_type_refs(member, refs);

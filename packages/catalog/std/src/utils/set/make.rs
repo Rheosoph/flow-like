@@ -22,6 +22,7 @@ impl MakeSetNode {
 impl NodeLogic for MakeSetNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("make_set", "Make Set", "Creates an empty set", "Utils/Set");
+        node.set_flowscript_name("set", "make");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

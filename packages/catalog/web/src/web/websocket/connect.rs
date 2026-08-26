@@ -7,9 +7,11 @@ use flow_like::flow::execution::{
     LogLevel, context::ExecutionContext, egress, internal_node::InternalNode, log::LogMessage,
 };
 
+#[cfg(feature = "execute")]
+use flow_like::flow::pin::PinType;
 use flow_like::flow::{
     node::{Node, NodeLogic},
-    pin::{PinOptions, PinType},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::async_trait;
@@ -58,6 +60,7 @@ impl NodeLogic for WebSocketConnectNode {
              connection closes, then triggers on_close.",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "connect");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

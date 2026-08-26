@@ -9,6 +9,7 @@ mod interaction_jwt;
 mod jwt;
 pub mod payload_storage;
 pub mod queue;
+pub mod rejection;
 pub mod run_sweeper;
 mod sse_proxy;
 pub mod state;

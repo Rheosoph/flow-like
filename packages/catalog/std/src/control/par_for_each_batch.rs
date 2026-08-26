@@ -34,6 +34,7 @@ impl NodeLogic for ParBatchLoopNode {
             "Loops over an Array in batches, running the body for multiple batches in parallel",
             "Control",
         );
+        node.set_flowscript_name("control", "parallelForEachBatch");
         node.add_icon("/flow/icons/for-each.svg");
         node.set_scores(
             NodeScores::new()

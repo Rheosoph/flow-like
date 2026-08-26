@@ -27,6 +27,8 @@ impl NodeLogic for SetContentTypeNode {
             "Sets the Content-Type header of a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setContentType");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

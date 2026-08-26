@@ -26,6 +26,8 @@ impl NodeLogic for BytesGzipCompressNode {
             "Gzip Compress",
             "Compresses a byte buffer with gzip",
         );
+        node.set_flowscript_name("bytes", "gzipCompress");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         node.add_input_pin(
             "level",
@@ -94,6 +96,8 @@ impl NodeLogic for BytesGzipDecompressNode {
             "Gzip Decompress",
             "Restores a gzip compressed byte buffer",
         );
+        node.set_flowscript_name("bytes", "gzipDecompress");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Compressed Bytes");
         node.add_input_pin(
             "max_size",

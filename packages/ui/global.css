@@ -2087,3 +2087,331 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 		transition: none;
 	}
 }
+
+/* ── FlowScript editor ↔ canvas navigation ─────────────────────────────── */
+
+/* Transient highlight for the node whose FlowScript line holds the cursor.
+   A DOM-class toggle — never selection — so it steals no focus or viewport. */
+.react-flow__node.flowscript-nav-highlight {
+	outline: 2px solid color-mix(in oklch, var(--primary) 70%, transparent);
+	outline-offset: 3px;
+	border-radius: 0.5rem;
+	transition: outline-color 150ms ease;
+}
+
+/* Trailing `//@n:` / `//@v:` / `//@l:` anchor comments, dimmed so the ids stop
+   competing with the code. The text itself is untouched — apply needs it. */
+.flowscript-anchor-dim {
+	opacity: 0.35;
+	font-size: 0.85em;
+}
+
+/* One-shot flash on the editor line of a node just selected on the canvas. */
+.flowscript-line-flash {
+	animation: flowscript-line-flash 1.2s ease-out forwards;
+}
+
+@keyframes flowscript-line-flash {
+	from {
+		background-color: color-mix(in oklch, var(--primary) 28%, transparent);
+	}
+	to {
+		background-color: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.flowscript-line-flash {
+		animation: none;
+		background-color: color-mix(in oklch, var(--primary) 18%, transparent);
+	}
+}
+
+/* ── FlowScript realtime presence ──────────────────────────────────────── */
+
+/* One static class per palette slot (CSP-safe, no inline styles). MUST stay in
+   sync with PEER_COLORS in hooks/use-peer-users.ts so a peer's editor presence
+   matches their canvas cursor color exactly. */
+.flowscript-peer-slot-0 {
+	--fs-peer: hsl(0 70% 50%);
+}
+.flowscript-peer-slot-1 {
+	--fs-peer: hsl(30 70% 50%);
+}
+.flowscript-peer-slot-2 {
+	--fs-peer: hsl(60 70% 45%);
+}
+.flowscript-peer-slot-3 {
+	--fs-peer: hsl(120 60% 40%);
+}
+.flowscript-peer-slot-4 {
+	--fs-peer: hsl(180 70% 40%);
+}
+.flowscript-peer-slot-5 {
+	--fs-peer: hsl(210 70% 50%);
+}
+.flowscript-peer-slot-6 {
+	--fs-peer: hsl(270 60% 55%);
+}
+.flowscript-peer-slot-7 {
+	--fs-peer: hsl(300 60% 50%);
+}
+.flowscript-peer-slot-8 {
+	--fs-peer: hsl(330 70% 50%);
+}
+.flowscript-peer-slot-9 {
+	--fs-peer: hsl(15 70% 50%);
+}
+.flowscript-peer-slot-10 {
+	--fs-peer: hsl(165 70% 40%);
+}
+.flowscript-peer-slot-11 {
+	--fs-peer: hsl(195 70% 45%);
+}
+.flowscript-peer-slot-12 {
+	--fs-peer: hsl(255 60% 55%);
+}
+.flowscript-peer-slot-13 {
+	--fs-peer: hsl(345 70% 50%);
+}
+.flowscript-peer-slot-14 {
+	--fs-peer: hsl(45 70% 50%);
+}
+.flowscript-peer-slot-15 {
+	--fs-peer: hsl(90 60% 40%);
+}
+
+/* Remote caret: an injected zero-width span, drawn as a colored bar. */
+.flowscript-peer-caret {
+	position: absolute;
+	box-sizing: border-box;
+	height: 100%;
+	border-left: 2px solid var(--fs-peer, hsl(0 0% 50%));
+	margin-left: -1px;
+	pointer-events: none;
+}
+
+/* Name flag injected right after the remote caret. */
+.flowscript-peer-flag {
+	background: var(--fs-peer, hsl(0 0% 50%));
+	color: white;
+	border-radius: 3px;
+	font-size: 0.6rem;
+	line-height: 1.2;
+	padding: 0 3px;
+	margin-left: 2px;
+	pointer-events: none;
+	white-space: nowrap;
+	user-select: none;
+}
+
+/* Remote selection range (low-alpha wash in the peer's color). */
+.flowscript-peer-selection {
+	background-color: color-mix(
+		in srgb,
+		var(--fs-peer, hsl(0 0% 50%)) 22%,
+		transparent
+	);
+}
+
+/* Glyph-margin dot on statements a peer is currently editing (soft claim). */
+.flowscript-peer-claim-glyph {
+	background: radial-gradient(
+			circle,
+			var(--fs-peer, hsl(0 0% 50%)) 0,
+			var(--fs-peer, hsl(0 0% 50%)) 3px,
+			transparent 4px
+		)
+		center / 100% 100% no-repeat;
+}
+
+/* "Teammate is looking at this on the canvas": very faint full-line wash on
+   the lines of nodes a peer has selected on the board. */
+.flowscript-peer-canvas-line {
+	background-color: color-mix(
+		in srgb,
+		var(--fs-peer, hsl(0 0% 50%)) 8%,
+		transparent
+	);
+}
+
+/* Canvas node outline for the node whose anchor holds a peer's text cursor.
+   Same DOM-class mechanism as .flowscript-nav-highlight above. */
+.react-flow__node.flowscript-peer-outline {
+	outline: 2px solid
+		color-mix(in srgb, var(--fs-peer, hsl(0 0% 50%)) 70%, transparent);
+	outline-offset: 3px;
+	border-radius: 0.5rem;
+	transition: outline-color 150ms ease;
+}
+
+/* ── FlowScript run integration ────────────────────────────────────────── */
+
+/* Line of a node currently executing in a local run: soft tint plus a pulsing
+   bar in the line-decorations gutter (the marching highlight). */
+.flowscript-run-executing {
+	background-color: color-mix(in oklch, var(--primary) 14%, transparent);
+}
+
+.flowscript-run-executing-gutter {
+	background: var(--primary);
+	width: 3px !important;
+	margin-left: 2px;
+	border-radius: 2px;
+	animation: flowscript-run-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes flowscript-run-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.flowscript-run-executing-gutter {
+		animation: none;
+	}
+}
+
+/* Fainter settled tint on lines the run already visited; cleared with the run. */
+.flowscript-run-done {
+	background-color: color-mix(in oklch, var(--primary) 6%, transparent);
+}
+
+/* A peer's currently executing lines — their palette slot when known
+   (flowscript-peer-slot-N sets --fs-peer), neutral gray otherwise. */
+.flowscript-run-remote {
+	background-color: color-mix(
+		in srgb,
+		var(--fs-peer, hsl(0 0% 50%)) 12%,
+		transparent
+	);
+}
+
+.flowscript-run-remote-gutter {
+	background: var(--fs-peer, hsl(0 0% 50%));
+	width: 3px !important;
+	margin-left: 2px;
+	border-radius: 2px;
+	opacity: 0.7;
+}
+
+/* Post-run `· 12× ⚠3` inlay after statement lines (heatmap visits/errors). */
+.flowscript-run-stats {
+	color: var(--muted-foreground);
+	opacity: 0.6;
+	font-size: 0.85em;
+	pointer-events: none;
+	user-select: none;
+}
+
+/* ── FlowScript statement-merge conflicts ──────────────────────────────── */
+
+/* A unit changed both on the board and in the local draft: warning wash on
+   its anchor line plus an amber bar in the line-decorations gutter. The
+   inline "Keep mine / Take theirs" lens pair renders above the same line. */
+.flowscript-merge-conflict {
+	background-color: color-mix(in srgb, #eab308 14%, transparent);
+}
+
+.flowscript-merge-conflict-gutter {
+	background: #eab308;
+	width: 3px !important;
+	margin-left: 2px;
+	border-radius: 2px;
+}
+
+/* ── FlowScript board comments ─────────────────────────────────────────── */
+
+/* Margin indicator for a comment thread bound to this line's statement: a
+   speech-bubble dot in the first author's peer color (flowscript-peer-slot-N
+   sets --fs-peer; neutral primary otherwise). Thread size ≥ 2 renders its
+   count via the matching count class below. */
+.flowscript-comment-margin {
+	cursor: pointer;
+}
+
+.flowscript-comment-margin::before {
+	content: "";
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 9px;
+	height: 9px;
+	transform: translateY(-50%);
+	border-radius: 6px 6px 6px 1px;
+	background: var(--fs-peer, var(--primary));
+	opacity: 0.85;
+}
+
+.flowscript-comment-margin::after {
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 9px;
+	transform: translateY(-50%);
+	text-align: center;
+	font-size: 7px;
+	font-weight: 700;
+	line-height: 9px;
+	color: white;
+}
+
+.flowscript-comment-count-2::after {
+	content: "2";
+}
+.flowscript-comment-count-3::after {
+	content: "3";
+}
+.flowscript-comment-count-4::after {
+	content: "4";
+}
+.flowscript-comment-count-5::after {
+	content: "5";
+}
+.flowscript-comment-count-6::after {
+	content: "6";
+}
+.flowscript-comment-count-7::after {
+	content: "7";
+}
+.flowscript-comment-count-8::after {
+	content: "8";
+}
+.flowscript-comment-count-9::after {
+	content: "9";
+}
+.flowscript-comment-count-many::after {
+	content: "+";
+}
+
+/* Hover-revealed "add a comment" affordance on commentable statement lines
+   without a thread. The margin div exists only for those lines, so the
+   opacity scoping is naturally per line. */
+.flowscript-comment-add {
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+
+.flowscript-comment-add:hover {
+	opacity: 0.9;
+}
+
+.flowscript-comment-add::before {
+	content: "+";
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 10px;
+	transform: translateY(-50%);
+	text-align: center;
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 10px;
+	color: var(--muted-foreground);
+}

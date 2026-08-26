@@ -57,9 +57,9 @@ macro_rules! run_with_execute_gate {
 pub use types::attachment::Attachment;
 pub use types::bounding_box::BoundingBox;
 pub use types::class_prediction::ClassPrediction;
-pub use types::db_connection::{
-    CachedDB, CachedDBRefreshHook, CachedDBRefresher, NodeDBConnection,
-};
+pub use types::db_connection::NodeDBConnection;
+#[cfg(feature = "execute")]
+pub use types::db_connection::{CachedDB, CachedDBRefreshHook, CachedDBRefresher};
 pub use types::flow_path::{FlowPath, FlowPathRuntime, FlowPathStore};
 pub use types::graph_overlay::{
     DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,

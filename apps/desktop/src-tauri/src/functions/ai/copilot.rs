@@ -2514,6 +2514,9 @@ fn node_to_metadata(node: &Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(node.flowscript_namespace()),
+        alias: Some(node.flowscript_alias()),
+        receiver: node.flowscript_receiver(),
     })
 }
 
@@ -2567,14 +2570,18 @@ impl CatalogProvider for DesktopCatalogProvider {
     }
 
     async fn filter_by_category(&self, category_prefix: &str) -> Vec<NodeMetadata> {
-        let category_prefix = category_prefix.to_lowercase();
+        let category_prefix = category_prefix.to_lowercase().replace("::", "/");
         let mut matches = Vec::new();
 
         for node in self.nodes.iter() {
+            let category = node.category.to_lowercase();
+            let namespace = node.flowscript_namespace().to_lowercase().replace('.', "/");
             let name_lower = node.name.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
 
-            if category.starts_with(&category_prefix) || name_lower.contains(&category_prefix) {
+            if category.contains(&category_prefix)
+                || namespace.contains(&category_prefix)
+                || name_lower.contains(&category_prefix)
+            {
                 matches.push(node_to_metadata(node));
             }
             if matches.len() >= 15 {
@@ -4495,6 +4502,9 @@ const EXTERNAL_AGENT_TOOL_CALL_ID: &str = "external-agent";
 struct ExternalAgentRunOutput {
     text: String,
     error: Option<String>,
+    /// Claude Code session id captured from the stream's init/result frames; lets the phase loop
+    /// resume the CLI transcript on continuation phases. Always the latest observed id.
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5264,13 +5274,28 @@ async fn external_code_agent_chat_internal(
     let mut continuation = 0u8;
     let mut zero_activity_restarts = 0u8;
     let mut previous_exhausted_budget: Option<String> = None;
-    let mut prompt = build_external_agent_prompt(
-        &surface.system_content,
-        &user_prompt,
-        scope,
-        workflow_edit_request,
-        global_agent,
-    );
+    let mut previous_exhausted_progress: Option<WorkflowProgressMark> = None;
+    // Claude Code receives the bounded role/lifecycle appendix through --append-system-prompt so
+    // it lands in the real system prompt; other backends keep it inline in the stdin prompt.
+    let claude_role_appendix = matches!(backend, FlowPilotAgentBackendKind::ClaudeCode)
+        .then(|| external_agent_role_appendix(scope, workflow_edit_request, global_agent));
+    // The latest Claude session id observed on a finished phase; every later phase in this run
+    // (continuation or transport restart) resumes it so the model keeps its own transcript
+    // instead of a lossy host reconstruction. Phases with no captured id fall back to the full
+    // re-wrapped prompt in a fresh session.
+    let mut resume_session_id: Option<String> = None;
+    let mut next_phase_resume: Option<String> = None;
+    let mut prompt = if claude_role_appendix.is_some() {
+        build_external_agent_prompt_body(&surface.system_content, &user_prompt)
+    } else {
+        build_external_agent_prompt(
+            &surface.system_content,
+            &user_prompt,
+            scope,
+            workflow_edit_request,
+            global_agent,
+        )
+    };
     let agent_result = loop {
         if nested_wall_clock_exhausted(
             nested_wall_clock_deadline
@@ -5307,6 +5332,8 @@ async fn external_code_agent_chat_internal(
             prompt,
             tool_names.clone(),
             current_images.as_deref().unwrap_or_default(),
+            next_phase_resume.take().as_deref(),
+            claude_role_appendix.as_deref(),
         ) {
             Ok(invocation) => invocation,
             Err(error) => {
@@ -5470,6 +5497,11 @@ async fn external_code_agent_chat_internal(
             invocation_cancellation,
         )
         .await;
+        if let Ok(output) = run_result.as_ref()
+            && let Some(session) = output.session_id.as_deref()
+        {
+            resume_session_id = Some(session.to_string());
+        }
         if let Some(watchdog) = wall_clock_watchdog {
             watchdog.abort();
         }
@@ -5543,12 +5575,23 @@ async fn external_code_agent_chat_internal(
             .and_then(|snapshot| snapshot.exhausted_budget.clone());
         if exhausted_budget.is_some() && exhausted_budget == previous_exhausted_budget {
             // The previous continuation already received a fresh bounded slice for this exact
-            // budget and burned it again. Another phase would arrive equally dead; stop honestly.
-            run_summary.mark_budget_incomplete();
-            break Err(external_workflow_incomplete_error(
-                final_workflow_snapshot.as_ref(),
-                continuation,
-            ));
+            // budget and burned it again. Terminal only when the progress ledger ALSO failed to
+            // advance across that slice: a run that spent the slice moving forward earns another,
+            // a circling run stops honestly here.
+            let current_progress = workflow_state
+                .as_ref()
+                .and_then(|state| state.lock().ok().map(|state| state.progress_mark()));
+            let progressed = matches!(
+                (current_progress.as_ref(), previous_exhausted_progress.as_ref()),
+                (Some(mark), Some(previous)) if mark.advanced_beyond(previous)
+            );
+            if !progressed {
+                run_summary.mark_budget_incomplete();
+                break Err(external_workflow_incomplete_error(
+                    final_workflow_snapshot.as_ref(),
+                    continuation,
+                ));
+            }
         }
 
         let phase_tool_calls =
@@ -5590,6 +5633,9 @@ async fn external_code_agent_chat_internal(
                 state.grant_continuation_slice();
             }
             previous_exhausted_budget = exhausted_budget;
+            previous_exhausted_progress = workflow_state
+                .as_ref()
+                .and_then(|state| state.lock().ok().map(|state| state.progress_mark()));
         }
 
         if run_failure.is_some() {
@@ -5645,13 +5691,24 @@ async fn external_code_agent_chat_internal(
                 flow_like::flow::copilot::stream::safe_text_preview(error, 600),
             ));
         }
-        prompt = build_external_agent_prompt(
-            &surface.system_content,
-            &repair_request,
-            scope,
-            true,
-            global_agent,
-        );
+        prompt = match (claude_role_appendix.as_deref(), resume_session_id.as_deref()) {
+            // Resumed continuation: the session already holds the platform prompt and the
+            // model's own transcript — send only the compact continuation payload.
+            (Some(_), Some(session)) => {
+                next_phase_resume = Some(session.to_string());
+                repair_request
+            }
+            (Some(_), None) => {
+                build_external_agent_prompt_body(&surface.system_content, &repair_request)
+            }
+            (None, _) => build_external_agent_prompt(
+                &surface.system_content,
+                &repair_request,
+                scope,
+                true,
+                global_agent,
+            ),
+        };
         send_external_progress_event(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
@@ -5706,10 +5763,12 @@ async fn external_code_agent_chat_internal(
                     .expect("guarded by is_some"),
             ),
             error: Some(error),
+            session_id: None,
         },
         Err(error) if workflow_edit_request && has_retained_candidate => ExternalAgentRunOutput {
             text: String::new(),
             error: Some(error),
+            session_id: None,
         },
         Err(error) => return Err(actionable_external_agent_failure(backend, &error)),
     };
@@ -7456,6 +7515,12 @@ fn summarize_tool_arguments(tool_name: &str, arguments: Option<&serde_json::Valu
             .and_then(|value| value.as_str())
             .map(|event_id| format!("event: {event_id}"))
             .unwrap_or_else(|| "Executing event".to_string()),
+        "run_board_tests" => arguments
+            .get("board_id")
+            .or_else(|| arguments.get("boardId"))
+            .and_then(|value| value.as_str())
+            .map(|board_id| format!("board tests: {board_id}"))
+            .unwrap_or_else(|| "Running board tests".to_string()),
         "ask_user" => arguments
             .get("questions")
             .and_then(|value| value.as_array())
@@ -7904,6 +7969,7 @@ fn specialist_tool_policy(
             "execute_event",
             "execute_node",
             "query_execution_logs",
+            "run_board_tests",
             // End-to-end verification of persisted work: drive a live page's inputs/buttons and
             // invoke the app's chat event, observing the runs they start.
             "interact_app_page",
@@ -8381,6 +8447,11 @@ const EXTERNAL_EXTENSION_OPERATION_GRANT: u16 = 6;
 const EXTERNAL_EXTENSION_CHECK_GRANT: u8 = 3;
 const EXTERNAL_EXTENSION_COMMIT_GRANT: u8 = 1;
 const EXTERNAL_EXTENSION_CONTINUATION_GRANT: u8 = 1;
+// A big board pays more operations/edits for the same amount of behavior change, so the volume
+// budgets scale with node count (one op per 8 nodes, one edit per 16), bounded so size never buys
+// unbounded circling headroom. Stall/circuit cut-offs are unaffected.
+const EXTERNAL_BOARD_SIZE_OPERATION_ALLOWANCE_CAP: u16 = 12;
+const EXTERNAL_BOARD_SIZE_EDIT_ALLOWANCE_CAP: u8 = 6;
 const MAX_RETAINED_STRUCTURED_DIAGNOSTICS: usize = 12;
 const MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES: usize = 12_000;
 // A typed build gets fixed lifecycle overhead plus roughly three operations per declared module
@@ -8627,6 +8698,12 @@ struct WorkflowToolLoopState {
     /// The model's own account of what advanced and what remains, from its last extension request.
     /// Recorded for the user and telemetry; it never influences whether a grant is made.
     last_extension_rationale: Option<String>,
+    /// Node count of the board this run edits; sizes the operation/edit budgets so large boards
+    /// earn more headroom up front instead of failing by exhaustion.
+    board_node_count: usize,
+    /// Progress mark at the last SDK idle-continuation slice; the next repeat of the same
+    /// exhausted budget is terminal only when progress did not advance beyond this mark.
+    last_idle_continuation_progress: Option<WorkflowProgressMark>,
 }
 
 impl WorkflowToolLoopState {
@@ -8696,6 +8773,7 @@ impl WorkflowToolLoopState {
         let Some(manifest) = manifest else {
             return;
         };
+        self.board_node_count = manifest.board.graph.nodes.len();
         let mut session = WorkflowSession::new(manifest, WorkflowSessionPolicy::default());
         let _ = session.mark_manifest_ready(0);
         let _ = session.begin_discovery(0);
@@ -8826,18 +8904,37 @@ impl WorkflowToolLoopState {
         }
     }
 
+    /// Extra source operations a large board earns: one per 8 nodes, bounded so a huge board
+    /// cannot buy unbounded circling headroom.
+    fn board_size_operation_allowance(&self) -> u16 {
+        u16::try_from(self.board_node_count / 8)
+            .unwrap_or(u16::MAX)
+            .min(EXTERNAL_BOARD_SIZE_OPERATION_ALLOWANCE_CAP)
+    }
+
+    /// Extra edit attempts a large board earns: one per 16 nodes, bounded.
+    fn board_size_edit_allowance(&self) -> u8 {
+        u8::try_from(self.board_node_count / 16)
+            .unwrap_or(u8::MAX)
+            .min(EXTERNAL_BOARD_SIZE_EDIT_ALLOWANCE_CAP)
+    }
+
     fn flowscript_operation_budget(&self) -> u16 {
-        scoped_operation_budget(self.scope_plan.as_ref()).saturating_add(
-            u16::from(self.granted_time_extensions)
-                .saturating_mul(EXTERNAL_EXTENSION_OPERATION_GRANT),
-        )
+        scoped_operation_budget(self.scope_plan.as_ref())
+            .saturating_add(
+                u16::from(self.granted_time_extensions)
+                    .saturating_mul(EXTERNAL_EXTENSION_OPERATION_GRANT),
+            )
+            .saturating_add(self.board_size_operation_allowance())
     }
 
     fn edit_attempt_budget(&self) -> u8 {
-        scoped_edit_budget(self.scope_plan.as_ref()).saturating_add(
-            self.granted_time_extensions
-                .saturating_mul(EXTERNAL_EXTENSION_CHECK_GRANT),
-        )
+        scoped_edit_budget(self.scope_plan.as_ref())
+            .saturating_add(
+                self.granted_time_extensions
+                    .saturating_mul(EXTERNAL_EXTENSION_CHECK_GRANT),
+            )
+            .saturating_add(self.board_size_edit_allowance())
     }
 
     fn commit_attempt_budget(&self) -> u8 {
@@ -9677,10 +9774,20 @@ fn prepare_sdk_idle_continuation_budget(
         return IdleContinuationBudget::Executable;
     };
     if Some(exhausted.as_str()) == previous_exhausted_budget {
-        return IdleContinuationBudget::Terminal(format!(
-            "the {exhausted} was exhausted again after its granted continuation slice"
-        ));
+        // Terminal only when the progress ledger also failed to advance since the previous
+        // slice — a run that spent the slice moving forward earns another one.
+        let mark = state.progress_mark();
+        let progressed = state
+            .last_idle_continuation_progress
+            .as_ref()
+            .is_some_and(|previous| mark.advanced_beyond(previous));
+        if !progressed {
+            return IdleContinuationBudget::Terminal(format!(
+                "the {exhausted} was exhausted again after its granted continuation slice"
+            ));
+        }
     }
+    state.last_idle_continuation_progress = Some(state.progress_mark());
     state.grant_continuation_slice();
     IdleContinuationBudget::SliceGranted(exhausted)
 }
@@ -9874,10 +9981,8 @@ fn workflow_predraft_context_preflight_with_lease(
                         } else {
                             "plan_board_scope"
                         }
-                    } else if state.current_reads > 0 {
-                        "get_declarations"
                     } else {
-                        "get_current_flowscript_then_get_declarations"
+                        "get_declarations"
                     },
                     "inspection_calls": state.predraft_context_reads,
                     "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
@@ -10545,7 +10650,7 @@ fn workflow_tool_preflight_with_args(
                     "code": "FLOWSCRIPT_RETAINED_REVISION_REQUIRED",
                     "retryable": true,
                     "next_action": match state.last_status.as_deref() {
-                        Some("valid") => "commit_flowscript",
+                        Some("valid" | "draft_started" | "draft_updated") => "commit_flowscript",
                         Some("validation_errors" | "error" | "no_changes") => "patch_flowscript",
                         _ => "check_flowscript",
                     },
@@ -11016,7 +11121,7 @@ fn workflow_tool_preflight_with_args(
                     } else {
                         "write_flowscript"
                     },
-                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch/check the retained source, and commit_flowscript."
+                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. The embedded FlowScript render IS the current board. Use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch the retained source, and commit_flowscript once diagnostics are clear."
                 }),
                 true,
             ))
@@ -11783,7 +11888,7 @@ fn declaration_result_is_usable(result_text: &str) -> bool {
 
 fn declaration_line_is_complete(line: &str) -> bool {
     let line = line.trim();
-    line.starts_with("declare function ")
+    flow_like::flow::ast::is_signature_line(line)
         && line.contains('(')
         && line.contains(')')
         && line.contains(';')
@@ -12331,7 +12436,16 @@ fn workflow_tool_record_with_outcome(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .or_else(|| submitted_flowscript(args).map(str::to_string))
-            .or(interrupted_source);
+            .or(interrupted_source)
+            .or_else(|| {
+                // Envelope results replace `source` with `source_bytes` but never change the
+                // retained bytes, so the last recorded source still describes this revision.
+                parsed
+                    .as_ref()
+                    .is_some_and(|value| value.get("source_bytes").is_some())
+                    .then(|| state.last_flowscript.clone())
+                    .flatten()
+            });
         let current_draft_id = state.flowscript_draft_id.clone();
         state.flowscript_draft_id = response_draft_id
             .clone()
@@ -12862,10 +12976,10 @@ fn flowpilot_mcp_server_instructions<'a>(
     }
 
     if workflow_mutation && has_ui {
-        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
+        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, the FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections.";
     }
     if workflow_mutation {
-        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
+        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. The FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
     }
     match (has_board, has_ui, has_data) {
         (false, true, false) => {
@@ -13437,6 +13551,7 @@ fn explicit_reasoning_effort(reasoning_effort: Option<&str>) -> Option<&str> {
 }
 
 impl ExternalAgentInvocation {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         backend: FlowPilotAgentBackendKind,
         cli: CliResolution,
@@ -13446,8 +13561,12 @@ impl ExternalAgentInvocation {
         prompt: String,
         tool_names: Vec<String>,
         images: &[ChatImage],
+        resume_session: Option<&str>,
+        append_system_prompt: Option<&str>,
     ) -> Result<Self, String> {
         match backend {
+            // Codex has no session-resume or system-prompt-append surface; both options are
+            // Claude-only and deliberately ignored here.
             FlowPilotAgentBackendKind::Codex => Self::codex(
                 backend,
                 cli,
@@ -13466,6 +13585,8 @@ impl ExternalAgentInvocation {
                 prompt,
                 tool_names,
                 images,
+                resume_session,
+                append_system_prompt,
             ),
             FlowPilotAgentBackendKind::GithubCopilot => Err(
                 "GitHub Copilot uses the direct SDK backend, not the external runner.".to_string(),
@@ -13562,6 +13683,7 @@ impl ExternalAgentInvocation {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn claude(
         backend: FlowPilotAgentBackendKind,
         cli: CliResolution,
@@ -13571,6 +13693,8 @@ impl ExternalAgentInvocation {
         prompt: String,
         tool_names: Vec<String>,
         images: &[ChatImage],
+        resume_session: Option<&str>,
+        append_system_prompt: Option<&str>,
     ) -> Result<Self, String> {
         let mcp_config_path = std::env::temp_dir().join(format!(
             "flowpilot-claude-mcp-{}.json",
@@ -13642,6 +13766,18 @@ impl ExternalAgentInvocation {
         }
         if let Some(effort) = explicit_reasoning_effort(reasoning_effort) {
             args.extend(["--effort".to_string(), effort.to_string()]);
+        }
+        // The bounded role/lifecycle appendix belongs in the real system prompt, not the user
+        // message; the board-embedding platform content stays on stdin because argv has OS
+        // length limits.
+        if let Some(appendix) = append_system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+            args.extend(["--append-system-prompt".to_string(), appendix.to_string()]);
+        }
+        // Continuation phases within one run resume the previous phase's session so the model
+        // keeps its own transcript instead of a lossy host reconstruction. Each resumed print
+        // run mints a NEW session id; the phase loop always resumes the latest captured one.
+        if let Some(session) = resume_session.map(str::trim).filter(|s| !s.is_empty()) {
+            args.extend(["--resume".to_string(), session.to_string()]);
         }
 
         // Text-only turns deliver the prompt via stdin as plain text (`-p` reads
@@ -13720,9 +13856,10 @@ impl ExternalAgentInvocation {
     }
 }
 
-fn build_external_agent_prompt(
-    system_content: &str,
-    user_prompt: &str,
+/// The role + workflow-loop appendix for external code-agent CLIs. On the Claude Code backend it
+/// travels as `--append-system-prompt` so it lands in the real system prompt; other backends
+/// receive it inline in the stdin prompt.
+fn external_agent_role_appendix(
     scope: CopilotScope,
     workflow_edit_request: bool,
     global_agent: bool,
@@ -13731,11 +13868,11 @@ fn build_external_agent_prompt(
         r#"
 THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
-2. Read get_current_flowscript once. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
+2. The system prompt already embeds the current board as anchored FlowScript — that render IS the board, so do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
 3. After any usable declaration result and BEFORE the first source write, call plan_board_scope exactly ONCE. Use one `single` segment for an ordinary edit; split only work too large to compose safely in one pass. Once the host accepts a plan, never call plan_board_scope again unless the host explicitly rejects the plan or a source repair proves the active segment impossible and the tool explicitly permits one revision.
 4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
-5. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
-6. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
+5. If the write/patch result carries diagnostics, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment — a zero-diagnostic write/patch needs no separate check round.
+6. Call commit_flowscript directly at the latest zero-diagnostic revision — commit runs the identical validation inline and returns the same structured validation_errors on failure. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
 7. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
 
 Helper rule: every helper declaration requires the literal keyword `function`, for example `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper. Keep each helper declaration in the same full document as its calls; never invent helper calls and expect them to resolve as catalog nodes. If a helper returns a value, declare a named return signature such as `function classify(...): (isSupport: bool) { ...; return result.value }`.
@@ -13770,17 +13907,42 @@ Entry-node rule: cron/schedules are app Event setup on an `eventsSimple()` entry
         }
     };
     format!(
+        r#"You are running through an external code-agent CLI connected to a role-scoped FlowPilot MCP server. Do not use shell/file-edit tools for FlowPilot artifacts; use only the provided FlowPilot MCP tools.
+
+{role_contract}
+{workflow_loop}"#,
+        role_contract = role_contract,
+    )
+}
+
+fn build_external_agent_prompt(
+    system_content: &str,
+    user_prompt: &str,
+    scope: CopilotScope,
+    workflow_edit_request: bool,
+    global_agent: bool,
+) -> String {
+    let appendix = external_agent_role_appendix(scope, workflow_edit_request, global_agent);
+    format!(
         r#"SYSTEM INSTRUCTIONS
 {system_content}
 
-You are running through an external code-agent CLI connected to a role-scoped FlowPilot MCP server. Do not use shell/file-edit tools for FlowPilot artifacts; use only the provided FlowPilot MCP tools.
-
-{role_contract}
-{workflow_loop}
+{appendix}
 
 USER REQUEST
-{user_prompt}"#,
-        role_contract = role_contract,
+{user_prompt}"#
+    )
+}
+
+/// Prompt body without the role appendix, for the Claude Code backend where the appendix rides
+/// `--append-system-prompt` instead of the user message.
+fn build_external_agent_prompt_body(system_content: &str, user_prompt: &str) -> String {
+    format!(
+        r#"SYSTEM INSTRUCTIONS
+{system_content}
+
+USER REQUEST
+{user_prompt}"#
     )
 }
 
@@ -13949,7 +14111,7 @@ fn build_external_workflow_continuation_prompt(
     let continuation_action = if typed_mode {
         "Continue only the typed-IR lifecycle selected by the retained state. Repair the same module/draft, validate it, and call commit_flow_ir_draft at the latest revision. Do not switch to FlowScript text or another mutation representation."
     } else if retained_source_mode {
-        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
+        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript and call commit_flowscript at the latest zero-diagnostic revision — commit validates inline and returns the same validation_errors on failure; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
     } else if has_accepted_scope_plan {
         "The host already accepted and retained the scope plan. DO NOT call plan_board_scope again. Call write_flowscript now for the returned active segment, then check and commit according to its strategy_rule."
     } else if snapshot.is_some_and(|state| state.last_declarations.is_some()) {
@@ -14285,6 +14447,17 @@ async fn run_external_agent_invocation(
                         fatal_error.get_or_insert(safe_error);
                     }
 
+                    // Claude's init and result frames both carry the session id; keep the latest
+                    // (resumed print runs mint a new id per run) so continuation phases can
+                    // `--resume` the transcript instead of replaying the whole platform prompt.
+                    if invocation.backend == FlowPilotAgentBackendKind::ClaudeCode
+                        && let Some(session_id) =
+                            value.get("session_id").and_then(serde_json::Value::as_str)
+                        && !session_id.is_empty()
+                    {
+                        stream_state.session_id = Some(session_id.to_string());
+                    }
+
                     // A failed FlowPilot MCP connection leaves the agent tool-less: it will answer
                     // in plain text and "succeed" without editing. Treat that as a terminal failure.
                     if let Some(error) = external_agent_mcp_connect_failure(&value) {
@@ -14450,12 +14623,17 @@ async fn run_external_agent_invocation(
 
     match (text.is_empty(), error) {
         (true, Some(error)) => Err(error),
-        (_, error) => Ok(ExternalAgentRunOutput { text, error }),
+        (_, error) => Ok(ExternalAgentRunOutput {
+            text,
+            error,
+            session_id: stream_state.session_id.clone(),
+        }),
     }
 }
 
 #[derive(Default)]
 struct ExternalAgentStreamState {
+    session_id: Option<String>,
     agent_message_text_by_id: HashMap<String, String>,
     last_agent_message_id: Option<String>,
     has_streamed_assistant_text: bool,
@@ -15586,7 +15764,7 @@ fn workflow_edit_continuation_prompt(
 {workspace_note}
 {failure_note}
 Do not ask the user to confirm. Do not say "Create draft", "go ahead", "tell me if", or similar.
-Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript, check_flowscript, and end with commit_flowscript creating the exact review claim; UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
+Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript and end with commit_flowscript creating the exact review claim (commit validates inline once diagnostics are clear; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment); UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
 
 Original user request:
 {original_user_prompt}"#
@@ -22587,7 +22765,12 @@ event onTicket() {
     fn workflow_edit_session_defers_runtime_verification_until_persisted() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
 
-        for tool in ["execute_event", "execute_node", "query_execution_logs"] {
+        for tool in [
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+            "run_board_tests",
+        ] {
             let result = workflow_tool_preflight(&state, tool)
                 .expect("mutation sessions must return an explicit runtime deferral");
             assert_eq!(result.is_error, Some(true));
@@ -26025,6 +26208,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26121,6 +26306,8 @@ eventsSimple() {
                 "hello".to_string(),
                 tool_names,
                 &[],
+                None,
+                None,
             )
             .expect("codex invocation should build");
 
@@ -26161,6 +26348,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26321,6 +26510,82 @@ eventsSimple() {
     }
 
     #[test]
+    fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/claude"),
+                CliResolutionSource::Path,
+            ),
+            "sonnet",
+            None,
+            "http://127.0.0.1:23456/mcp",
+            "continuation payload".to_string(),
+            vec!["write_flowscript".to_string()],
+            &[],
+            Some("session-1234"),
+            Some("ROLE APPENDIX"),
+        )
+        .expect("claude invocation should build");
+
+        let resume_index = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--resume")
+            .expect("claude must resume the captured session");
+        assert_eq!(invocation.args[resume_index + 1], "session-1234");
+        let append_index = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .expect("claude must append the role prompt");
+        assert_eq!(invocation.args[append_index + 1], "ROLE APPENDIX");
+        assert_eq!(
+            invocation.prompt, "continuation payload",
+            "a resumed continuation sends only its compact payload on stdin"
+        );
+
+        let codex = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::Codex,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/codex"),
+                CliResolutionSource::Path,
+            ),
+            "default",
+            None,
+            "http://127.0.0.1:12345/mcp",
+            "hello".to_string(),
+            vec!["edit_flowscript".to_string()],
+            &[],
+            Some("session-1234"),
+            Some("ROLE APPENDIX"),
+        )
+        .expect("codex invocation should build");
+        assert!(
+            !codex.args.iter().any(|arg| arg == "--resume"
+                || arg == "--append-system-prompt"
+                || arg.contains("session-1234")),
+            "codex has no resume/append surface; both options must be ignored"
+        );
+    }
+
+    #[test]
+    fn external_agent_prompt_split_keeps_the_full_wrap_byte_identical() {
+        let full = build_external_agent_prompt("SYS", "USER", CopilotScope::Board, true, false);
+        let appendix = external_agent_role_appendix(CopilotScope::Board, true, false);
+        assert_eq!(
+            full,
+            format!("SYSTEM INSTRUCTIONS\nSYS\n\n{appendix}\n\nUSER REQUEST\nUSER")
+        );
+        assert_eq!(
+            build_external_agent_prompt_body("SYS", "USER"),
+            "SYSTEM INSTRUCTIONS\nSYS\n\nUSER REQUEST\nUSER"
+        );
+        assert!(appendix.contains("BOARD specialist"));
+        assert!(appendix.contains("WORKFLOW MUTATION RUN"));
+    }
+
+    #[test]
     fn claude_invocation_uses_shared_mcp_config() {
         let invocation = ExternalAgentInvocation::new(
             FlowPilotAgentBackendKind::ClaudeCode,
@@ -26340,6 +26605,8 @@ eventsSimple() {
                 "commit_flowscript".to_string(),
             ],
             &[],
+            None,
+            None,
         )
         .expect("claude invocation should build");
 
@@ -26449,6 +26716,8 @@ eventsSimple() {
                 "flowpilot_board".to_string(),
             ],
             &[],
+            None,
+            None,
         )
         .expect("global Claude invocation should build");
 
@@ -26499,6 +26768,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[test_chat_image()],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26532,6 +26803,8 @@ eventsSimple() {
             "hello".to_string(),
             vec![],
             &[test_chat_image()],
+            None,
+            None,
         )
         .expect("claude invocation should build");
 

@@ -1,0 +1,142 @@
+use array::{ length, push }
+use control::{ delay }
+use log::{ error, info, warn }
+use types::{ fallback, isEmpty }
+
+interface DeploymentArtifact {
+    name: string;
+    digest: string;
+    size_bytes: int;
+    kind?: "image" | "bundle" | "sbom" = "image";
+}
+interface DeploymentStatus {
+    deployment_id: string;
+    state: "queued" | "running" | "succeeded" | "failed";
+    started_at: string;
+    artifacts: DeploymentArtifact[];
+    message?: string | null;
+}
+
+@description("Base URL of the release registry, no trailing slash")
+const registryBaseUrl = "https://registry.internal.example.com/v2"
+
+@description("Bearer token used to read deployment status")
+@secret
+const registryToken: string
+
+@category("Release/Polling")
+let maxPollAttempts = 6
+
+@description("Contracted response shape, used to derive the validation schema")
+const statusTemplate: DeploymentStatus = {"deployment_id":"","state":"queued","started_at":"","artifacts":[],"message":null}
+
+function retryPolicy(statusCode: int): (retryable: bool, reason: string) {
+    let retryable = false
+    let reason = "fatal"
+    if (statusCode == 429) {
+        retryable = true
+        reason = "rate limited"
+    } else if (statusCode == 408) {
+        retryable = true
+        reason = "request timeout"
+    } else if (statusCode >= 500) {
+        retryable = true
+        reason = "upstream error"
+    }
+    return retryable, reason
+}
+
+function toManifestRow(artifact: Struct, position: int): (row: Struct) {
+    const { value: rawName } = struct::get({ struct: artifact, field: "name" })
+    const { value: rawDigest } = struct::get({ struct: artifact, field: "digest" })
+    const { value: rawSize } = struct::get({ struct: artifact, field: "size_bytes" })
+    const { value: rawKind } = struct::get({ struct: artifact, field: "kind" })
+
+    const name = fallback({ value: rawName, default: `artifact-${position}` })
+    const digest = fallback({ value: rawDigest, default: "sha256:unknown" })
+    const sizeBytes = fallback({ value: rawSize, default: 0 })
+    const kind = fallback({ value: rawKind, default: "image" })
+
+    const base = struct::make()
+    const withName = base.set("name", name)
+    const withDigest = withName.set("digest", digest)
+    const withSize = withDigest.set("size_bytes", sizeBytes)
+    const withKind = withSize.set("kind", kind)
+    const row = withKind.set("position", position)
+    return row
+}
+
+eventsGeneric pollDeploymentStatus(payload: Struct, deploymentId: string) {
+    const baseRequest = http::request({ method: "GET", url: `${registryBaseUrl}/deployments/${deploymentId}` })
+    const authorized = baseRequest.setAccept("application/json").setBearerAuth(registryToken)
+    const probe = authorized.setHeader("X-Client", "flow-like-release-bot")
+
+    let attempt = 0
+    let settled = false
+    let backoffMs = 400.0
+    let lastStatus = 0
+    let bodyText = ""
+
+    while (!settled && attempt < maxPollAttempts) {
+        attempt = attempt + 1
+        const poll = http::fetch({ request: probe })
+        poll {
+            execSuccess: {
+                const code = poll.status()
+                lastStatus = code
+                if (poll.isSuccess()) {
+                    bodyText = poll.toText()
+                    settled = true
+                    info({ message: `deployment ${deploymentId} answered ${code} on attempt ${attempt}`, toast: false })
+                } else {
+                    const { retryable, reason } = retryPolicy(code)
+                    if (retryable) {
+                        warn({ message: `${reason} (${code}) on attempt ${attempt}, waiting ${backoffMs}ms`, toast: false })
+                        delay({ time: backoffMs })
+                        backoffMs = backoffMs * 2.0
+                    } else {
+                        error({ message: `registry refused the status probe with ${code}`, toast: true })
+                        settled = true
+                    }
+                }
+            }
+            execError: {
+                warn({ message: `transport failure on attempt ${attempt}, waiting ${backoffMs}ms`, toast: false })
+                delay({ time: backoffMs })
+                backoffMs = backoffMs * 2.0
+            }
+        }
+    }
+
+    let manifest = array::make()
+    let summary = `deployment ${deploymentId} unresolved after ${attempt} attempts (last status ${lastStatus})`
+
+    if (isEmpty({ value: bodyText, trim: true })) {
+        error({ message: summary, toast: true })
+    } else {
+        const templateJson = json::stringify({ value: statusTemplate, pretty: false })
+        const derivedSchema = json::makeSchema({ exampleJson: templateJson })
+        const schemaText = json::stringify({ value: derivedSchema, pretty: false })
+        const status = json::parseWithSchema({ schema: schemaText, data: bodyText })
+
+        const { value: state } = struct::get({ struct: status, field: "state" })
+        const { value: rawArtifacts, found: hasArtifacts } = struct::get({ struct: status, field: "artifacts" })
+
+        if (hasArtifacts) {
+            for (const [index, artifact] of rawArtifacts) {
+                const row = toManifestRow(artifact, index)
+                manifest = manifest.push(row)
+            }
+        }
+
+        const ordered = array::sort({ arrayIn: manifest, descending: true, compare: "Number", nulls: "Last" })
+        const { arrayOut: shippable, kept } = array::filterBy({ arrayIn: ordered, key: "size_bytes", operator: "Greater Than", value: "0", compare: "Number", ignoreCase: false, invert: false })
+        const total = manifest.length()
+
+        manifest = shippable
+        summary = `deployment ${deploymentId} is ${state}: ${kept}/${total} artifacts shippable after ${attempt} attempts`
+        info({ message: summary, toast: false })
+    }
+
+    return summary
+}

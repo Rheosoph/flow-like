@@ -28,6 +28,8 @@ export type CommentNode = Node<
 	{
 		comment: IComment;
 		onUpsert: (comment: IComment) => Promise<void>;
+		/** Present when the comment is anchored to a node (`node_id`) — reveals it in FlowScript. */
+		onOpenInCode?: () => void;
 		boardId: string;
 		appId: string;
 		hash: string;
@@ -142,6 +144,7 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 						onMoveUp={() => onMoveLayer(1)}
 						onMoveDown={() => onMoveLayer(-1)}
 						onToggleLock={toggleLock}
+						onGoToCode={props.data.onOpenInCode}
 					/>
 				)}
 				<div

@@ -7,6 +7,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
@@ -49,6 +50,7 @@ impl NodeLogic for BatchImageInferenceNode {
             "Run ONNX inference on multiple images in batches",
             "AI/ML/ONNX/Batch",
         );
+        node.set_flowscript_name("onnx", "batchImageInference");
         node.set_version(1);
 
         node.add_icon("/flow/icons/layers.svg");

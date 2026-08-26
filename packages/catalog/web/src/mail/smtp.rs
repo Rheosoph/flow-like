@@ -135,6 +135,7 @@ impl NodeLogic for SmtpConnectNode {
             "Connects to an SMTP server and caches the session. For Gmail: use host 'smtp.gmail.com', port 587, encryption 'StartTls', your Gmail address as username, and an App Password (not your regular password). Generate an App Password at: https://support.google.com/mail/answer/185833",
             "Email/SMTP",
         );
+        node.set_flowscript_name("smtp", "connect");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);

@@ -80,6 +80,7 @@ impl NodeLogic for ListOneDriveItemsNode {
             "List files and folders in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "listItems");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -179,6 +180,7 @@ impl NodeLogic for GetOneDriveItemNode {
             "Get metadata for a OneDrive item",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "getItem");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -276,6 +278,7 @@ impl NodeLogic for DownloadOneDriveFileNode {
             "Download a file from OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "download");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -374,6 +377,7 @@ impl NodeLogic for UploadOneDriveFileNode {
             "Upload a FlowPath file to OneDrive; automatically uses an upload session for larger files",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "upload");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -533,6 +537,7 @@ impl NodeLogic for CreateOneDriveFolderNode {
             "Create a new folder in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "createFolder");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -662,6 +667,7 @@ impl NodeLogic for DeleteOneDriveItemNode {
             "Delete a file or folder from OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "delete");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -750,6 +756,7 @@ impl NodeLogic for MoveOneDriveItemNode {
             "Move a file or folder to a new location in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "move");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -904,6 +911,7 @@ impl NodeLogic for CopyOneDriveItemNode {
             "Copy a file or folder in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "copy");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
@@ -1059,6 +1067,7 @@ impl NodeLogic for SearchOneDriveNode {
             "Search for files and folders in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_flowscript_name("microsoft.onedrive", "search");
         node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 

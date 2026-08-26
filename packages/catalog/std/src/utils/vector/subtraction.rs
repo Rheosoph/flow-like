@@ -25,6 +25,7 @@ impl NodeLogic for FloatVectorSubtractionNode {
             "Subtracts one float vector from another element-wise",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "subtract");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

@@ -67,6 +67,7 @@ impl NodeLogic for ShareTextPostNode {
             "Share a text post on LinkedIn",
             "Data/LinkedIn",
         );
+        node.set_flowscript_name("linkedin", "shareText");
         node.add_icon("/flow/icons/linkedin.svg");
 
         node.add_input_pin(
@@ -249,6 +250,7 @@ impl NodeLogic for ShareArticleNode {
             "Share an article/link on LinkedIn with optional title and description",
             "Data/LinkedIn",
         );
+        node.set_flowscript_name("linkedin", "shareArticle");
         node.add_icon("/flow/icons/linkedin.svg");
 
         node.add_input_pin(

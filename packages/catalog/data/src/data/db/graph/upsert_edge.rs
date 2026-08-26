@@ -1,11 +1,15 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeGraphConnection;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 /// # Upsert Graph Edge
 /// Inserts or updates an edge in a graph overlay's underlying edge table.
@@ -28,6 +32,8 @@ impl NodeLogic for UpsertGraphEdgeNode {
             "Inserts or updates an edge in the graph overlay's underlying edge table",
             "Data/Database/Graph/Write",
         );
+        node.set_flowscript_name("db.graph", "upsertEdge");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

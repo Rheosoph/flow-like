@@ -24,6 +24,8 @@ impl NodeLogic for FloorFloatNode {
             "Rounds a float down to the nearest integer",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "floor");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float", "Float", "Input Float", VariableType::Float);

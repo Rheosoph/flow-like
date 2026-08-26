@@ -27,6 +27,8 @@ impl NodeLogic for SetToArrayNode {
             "Converts a set to an array",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "toArray");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

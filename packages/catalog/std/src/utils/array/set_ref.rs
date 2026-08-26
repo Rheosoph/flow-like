@@ -26,6 +26,7 @@ impl NodeLogic for SetIndexArrayRefNode {
             "Set an element at a specific index directly in a variable array without copying. Much faster for large arrays.",
             "Utils/Array/By Reference",
         );
+        node.set_flowscript_name("array", "setIndexRef");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

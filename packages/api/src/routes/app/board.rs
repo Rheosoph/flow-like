@@ -2,6 +2,7 @@ pub mod apply_flowscript;
 pub mod delete_board;
 pub mod execute_commands;
 pub mod flow_ir_commit;
+pub mod format_flowscript;
 pub mod get_board;
 pub mod get_board_variables;
 pub mod get_board_versions;
@@ -78,6 +79,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{board_id}/flowscript/apply",
             post(apply_flowscript::apply_flowscript),
+        )
+        .route(
+            "/{board_id}/flowscript/format",
+            post(format_flowscript::format_flowscript),
         )
         .route(
             "/{board_id}/flow-ir-commit/disposition",

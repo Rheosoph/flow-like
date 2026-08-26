@@ -10,7 +10,7 @@ use std::{
 use super::{
     board::Board,
     execution::context::ExecutionContext,
-    pin::{Pin, PinType, ValueType},
+    pin::{Pin, PinType, ValueType, is_open_object_schema},
     variable::VariableType,
 };
 
@@ -187,6 +187,20 @@ pub struct Node {
     /// WASM metadata for external nodes. None for built-in catalog nodes.
     /// Populated automatically when placing or pasting nodes; never trust frontend-supplied values.
     pub wasm: Option<NodeWasm>,
+    /// FlowScript namespace path (`string`, `http`, `jira`, `ui`; dotted when nested).
+    /// Presentation only — never part of node identity (`name` stays the id). `None` derives
+    /// it from `category` (`flow_like_ast::naming::derive_namespace`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// FlowScript member name inside `namespace` (`trim`, `fetch`, `createIssue`).
+    /// Presentation only — never part of node identity. `None` derives it from `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Name of the data input pin that receives the value in FlowScript method form
+    /// (`s` in `s.trim()`). Presentation only. `None` applies the default rule
+    /// (`flowscript_receiver`); `Some("")` opts out: the node is callable statically only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
 }
 
 impl Node {
@@ -215,7 +229,104 @@ impl Node {
             only_offline: false,
             version: None,
             wasm: None,
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
+    }
+
+    /// Set the explicit FlowScript spelling of this node (`namespace::alias`).
+    pub fn set_flowscript_name(&mut self, namespace: &str, alias: &str) -> &mut Self {
+        self.namespace = Some(namespace.to_string());
+        self.alias = Some(alias.to_string());
+        self
+    }
+
+    /// Name the data input pin that receives the value in method form; `""` makes the node
+    /// static-only.
+    pub fn set_receiver(&mut self, pin_name: &str) -> &mut Self {
+        self.receiver = Some(pin_name.to_string());
+        self
+    }
+
+    fn name_fields(&self) -> flow_like_ast::NameFields<'_> {
+        flow_like_ast::NameFields {
+            namespace: self.namespace.as_deref(),
+            alias: self.alias.as_deref(),
+            receiver: self.receiver.as_deref(),
+        }
+    }
+
+    /// Effective FlowScript namespace: the explicit field (every first-party node sets one),
+    /// else the `NAME_OVERRIDES` residue table, else derived from `category`
+    /// (`flow_like_ast::effective_spelling`).
+    pub fn flowscript_namespace(&self) -> String {
+        flow_like_ast::effective_spelling(&self.name, &self.category, self.name_fields()).0
+    }
+
+    /// Effective FlowScript alias: the explicit field, else the override table, else derived
+    /// from `name` and `category`.
+    pub fn flowscript_alias(&self) -> String {
+        flow_like_ast::effective_spelling(&self.name, &self.category, self.name_fields()).1
+    }
+
+    /// The data input pin a method-form call binds the receiver to, or `None` when the node is
+    /// static-only.
+    ///
+    /// Without an explicit `receiver` (or an override-table entry), the first data input (by
+    /// `index`) is the receiver iff its type is the effective namespace's own value type
+    /// (`string` ↔ `String`, `array` ↔ any `Array`, …; `flow_like_ast::VALUE_TYPE_NAMESPACES`).
+    /// Nodes outside value-type namespaces are static unless they opt in with
+    /// [`Self::set_receiver`]. The rule itself lives in `flow_like_ast::effective_names` so
+    /// catalog metadata derives the same answer.
+    pub fn flowscript_receiver(&self) -> Option<String> {
+        let inputs = self
+            .data_inputs_in_order()
+            .map(|pin| {
+                (
+                    pin.name.clone(),
+                    format!("{:?}", pin.data_type),
+                    format!("{:?}", pin.value_type),
+                )
+            })
+            .collect::<Vec<_>>();
+        flow_like_ast::effective_names(
+            &self.name,
+            &self.category,
+            self.name_fields(),
+            inputs.iter().map(|(name, data_type, value_type)| {
+                (name.as_str(), data_type.as_str(), value_type.as_str())
+            }),
+        )
+        .receiver
+    }
+
+    /// The FlowScript method class of the effective receiver pin (`string`, `array`, …; the
+    /// schema title for a struct receiver with one), or `None` for static-only nodes and
+    /// receivers without a value-type class.
+    pub fn flowscript_receiver_class(&self) -> Option<String> {
+        let receiver = self.flowscript_receiver()?;
+        let pin = self
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == receiver)?;
+        flow_like_ast::receiver_class_of(
+            &format!("{:?}", pin.data_type),
+            &format!("{:?}", pin.value_type),
+            pin.schema.as_deref(),
+        )
+    }
+
+    fn data_inputs_in_order(&self) -> impl Iterator<Item = &Pin> {
+        let mut inputs = self
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution
+            })
+            .collect::<Vec<_>>();
+        inputs.sort_by(|a, b| (a.index, a.name.as_str()).cmp(&(b.index, b.name.as_str())));
+        inputs.into_iter()
     }
 
     pub fn add_comment(&mut self, comment: &str) {
@@ -413,30 +524,60 @@ impl Node {
         self.scores = Some(scores);
     }
 
-    pub fn harmonize_schema(&mut self, pins: Vec<&str>) -> Option<String> {
-        let schema = match self
-            .pins
-            .iter()
-            .find(|(_, pin)| pins.contains(&pin.name.as_str()) && pin.schema.is_some())
-        {
-            Some((_, pin)) => pin.schema.clone(),
-            None => return None,
-        };
-
-        for pin in self.pins.values_mut() {
-            if pins.contains(&pin.name.as_str()) {
-                pin.schema = schema.clone();
+    /// The schema the listed pins should agree on, scanned in the caller's pin order.
+    ///
+    /// Ranked, best first, because a pin's schema is only as trustworthy as where it came from:
+    ///
+    /// 1. A concrete schema on an input pin that has a producer — the shape actually flowing in.
+    /// 2. Any other concrete schema. An output pin can only have inherited one *backwards* from
+    ///    whatever it feeds, which goes stale the moment the producer upstream is swapped out.
+    /// 3. The open-object marker. `set_open_schema` says "this pin accepts any shape", never "its
+    ///    peers have no shape", so a permissive consumer must not erase a real schema.
+    ///
+    /// See [`crate::flow::pin::is_open_object_schema`].
+    fn donor_schema(&self, pins: &[&str]) -> Option<String> {
+        fn rank(pin: &Pin) -> u8 {
+            match pin.schema.as_deref() {
+                None => u8::MAX,
+                Some(schema) if is_open_object_schema(schema) => 2,
+                Some(_) if pin.pin_type == PinType::Input && !pin.depends_on.is_empty() => 0,
+                Some(_) => 1,
             }
         }
 
-        schema
+        let mut best: Option<(u8, &Pin)> = None;
+        for name in pins {
+            for pin in self.pins.values().filter(|pin| pin.name == *name) {
+                let pin_rank = rank(pin);
+                if pin_rank == u8::MAX {
+                    continue;
+                }
+                if best.is_none_or(|(best_rank, _)| pin_rank < best_rank) {
+                    best = Some((pin_rank, pin));
+                }
+            }
+        }
+
+        best.and_then(|(_, pin)| pin.schema.clone())
+    }
+
+    pub fn harmonize_schema(&mut self, pins: Vec<&str>) -> Option<String> {
+        let schema = self.donor_schema(&pins)?;
+
+        for pin in self.pins.values_mut() {
+            if pins.contains(&pin.name.as_str()) {
+                pin.schema = Some(schema.clone());
+            }
+        }
+
+        Some(schema)
     }
 
     pub fn harmonize_type(&mut self, pins: Vec<&str>, schema: bool) -> Option<VariableType> {
         // Scan in the caller's pin order, not map iteration order, so the
         // donor pin is deterministic. The type comes from the first
-        // non-generic pin; the schema from the first pin that actually has
-        // one — a schema-less sibling must never wipe another pin's schema.
+        // non-generic pin; the schema from `donor_schema` — a schema-less or
+        // open-shaped sibling must never wipe another pin's concrete schema.
         let variable_type = pins.iter().find_map(|name| {
             self.pins
                 .values()
@@ -445,12 +586,7 @@ impl Node {
         })?;
 
         let found_schema = if schema {
-            pins.iter().find_map(|name| {
-                self.pins
-                    .values()
-                    .filter(|pin| pin.name == *name)
-                    .find_map(|pin| pin.schema.clone())
-            })
+            self.donor_schema(&pins)
         } else {
             None
         };
@@ -516,7 +652,14 @@ impl Node {
             match pin {
                 Some(pin) => {
                     mutable_pin.data_type = pin.data_type.clone();
-                    mutable_pin.schema = pin.schema.clone();
+                    // The open marker declares "any shape", so there is nothing to inherit from it.
+                    // Adopting it — from a consumer like Break Struct's `struct_in`, which this pin
+                    // reaches through `connected_to` — would erase the shape this pin's own
+                    // producer gave it, and `harmonize_type` would then spread the blank downstream.
+                    mutable_pin.schema = pin
+                        .schema
+                        .clone()
+                        .filter(|schema| !is_open_object_schema(schema));
                     found_type = pin.data_type.clone();
 
                     if value_type.is_none() {
@@ -747,6 +890,9 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             // Mirror-driven: pins copied from a target function layer.
             | "control_call_function"
             | "control_call_reference"
+            // Schema-driven: one pin per field of the struct schema a wired peer declares.
+            | "struct_break"
+            | "struct_make_from_schema"
             // Widget-driven: pins derived from a persisted widget's bindings/contract.
             | "a2ui_instantiate_widget"
             | "a2ui_widget_update_inputs"
@@ -757,6 +903,42 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             | "df_execute_sql"
             | "df_write_delta"
             | "graph_sql_query"
+            // Backend-driven: the `source` dropdown decides whether the node reads a database
+            // table or a raw vector, and mints the matching inputs. Every one of these reads
+            // only its own `source` pin, so the literal-driven prediction path applies.
+            | "fit_adaboost"
+            | "fit_dbscan"
+            | "fit_decision_tree"
+            | "fit_elastic_net"
+            | "fit_feature_scaler"
+            | "fit_gaussian_mixture"
+            | "fit_glm"
+            | "fit_kmeans"
+            | "fit_knn_classifier"
+            | "fit_knn_regressor"
+            | "fit_linear_regression"
+            | "fit_logistic_regression"
+            | "fit_multinomial_naive_bayes"
+            | "fit_naive_bayes"
+            | "fit_one_class_svm"
+            | "fit_ordinal_adjacent_category"
+            | "fit_ordinal_continuation_ratio"
+            | "fit_ordinal_frank_hall"
+            | "fit_ordinal_logistic"
+            | "fit_ordinal_neural"
+            | "fit_ordinal_ridge"
+            | "fit_pca"
+            | "fit_random_forest"
+            | "fit_svm_multi_class"
+            | "fit_svm_regression"
+            | "fit_tfidf_vectorizer"
+            | "fit_tsne"
+            | "ml_apply_transform"
+            | "ml_predict"
+            | "ai_ml_tuning_auto_classifier"
+            | "ai_ml_tuning_auto_ordinal"
+            | "ai_ml_tuning_grid_search"
+            | "ai_ml_tuning_ordinal_grid_search"
     )
 }
 
@@ -838,6 +1020,117 @@ mod tests {
     use flow_like_types::{FromProto, ToProto};
     use flow_like_types::{Message, tokio};
 
+    use crate::flow::pin::OPEN_OBJECT_SCHEMA;
+
+    const CONCRETE_SCHEMA: &str =
+        r#"{"title":"A2UIFileInputFile","type":"object","properties":{"name":{"type":"string"}}}"#;
+    const STALE_SCHEMA: &str =
+        r#"{"title":"Bit","type":"object","properties":{"id":{"type":"string"}}}"#;
+
+    /// `Get Element` harmonizes its element pin with its array pin. The element pin reaches its
+    /// *consumer* (Break Struct's open `struct_in`) through `connected_to`, so without a
+    /// preference the open marker would be stamped over the array's real schema.
+    #[test]
+    fn a_concrete_schema_outranks_the_open_marker_when_harmonizing() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        node.add_input_pin("array_in", "Array", "", super::VariableType::Struct)
+            .schema = Some(CONCRETE_SCHEMA.to_string());
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(OPEN_OBJECT_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        for name in ["element", "array_in"] {
+            assert_eq!(
+                node.get_pin_by_name(name).unwrap().schema.as_deref(),
+                Some(CONCRETE_SCHEMA),
+                "`{name}` must keep the concrete schema"
+            );
+        }
+
+        node.harmonize_schema(vec!["element", "array_in"]);
+        assert_eq!(
+            node.get_pin_by_name("element").unwrap().schema.as_deref(),
+            Some(CONCRETE_SCHEMA)
+        );
+    }
+
+    /// A passthrough follows its producer, not the consumer it feeds. The consumer's copy of the
+    /// previous shape would otherwise be stamped back over the array that was just rewired.
+    #[test]
+    fn an_upstream_schema_outranks_one_inherited_from_a_consumer() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        let array_in = node.add_input_pin("array_in", "Array", "", super::VariableType::Struct);
+        array_in.schema = Some(CONCRETE_SCHEMA.to_string());
+        array_in.depends_on.insert("producer-pin".to_string());
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(STALE_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        for name in ["element", "array_in"] {
+            assert_eq!(
+                node.get_pin_by_name(name).unwrap().schema.as_deref(),
+                Some(CONCRETE_SCHEMA),
+                "`{name}` must follow the wired producer"
+            );
+        }
+    }
+
+    /// With nothing concrete to spread, the marker is still the best answer available: the pins
+    /// agree that the shape is open rather than losing the declaration entirely.
+    #[test]
+    fn the_open_marker_still_spreads_when_no_pin_has_a_real_schema() {
+        let mut node = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        node.add_input_pin("array_in", "Array", "", super::VariableType::Struct);
+        node.add_output_pin("element", "Element", "", super::VariableType::Struct)
+            .schema = Some(OPEN_OBJECT_SCHEMA.to_string());
+
+        node.harmonize_type(vec!["element", "array_in"], true);
+
+        assert_eq!(
+            node.get_pin_by_name("array_in").unwrap().schema.as_deref(),
+            Some(OPEN_OBJECT_SCHEMA)
+        );
+    }
+
+    /// `match_type` on an output pin reads `connected_to`, so it inherits from the consumer.
+    #[tokio::test]
+    async fn match_type_does_not_inherit_an_open_marker_from_a_consumer() {
+        use flow_like_storage::object_store::path::Path;
+
+        let mut board = super::Board::new_detached(Some("match-type".to_string()), Path::default());
+
+        let mut consumer = super::Node::new("struct_break", "Break Struct", "", "Structs");
+        consumer.id = "consumer".to_string();
+        consumer
+            .add_input_pin("struct_in", "Struct", "", super::VariableType::Struct)
+            .set_open_schema();
+        let consumer_pin = consumer.get_pin_by_name("struct_in").unwrap().id.clone();
+        board.nodes.insert(consumer.id.clone(), consumer);
+
+        let mut passthrough = super::Node::new("array_get", "Get Element", "", "Utils/Array");
+        passthrough.id = "passthrough".to_string();
+        let element =
+            passthrough.add_output_pin("element", "Element", "", super::VariableType::Generic);
+        element.connected_to.insert(consumer_pin);
+
+        passthrough
+            .match_type("element", &board, Some(super::ValueType::Normal), None)
+            .unwrap();
+
+        assert_eq!(
+            passthrough.get_pin_by_name("element").unwrap().data_type,
+            super::VariableType::Struct,
+            "the data type is still inherited from the consumer"
+        );
+        assert_eq!(
+            passthrough.get_pin_by_name("element").unwrap().schema,
+            None,
+            "the open marker declares nothing, so there is no schema to inherit"
+        );
+    }
+
     #[tokio::test]
     async fn serialize_node() {
         let node = super::Node::new("Hi", "Test Node", "What a wonderful day", "IDK");
@@ -848,6 +1141,62 @@ mod tests {
             super::Node::from_proto(flow_like_types::proto::Node::decode(&buf[..]).unwrap());
 
         assert_eq!(node.id, deser_node.id);
+    }
+
+    #[test]
+    fn flowscript_names_derive_unless_explicit() {
+        let mut node = super::Node::new("string_trim", "Trim", "", "Utils/String");
+        node.add_input_pin("string", "String", "", super::VariableType::String);
+        assert_eq!(node.flowscript_namespace(), "string");
+        assert_eq!(node.flowscript_alias(), "trim");
+        assert_eq!(node.flowscript_receiver().as_deref(), Some("string"));
+        assert_eq!(node.flowscript_receiver_class().as_deref(), Some("string"));
+
+        node.set_flowscript_name("text", "strip").set_receiver("");
+        assert_eq!(node.flowscript_namespace(), "text");
+        assert_eq!(node.flowscript_alias(), "strip");
+        assert_eq!(node.flowscript_receiver(), None);
+        assert_eq!(node.flowscript_receiver_class(), None);
+    }
+
+    #[test]
+    fn default_receiver_requires_the_namespace_value_type() {
+        let mut from_int = super::Node::new("string_from_int", "From Int", "", "Utils/String");
+        from_int.add_input_pin("exec_in", "In", "", super::VariableType::Execution);
+        from_int.add_input_pin("value", "Value", "", super::VariableType::Integer);
+        assert_eq!(from_int.flowscript_receiver(), None);
+
+        let mut push = super::Node::new("array_push", "Push", "", "Utils/Array");
+        push.add_input_pin("array", "Array", "", super::VariableType::Generic)
+            .set_value_type(super::ValueType::Array);
+        push.add_input_pin("item", "Item", "", super::VariableType::Generic);
+        assert_eq!(push.flowscript_receiver().as_deref(), Some("array"));
+        assert_eq!(push.flowscript_receiver_class().as_deref(), Some("array"));
+
+        let mut probe = super::Node::new("http_probe", "Probe", "", "Web/API");
+        probe.add_input_pin("url", "URL", "", super::VariableType::String);
+        assert_eq!(probe.flowscript_receiver(), None);
+        probe.set_receiver("url");
+        assert_eq!(probe.flowscript_receiver().as_deref(), Some("url"));
+        assert_eq!(probe.flowscript_receiver_class().as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn explicit_fields_win_over_derivation() {
+        let mut md5 = super::Node::new("utils_hash_md5", "MD5", "", "Utils/Hash");
+        md5.add_input_pin("input", "Input", "", super::VariableType::String);
+        // The override residue is empty after the bake-in: an un-annotated node derives.
+        assert_eq!(md5.flowscript_namespace(), "hash");
+        assert_eq!(md5.flowscript_alias(), "md5");
+        assert_eq!(md5.flowscript_receiver(), None);
+
+        md5.set_flowscript_name("hash", "md5").set_receiver("input");
+        assert_eq!(md5.flowscript_receiver().as_deref(), Some("input"));
+        assert_eq!(md5.flowscript_receiver_class().as_deref(), Some("string"));
+
+        md5.set_flowscript_name("digest", "md5").set_receiver("");
+        assert_eq!(md5.flowscript_namespace(), "digest");
+        assert_eq!(md5.flowscript_receiver(), None);
     }
 
     #[test]

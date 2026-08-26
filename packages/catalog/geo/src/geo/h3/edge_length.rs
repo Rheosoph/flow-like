@@ -35,6 +35,7 @@ impl NodeLogic for EdgeLengthNode {
             "Returns the average edge length of H3 cells at a given resolution.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "edgeLength");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

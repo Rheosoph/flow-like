@@ -3,13 +3,17 @@
 //! Returns generic information about any ML model type.
 
 use crate::ml::NodeMLModel;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Result, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{Result, async_trait};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +48,8 @@ impl NodeLogic for GetModelInfoNode {
             "Get general information about any ML model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "info");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.add_input_pin(

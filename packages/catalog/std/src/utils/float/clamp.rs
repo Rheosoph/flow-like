@@ -24,6 +24,8 @@ impl NodeLogic for ClampFloatNode {
             "Clamps a float within a given range",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "clamp");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float", "Float", "Input Float", VariableType::Float);

@@ -27,6 +27,8 @@ impl NodeLogic for PopSetNode {
             "Pops a random element of a set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "pop");
+        node.set_receiver("set_in");
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

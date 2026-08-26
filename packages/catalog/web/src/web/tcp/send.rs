@@ -37,6 +37,8 @@ impl NodeLogic for TcpSendNode {
             "Sends data through an open TCP connection",
             "Web/TCP",
         );
+        node.set_flowscript_name("tcp", "send");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

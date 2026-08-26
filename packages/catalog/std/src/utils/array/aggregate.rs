@@ -34,6 +34,8 @@ impl NodeLogic for ZipArrayNode {
             "Pairs up the elements of two arrays, stopping at the shorter one",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "zip");
+        node.set_receiver("array_first");
         node.add_icon("/flow/icons/grip.svg");
         node.set_scores(pure_scores());
 
@@ -103,6 +105,8 @@ impl NodeLogic for SumFieldArrayNode {
             "Adds up one numeric field across an array of structs",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "sumField");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

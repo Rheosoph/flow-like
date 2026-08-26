@@ -25,6 +25,8 @@ impl NodeLogic for FallbackNode {
             "Returns the input value if valid, otherwise returns the fallback default. Useful for handling optional values or error recovery.",
             "Utils/Types",
         );
+        node.set_flowscript_name("types", "fallback");
+        node.set_receiver("value");
         node.add_icon("/flow/icons/shield.svg");
 
         node.add_input_pin(

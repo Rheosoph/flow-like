@@ -58,12 +58,15 @@ impl IntDivNode {
 #[async_trait]
 impl NodeLogic for IntDivNode {
     fn get_node(&self) -> Node {
-        division_node(
+        let mut node = division_node(
             "int_div",
             "// (Int)",
             "Divides two integers and truncates towards zero",
             "Truncated quotient",
-        )
+        );
+        node.set_flowscript_name("int", "div");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -84,12 +87,15 @@ impl IntDivEuclidNode {
 #[async_trait]
 impl NodeLogic for IntDivEuclidNode {
     fn get_node(&self) -> Node {
-        division_node(
+        let mut node = division_node(
             "int_div_euclid",
             "Floor Divide (Int)",
             "Divides two integers and rounds towards negative infinity",
             "Euclidean quotient",
-        )
+        );
+        node.set_flowscript_name("int", "divEuclid");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -110,12 +116,15 @@ impl IntRemEuclidNode {
 #[async_trait]
 impl NodeLogic for IntRemEuclidNode {
     fn get_node(&self) -> Node {
-        division_node(
+        let mut node = division_node(
             "int_rem_euclid",
             "Modulo (Int)",
             "Remainder that is always positive, unlike the % operator",
             "Non-negative remainder",
-        )
+        );
+        node.set_flowscript_name("int", "remEuclid");
+        node.set_receiver("integer1");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

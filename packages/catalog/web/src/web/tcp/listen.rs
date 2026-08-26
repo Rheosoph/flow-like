@@ -46,6 +46,7 @@ impl NodeLogic for TcpListenNode {
              or timed out, then triggers on_close.",
             "Web/TCP",
         );
+        node.set_flowscript_name("tcp", "listen");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

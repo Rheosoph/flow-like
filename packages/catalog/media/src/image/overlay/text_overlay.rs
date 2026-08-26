@@ -1,3 +1,4 @@
+use ab_glyph::FontArc;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -6,12 +7,11 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
-    ab_glyph::FontArc,
     async_trait,
     image::{DynamicImage, Rgba},
-    imageproc::drawing::draw_text_mut,
     json::json,
 };
+use imageproc::drawing::draw_text_mut;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -53,6 +53,8 @@ impl NodeLogic for TextOverlayNode {
             "Draw text on top of an image with configurable font size, position, and color",
             "Image/Overlay",
         );
+        node.set_flowscript_name("image", "textOverlay");
+        node.set_receiver("base_image");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

@@ -27,6 +27,7 @@ impl NodeLogic for GetJiraIssueNode {
             "Get a single Jira issue by its key (e.g., PROJ-123)",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getIssue");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

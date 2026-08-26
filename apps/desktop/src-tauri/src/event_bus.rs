@@ -3,6 +3,7 @@ use crate::{
     utils::{UiEmitTarget, local_execution_environment},
 };
 use flow_like::app::App;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::Path;
@@ -14,6 +15,7 @@ use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, sync::mpsc};
 use flow_like_types::{json, tokio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -56,6 +58,70 @@ impl EventBusEvent {
         &self,
         app_handle: &AppHandle,
         flow_like_state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Option<LogMeta>> {
+        let started = Arc::new(AtomicBool::new(false));
+        match self
+            .execute_inner(app_handle, flow_like_state.clone(), started.clone())
+            .await
+        {
+            Ok(meta) => Ok(meta),
+            Err(error) => {
+                if !started.load(Ordering::Relaxed) {
+                    self.record_rejection(&flow_like_state, &error).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Schedules and sinks fire unattended, so a setup failure here has no
+    /// caller to report to. Give it the same run history a real execution
+    /// would have produced, with the reason as its only log line.
+    async fn record_rejection(
+        &self,
+        flow_like_state: &Arc<FlowLikeState>,
+        error: &flow_like_types::Error,
+    ) {
+        let execution_state = Arc::new(flow_like_state.for_execution_run());
+        let event = match App::load(self.app_id.clone(), execution_state.clone()).await {
+            Ok(app) => app.get_event(&self.event_id, None).await.ok(),
+            Err(_) => None,
+        };
+
+        let Some(event) = event else {
+            tracing::warn!(
+                app_id = %self.app_id,
+                event_id = %self.event_id,
+                error = %error,
+                "Event trigger failed before its board could be identified; nothing to record"
+            );
+            return;
+        };
+
+        let rejection = RejectedRun::new(
+            self.app_id.clone(),
+            event.board_id.clone(),
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .with_event_definition(&event)
+        .with_payload(self.payload.as_ref());
+
+        if let Err(error) = flow_like_state.record_rejected_run(&rejection).await {
+            tracing::warn!(
+                app_id = %self.app_id,
+                event_id = %self.event_id,
+                error = %error,
+                "Failed to record a rejected event trigger"
+            );
+        }
+    }
+
+    async fn execute_inner(
+        &self,
+        app_handle: &AppHandle,
+        flow_like_state: Arc<FlowLikeState>,
+        started: Arc<AtomicBool>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
         let execution_state = Arc::new(flow_like_state.for_execution_run());
 
@@ -195,6 +261,7 @@ impl EventBusEvent {
         );
 
         flow_like_state.register_run(&run_id, run_data);
+        started.store(true, Ordering::Relaxed);
 
         let meta = tokio::select! {
             result = internal_run.execute(execution_state.clone()) => result,

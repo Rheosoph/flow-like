@@ -27,6 +27,7 @@ impl NodeLogic for MatchFingerprintNode {
             "Attempts to find an element matching the fingerprint",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "match");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.set_scores(

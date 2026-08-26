@@ -530,6 +530,7 @@ impl NodeLogic for MakeHistoryMessageNode {
             "Creates a chat message with text, image, audio, video, or document content and optional tool metadata",
             "AI/Generative/History/Message",
         );
+        node.set_flowscript_name("history", "makeMessage");
         node.add_icon("/flow/icons/message.svg");
         node.set_version(4);
         node.set_scores(

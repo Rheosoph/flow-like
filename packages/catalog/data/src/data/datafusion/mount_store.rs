@@ -1,10 +1,13 @@
-use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
+use crate::data::datafusion::session::DataFusionSession;
+#[cfg(feature = "execute")]
+use crate::data::datafusion::session::{CachedDataFusionSession, DeferredMount};
 use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::{
     common::TableReference,
     datasource::{
@@ -12,20 +15,26 @@ use flow_like_storage::datafusion::{
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
 };
-use flow_like_types::{async_trait, json::json, reqwest::Url};
+#[cfg(feature = "execute")]
+use flow_like_types::reqwest::Url;
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
+#[cfg(any(feature = "execute", test))]
 fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
 }
 
 /// Which listing format a deferred store mount should use.
+#[cfg(feature = "execute")]
 enum ListingMountFormat {
     Parquet,
     Csv { has_header: bool, delimiter: u8 },
     Json,
 }
 
+#[cfg(feature = "execute")]
 impl ListingMountFormat {
     fn label(&self) -> &'static str {
         match self {
@@ -54,6 +63,7 @@ impl ListingMountFormat {
 /// Deferred mount shared by the Parquet/CSV/JSON store nodes. Listing the prefix and
 /// inferring the schema hit the object store, so the work only happens when a consumer
 /// actually queries the session.
+#[cfg(feature = "execute")]
 struct ListingStoreMount {
     path: FlowPath,
     table_name: String,
@@ -61,6 +71,7 @@ struct ListingStoreMount {
     format: ListingMountFormat,
 }
 
+#[cfg(feature = "execute")]
 #[async_trait]
 impl DeferredMount for ListingStoreMount {
     fn describe(&self) -> String {
@@ -114,6 +125,7 @@ impl DeferredMount for ListingStoreMount {
     }
 }
 
+#[cfg(feature = "execute")]
 async fn defer_listing_mount(
     context: &mut ExecutionContext,
     session: &DataFusionSession,
@@ -143,6 +155,8 @@ impl NodeLogic for MountStoreParquetNode {
             "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountParquet");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -202,6 +216,7 @@ impl NodeLogic for MountStoreParquetNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -225,6 +240,13 @@ impl NodeLogic for MountStoreParquetNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 #[crate::register_node]
@@ -246,6 +268,8 @@ impl NodeLogic for MountStoreCsvNode {
             "Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountCsv");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -321,6 +345,7 @@ impl NodeLogic for MountStoreCsvNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -351,6 +376,13 @@ impl NodeLogic for MountStoreCsvNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 #[crate::register_node]
@@ -372,6 +404,8 @@ impl NodeLogic for MountStoreJsonNode {
             "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "mountJson");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -431,6 +465,7 @@ impl NodeLogic for MountStoreJsonNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -453,6 +488,13 @@ impl NodeLogic for MountStoreJsonNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 

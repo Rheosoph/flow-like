@@ -27,6 +27,7 @@ impl NodeLogic for ListJiraProjectsNode {
             "List all accessible Jira projects",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "listProjects");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

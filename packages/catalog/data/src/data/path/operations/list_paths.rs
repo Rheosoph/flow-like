@@ -27,6 +27,8 @@ impl NodeLogic for ListPathsNode {
             "Lists all paths in a directory",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "listPaths");
+        node.set_receiver("prefix");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

@@ -26,6 +26,8 @@ impl NodeLogic for ReplaceSegmentNode {
             "Replaces a segment in a FlowPath",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "replaceSegment");
+        node.set_receiver("in_path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin("in_path", "Path", "FlowPath", VariableType::Struct)

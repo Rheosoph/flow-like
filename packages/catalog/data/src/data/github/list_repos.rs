@@ -75,6 +75,7 @@ impl NodeLogic for ListGitHubReposNode {
             "List repositories for the authenticated user or a specified organization",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listRepos");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

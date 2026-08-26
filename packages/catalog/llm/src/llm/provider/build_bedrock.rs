@@ -34,6 +34,7 @@ impl NodeLogic for BuildBedrockNode {
             "Prepares a Bit for AWS Bedrock model endpoints",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "bedrock");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

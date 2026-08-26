@@ -3,9 +3,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::{env, sync::OnceLock, time::Duration};
 
-use flow_like_types::{
-    maintenance::{MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse},
-    tokio,
+use flow_like_types_contracts::maintenance::{
+    MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse,
 };
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use reqwest::StatusCode;

@@ -1,0 +1,415 @@
+---
+title: "6. Anatomy of a FlowScript Document"
+description: Read a canonical Flow-Like FlowScript file from use declarations and interfaces through variables, functions, events, identity anchors, and diagnostics.
+seo:
+  title: "Flow-Like FlowScript Syntax: Anatomy of a Complete Document"
+  topics:
+    - FlowScript syntax
+    - canonical source
+    - imports
+    - interfaces
+    - variables
+    - functions and events
+sidebar:
+  order: 6
+  badge:
+    text: Draft
+    variant: caution
+---
+
+A FlowScript document is the typed text form of one Board, arranged for stable reading rather
+than authoring history.
+
+Imports establish names. Interfaces describe structured values. Top-level variables describe the
+Board's per-run and configurable state. Functions define callable layers. Events provide the
+entries that can start execution. A `detached` block holds an execution chain the Board contains
+but no entry reaches, one block per chain. Inside those entries and functions, statements describe
+nodes and control flow.
+
+The order is deliberate:
+
+```text
+use declarations
+interfaces
+top-level variables
+functions
+event entries
+detached blocks
+```
+
+A `detached` block is emitted for a chain with no reachable entry. Its contents never run, so it
+usually signals a Board problem rather than something to author deliberately.
+
+This chapter maps each document section to its Board entity and clarifies Flow-specific meanings
+behind familiar syntax.
+
+> **Release check:** The complete Incident source is a parser-tested canonical fixture at
+> `examples/document-anatomy/anatomy.flow`. Catalog-aware reconciliation, execution, and editor
+> diagnostics still need verification in the publication release. Free-standing `//` comments in
+> bodies survive parse-and-format, but the Board reconciler does not persist them as canvas
+> comments. Top-level comments have no durable AST slot.
+
+## 6.1 Canonical source, not stylistic trivia
+
+FlowScript looks familiar on purpose. Braces, declarations, function calls, object-shaped
+arguments, interfaces, and control blocks give it a TypeScript-familiar surface. Rust-style
+`use` declarations and `::` paths solve namespace imports. Decorator-shaped annotations add
+Flow-specific metadata.
+
+The resemblance to TypeScript and Rust helps with reading, but the Board model supplies the
+semantics. FlowScript runs no hidden JavaScript engine, and decorators are fixed Flow metadata
+rather than functions evaluated at load time.
+
+The parser accepts more than one spelling for some constructs. The renderer emits one canonical
+spelling:
+
+- statements may contain semicolons, but canonical output omits them;
+- interface properties may omit separators or use commas, but canonical output ends each field
+  with a semicolon;
+- strings may be single- or double-quoted, but canonical output uses escaped double quotes;
+- indentation defaults to four spaces, and document sections are separated by one blank line;
+- comma-separated `use` trees are rendered as one declaration per line; and
+- a redundant scalar type annotation is omitted when a literal default infers the same type.
+
+For example, this is accepted input:
+
+```flow
+const urgentPhrase: string = 'production is on hold';
+
+eventsGeneric triageIncident(payload: Struct, report: string) {
+  info({ message: report, toast: false });
+};
+```
+
+Its canonical text uses double quotes, no statement terminators, and four-space indentation:
+
+```flow
+const urgentPhrase = "production is on hold"
+
+eventsGeneric triageIncident(payload: Struct, report: string) {
+    info({ message: report, toast: false })
+}
+```
+
+Stable rendering keeps diffs meaningful, reduces equivalent spellings for generated edits, and
+lets repeated parsing and rendering converge without whitespace churn.
+
+Section order may therefore change after formatting. The renderer groups top-level declarations
+by role even if the input places an event before a function. Board lowering sorts variables by
+name and stable identity; function layers and event entries use deterministic identity and entry
+ordering. Runtime order lives inside bodies, never in top-level placement.
+
+Formatting parses and renders syntax without consulting the node catalog, so it can format an
+unknown call. Apply resolves declarations, checks pins and types, and plans the Board changes.
+
+FlowScript also carries comments with two very different jobs.
+
+A normal body comment is prose:
+
+```flow
+eventsGeneric triageIncident(payload: Struct, report: string) {
+    // Normalize before applying the incident rule.
+    const normalized = report.trim()
+}
+```
+
+The parser and formatter preserve a free-standing body comment and may move a trailing comment to
+its own line. The reconciler currently drops these comments when writing to the Board, while the
+text AST skips top-level comments. This remains a round-trip gap.
+
+An anchor comment is identity metadata:
+
+```flow
+const urgentPhrase = "production is on hold"   //@v:variable-id
+
+function normalizeReport(report: string): (normalized: string) {   //@l:layer-id
+    return report.trim()
+}
+
+eventsGeneric triageIncident(payload: Struct, report: string) {   //@n:event-node-id
+    const normalized = normalizeReport({ report: report })   //@n:call-node-id
+}
+```
+
+`//@v:` identifies a Board variable, `//@l:` a Function layer, and `//@n:` a node. Anchors let an
+edit update an existing entity by identity. The authoring surface emits them when requested; book
+examples normally hide them.
+
+Edit anchors carefully. Duplicate anchors and stale anchors without one compatible target produce
+diagnostics; a safe unique rebind appears as a correction. Removing anchored sections can trigger
+a deletion plan that requires explicit approval.
+
+## 6.2 `use` declarations
+
+Every catalog operation has a namespace-aware FlowScript name. The fully qualified form is the
+least ambiguous:
+
+```flow
+log::error({ message: report, toast: false })
+```
+
+`::` separates a namespace path from a member. A dot handles field or receiver access in
+expressions such as `report.trim()` and `incident.report`.
+
+Top-level `use` declarations can open that namespace in four supported ways:
+
+```flow
+use log
+use log::*
+use log as audit
+use log::{ error, info }
+```
+
+These forms allow, respectively:
+
+```flow
+log::info({ message: "qualified through imported namespace", toast: false })
+info({ message: "bare through glob", toast: false })
+audit::error({ message: "qualified through alias", toast: false })
+error({ message: "bare selected member", toast: false })
+```
+
+Current lowering can derive a glob import when a Board has at least two static calls in one
+namespace and no name collision. That is why Chapter 4 renders `use log::*` above `error(...)`
+and `info(...)`. A single or ambiguous call usually stays qualified.
+
+Unknown namespaces, missing members, reserved aliases, and name collisions produce reconciliation
+diagnostics. Argument shape may disambiguate the same member exposed by two globs; otherwise the
+call needs a qualified spelling. An unused valid import is a non-blocking correction.
+
+`use` is top-level only and changes name resolution in this document. Package installation,
+capabilities, and App approval remain separate.
+
+## 6.3 Interfaces
+
+An interface is the readable FlowScript surface of a structured schema.
+
+Here is an incident contract:
+
+```flow
+interface Incident {
+    report: string;
+    source?: string | null = null;
+    tags?: string[] = [];
+}
+```
+
+`report` is required. `source` is optional, accepts a string or `null`, and defaults to `null`.
+`tags` is an optional string array with an empty default. Interfaces also support named types,
+maps, unions, literal string alternatives, `any`, and quoted field names for invalid identifiers.
+Chapter 7 covers their type behavior.
+
+A bare `Struct` says little about its fields. A named interface gives a top-level variable,
+Function boundary, or Generic Event output an exact contract:
+
+```flow
+let incident: Incident
+
+function incidentReport(incident: Incident): (report: string) {
+    return incident.report
+}
+```
+
+The parser generates JSON Schema metadata from the declaration. The reconciler carries that
+schema onto the relevant variable or boundary pins and enforces it where the contract requires.
+When the Board already carries an equivalent schema, lowering can recover a readable nominal
+interface name instead of printing an opaque schema string beside every use.
+
+`interface Incident` describes a pin shape. It creates no runtime class, constructor, prototype,
+or methods. Method-shaped calls still resolve to a catalog node or declared FlowScript function
+with a compatible receiver contract.
+
+`@schema("…")` remains a legacy escape for metadata a named interface cannot represent. Prefer an
+interface when it preserves the schema; avoid pasting large JSON Schema into ordinary source.
+
+Interfaces do not support decorators. They are derived from schema-bearing text surfaces rather
+than stored as independent Board assets, so a declaration needs a variable, function, or event
+boundary to describe.
+
+## 6.4 Top-level variables
+
+Top-level variable keywords have Flow-specific meanings.
+
+Consider two declarations:
+
+```flow
+const urgentPhrase = "production is on hold"
+let ignoreCase = true
+```
+
+At the top level, the keywords map to Board exposure:
+
+| FlowScript | Board meaning |
+| --- | --- |
+| `const` | A non-exposed Board variable |
+| `let` | An exposed Board variable that may participate in App or Event configuration |
+
+Both keywords allow assignment during a run. Each run receives a fresh in-memory value from a
+permitted runtime or Event override, or from the persisted Board default. Changes disappear after
+the run; durable application state belongs in storage or Data Studio.
+
+The distinction is easiest to remember this way:
+
+> At document scope, `const` and `let` describe configuration visibility. They do not import
+> JavaScript's write rules.
+
+Annotations expose the remaining Board metadata. The current variable decorators are:
+
+| Decorator | Meaning |
+| --- | --- |
+| `@description("…")` | Human guidance for the variable |
+| `@category("…")` | UI grouping metadata |
+| `@secret` | Sensitive handling; the value stays outside rendered FlowScript |
+| `@readonly` | User-editable metadata is false |
+| `@runtime` | Configure the value through the runtime channel |
+| `@schema("…")` | Legacy inline schema metadata when no interface represents it |
+
+Their canonical order is description, category, legacy schema, secret, readonly, then runtime.
+Each annotation applies to the declaration immediately below it; placing a comment between a
+decorator and its variable is currently a parse error.
+
+`@readonly` locks ordinary edits to the variable definition and configuration; it does not yet
+guard runtime writes. `@runtime` selects a runtime-configuration channel. Current Web and Desktop
+storage is local to the client profile and device, while an Event can carry a trusted override.
+`@secret` still forbids credentials in source. Chapter 11 covers the enforcement boundaries.
+
+A secret declaration is intentionally value-free when rendered:
+
+```flow
+@description("Token used by the ticket integration")
+@secret
+@runtime
+const ticketToken: string
+```
+
+FlowScript accepts an empty placeholder when creating the declaration. Reconciliation rejects a
+non-empty secret initializer without echoing it in the diagnostic. Credentials enter through a
+trusted secret-setting surface, and existing defaults are omitted when the Board becomes text.
+
+Local bindings are separate. Inside a body, `const normalized = report.trim()` names a node output.
+A local `let` alias or typed variable does not affect Board-variable exposure.
+
+## 6.5 Functions
+
+A FlowScript function is a callable Function layer with a typed boundary.
+
+We can extract the normalization step from Incident Triage:
+
+```flow
+function normalizeReport(report: string): (normalized: string) {
+    return report.trim()
+}
+```
+
+The parameter becomes an input pin on the Function layer and the named return becomes an output
+pin. The body remains visible graph logic inside that layer; each call becomes a Call Function
+node targeting the layer:
+
+```flow
+const normalized = normalizeReport({ report: report })
+```
+
+The declaration's return syntax is deliberately explicit:
+
+```flow
+: (normalized: string)
+```
+
+Parentheses hold a named output list rather than a tuple. Each output name belongs to the pin
+contract, and returned values must match the declared count and types. Mismatches produce a
+diagnostic.
+
+Purity determines the execution boundary. The function above contains demanded data work and
+needs no Execution pins. A function with an impure call gains one execution entry and continuation;
+each call joins the caller's path. It uses the Chapter 5 runtime model.
+
+Within a body, a call-result binding normally renders with `const`:
+
+```flow
+const normalized = report.trim()
+```
+
+This `const` is an SSA-like name for a node output. When a local binding merely aliases a non-call
+expression, canonical rendering uses `let`. Top-level exposure rules do not apply here.
+
+Functions may carry `@cache` metadata. The bare form uses the default namespace, a five-minute
+lifetime, and App scope. A structured form sets namespace, TTL, and App or user scope. A cache hit
+skips the body, including side effects, so use it only when inputs determine the output.
+
+Function anchors use `//@l:` because the layer holds the durable identity. Inner nodes use
+`//@n:`. Preserving the layer anchor during a rename updates one callable entity; copying without
+it creates a new plan.
+
+## 6.6 Events
+
+Events turn the preceding declarations into runnable entries.
+
+An event header has two names with different jobs:
+
+```flow
+eventsGeneric triageIncident(payload: Struct, report: string) {
+    // body
+}
+```
+
+`eventsGeneric` selects the catalog event type. The optional `triageIncident` names this entry.
+Without it, `eventsGeneric(...)` keeps the catalog default.
+
+Parameters become the event node's data output pins. Generic Event can declare custom outputs;
+fixed event kinds use their catalog contract. On an anchored event, changes to parameter name,
+order, type, container, or schema are rejected as boundary-contract changes.
+
+An event block is the entry node inside a Flow. An App Event is the platform surface that exposes
+it as a form, API, schedule, quick action, or another trigger.
+
+On a fresh Board, the Incident example can now use every document section we have learned:
+
+```flow
+use log::*
+
+interface Incident {
+    report: string;
+    source?: string | null = null;
+    tags?: string[] = [];
+}
+
+@description("Phrase that marks an urgent incident")
+@category("Triage")
+const urgentPhrase = "production is on hold"
+
+@description("Whether the incident phrase ignores letter case")
+let ignoreCase = true
+
+function normalizeReport(report: string): (normalized: string) {
+    return report.trim()
+}
+
+eventsGeneric triageIncident(payload: Struct, incident: Incident) {
+    const normalized = normalizeReport({ report: incident.report })
+    if (normalized.contains({ substring: urgentPhrase, ignoreCase: ignoreCase })) {
+        error({ message: normalized, toast: false })
+    } else {
+        info({ message: normalized, toast: false })
+    }
+}
+```
+
+Read from top to bottom: the import opens `log`, the interface defines the event schema, and the
+two Board variables hold internal and exposed configuration. The function creates a reusable pure
+layer. The event supplies its outputs, calls the function, and selects an execution path.
+
+Before the Board changes, the document passes phased checks. Syntax errors carry a one-based line
+and column. Reconciliation resolves declarations, validates pins, types, schemas, returns, event
+boundaries, and execution wiring, then enforces structural limits.
+
+The backend classifies findings with stable `FS_*` codes and phases such as parse, catalog
+resolution, type checking, execution wiring, lowering, and validation. Reconciliation source
+spans are best effort because the structured sidecar derives from a string diagnostic channel;
+repeated calls may yield several candidate spans. Read the code, message, expected and actual
+values, declaration or pin, and repair guidance together.
+
+The server applies a FlowScript document as one program. Any reconciliation diagnostic blocks all
+planned Board commands. Non-blocking normalizations, such as an unused import, return separately
+as corrections. Deleting existing Board entities still requires approval, even with a clean plan.
+
+Chapter 7 follows the types and schemas carried by these declarations onto visible pins.

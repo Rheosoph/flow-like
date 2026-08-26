@@ -26,6 +26,7 @@ impl NodeLogic for SequenceNode {
             "Sequential Execution",
             "Control",
         );
+        node.set_flowscript_name("control", "sequence");
         node.add_icon("/flow/icons/sequence.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

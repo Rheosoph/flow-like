@@ -27,6 +27,7 @@ impl NodeLogic for ComputerScreenshotNode {
             "Takes a screenshot of the screen, window, or region",
             "Automation/Computer/Capture",
         );
+        node.set_flowscript_name("computer", "screenshot");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

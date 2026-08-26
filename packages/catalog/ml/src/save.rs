@@ -31,6 +31,8 @@ impl NodeLogic for SaveMLModelNode {
             "Save Trained ML Model to Path",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "save");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

@@ -231,6 +231,7 @@ impl NodeLogic for ImageClassificationNode {
             "Image Classification with ONNX-Models. Download models from: MobileNetV2 (https://github.com/onnx/models/tree/main/validated/vision/classification/mobilenet), SqueezeNet (https://github.com/onnx/models/tree/main/validated/vision/classification/squeezenet), ResNet (https://github.com/onnx/models/tree/main/validated/vision/classification/resnet), EfficientNet (https://github.com/onnx/models/tree/main/validated/vision/classification/efficientnet-lite4)",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "imageClassification");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

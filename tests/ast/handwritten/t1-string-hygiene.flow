@@ -1,0 +1,17 @@
+use log::{ info }
+use string::{ join, slugify, split, toLower, trim }
+
+function normalize(raw: string): (slug: string, words: string[]) {
+    const trimmed = raw.trim()
+    const lowered = trimmed.toLower()
+    const slug = lowered.slugify({ separator: "-", maxLength: 60 })
+    const words = lowered.split({ separator: " ", skipEmpty: true })
+    return slug, words
+}
+
+eventsSimple normalizeTitle() {
+    const raw = "   The Quick   Brown Fox  "
+    const { slug, words } = normalize(raw)
+    const rejoined = words.join({ separator: "+" })
+    info({ message: `${slug} / ${rejoined}`, toast: false })
+}

@@ -3,11 +3,13 @@
 //! Nodes for creating, managing, and configuring Copilot sessions.
 
 #[cfg(feature = "execute")]
+use super::COPILOT_SESSION_PREFIX;
+#[cfg(feature = "execute")]
 use super::CachedCopilotSession;
 use super::{
-    COPILOT_SESSION_PREFIX, CopilotClientHandle, CopilotSessionConfig, CopilotSessionHandle,
-    CopilotToolConfig, CustomAgentConfig, InfiniteSessionConfig, ProviderConfig,
-    SystemMessageConfig, SystemMessageMode,
+    CopilotClientHandle, CopilotSessionConfig, CopilotSessionHandle, CopilotToolConfig,
+    CustomAgentConfig, InfiniteSessionConfig, ProviderConfig, SystemMessageConfig,
+    SystemMessageMode,
 };
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -32,6 +34,7 @@ impl NodeLogic for CopilotSessionBuilderNode {
             "Builds a complete Copilot session configuration with all options",
             "AI/GitHub/Copilot/Session",
         );
+        node.set_flowscript_name("github.copilot", "sessionConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -238,6 +241,8 @@ impl NodeLogic for CopilotCreateSessionNode {
             "Creates a new Copilot chat session",
             "AI/GitHub/Copilot/Session",
         );
+        node.set_flowscript_name("github.copilot", "createSession");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -448,6 +453,8 @@ impl NodeLogic for CopilotDestroySessionNode {
             "Destroys a Copilot session",
             "AI/GitHub/Copilot/Session",
         );
+        node.set_flowscript_name("github.copilot", "destroySession");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

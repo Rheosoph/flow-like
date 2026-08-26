@@ -51,12 +51,14 @@ impl IntSumNode {
 #[async_trait]
 impl NodeLogic for IntSumNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "int_sum",
             "Sum (Int)",
             "Adds up every integer in an array",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "sum");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -82,12 +84,14 @@ impl IntProductNode {
 #[async_trait]
 impl NodeLogic for IntProductNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "int_product",
             "Product (Int)",
             "Multiplies every integer in an array",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "product");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -115,12 +119,14 @@ impl IntAverageNode {
 #[async_trait]
 impl NodeLogic for IntAverageNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "int_average",
             "Average (Int)",
             "Arithmetic mean of every integer in an array",
             VariableType::Float,
-        )
+        );
+        node.set_flowscript_name("int", "average");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -148,12 +154,14 @@ impl IntMinOfNode {
 #[async_trait]
 impl NodeLogic for IntMinOfNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "int_min_of",
             "Min Of (Int)",
             "Smallest integer in an array",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "minOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -178,12 +186,14 @@ impl IntMaxOfNode {
 #[async_trait]
 impl NodeLogic for IntMaxOfNode {
     fn get_node(&self) -> Node {
-        aggregate_node(
+        let mut node = aggregate_node(
             "int_max_of",
             "Max Of (Int)",
             "Largest integer in an array",
             VariableType::Integer,
-        )
+        );
+        node.set_flowscript_name("int", "maxOf");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

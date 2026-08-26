@@ -10,9 +10,11 @@ use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, OrdinalOrdering, values_to_array1_ordinal,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -23,9 +25,10 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::OrdinalRidge;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -80,6 +83,7 @@ impl NodeLogic for FitOrdinalRidgeNode {
             "Fit/Train an ordinal model the cheap way: ridge-regress the level rank on the features, then cut the score at thresholds learned from the training distribution instead of rounding it. Closed-form, so it stays fast exactly where the proportional-odds model gets expensive - many levels, many features, or when you just want a quick ordinal baseline to beat. It also degrades gracefully when the proportional-odds assumption does not hold. Unlike the proportional-odds model it yields no probabilities: you get the predicted level and the latent score behind it, nothing calibrated.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "fitOrdinalRidge");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -344,7 +348,6 @@ impl NodeLogic for FitOrdinalRidgeNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

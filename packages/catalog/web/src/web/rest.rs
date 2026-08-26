@@ -4,7 +4,10 @@ use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::execution::{
     LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
 };
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 use flow_like::flow::pin::{PinType, ValueType};
 use flow_like::flow::{
     node::{Node, NodeLogic},
@@ -13,10 +16,19 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_types::async_trait;
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
+use flow_like_types::json;
 #[cfg(feature = "execute")]
-use flow_like_types::json::{self, json};
+use flow_like_types::json::json;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 use std::collections::HashMap;
 
 use super::tls::TlsConfig;
@@ -188,6 +200,7 @@ impl NodeLogic for CreateRestServerConfigNode {
             "Creates a REST server config that route, file, auth, and server nodes can compose.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "serverConfig");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin("host", "Host", "Bind host", VariableType::String)
@@ -273,6 +286,8 @@ impl NodeLogic for RegisterRestFunctionNode {
             "Registers referenced Flow functions as handlers for a REST path.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerFunction");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.set_can_reference_fns(true);
@@ -355,6 +370,10 @@ fn rest_route_methods(method: &str) -> flow_like_types::Result<Vec<String>> {
     }
 }
 
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn is_rest_file_directory_route(route: &RestFileRoute) -> bool {
     route.directory || rest_file_route_prefix(&route.path).is_some()
 }
@@ -369,12 +388,20 @@ fn rest_file_route_prefix(path: &str) -> Option<String> {
     })
 }
 
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_file_mount_path(path: &str) -> String {
     normalize_rest_file_mount_path(
         rest_file_route_prefix(path).unwrap_or_else(|| super::http_runtime::normalize_path(path)),
     )
 }
 
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn normalize_rest_file_mount_path(path: String) -> String {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -384,6 +411,10 @@ fn normalize_rest_file_mount_path(path: String) -> String {
     }
 }
 
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_file_openapi_path(route: &RestFileRoute) -> String {
     if !is_rest_file_directory_route(route) {
         return super::http_runtime::normalize_path(&route.path);
@@ -431,6 +462,8 @@ impl NodeLogic for RegisterRestFilesNode {
             "Registers a FlowPath file or directory as static REST responses.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerFiles");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -526,6 +559,8 @@ impl NodeLogic for RegisterRestOpenApiNode {
             "Registers OpenAPI JSON and browser UI endpoints generated from the REST server config.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerOpenApi");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -602,6 +637,7 @@ impl NodeLogic for CreateApiKeyAuthNode {
             "Creates REST auth that requires a configured API key header.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "apiKey");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -656,6 +692,7 @@ impl NodeLogic for CreateBearerTokenAuthNode {
             "Creates REST auth that requires a static Authorization bearer token.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "bearer");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -706,6 +743,7 @@ impl NodeLogic for CreateBasicAuthNode {
             "Creates REST auth that requires HTTP Basic credentials.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "basic");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -758,6 +796,7 @@ impl NodeLogic for CreateHmacSha256AuthNode {
             "Creates REST auth that verifies an HMAC-SHA256 request signature.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "hmacSha256");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -847,6 +886,7 @@ impl NodeLogic for CreateOidcDiscoveryAuthNode {
             "Creates OAuth bearer auth by discovering the JWKS URI from an OpenID Connect issuer.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oidcDiscovery");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -920,6 +960,7 @@ impl NodeLogic for CreateOAuthJwksUrlAuthNode {
             "Creates OAuth bearer auth that fetches a JWKS endpoint once when the server starts.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oauthJwksUrl");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -998,6 +1039,7 @@ impl NodeLogic for CreateOAuthJwksFileAuthNode {
             "Creates OAuth bearer auth from a JWKS JSON FlowPath loaded when the server starts.",
             "Web/Auth",
         );
+        node.set_flowscript_name("auth", "oauthJwksFile");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -1084,6 +1126,8 @@ impl NodeLogic for RegisterRestAuthNode {
             "Registers REST server authentication settings.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "registerAuth");
+        node.set_receiver("config_in");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.add_input_pin(
@@ -1144,6 +1188,7 @@ impl NodeLogic for RestServerNode {
             "Starts a REST server from a composed config. Function routes and files are registered on the config before this node runs.",
             "Web/REST",
         );
+        node.set_flowscript_name("rest", "server");
         node.set_version(REST_CONFIG_NODE_VERSION);
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
@@ -1190,6 +1235,7 @@ impl NodeLogic for RestServerNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
         use std::sync::{
             Arc,
             atomic::{AtomicU32, Ordering},
@@ -1388,6 +1434,7 @@ impl NodeLogic for RestServerNode {
                 return Err(flow_like_types::anyhow!("Execution was cancelled"));
             }
         }
+        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
         Ok(())
     }
 
@@ -1399,10 +1446,16 @@ impl NodeLogic for RestServerNode {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 type FunctionContextMap = HashMap<String, super::http_runtime::SharedFunctionContext>;
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 #[derive(Clone)]
 enum CachedFileRoute {
     File {
@@ -1417,7 +1470,10 @@ enum CachedFileRoute {
     },
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 #[derive(Clone)]
 struct CachedOpenApiRoute {
     path: String,
@@ -1425,7 +1481,10 @@ struct CachedOpenApiRoute {
     bytes: Vec<u8>,
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn build_function_contexts(
     context: &ExecutionContext,
     routes: &[RestFunctionRoute],
@@ -1448,7 +1507,10 @@ async fn build_function_contexts(
     map
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn preload_files(
     context: &mut ExecutionContext,
     routes: &[RestFileRoute],
@@ -1502,7 +1564,10 @@ async fn preload_files(
     files
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn build_openapi_specs(
     context: &ExecutionContext,
     config: &RestServerConfig,
@@ -1541,7 +1606,10 @@ async fn build_openapi_specs(
     routes
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn build_openapi_document(
     context: &ExecutionContext,
     config: &RestServerConfig,
@@ -1638,7 +1706,10 @@ async fn build_openapi_document(
     document
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_ui_html(spec_path: &str) -> String {
     let spec_url = json::to_string(spec_path).unwrap_or_else(|_| "\"/openapi.json\"".to_string());
     format!(
@@ -1696,7 +1767,10 @@ fn openapi_ui_html(spec_path: &str) -> String {
     )
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn insert_openapi_operation(
     paths: &mut json::Map<String, flow_like_types::Value>,
     path: String,
@@ -1711,7 +1785,10 @@ fn insert_openapi_operation(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_methods(methods: &[String]) -> Vec<&'static str> {
     let allowed = [
         ("GET", "get"),
@@ -1742,7 +1819,10 @@ fn openapi_methods(methods: &[String]) -> Vec<&'static str> {
     out
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn route_function_metadata(
     context: &ExecutionContext,
     function_refs: &[String],
@@ -1780,7 +1860,10 @@ async fn route_function_metadata(
     (summary, description, refs)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn route_request_body_schema(
     context: &ExecutionContext,
     function_refs: &[String],
@@ -1858,7 +1941,10 @@ async fn route_request_body_schema(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn is_rest_internal_arg_pin(name: &str) -> bool {
     matches!(
         name,
@@ -1874,7 +1960,10 @@ fn is_rest_internal_arg_pin(name: &str) -> bool {
     )
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn merge_openapi_schemas(mut schemas: Vec<flow_like_types::Value>) -> flow_like_types::Value {
     if schemas.len() == 1 {
         schemas.remove(0)
@@ -1883,7 +1972,10 @@ fn merge_openapi_schemas(mut schemas: Vec<flow_like_types::Value>) -> flow_like_
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_pin_schema(
     data_type: &VariableType,
     value_type: &ValueType,
@@ -1915,7 +2007,10 @@ fn openapi_pin_schema(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_pin_property_name(pin: &flow_like::flow::pin::Pin) -> String {
     let friendly = super::http_runtime::sanitize_identifier(pin.friendly_name.trim());
     if !friendly.is_empty() {
@@ -1924,10 +2019,16 @@ fn openapi_pin_property_name(pin: &flow_like::flow::pin::Pin) -> String {
     super::http_runtime::sanitize_identifier(&pin.name)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 const OPENAPI_EMPTY_STRING_HASH: &str = "16248035215404677707";
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn resolve_openapi_text_ref(value: &str, board_refs: &HashMap<String, String>) -> String {
     let trimmed = value.trim();
     if trimmed == OPENAPI_EMPTY_STRING_HASH {
@@ -1939,7 +2040,10 @@ fn resolve_openapi_text_ref(value: &str, board_refs: &HashMap<String, String>) -
         .unwrap_or_else(|| trimmed.to_string())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn resolve_openapi_text_ref_opt(
     value: Option<&str>,
     board_refs: &HashMap<String, String>,
@@ -1947,7 +2051,10 @@ fn resolve_openapi_text_ref_opt(
     value.map(|raw| resolve_openapi_text_ref(raw, board_refs))
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn resolved_openapi_description(
     description: &str,
     board_refs: &HashMap<String, String>,
@@ -1961,7 +2068,10 @@ fn resolved_openapi_description(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn response_schema_for_content_type(content_type: &str) -> flow_like_types::Value {
     let lower = content_type.to_ascii_lowercase();
     if lower.contains("json") {
@@ -1973,7 +2083,10 @@ fn response_schema_for_content_type(content_type: &str) -> flow_like_types::Valu
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_responses(
     auth: &RestAuthConfig,
     ok_content: Option<(&str, flow_like_types::Value)>,
@@ -2012,7 +2125,10 @@ fn openapi_responses(
     flow_like_types::Value::Object(responses)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_security(
     auth: &RestAuthConfig,
 ) -> Option<(String, flow_like_types::Value, flow_like_types::Value)> {
@@ -2097,7 +2213,10 @@ fn openapi_security(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn openapi_operation_id(method: &str, path: &str) -> String {
     let path = super::http_runtime::sanitize_identifier(path).replace('-', "_");
     if path.is_empty() {
@@ -2107,7 +2226,10 @@ fn openapi_operation_id(method: &str, path: &str) -> String {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut stream: super::tls::BoxedIo,
@@ -2147,7 +2269,10 @@ async fn handle_connection(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn route_request(
     request: super::http_runtime::HttpRequest,
     config: &RestServerConfig,
@@ -2221,7 +2346,10 @@ async fn route_request(
     response_from_value(result)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 async fn file_route_response(
     file: &CachedFileRoute,
     request_path: &str,
@@ -2262,7 +2390,10 @@ async fn file_route_response(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn file_response(content_type: String, body: Vec<u8>) -> super::http_runtime::HttpResponse {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), content_type);
@@ -2273,6 +2404,10 @@ fn file_response(content_type: String, body: Vec<u8>) -> super::http_runtime::Ht
     }
 }
 
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_file_route_filename(route_path: &str, request_path: &str) -> Option<String> {
     let prefix = rest_file_mount_path(route_path);
     let request_path = super::http_runtime::normalize_path(request_path);
@@ -2289,14 +2424,20 @@ fn rest_file_route_filename(route_path: &str, request_path: &str) -> Option<Stri
     Some(filename.to_string())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn decode_rest_file_name(filename: &str) -> String {
     urlencoding::decode(filename)
         .map(|value| value.into_owned())
         .unwrap_or_else(|_| filename.to_string())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_arguments(
     request: &super::http_runtime::HttpRequest,
     client: &flow_like_types::Value,
@@ -2321,7 +2462,10 @@ fn rest_arguments(
     flow_like_types::Value::Object(args)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_args_from_body_and_query(
     body: &flow_like_types::Value,
     query: &HashMap<String, String>,
@@ -2343,7 +2487,10 @@ fn rest_args_from_body_and_query(
     args
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn parse_rest_body_value(
     request: &super::http_runtime::HttpRequest,
 ) -> Result<flow_like_types::Value, super::http_runtime::HttpResponse> {
@@ -2367,7 +2514,10 @@ fn parse_rest_body_value(
     })
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn rest_request_to_value_with_client(
     request: &super::http_runtime::HttpRequest,
     client: &flow_like_types::Value,
@@ -2386,7 +2536,10 @@ fn rest_request_to_value_with_client(
     })
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn response_from_value(value: flow_like_types::Value) -> super::http_runtime::HttpResponse {
     if let Some(obj) = value.as_object() {
         let status_code = obj
@@ -2422,7 +2575,10 @@ fn response_from_value(value: flow_like_types::Value) -> super::http_runtime::Ht
     body_response(200, HashMap::new(), value)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn body_response(
     status_code: u16,
     mut headers: HashMap<String, String>,
@@ -2451,7 +2607,10 @@ fn body_response(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 fn method_matches(route: &RestFunctionRoute, method: &str) -> bool {
     route.methods.is_empty()
         || route
@@ -2555,7 +2714,11 @@ mod serialization_tests {
     }
 }
 
-#[cfg(all(test, feature = "execute"))]
+#[cfg(all(
+    test,
+    feature = "execute",
+    not(all(feature = "remote", not(feature = "local")))
+))]
 mod tests {
     use super::*;
     use crate::web::test_support::{

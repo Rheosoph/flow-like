@@ -26,6 +26,7 @@ impl NodeLogic for PushTextToStepNode {
             "Appends text to the current step's reasoning",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushTextToStep");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

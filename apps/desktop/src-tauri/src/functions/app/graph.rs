@@ -273,7 +273,7 @@ async fn ensure_action_board_published_with_mode(
         let guard = board.lock().await;
         if existing.contains(&pinned) {
             if publish_draft && !guard.snapshot_matches_current(pinned, None).await? {
-                let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+                let snapshot = guard.prepare_snapshot_recovering_from_races(None).await?;
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
                 prepared = Some(snapshot);
@@ -287,13 +287,20 @@ async fn ensure_action_board_published_with_mode(
                     pinned.2
                 ));
             }
-            if guard
+            // A slot another draft owns, and a slot this attempt writes but
+            // then loses to a racing editor save, resolve the same way: pin the
+            // reloaded draft at the next free patch instead.
+            let moved = if guard
                 .snapshot_version_slot_is_compatible(pinned, None)
                 .await?
             {
-                guard.snapshot_at_version(pinned, None).await?;
+                guard
+                    .snapshot_at_version_recovering_from_races(pinned, None)
+                    .await?
             } else {
-                let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+                Some(guard.prepare_snapshot_recovering_from_races(None).await?)
+            };
+            if let Some(snapshot) = moved {
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
                 prepared = Some(snapshot);
@@ -315,7 +322,7 @@ async fn ensure_action_board_published_with_mode(
         if guard.snapshot_matches_current(pinned, None).await? {
             prepared = Some(guard.prepared_snapshot_at_version(pinned, None).await?);
         } else {
-            let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+            let snapshot = guard.prepare_snapshot_recovering_from_races(None).await?;
             pinned = snapshot.version();
             action.board_version = Some([pinned.0, pinned.1, pinned.2]);
             prepared = Some(snapshot);

@@ -25,6 +25,8 @@ impl NodeLogic for StringToIntNode {
             "Parses a string into an integer",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "toInt");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -87,6 +89,8 @@ impl NodeLogic for StringToFloatNode {
             "Parses a string into a float",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "toFloat");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -148,6 +152,8 @@ impl NodeLogic for StringToBoolNode {
             "Parses a string into a boolean. Accepts true/false, 1/0, yes/no and on/off",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "toBool");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 

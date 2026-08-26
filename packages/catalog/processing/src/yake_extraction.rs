@@ -5,6 +5,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
 use whatlang::detect;
@@ -30,6 +31,7 @@ impl NodeLogic for YakeExtractionNode {
             "Extracts keywords from text using YAKE (Yet Another Keyword Extractor). YAKE is an unsupervised automatic keyword extraction method that uses statistical features from the text itself.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractKeywordsYake");
         node.add_icon("/flow/icons/key.svg");
 
         node.set_scores(

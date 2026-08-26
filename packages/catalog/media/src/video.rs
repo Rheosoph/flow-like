@@ -1692,6 +1692,7 @@ impl NodeLogic for MakeOpenAiSoraVideoOptionsNode {
             "Creates typed video options for OpenAI Sora models.",
             "AI/Generative/Video/Options",
         );
+        node.set_flowscript_name("ai.video.options", "openaiSora");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1742,6 +1743,7 @@ impl NodeLogic for MakeVertexVeoVideoOptionsNode {
             "Creates typed video options for Google Vertex Veo models.",
             "AI/Generative/Video/Options",
         );
+        node.set_flowscript_name("ai.video.options", "vertexVeo");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1816,6 +1818,7 @@ impl NodeLogic for MakeRunwayVideoOptionsNode {
             "Creates typed video options for Runway models.",
             "AI/Generative/Video/Options",
         );
+        node.set_flowscript_name("ai.video.options", "runway");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1878,6 +1881,7 @@ impl NodeLogic for MakeFalVideoOptionsNode {
             "Creates typed video options for fal.ai video models.",
             "AI/Generative/Video/Options",
         );
+        node.set_flowscript_name("ai.video.options", "fal");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1945,6 +1949,7 @@ impl NodeLogic for MakeReplicateVideoOptionsNode {
             "Creates typed video options for Replicate video models.",
             "AI/Generative/Video/Options",
         );
+        node.set_flowscript_name("ai.video.options", "replicate");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2012,6 +2017,7 @@ impl NodeLogic for BuildRunwayVideoProviderNode {
             "Builds a Runway video generation provider Bit.",
             "AI/Generative/Video/Provider",
         );
+        node.set_flowscript_name("ai.video.provider", "runway");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2088,6 +2094,7 @@ impl NodeLogic for BuildFalVideoProviderNode {
             "Builds a fal.ai queued video generation provider Bit.",
             "AI/Generative/Video/Provider",
         );
+        node.set_flowscript_name("ai.video.provider", "fal");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2148,6 +2155,7 @@ impl NodeLogic for BuildReplicateVideoProviderNode {
             "Builds a Replicate video generation provider Bit.",
             "AI/Generative/Video/Provider",
         );
+        node.set_flowscript_name("ai.video.provider", "replicate");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2223,6 +2231,7 @@ impl NodeLogic for GenerateVideoNode {
             "Generates video with an existing provider Bit and writes it to FlowPath.",
             "AI/Generative/Video",
         );
+        node.set_flowscript_name("ai.video", "generate");
         node.add_icon("/flow/icons/video.svg");
         node.set_version(3);
         node.set_scores(media_scores());

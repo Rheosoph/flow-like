@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"docs:screenshot": "bun apps/desktop/scripts/doc-screenshot.ts",
+		"workflow:screenshot": "bun apps/desktop/scripts/workflow-screenshot.ts",
 		"docs:nodes": "cargo run -p flow-like-catalog --bin generate_node_docs",
 		"flowpilot:e2e": "bun apps/desktop/scripts/flowpilot-e2e.ts",
 		"university": "bun apps/desktop/scripts/university.ts",

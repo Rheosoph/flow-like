@@ -25,6 +25,7 @@ impl NodeLogic for RetryLoopNode {
             "Retries an action multiple times with configurable backoff. WARNING: This node activates exec_attempt in a loop but the current executor does not re-enter downstream nodes -- the retry semantics require executor-level loop support to work correctly.",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "retryLoop");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

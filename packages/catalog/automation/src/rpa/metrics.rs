@@ -24,6 +24,7 @@ impl NodeLogic for StartTimerNode {
             "Returns the current timestamp for measuring action duration",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "startTimer");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -90,6 +91,7 @@ impl NodeLogic for CalculateElapsedNode {
             "Calculates elapsed time from a start timestamp",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "calculateElapsed");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

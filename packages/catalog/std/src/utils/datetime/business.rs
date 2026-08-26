@@ -31,6 +31,8 @@ impl NodeLogic for DateBusinessDaysBetweenNode {
             "Counts the working days between two dates, skipping weekends",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "businessDaysBetween");
+        node.set_receiver("start");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 
@@ -110,6 +112,8 @@ impl NodeLogic for DateAddBusinessDaysNode {
             "Moves a date forward or back by working days, skipping weekends",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "addBusinessDays");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 

@@ -1,0 +1,435 @@
+use log::{ info, warn, error }
+use hash::{ blake3 }
+use ai::embedding as vectors
+use ai::processing as docai
+use pdf as pdfDoc
+use docx as wordDoc
+use pptx as slideDoc
+use faker::lorem as fakeText
+use faker::internet as fakeIdentity
+use faker::company as fakeCompany
+use faker::number as fakeNumber
+// BUG: `use ingest::pdfs as pdfIngest` — a `use ... as` alias for a nested module layer is
+// rejected ("namespace `ingest::pdfs` is unknown"), so the three identically named
+// `extract()` functions can only be disambiguated by their absolute `a::b::extract` paths.
+// See bug-t4-knowledge-qa-use-module-alias.flow.
+
+interface QaCase {
+    case_id: string;
+    persona: string;
+    question: string;
+    must_contain: string;
+    weight?: float = 1;
+}
+
+@description("LanceDB table that stores every embedded knowledge passage")
+@category("Knowledge/Index")
+const knowledgeTable = "knowledge_chunks"
+@description("Embedding bit used for both indexing and retrieval")
+@category("Knowledge/Index")
+const embeddingBitId = "bit:embedding/text-multilingual-e5"
+@description("Cache namespace shared by every retrieval caller")
+const retrievalNamespace = "kb-retrieval-v4"
+@description("Atlassian API token used by the docs-space crawler")
+@secret
+const confluenceToken: string
+@description("Notion integration token for the runbook database")
+@secret
+const notionToken: string
+@description("Password of the knowledge mailbox")
+@secret
+const mailboxPassword: string
+@description("Minimum answer similarity a synthetic QA case must reach")
+@category("Knowledge/QA")
+let passThreshold = 0.62
+
+function embeddingModel(): (model: Struct) {
+    const bit = ai::loadBit({ bitId: embeddingBitId })
+    return vectors::loadModel({ bit: bit })
+}
+
+function retrievalModel(): (model: Struct) {
+    const preferences = ai::preferences::make({ multimodal: false })
+    const hinted = preferences.setModelHint("fast-instruct")
+    return ai::findModel({ preferences: hinted })
+}
+
+@cache({ namespace: "kb-retrieval-v4", ttlSeconds: 900, scope: "user" })
+function retrieveContext(question: string, topK: int): (context: string, hits: int) {
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    const embedder = embeddingModel()
+    const queryVector = vectors::embedQuery({ queryString: question, model: embedder })
+    const matches = index.hybridSearch({ search: question, vector: queryVector, fields: ["vector", "text"], filter: "space IS NOT NULL", rerank: true, limit: topK, offset: 0 })
+    let context = ""
+    for (const [rank, match] of matches) {
+        const { value: passage } = struct::get({ struct: match, field: "text" })
+        const { value: origin } = struct::get({ struct: match, field: "source" })
+        context = `${context}\n[${rank}] ${origin} :: ${passage}`
+    }
+    const trimmed = context.trim()
+    const hits = array::length({ array: matches })
+    return trimmed, hits
+}
+
+function groundedHistory(base: Struct, question: string, context: string): (history: Struct) {
+    const grounded = history::makeMessage({ role: "user", type: "text", text: `${question}\n\n--- knowledge passages ---\n${context}` })
+    const conversation = base.addMessage(grounded)
+    const primed = conversation.setSystemPrompt("Answer only from the supplied knowledge passages and name the source of every claim. Say so plainly when the passages do not cover the question.")
+    return primed.setStream(true)
+}
+
+function helpdeskAgent(): (agent: Struct) {
+    const base = agent::fromModel({ model: retrievalModel(), maxIter: 3, infiniteContext: false, contextMode: "summarize", maxContextTokens: 16000 })
+    const briefed = base.setSystemPrompt("You are the Capacity helpdesk assistant. Ground every sentence in the knowledge base and escalate to a human when it is silent.")
+    const equipped = agent::registerFunctionTools({ agentIn: briefed, fnRefs: [lookupPassages] })
+    eventsGeneric lookupPassages(topic: string) {
+        const { context } = retrieveContext(topic, 4)
+        return context
+    }
+    return equipped
+}
+
+function mailReply(ticketId: string, recipient: string, reply: string): (messageId: string) {
+    const mailbox = smtp::connect({ host: "smtp.rheosoph.com", port: 587, username: "knowledge-bot@rheosoph.com", password: mailboxPassword, encryption: "StartTls" })
+    const html = md::toHtml({ markdown: reply, allowHtml: false, smartPunctuation: true })
+    const messageId = mailbox.send("knowledge-bot@rheosoph.com", recipient, "", "", `Re: ${ticketId}`, reply, html)
+    info({ message: `${ticketId}: answer mailed to ${recipient} as ${messageId}`, toast: false })
+    return messageId
+}
+
+function indexDocument(source: Struct, space: string): (chunkCount: int) {
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    const { text, pages } = ingest::extract(source)
+    const embedder = embeddingModel()
+    const chunks = docai::chunkTextChar({ text: text, capacity: 900, overlap: 120, markdown: true })
+    const origin = source.rawPath()
+    @parallel
+    for (const [position, chunk] of chunks) {
+        const vector = vectors::embedDocument({ queryString: chunk, model: embedder })
+        let row = struct::make()
+        row.chunk_id = blake3({ input: `${origin}#${position}` })
+        row.space = space
+        row.source = origin
+        row.text = chunk
+        row.vector = vector
+        db::upsert({ database: index, idRow: "chunk_id", value: row })
+    }
+    const chunkCount = array::length({ array: chunks })
+    info({ message: `${origin}: ${pages} page(s) split into ${chunkCount} chunk(s) for ${space}`, toast: false })
+    return chunkCount
+}
+
+function storePassage(index: Struct, space: string, source: string, text: string): (chunkId: string) {
+    const embedder = embeddingModel()
+    const vector = vectors::embedDocument({ queryString: text, model: embedder })
+    let row = struct::make()
+    row.chunk_id = blake3({ input: source })
+    row.space = space
+    row.source = source
+    row.text = text
+    row.vector = vector
+    db::upsert({ database: index, idRow: "chunk_id", value: row })
+    return row.chunk_id
+}
+
+function crawlConfluenceSpace(spaceKey: string, limit: int): (pageCount: int) {
+    const provider = atlassian::providerApiToken({ baseUrl: "https://rheosoph.atlassian.net", email: "knowledge-bot@rheosoph.com", apiToken: confluenceToken, isCloud: true })
+    const { results, total } = confluence::search({ provider: provider, cql: "type = page ORDER BY lastmodified DESC", spaceKey: spaceKey, contentType: "page", limit: limit, start: 0 })
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    for (const [position, hit] of results) {
+        const { value: pageId } = struct::get({ struct: hit, field: "id" })
+        const { bodyContent } = confluence::getPage({ provider: provider, pageId: pageId, includeBody: true, bodyFormat: "storage" })
+        const markdown = md::fromHtml({ html: bodyContent, skippedTags: ["script", "style"] })
+        storePassage(index, spaceKey, `confluence://${spaceKey}/${pageId}`, markdown)
+        confluence::addLabel({ provider: provider, pageId: pageId, label: "kb-indexed" })
+        info({ message: `confluence[${position}]: indexed page ${pageId}`, toast: false })
+    }
+    return total
+}
+
+function crawlNotionRunbooks(query: string, limit: int): (pageCount: int) {
+    const provider = notion::providerApiKey({ integrationToken: notionToken })
+    const { results, count } = notion::search({ provider: provider, query: query, filterType: "page", sortDirection: "descending", pageSize: limit, fetchAll: false })
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    for (const [position, page] of results) {
+        const { value: pageId } = struct::get({ struct: page, field: "id" })
+        const { title, plainText } = notion::getPage({ provider: provider, pageId: pageId, includeContent: true, includeNestedContent: true })
+        const keywords = docai::extractKeywordsYake({ text: plainText, language: "en", ngrams: 2, maxKeywords: 12, dedupThreshold: 0.8 })
+        storePassage(index, "runbooks", `notion://${pageId}`, `${title}\n${keywords}\n${plainText}`)
+        info({ message: `notion[${position}]: indexed "${title}"`, toast: false })
+    }
+    return count
+}
+
+function crawlRemoteSpaces(): (pageCount: int, portalSections: int) {
+    const { text: portalText, pages: portalSections } = ingest::web::extract("https://docs.rheosoph.com/knowledge")
+    const keywords = docai::extractKeywordsRake({ text: portalText, language: "en", minScore: 1.5, maxKeywords: 20 })
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    storePassage(index, "portal", "https://docs.rheosoph.com/knowledge", portalText)
+    const confluencePages = crawlConfluenceSpace("KB", 50)
+    const notionPages = crawlNotionRunbooks("runbook", 25)
+    const pageCount = confluencePages + notionPages
+    info({ message: `remote crawl: ${confluencePages} confluence + ${notionPages} notion page(s); portal themes ${keywords}`, toast: false })
+    return pageCount, portalSections
+}
+
+function scoreAnswer(answer: string, expected: string): (score: float, passed: bool) {
+    const normalized = answer.toLower()
+    const target = expected.toLower()
+    let score = string::jaroWinklerDistance({ string1: normalized, string2: target })
+    if (string::contains({ string: normalized, substring: target, ignoreCase: true })) {
+        score = 0.99
+    }
+    let passed = score > passThreshold
+    return score, passed
+}
+
+function syntheticCase(persona: string, index: int): (qaCase: QaCase) {
+    let qaCase = struct::make()
+    qaCase.case_id = `${persona}-${index}`
+    qaCase.persona = persona
+    qaCase.question = fakeText::sentence({ minWords: 8, maxWords: 16 })
+    qaCase.must_contain = fakeCompany::catchPhrase()
+    qaCase.weight = fakeNumber::float({ min: 0.5, max: 1.5 })
+    return qaCase
+}
+
+function runQaCases(personas: string[]): (report: string, passed: int, failed: int) {
+    let rows = array::make()
+    rows = array::push({ arrayIn: rows, value: "| case | persona | requester | hits | score |" })
+    rows = array::push({ arrayIn: rows, value: "| --- | --- | --- | --- | --- |" })
+    let passed = 0
+    let failed = 0
+    for (const [caseIndex, persona] of personas) {
+        const qaCase = syntheticCase(persona, caseIndex)
+        const requester = fakeIdentity::email()
+        const { context, hits } = retrieveContext(qaCase.question, 4)
+        const { score, passed: casePassed } = scoreAnswer(context, qaCase.must_contain)
+        if (casePassed) {
+            passed = passed + 1
+        } else {
+            failed = failed + 1
+            warn({ message: `case ${qaCase.case_id} (weight ${qaCase.weight}) never surfaced "${qaCase.must_contain}"`, toast: false })
+        }
+        rows = array::push({ arrayIn: rows, value: `| ${qaCase.case_id} | ${persona} | ${requester} | ${hits} | ${score} |` })
+    }
+    const report = string::join({ strings: rows, separator: "\n" })
+    return report, passed, failed
+}
+
+function publishQaReport(report: string, stamp: string, headline: string): (pageId: string) {
+    const html = md::toHtml({ markdown: report, allowHtml: false, smartPunctuation: true })
+    const provider = atlassian::providerApiToken({ baseUrl: "https://rheosoph.atlassian.net", email: "knowledge-bot@rheosoph.com", apiToken: confluenceToken, isCloud: true })
+    const { pageId } = confluence::createPage({ provider: provider, spaceKey: "KB", title: `Knowledge QA sweep ${stamp}`, body: html })
+    confluence::addLabel({ provider: provider, pageId: pageId, label: "qa-regression" })
+    const mailbox = smtp::connect({ host: "smtp.rheosoph.com", port: 587, username: "knowledge-bot@rheosoph.com", password: mailboxPassword, encryption: "StartTls" })
+    mailbox.send("knowledge-bot@rheosoph.com", "knowledge-owners@rheosoph.com", "", "", headline, report, html)
+    return pageId
+}
+
+function knowledgeCoverage(space: string): (total: int, scoped: int, indices: int) {
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    const total = db::count({ database: index, filter: "space IS NOT NULL" })
+    // BUG: `params: { space: space }` — a computed object literal on a Struct pin is dropped
+    // ("argument `params` on `count` is not a literal or resolvable node output"), so the
+    // placeholder bindings are assembled through struct::make instead.
+    let bindings = struct::make()
+    bindings.space = space
+    const scoped = db::count({ database: index, filter: "space = $space", params: bindings })
+    const indices = array::length({ array: db::listIndices({ database: index }) })
+    return total, scoped, indices
+}
+
+function crawlStorageInbox(): (folders: int, chunks: int) {
+    const root = files::storageDir({ nodeScope: false })
+    const inbox = root.child("knowledge-inbox")
+    // BUG: `let queue = files::listFolders(...)` is the natural spelling, but a variable seeded
+    // from a concretely typed array (Struct[]/string[]) collapses to the bare element type as
+    // soon as it is reassigned inside a nested block, so every later array node rejects it
+    // ("source `variable_get.value_ref` is `Struct/Normal`, but input `array_in` requires
+    // `Generic/Array`"). Seeding from array::make() keeps the pin Generic/Array.
+    // See bug-t4-knowledge-qa-while-mutated-typed-array.flow.
+    let queue = array::make()
+    queue = array::extend({ arrayIn: queue, values: files::listFolders({ prefix: inbox, recursive: false }) })
+    let visited = 0
+    let indexed = 0
+    while (array::length({ array: queue }) > 0) {
+        const { element: folder } = array::get({ arrayIn: queue, index: 0 })
+        queue = array::removeIndex({ arrayIn: queue, index: 0 })
+        visited = visited + 1
+        const space = folder.filename(false)
+        const entries = files::listPaths({ prefix: folder, recursive: false })
+        for (const [position, entry] of entries) {
+            const suffix = entry.extension()
+            const supported = array::includes({ arrayIn: ["pdf", "docx", "pptx", "md"], value: suffix })
+            if (supported) {
+                const produced = indexDocument(entry, space)
+                indexed = indexed + produced
+            } else {
+                warn({ message: `${space}[${position}]: skipping unsupported .${suffix}`, toast: false })
+            }
+        }
+        queue = array::extend({ arrayIn: queue, values: files::listFolders({ prefix: folder, recursive: false }) })
+        control::delay({ time: 200 })
+    }
+    return visited, indexed
+}
+
+eventsSimple crawlKnowledgeSpaces() {
+    const { folders, chunks } = crawlStorageInbox()
+    const { pageCount, portalSections } = crawlRemoteSpaces()
+    const index = db::open({ name: knowledgeTable, userScoped: false })
+    db::buildIndex({ database: index, column: "vector", type: "VECTOR" })
+    db::optimize({ database: index, keepVersions: false })
+    info({ message: `${retrievalNamespace}: ${folders} folder(s) and ${chunks} chunk(s) from storage, ${pageCount} remote page(s), ${portalSections} portal section(s)`, toast: false })
+}
+
+eventsChat answerFromKnowledge(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {
+    const popped = history::popMessage({ history: history })
+    popped {
+        execOut: {
+            const { content: question } = history::extractContent({ message: popped.message })
+            const { context, hits } = retrieveContext(question, 8)
+            const stepId = chat::pushStep({ title: "Knowledge lookup", description: `${hits} passage(s) matched` })
+            chat::pushTextToStep({ text: context })
+            const streamed = groundedHistory(popped.historyOut, question, context)
+            const answer = ai::invoke({ model: retrievalModel(), history: streamed })
+            answer {
+                onStream: {
+                    chat::pushChunk({ chunk: answer.chunk })
+                }
+                done: {
+                    chat::pushResponse({ response: answer.result })
+                    chat::pushStat({ stepName: "Knowledge lookup", stat: answer.stats })
+                    chat::removeStep({ stepId: stepId })
+                    chat::pushLocalSession({ localSession: localSession })
+                }
+            }
+        }
+        empty: {
+            warn({ message: "knowledge chat turn arrived without a user message", toast: false })
+        }
+    }
+}
+
+eventsGeneric helpdeskWebhook(payload: Struct, ticketId: string, question: string, requesterEmail: string) {
+    const { context, hits } = retrieveContext(question, 5)
+    const conversation = history::fromString({ modelName: "kb-helpdesk", message: `Ticket ${ticketId}: ${question}` })
+    const grounded = conversation.setSystemPrompt(`Answer using only these knowledge passages:\n${context}`)
+    const { response } = agent::invoke({ agent: helpdeskAgent(), history: grounded })
+    const { content: reply } = ai::response::lastContent({ response: response })
+    if (hits > 0) {
+        mailReply(ticketId, requesterEmail, reply)
+    } else {
+        warn({ message: `${ticketId}: no knowledge passage matched, escalating to a human`, toast: false })
+    }
+    return reply
+}
+
+eventsWidgetAction knowledgeStatusCard(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const spaceFilter = events::extractInputValue({ inputValues: inputValues, componentId: "kb-space-select" })
+    const trigger = events::extractActionContext({ actionContext: actionContext, fieldName: "trigger" })
+    const { element: statusLabel } = ui::getElement({ elementRef: "kb-status-label" })
+    const { element: progressBar } = ui::getElement({ elementRef: "kb-index-progress" })
+    ui::setElementLoading({ elementRef: statusLabel, loading: true })
+    const { total, scoped, indices } = knowledgeCoverage(spaceFilter)
+    const ratio = int::divide({ integer1: scoped, integer2: total })
+    ui::setElementText({ elementRef: statusLabel, text: `${scoped} of ${total} passage(s) indexed for ${spaceFilter}` })
+    ui::setBadgeContent({ elementRef: statusLabel, content: `${indices}` })
+    ui::setProgress({ elementRef: progressBar, value: ratio * 100.0 })
+    ui::setElementLoading({ elementRef: statusLabel, loading: false })
+    info({ message: `${widgetInstanceId} handled ${eventName} (${trigger})`, toast: false })
+}
+
+eventsSimple qaRegressionSweep() {
+    const root = files::storageDir({ nodeScope: false })
+    const workbook = root.child("qa/knowledge-cases.xlsx")
+    const { sheetNames, count: sheetCount } = excel::getSheetNames({ file: workbook })
+    const tables = excel::extractTables({ file: workbook, sheet: "cases" })
+    const session = df::createSession({ sessionName: "knowledge-qa", targetPartitions: 4, batchSize: 4096, collectStatistics: true })
+    const tableNames = df::registerExcel({ session: session, file: workbook, sheet: "cases", mode: "Sheet as table", prefix: "qa_" })
+    const { result: breakdown, rowCount } = df::executeSql({ session: session, query: "SELECT persona, count(*) AS cases FROM qa_cases GROUP BY persona ORDER BY cases DESC" })
+    const { report, passed, failed } = runQaCases(["new-hire", "support-agent", "field-engineer"])
+    const stamp = datetime::now().format("%Y-%m-%d")
+    const headline = `Knowledge QA ${stamp}: ${passed} passed, ${failed} failed`
+    const pageId = publishQaReport(`${report}\n\n${breakdown}`, stamp, headline)
+    if (failed > passed) {
+        error({ message: `${headline} — regressed over ${rowCount} declared case(s) in ${sheetCount} sheet(s)`, toast: true })
+    } else {
+        info({ message: `${headline} — published as ${pageId} from ${sheetNames} / ${tableNames} (${array::length({ array: tables })} table(s))`, toast: false })
+    }
+}
+
+module ingest {
+    function extract(source: Struct): (text: string, pages: int) {
+        const suffix = source.extension()
+        let text = ""
+        let pages = 0
+        if (suffix == "pdf") {
+            const { text: pdfText, pages: pdfPages } = ingest::pdfs::extract(source)
+            text = pdfText
+            pages = pdfPages
+        } else if (suffix == "docx" || suffix == "pptx") {
+            const { text: officeText, pages: officePages } = ingest::office::extract(source)
+            text = officeText
+            pages = officePages
+        } else {
+            const raw = files::readToString({ path: source })
+            const paragraphs = string::lines({ string: raw, skipEmpty: true })
+            text = raw
+            pages = array::length({ array: paragraphs })
+        }
+        return text, pages
+    }
+
+    module pdfs {
+        function extract(source: Struct): (text: string, pages: int) {
+            const text = pdfDoc::extractText({ template: source })
+            const pages = pdfDoc::pageCount({ pdf: source })
+            const { title, author } = pdfDoc::getMetadata({ template: source })
+            info({ message: `pdf "${title}" by ${author}: ${pages} page(s)`, toast: false })
+            return text, pages
+        }
+    }
+
+    module web {
+        function extract(source: string): (text: string, pages: int) {
+            const session = automation::startSession({ defaultDelayMs: 250, clickDelayMs: 80, debugMode: false })
+            const launched = browser::open({ session: session, browserType: "Chrome", headless: true, viewportWidth: 1440, viewportHeight: 900, pageLoadTimeout: 30 })
+            const { sessionOut: opened, finalUrl } = browser::goto({ session: launched, url: source })
+            let text = ""
+            const idle = browser::waitForNetworkIdle({ session: opened, idleTimeMs: 750, timeoutMs: 15000 })
+            idle {
+                execOut: {
+                    const { html } = browser::getHtml({ session: idle.sessionOut, selector: "main", outerHtml: false })
+                    text = md::fromHtml({ html: html, skippedTags: ["script", "style", "nav", "footer"] })
+                }
+                execTimeout: {
+                    warn({ message: `${finalUrl} never settled; the portal page was skipped`, toast: false })
+                }
+            }
+            browser::close({ session: opened })
+            automation::stopSession({ session: opened })
+            const sections = string::lines({ string: text, skipEmpty: true })
+            const pages = array::length({ array: sections })
+            return text, pages
+        }
+    }
+
+    module office {
+        function extract(source: Struct): (text: string, pages: int) {
+            const suffix = source.extension()
+            let text = ""
+            let pages = 0
+            if (suffix == "pptx") {
+                text = slideDoc::extractText({ template: source })
+                pages = slideDoc::slideCount({ template: source })
+            } else {
+                text = wordDoc::extractText({ template: source })
+                const placeholders = wordDoc::listPlaceholders({ template: source })
+                pages = array::length({ array: placeholders })
+            }
+            return text, pages
+        }
+    }
+}

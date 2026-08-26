@@ -1,0 +1,25 @@
+use log::{ info }
+
+function commitDurableUpdate(revision: string) {
+    info({ message: `Committed ${revision}`, toast: false })
+}
+
+function advanceRevision(revision: string): (nextRevision: string) {
+    info({ message: `Advancing ${revision}`, toast: false })
+    return `${revision}-next`
+}
+
+function invalidateCache(revision: string) {
+    info({ message: `Invalidated cache for ${revision}`, toast: false })
+}
+
+function publishSuccess(revision: string) {
+    info({ message: `Published ${revision}`, toast: false })
+}
+
+eventsGeneric updateDirectory(payload: Struct, revision: string) {
+    commitDurableUpdate(revision)
+    const nextRevision = advanceRevision(revision)
+    invalidateCache(nextRevision)
+    publishSuccess(nextRevision)
+}

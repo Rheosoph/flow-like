@@ -1,0 +1,149 @@
+---
+title: "2. The Manifesto: Constrained Freedom"
+description: Explore Flow-Like's principles for typed building blocks, legible workflows, safe extension, governed execution, and freedom without hidden liabilities.
+seo:
+  title: "Constrained Freedom: Flow-Like's Software Principles | FlowBook"
+  topics:
+    - constrained freedom
+    - reliable software
+    - typed building blocks
+    - safe extensibility
+    - software governance
+sidebar:
+  order: 2
+  badge:
+    text: Draft
+    variant: caution
+---
+
+Flow-Like makes a trade. Executable operations enter a shared, typed model instead of arriving
+through arbitrary escape hatches. In return, the platform can inspect, run, and govern more of the
+application as one system.
+
+The constraint has to earn its place. It should prevent a meaningful class of mistakes while
+leaving real work practical. Developers will route around a platform that makes the sound path
+needlessly painful.
+
+The following principles are the standard against which FlowScript and Flow-Like should be judged.
+
+## 2.1 Reliability begins during authoring
+
+Teams often postpone operational work until a feature exists. Authentication, logging, recovery,
+permissions, secret handling, and cost controls enter separate backlogs. The prototype feels fast
+because it temporarily ignores the work required to keep it alive.
+
+A reliable program has to survive conditions beyond its author's machine. Unexpected input should
+meet an explicit boundary. A failed dependency should leave evidence. Reviewers should be able to
+see what changed, and a responder should be able to connect a runtime error to the responsible
+operation.
+
+Flow-Like therefore places typed connections, versioned changes, runtime context, and run evidence
+around the Flow. Deployment targets still differ in maturity and policy. The durable principle is
+that application teams should spend their time on the domain problem instead of rebuilding a
+private operating model for every project.
+
+Efficiency belongs here too. Runtime waste matters on a critical or high-volume path. Human waste
+appears when each team recreates the same infrastructure and rediscovers the same failure modes.
+The platform should reduce both.
+
+## 2.2 Readability is operational
+
+Software outlives the attention of its first author. Developers, domain experts, operators, and
+reviewers each arrive with different context. AI systems now join that readership and may also
+propose changes.
+
+Inside Studio, the canvas exposes operations and relationships. FlowScript gives developers a
+compact text editor for the same logic. Both author the same Flow.
+
+The two views answer different questions. Text works well for search, comparison, and broad edits.
+The canvas shows locality, paths, boundaries, and the node responsible for a run result. A readable
+Flow lets the team choose the useful view without maintaining two programs.
+
+Organization affects correctness once several people have to review or operate the application.
+If important behavior disappears into a generic code box, the visible Flow can no longer support
+that work.
+
+## 2.3 Hard work should move quickly
+
+Safety becomes irrelevant when it makes useful software too slow to deliver. Flow-Like has to make
+the disciplined path competitive.
+
+The node catalog turns recurring capabilities into typed operations. Inputs and outputs become
+pins; connections can be checked against their declared types; logs can refer to the exact node
+that ran. Platform services provide the surrounding application structure so each Flow can focus
+on its own decision or process.
+
+This matters in an existing estate. A developer should be able to connect a current API, database,
+file store, or device and add only the logic that is new. A reusable package can expose a
+specialized integration once, with a contract that later authors can inspect.
+
+The platform cannot decide the domain model or make an unreliable dependency reliable. It can
+remove engineering repetition that adds little value to the domain. The useful measure is the
+time required to reach software that a team can understand, extend, and operate.
+
+## 2.4 Why text belongs beside the graph
+
+Low-level building blocks keep a workflow honest. They also make the canvas larger. Related logic
+spreads across space, repeated patterns take time to place, and a long wire can be slower to follow
+than a compact expression.
+
+A generic code node shrinks the visible graph by moving behavior into a second language. One box
+may conceal many calls, branches, and side effects. Debugging crosses into a separate toolchain,
+and the node's visible contract describes less of what actually happens.
+
+FlowScript addresses scale while retaining the graph model. Its values, calls, branches, loops,
+functions, and handlers reconcile to operations the Board can represent. The language provides a
+purpose-built text form rather than a serialized configuration file.
+
+The result is compact authoring that remains part of the graph model. If reconciliation cannot
+preserve that meaning, Apply must stop with a precise diagnostic.
+
+## 2.5 Constraints must state their boundary
+
+Typed pins catch incompatible connections before a run, within the facts declared by the nodes.
+They cannot prove that a business rule is sensible or that an external service will honor its
+schema.
+
+Secret handling keeps protected values out of ordinary FlowScript source and guards sensitive
+changes. That protection is meaningful, although metadata alone cannot prevent a later node from
+logging or returning a secret. Stronger claims require verification across previews, errors,
+storage, and deployment paths.
+
+Custom nodes use WebAssembly components with declared host capabilities. Interactive clients can
+show package and permission information before execution, and publication can include review.
+Resource limits, remembered trust, and unattended runs still need explicit policy and testing.
+
+Versions and publication gates follow the same rule. A numbered Board version freezes the graph;
+packages, data, credentials, and external systems can have separate lifetimes. Good documentation
+states what a control protects and where its responsibility ends.
+
+## 2.6 Broad outcomes, opinionated implementation
+
+Flow-Like aims to support applications, automations, agents, data work, APIs, and internal tools
+through a small number of visible execution concepts. That breadth depends on consistency at the
+implementation boundary.
+
+When the catalog lacks a capability, an experienced developer can package a WASM node and expose
+a typed contract. A domain expert then uses the capability as a normal building block, without
+inheriting its implementation language.
+
+AI follows the same path. An authoring agent proposes reviewable changes over declared operations.
+A runtime model call occupies an explicit node where semantic uncertainty is useful. Exact logic
+stays in deterministic nodes around it.
+
+The platform deliberately limits arbitrary injection of credentials, deployment assumptions,
+side effects, and unreviewed code. The return on that constraint is collaborative software whose
+logic remains available after its first author leaves.
+
+## 2.7 The product has to live by the manifesto
+
+FlowScript and Flow-Like are evolving. Authoring parity has edges, clients differ, and deployment
+targets have different operating histories. Security, performance, scale, and cost claims need
+tests or measurements for the release being described.
+
+This book marks changing capabilities as **Current**, **Preview**, or **Vision** and names known
+limitations near the feature they affect. A polished story is not worth a bad operating decision.
+
+The same candor applies to product design. If the governed route stays slower or more awkward than
+the escape hatch, users will choose the escape hatch. The team building Flow-Like owns that
+problem. Constrained freedom works only when the reliable route is also a practical way to ship.

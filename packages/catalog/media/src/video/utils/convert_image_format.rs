@@ -19,6 +19,7 @@ impl NodeLogic for ConvertImageFormatNode {
             "Decode a still image and write it as PNG, JPEG, GIF, WebP, or AVIF",
             "Image",
         );
+        node.set_flowscript_name("image", "convertFormat");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source image FlowPath");

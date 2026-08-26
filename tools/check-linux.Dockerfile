@@ -1,12 +1,11 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CARGO_TARGET_DIR=/tmp/cargo-target
-ENV RUSTFLAGS="--cfg tokio_unstable"
+ENV CARGO_TARGET_DIR=/cargo-target
 
 # Linux native deps + Windows cross-compilation toolchain (MinGW)
 RUN apt-get update -qq && apt-get install -y -qq \
-    curl build-essential pkg-config protobuf-compiler \
+    curl git build-essential pkg-config protobuf-compiler \
     libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
     libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev \
     libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev \

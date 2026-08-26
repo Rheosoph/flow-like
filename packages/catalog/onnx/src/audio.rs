@@ -137,6 +137,7 @@ impl NodeLogic for LoadAudioNode {
             "Load audio file for processing",
             "AI/ML/ONNX/Audio",
         );
+        node.set_flowscript_name("onnx", "loadAudio");
 
         node.add_icon("/flow/icons/audio.svg");
 
@@ -240,6 +241,7 @@ impl NodeLogic for VoiceActivityDetectionNode {
             "Detect speech segments in audio. Download Silero VAD model from: https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx",
             "AI/ML/ONNX/Audio",
         );
+        node.set_flowscript_name("onnx", "vad");
         node.set_version(1);
 
         node.add_icon("/flow/icons/microphone.svg");
@@ -448,6 +450,7 @@ impl NodeLogic for ResampleAudioNode {
             "Resample audio to target sample rate",
             "AI/ML/ONNX/Audio",
         );
+        node.set_flowscript_name("onnx", "resampleAudio");
 
         node.add_icon("/flow/icons/waveform.svg");
 
@@ -529,6 +532,7 @@ impl NodeLogic for TrimAudioNode {
             "Trim audio to speech segments from VAD",
             "AI/ML/ONNX/Audio",
         );
+        node.set_flowscript_name("onnx", "trimAudio");
 
         node.add_icon("/flow/icons/scissors.svg");
 
@@ -621,6 +625,7 @@ impl NodeLogic for AudioToMelSpectrogramNode {
             "Convert audio to mel spectrogram for speech models",
             "AI/ML/ONNX/Audio",
         );
+        node.set_flowscript_name("onnx", "audioToMelSpectrogram");
 
         node.add_icon("/flow/icons/waveform.svg");
 

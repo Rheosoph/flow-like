@@ -29,6 +29,7 @@ impl NodeLogic for PdfEncryptNode {
             "Encrypt a PDF with a user password for restricted access.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "encrypt");
         node.add_icon("/flow/icons/lock.svg");
         node.set_scores(
             NodeScores::new()

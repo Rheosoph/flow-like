@@ -54,7 +54,8 @@ use crate::{
     error::ApiError,
     execution::{
         DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
-        collect_generic_result_bytes, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
+        collect_generic_result_bytes, is_jwt_configured, rejection, resolve_wasm_packages,
+        sign_execution_jwt,
     },
     routes::{
         app::events::db::{db_model_to_event, decrypt_token},
@@ -301,6 +302,34 @@ async fn dispatch_inbound_rest(
     .await
 }
 
+/// Give a refused inbound call the same run history a dispatched one gets.
+///
+/// A published REST or MCP endpoint is often the only integration surface an
+/// app exposes, and its 404s land in a caller the app owner cannot see. Without
+/// a record, "the webhook stopped working" has no evidence anywhere.
+async fn record_inbound_rejection(
+    state: &AppState,
+    event_row: &event::Model,
+    stage: rejection::RejectionStage,
+    reason: String,
+    body: Option<&Bytes>,
+) {
+    let payload = body
+        .filter(|body| !body.is_empty())
+        .and_then(|body| serde_json::from_slice::<Value>(body).ok());
+
+    let context = rejection::RejectedRunContext::new(event_row.app_id.clone(), stage, reason)
+        .with_board(
+            event_row.board_id.clone().unwrap_or_default(),
+            event_row.board_version.clone(),
+        )
+        .with_event(event_row.id.clone(), event_row.node_id.clone())
+        .with_event_version(Some(event_row.event_version.clone()))
+        .with_payload(payload);
+
+    rejection::record(state, context).await;
+}
+
 /// Matches and executes a REST registration of an event. Used by the public
 /// inbound router and by the authenticated app-connection proxy. Both surfaces
 /// enforce configured per-registration auth. The surface flag only controls
@@ -334,9 +363,18 @@ pub(crate) async fn dispatch_rest_for_event(
     };
     let slug_or_id = public_slug;
 
-    let version = event_row.last_setup_version.clone().ok_or_else(|| {
-        ApiError::not_found("event has no completed setup; call POST /setup first")
-    })?;
+    let Some(version) = event_row.last_setup_version.clone() else {
+        let reason = "event has no completed setup; call POST /setup first";
+        record_inbound_rejection(
+            state,
+            event_row,
+            rejection::RejectionStage::Resolution,
+            reason.to_string(),
+            Some(body),
+        )
+        .await;
+        return Err(ApiError::not_found(reason));
+    };
 
     // Normalize path so `/foo` and `foo` match the same row.
     let normalized = normalize_inbound_path(path);
@@ -348,7 +386,7 @@ pub(crate) async fn dispatch_rest_for_event(
     }
 
     // Look up matching registration. Exact match wins over templated.
-    let (registration, path_params) = match_registration(
+    let matched = match_registration(
         state,
         &resolved.app_id,
         &resolved.event_id,
@@ -356,10 +394,19 @@ pub(crate) async fn dispatch_rest_for_event(
         method,
         &normalized,
     )
-    .await?
-    .ok_or_else(|| {
-        ApiError::not_found(format!("no registration matches {} {}", method, normalized))
-    })?;
+    .await?;
+    let Some((registration, path_params)) = matched else {
+        let reason = format!("no registration matches {} {}", method, normalized);
+        record_inbound_rejection(
+            state,
+            event_row,
+            rejection::RejectionStage::Resolution,
+            reason.clone(),
+            Some(body),
+        )
+        .await;
+        return Err(ApiError::not_found(reason));
+    };
     let registration_headers = registration_auth_headers(headers, is_public_surface);
 
     // A connection role authorizes access to the proxy, but does not replace
@@ -1652,7 +1699,24 @@ async fn dispatch_rest_fn(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let body_value = parse_rest_body_value(body, &content_type)?;
+    let body_value = match parse_rest_body_value(body, &content_type) {
+        Ok(value) => value,
+        Err(error) => {
+            let reason = error
+                .public_message()
+                .unwrap_or("request body could not be parsed")
+                .to_string();
+            record_inbound_rejection(
+                state,
+                event_row,
+                rejection::RejectionStage::Payload,
+                reason,
+                None,
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let headers_single = header_map_to_json(headers);
     let query_single = parse_query_single(raw_query);
     let mut args = rest_args_from_body_and_query(&body_value, &query_single);
@@ -2813,11 +2877,18 @@ async fn mcp_tool_call_response(
         .unwrap_or_else(|| json!({}));
     let tools = mcp_tools_for_event(state, event_row, config).await?;
     let Some(tool) = tools.into_iter().find(|tool| tool.name == name) else {
-        return Ok(Some(json_rpc_error(
-            id,
-            -32602,
-            &format!("Unknown tool: {name}"),
-        )));
+        // JSON-RPC reports this inside a 200, so the caller's transport layer
+        // shows nothing wrong and the app owner sees no failed run at all.
+        let reason = format!("Unknown tool: {name}");
+        record_inbound_rejection(
+            state,
+            event_row,
+            rejection::RejectionStage::Resolution,
+            reason.clone(),
+            None,
+        )
+        .await;
+        return Ok(Some(json_rpc_error(id, -32602, &reason)));
     };
 
     let normalized_arguments = normalize_tool_arguments(arguments, &tool);

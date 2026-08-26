@@ -26,6 +26,7 @@ impl NodeLogic for ChunkTextChar {
             "Splits raw text locally using simple character-based chunking",
             "AI/Preprocessing",
         );
+        node.set_flowscript_name("ai.processing", "chunkTextChar");
 
         node.set_scores(
             NodeScores::new()

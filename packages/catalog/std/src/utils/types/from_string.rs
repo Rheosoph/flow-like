@@ -27,6 +27,7 @@ impl NodeLogic for FromStringNode {
             "Convert String to Struct",
             "Utils/Conversions",
         );
+        node.set_flowscript_name("json", "parse");
         node.add_icon("/flow/icons/convert.svg");
 
         node.add_input_pin(

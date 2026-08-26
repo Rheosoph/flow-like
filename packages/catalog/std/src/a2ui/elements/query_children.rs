@@ -30,6 +30,7 @@ impl NodeLogic for QueryChildren {
             "Gets all child elements of a container",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryChildren");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

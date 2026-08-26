@@ -27,6 +27,8 @@ impl NodeLogic for DiscardSetNode {
             "Discards an element of a set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "discard");
+        node.set_receiver("set_in");
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

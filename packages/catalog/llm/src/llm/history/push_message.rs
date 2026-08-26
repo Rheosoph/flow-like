@@ -26,6 +26,8 @@ impl NodeLogic for PushHistoryMessageNode {
             "Appends a chat message to the end of a history",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "addMessage");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

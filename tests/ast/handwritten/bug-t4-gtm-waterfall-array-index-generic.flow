@@ -1,0 +1,23 @@
+// BUG: indexing a declared `string[]` yields `Generic`, so comparing the element to a string
+// literal is rejected:
+//     diag: binary operator `==` has incompatible operand types `Generic` and `String`
+//     diag: argument `condition` on `controlBranch` is not a literal or resolvable node output;
+//           skipped connection
+//
+// `vendorLadder` is spelled `let vendorLadder: string[]`, so `vendorLadder[cursor]` is a String by
+// construction; the index expression drops the element type instead of carrying it through. The
+// branch is then left with an unconnected `condition` pin, so the whole `if` silently loses its
+// test on the board.
+//
+// Workaround used in t4-gtm-waterfall.flow: hand the element through a node whose output pin is
+// typed String (`string::trim`) before comparing it.
+use log::{ info }
+
+let ladder: string[] = ["dropcontact","apollo","clearbit"]
+
+eventsSimple ladderProbe() {
+    const step = ladder[0]
+    if (step == "dropcontact") {
+        info({ message: "cheapest vendor first", toast: false })
+    }
+}

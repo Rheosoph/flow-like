@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Value placement by owner and lifetime</title>
+  <desc id="desc">A decision map places values inside one run, in configuration, in cross-run storage, or in a protected credential channel.</desc>
+  <defs>
+    <style>
+      .sans { font-family: Inter, Arial, sans-serif; }
+      .eyebrow { font-size: 27px; font-weight: 760; letter-spacing: 3px; }
+      .title { font-size: 40px; font-weight: 740; letter-spacing: -0.8px; }
+      .body { font-size: 29px; font-weight: 610; }
+      .small { font-size: 25px; font-weight: 500; }
+      .code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 27px; font-weight: 650; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1040" rx="30" fill="#fbfaf8"/>
+  <rect x="40" y="36" width="1520" height="968" rx="28" fill="#ffffff" stroke="#cfc7c0" stroke-width="3"/>
+  <rect x="72" y="36" width="230" height="9" rx="4.5" fill="#e95335"/>
+
+  <text x="800" y="104" text-anchor="middle" class="sans eyebrow" fill="#9d311f">CHOOSE BY OWNER AND LIFETIME</text>
+  <text x="800" y="160" text-anchor="middle" class="sans title" fill="#18171b">Where should this value live?</text>
+
+  <rect x="74" y="210" width="706" height="330" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="108" y="266" class="sans eyebrow" fill="#625e66">INSIDE ONE RUN</text>
+  <text x="108" y="316" class="sans small" fill="#625e66">Produced on one body path</text>
+  <rect x="108" y="344" width="638" height="64" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="132" y="385" class="sans body" fill="#18171b">Derived value</text>
+  <text x="714" y="385" text-anchor="end" class="sans code" fill="#9d311f">local binding</text>
+  <text x="108" y="456" class="sans small" fill="#625e66">Shared mutable value within the run</text>
+  <rect x="108" y="474" width="638" height="44" rx="12" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="427" y="504" text-anchor="middle" class="sans code" fill="#9d311f">Flow variable</text>
+
+  <rect x="820" y="210" width="706" height="330" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="854" y="266" class="sans eyebrow" fill="#625e66">CONFIGURATION</text>
+  <text x="854" y="316" class="sans small" fill="#625e66">Choose the boundary that owns the input</text>
+  <rect x="854" y="344" width="638" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="878" y="381" class="sans body" fill="#18171b">Shared App default</text>
+  <text x="1460" y="381" text-anchor="end" class="sans code" fill="#9d311f">exposed variable</text>
+  <rect x="854" y="414" width="638" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="878" y="451" class="sans body" fill="#18171b">One trigger boundary</text>
+  <text x="1460" y="451" text-anchor="end" class="sans code" fill="#9d311f">Event override</text>
+  <rect x="854" y="484" width="638" height="38" rx="12" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1173" y="511" text-anchor="middle" class="sans code" fill="#9d311f">runner or device input: @runtime</text>
+
+  <rect x="74" y="574" width="706" height="342" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="108" y="630" class="sans eyebrow" fill="#625e66">CROSS-RUN STATE</text>
+  <text x="108" y="680" class="sans small" fill="#625e66">Choose by the cost of losing the value</text>
+  <rect x="108" y="708" width="638" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="132" y="745" class="sans body" fill="#18171b">Disposable or recomputable</text>
+  <text x="714" y="745" text-anchor="end" class="sans code" fill="#9d311f">cache</text>
+  <rect x="108" y="778" width="638" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="132" y="815" class="sans body" fill="#18171b">Large durable object</text>
+  <text x="714" y="815" text-anchor="end" class="sans code" fill="#9d311f">App file</text>
+  <rect x="108" y="848" width="638" height="46" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="132" y="880" class="sans body" fill="#18171b">Durable, queryable record</text>
+  <text x="714" y="880" text-anchor="end" class="sans code" fill="#9d311f">database</text>
+
+  <rect x="820" y="574" width="706" height="342" rx="22" fill="#f8eee8" stroke="#c66a4b" stroke-width="3"/>
+  <text x="854" y="630" class="sans eyebrow" fill="#9d311f">CREDENTIAL</text>
+  <text x="854" y="684" class="sans title" fill="#18171b">Protected configuration channel</text>
+  <rect x="854" y="722" width="638" height="72" rx="14" fill="#ffffff" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="878" y="750" class="sans small" fill="#625e66">FlowScript declares secret metadata</text>
+  <text x="878" y="781" class="sans code" fill="#9d311f">@secret</text>
+  <text x="854" y="842" class="sans small" fill="#3f3b40">The stored value stays outside readable source.</text>
+  <text x="854" y="879" class="sans small" fill="#3f3b40">Local BYOK may combine @secret with @runtime.</text>
+
+  <text x="800" y="968" text-anchor="middle" class="sans small" fill="#625e66">Use the narrowest scope that covers the required lifetime.</text>
+</svg>

@@ -1,21 +1,26 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::{
     bit::Bit,
     flow::{
-        execution::{LogLevel, context::ExecutionContext},
+        execution::context::ExecutionContext,
         node::{Node, NodeLogic, NodeScores},
         pin::{PinOptions, ValueType},
         variable::VariableType,
     },
 };
 #[cfg(feature = "execute")]
+use flow_like_types::Value;
+#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
+#[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
 use std::fmt;
@@ -107,6 +112,7 @@ impl NodeLogic for AiKeywordExtractionNode {
             "Extracts keywords from text using an LLM. The AI understands context and semantics, providing high-quality keyword extraction for complex or domain-specific content.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractKeywords");
         node.add_icon("/flow/icons/sparkles.svg");
         node.set_version(3);
 

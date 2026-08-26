@@ -4,6 +4,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json::json};
 
@@ -52,6 +53,7 @@ impl NodeLogic for InsertColumnNode {
             "Insert one or more columns into a worksheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "insertColumn");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Exec

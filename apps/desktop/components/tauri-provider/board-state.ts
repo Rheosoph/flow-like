@@ -36,6 +36,7 @@ import {
 	type IPrerunBoardResponse,
 	type IRunContext,
 	type IRunPayload,
+	type IScopedFlowScriptResponse,
 	type ISettingsProfile,
 	type IVersionType,
 	type ProgressToastData,
@@ -1384,14 +1385,15 @@ export class BoardState implements IBoardState {
 
 		const promise = injectDataFunction(
 			async () => {
+				// The route reads version_type from the query string only, so a
+				// body here silently degrades every Major and Minor to a Patch.
 				const remoteData = await fetcher<[number, number, number]>(
 					this.backend.profile!,
-					`apps/${appId}/board/${boardId}`,
+					`apps/${appId}/board/${boardId}?version_type=${encodeURIComponent(
+						versionType,
+					)}`,
 					{
 						method: "PATCH",
-						body: JSON.stringify({
-							version_type: versionType,
-						}),
 					},
 					this.backend.auth,
 				);
@@ -3099,6 +3101,8 @@ export class BoardState implements IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions = false,
 		origin: FlowScriptApplyOrigin = "editor",
+		scopeAnchors?: string[],
+		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
@@ -3114,6 +3118,8 @@ export class BoardState implements IBoardState {
 					currentLayer,
 					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
 					allowDeletions,
+					scopeAnchors,
+					module,
 				});
 			} catch (error) {
 				void this.reportFlowScriptApplyFailure({
@@ -3183,14 +3189,16 @@ export class BoardState implements IBoardState {
 	 * Report an apply that did not do what the user asked, so the source that produced it can be
 	 * reviewed. Best-effort in every direction: the source is redacted natively first so nothing
 	 * raw leaves the machine, a signed-out user reports nothing, and a failed report is swallowed —
-	 * losing a capture must never cost someone their edit.
+	 * losing a capture must never cost someone their edit. The typed-IR commit path holds only a
+	 * compiler token, never the draft source, so `flowscript` may be absent there; a supplied but
+	 * empty source still reports nothing.
 	 */
 	private async reportFlowScriptApplyFailure(failure: {
 		appId: string;
 		boardId: string;
 		currentLayer?: string;
 		allowDeletions: boolean;
-		flowscript: string;
+		flowscript?: string;
 		outcome: FlowScriptApplyOutcome;
 		origin: FlowScriptApplyOrigin;
 		errorMessage?: string;
@@ -3200,14 +3208,18 @@ export class BoardState implements IBoardState {
 	}): Promise<void> {
 		const { profile, auth } = this.backend;
 		if (!profile || !auth) return;
-		if (!failure.flowscript.trim()) return;
 
 		try {
-			const redacted = await invoke<{ flowscript: string }>(
-				"redact_flowscript",
-				{ flowscript: failure.flowscript },
-			);
-			if (!redacted.flowscript.trim()) return;
+			let flowscript = "";
+			if (failure.flowscript !== undefined) {
+				if (!failure.flowscript.trim()) return;
+				const redacted = await invoke<{ flowscript: string }>(
+					"redact_flowscript",
+					{ flowscript: failure.flowscript },
+				);
+				if (!redacted.flowscript.trim()) return;
+				flowscript = redacted.flowscript;
+			}
 
 			const report: IFlowScriptApplyFailureReport = {
 				app_id: failure.appId,
@@ -3215,7 +3227,7 @@ export class BoardState implements IBoardState {
 				layer_id: failure.currentLayer,
 				outcome: failure.outcome,
 				origin: failure.origin,
-				flowscript: redacted.flowscript,
+				flowscript,
 				error_message: failure.errorMessage,
 				diagnostics: failure.diagnostics,
 				corrections: failure.corrections,
@@ -3234,6 +3246,48 @@ export class BoardState implements IBoardState {
 		} catch (error) {
 			console.debug("[applyFlowScript] failure report skipped", error);
 		}
+	}
+
+	/**
+	 * Capture a terminal typed-IR commit outcome, classified on the native result before remote
+	 * delivery so a blocked sync is never miscounted as the agent's edit going wrong. Replays and
+	 * already-delivered claims are earlier successes, not failures.
+	 */
+	private captureFlowIrCommitFailure(
+		appId: string,
+		token: FlowIrCommitToken,
+		result: IApplyFlowIrCommitResponse,
+	): void {
+		if (result.replayed || result.code === "IR_COMMIT_DELIVERY_FINALIZED")
+			return;
+		// A user declining the native destructive dialog is a choice, not an agent failure.
+		if (result.code === "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED") return;
+		const outcome =
+			result.status === "applied"
+				? flowScriptApplyOutcome(
+						result.commands.length,
+						result.diagnostics.length,
+					)
+				: result.status === "error"
+					? "error"
+					: "blocked";
+		if (!outcome) return;
+		void this.reportFlowScriptApplyFailure({
+			appId,
+			boardId: token.board_id,
+			allowDeletions: token.requires_destructive_approval ?? false,
+			origin: "agent",
+			outcome,
+			errorMessage:
+				result.status === "applied"
+					? undefined
+					: result.code
+						? `${result.code}: ${result.message}`
+						: result.message,
+			diagnostics: result.diagnostics,
+			corrections: result.corrections ?? [],
+			commandCount: result.commands.length,
+		});
 	}
 
 	async getFlowScript(
@@ -3267,6 +3321,92 @@ export class BoardState implements IBoardState {
 		}
 	}
 
+	async getFlowScriptScoped(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_scoped", {
+				appId,
+				boardId,
+				nodeIds,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("node_ids", nodeIds.join(","));
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
+	async getFlowScriptFile(
+		appId: string,
+		boardId: string,
+		file: string,
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_file", {
+				appId,
+				boardId,
+				file,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("file", file);
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
+	async formatFlowScript(
+		_appId: string,
+		_boardId: string,
+		flowscript: string,
+		anchors = true,
+	): Promise<string> {
+		return await invoke<string>("format_flowscript", {
+			flowscript,
+			anchors,
+		});
+	}
+
 	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
 		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
 			flowscript,
@@ -3277,10 +3417,12 @@ export class BoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		flowscript: string,
+		scopeAnchors?: string[],
+		module?: string,
 	): Promise<ICheckFlowScriptReconcileResponse> {
 		return await invoke<ICheckFlowScriptReconcileResponse>(
 			"check_flowscript_reconcile",
-			{ appId, boardId, flowscript },
+			{ appId, boardId, flowscript, scopeAnchors, module },
 		);
 	}
 
@@ -3504,13 +3646,33 @@ export class BoardState implements IBoardState {
 				}
 				deliveryIdentity = boundIdentity;
 			}
-			const result = await invoke<IApplyFlowIrCommitResponse>(
-				"flowpilot_apply_flow_ir_commit",
-				{
+			let result: IApplyFlowIrCommitResponse;
+			try {
+				result = await invoke<IApplyFlowIrCommitResponse>(
+					"flowpilot_apply_flow_ir_commit",
+					{
+						appId,
+						token,
+					},
+				);
+			} catch (error) {
+				void this.reportFlowScriptApplyFailure({
 					appId,
-					token,
-				},
-			);
+					boardId: token.board_id,
+					allowDeletions: token.requires_destructive_approval ?? false,
+					origin: "agent",
+					outcome: "error",
+					errorMessage: getErrorMessage(
+						error,
+						"Unknown typed workflow apply error",
+					),
+					diagnostics: [],
+					corrections: [],
+					commandCount: 0,
+				});
+				throw error;
+			}
+			this.captureFlowIrCommitFailure(appId, token, result);
 			if (result.status !== "applied" || result.commands.length === 0) {
 				return result;
 			}

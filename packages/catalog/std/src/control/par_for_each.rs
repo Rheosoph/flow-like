@@ -28,6 +28,7 @@ impl NodeLogic for ParLoopNode {
             "Loops over an Array in Parallel",
             "Control",
         );
+        node.set_flowscript_name("control", "parallelForEach");
         node.add_icon("/flow/icons/for-each.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

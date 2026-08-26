@@ -1,0 +1,12 @@
+[package]
+name = "flow-like-model-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+rig = { package = "rig-core", version = "0.38.2", default-features = false }
+schemars = { version = "1.1.0", features = ["preserve_order"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = "1.0.134"

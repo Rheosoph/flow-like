@@ -27,6 +27,7 @@ impl NodeLogic for DateTimeParseNode {
             "Parses a string into a DateTime. Auto-detects common formats and epoch timestamps (seconds, milliseconds, microseconds, nanoseconds) or uses a custom format string.",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "parse");
 
         node.add_input_pin("input", "Input", "String to parse", VariableType::String);
         node.add_input_pin(

@@ -11,6 +11,7 @@ import {
 	connectPinsCommand,
 	disconnectPinsCommand,
 	moveNodeCommand,
+	moveToLayerCommand,
 	removeCommentCommand,
 	removeNodeCommand,
 	removeVariableCommand,
@@ -97,6 +98,8 @@ function layerTypeFromCommand(value?: string): ILayerType {
 			return ILayerType.Function;
 		case "Macro":
 			return ILayerType.Macro;
+		case "Module":
+			return ILayerType.Module;
 		default:
 			return ILayerType.Collapsed;
 	}
@@ -610,6 +613,79 @@ export function useCopilotCommands({
 								removeMappedNode(command.layer.id);
 							}
 							break;
+						case "MoveToLayer": {
+							const moveIds = command.ids ?? [];
+							const moveTarget = command.target ?? undefined;
+							if (moveIds.length === 0) break;
+
+							const targetsAModule = moveTarget
+								? latestBoardLayers[moveTarget]?.type === ILayerType.Module
+								: true;
+							if (!targetsAModule) {
+								console.warn(
+									`[FlowPilot] MoveToLayer target ${moveTarget} is not an existing Module layer, skipping the move`,
+								);
+								break;
+							}
+
+							const isLayerAncestor = (
+								ancestorId: string,
+								descendantId: string,
+							): boolean => {
+								let current =
+									latestBoardLayers[descendantId]?.parent_id ?? undefined;
+								const seen = new Set<string>();
+								while (current) {
+									if (current === ancestorId) return true;
+									if (seen.has(current)) return false;
+									seen.add(current);
+									current = latestBoardLayers[current]?.parent_id ?? undefined;
+								}
+								return false;
+							};
+
+							for (const id of moveIds) {
+								const node = latestBoardNodes[id];
+								if (node) {
+									const movedNode = { ...node, layer: moveTarget ?? null };
+									latestBoardNodes[id] = movedNode;
+									replaceMappedNode(movedNode);
+									continue;
+								}
+
+								const comment = latestBoardComments[id];
+								if (comment) {
+									latestBoardComments[id] = {
+										...comment,
+										layer: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								const layer = latestBoardLayers[id];
+								if (layer) {
+									if (
+										moveTarget &&
+										(moveTarget === id || isLayerAncestor(id, moveTarget))
+									) {
+										console.warn(
+											`[FlowPilot] MoveToLayer skipping layer ${id} — moving it under ${moveTarget} would create a cycle`,
+										);
+										continue;
+									}
+									latestBoardLayers[id] = {
+										...layer,
+										parent_id: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								console.warn(
+									`[FlowPilot] MoveToLayer skipping unknown id ${id}`,
+								);
+							}
+							break;
+						}
 						case "UpsertVariable":
 							if (command.variable) {
 								latestBoardVariables[command.variable.id] = command.variable;
@@ -717,7 +793,13 @@ export function useCopilotCommands({
 						x: baseX + (nodeIndex % 3) * 300,
 						y: baseY + Math.floor(nodeIndex / 3) * 200,
 					};
-					const targetLayer = resolveLayerId(cmd.target_layer) ?? currentLayer;
+					// A module without an explicit parent is a ROOT module — never implicitly
+					// nested under whatever layer the user is currently standing in (a module
+					// may only nest inside another module).
+					const targetLayer =
+						layerType === ILayerType.Module
+							? resolveLayerId(cmd.target_layer)
+							: (resolveLayerId(cmd.target_layer) ?? currentLayer);
 					const layer: ILayer = {
 						id: layerId,
 						name: cmd.name,
@@ -1361,8 +1443,12 @@ export function useCopilotCommands({
 							);
 							break;
 						}
+						// A module without an explicit parent is a ROOT module — mirror of the
+						// setup-path rule above.
 						const targetLayer =
-							resolveLayerId(cmd.target_layer) ?? currentLayer;
+							layerType === ILayerType.Module
+								? resolveLayerId(cmd.target_layer)
+								: (resolveLayerId(cmd.target_layer) ?? currentLayer);
 						const nodeIds = resolveNodeIds(cmd.node_ids || []);
 						const position = cmd.position ?? { x: baseX, y: baseY };
 
@@ -1497,6 +1583,96 @@ export function useCopilotCommands({
 							}),
 						);
 						latestBoardLayers[layerToUpdate.id] = updatedLayer;
+						break;
+					}
+
+					case "RenameLayer": {
+						const layerToRename = resolveLayer(cmd.layer_id);
+						if (!layerToRename) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot rename layer: "${cmd.layer_id}" was not found`,
+							);
+							break;
+						}
+						const renamedLayer: ILayer = {
+							...layerToRename,
+							name: cmd.name,
+						};
+						remainingGenericCommands.push(
+							upsertLayerCommand({
+								layer: renamedLayer,
+								node_ids: [],
+								current_layer: layerToRename.parent_id ?? null,
+								old_layer: layerToRename,
+							}),
+						);
+						latestBoardLayers[layerToRename.id] = renamedLayer;
+						registerNodeRefs([cmd.name], layerAsNode(renamedLayer));
+						flowPilotDebugLog(
+							`[RenameLayer] Queued "${layerToRename.name}" -> "${cmd.name}"`,
+						);
+						break;
+					}
+
+					case "MoveToLayer": {
+						const moveTarget = resolveLayerId(cmd.target_layer);
+						if (cmd.target_layer && !moveTarget) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move to layer: "${cmd.target_layer}" was not found`,
+							);
+							break;
+						}
+						if (
+							moveTarget &&
+							latestBoardLayers[moveTarget]?.type !== ILayerType.Module
+						) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move to layer: "${cmd.target_layer}" is not a Module layer`,
+							);
+							break;
+						}
+						const moveIds = [
+							...new Set((cmd.ids ?? []).map((id) => resolveNodeId(id))),
+						];
+						if (moveIds.length === 0) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								"MoveToLayer requires at least one id to move",
+							);
+							break;
+						}
+						remainingGenericCommands.push(
+							moveToLayerCommand({
+								ids: moveIds,
+								target: moveTarget ?? null,
+							}),
+						);
+						for (const id of moveIds) {
+							const movedNode = latestBoardNodes[id];
+							if (movedNode) {
+								const updated = { ...movedNode, layer: moveTarget ?? null };
+								latestBoardNodes[id] = updated;
+								replaceMappedNode(updated);
+								continue;
+							}
+							const movedLayer = latestBoardLayers[id];
+							if (movedLayer) {
+								latestBoardLayers[id] = {
+									...movedLayer,
+									parent_id: moveTarget ?? null,
+								};
+							}
+						}
+						flowPilotDebugLog(
+							`[MoveToLayer] Queued ${moveIds.length} ids -> ${moveTarget ?? "root"}`,
+						);
 						break;
 					}
 				}

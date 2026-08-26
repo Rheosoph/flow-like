@@ -33,6 +33,8 @@ impl NodeLogic for MqttPublishNode {
             "Publishes a message to an MQTT topic",
             "Web/MQTT",
         );
+        node.set_flowscript_name("mqtt", "publish");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

@@ -26,6 +26,7 @@ impl NodeLogic for PushStepNode {
             "Starts a new plan step with title and description",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushStep");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

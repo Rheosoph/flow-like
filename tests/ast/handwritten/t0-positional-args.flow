@@ -1,0 +1,26 @@
+use log::{ info }
+use string::{ padStart, replace, toUpper, trim }
+
+function tag(prefix: string, body: string, width: int): (label: string) {
+    const upper = prefix.toUpper()
+    const padded = body.padStart({ length: width, padding: "." })
+    return `${upper}:${padded}`
+}
+
+eventsSimple positionalForms() {
+    const source = "  hello world  "
+
+    const namedCatalog = string::trim({ string: source })
+    const positionalCatalog = string::trim(source)
+    const methodNoArgs = source.trim()
+    const methodPositional = source.replace("hello", "goodbye")
+    const methodNamed = source.replace({ pattern: "hello", replacement: "goodbye" })
+    const methodMixed = source.replace("hello", "goodbye", { isRegex: false })
+
+    const fnPositional = tag("a", namedCatalog, 12)
+    const fnNamed = tag({ prefix: "b", body: positionalCatalog, width: 12 })
+    const fnMethod = methodNoArgs.tag("c", 12)
+
+    info({ message: `${positionalCatalog} ${methodPositional} ${methodNamed} ${methodMixed}`, toast: false })
+    info({ message: `${fnPositional} ${fnNamed} ${fnMethod}`, toast: false })
+}

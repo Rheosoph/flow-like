@@ -34,6 +34,7 @@ impl NodeLogic for BuildGeminiNode {
             "Prepares a Bit for Google Gemini endpoints using the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "gemini");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

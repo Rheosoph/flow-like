@@ -14,7 +14,9 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{Result, Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
 
@@ -37,6 +39,7 @@ impl NodeLogic for ConfusionMatrixNode {
             "Build confusion matrix and calculate precision, recall, and F1 score",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "evalConfusionMatrix");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

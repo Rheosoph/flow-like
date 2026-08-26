@@ -28,6 +28,7 @@ impl NodeLogic for PushStatNode {
             "Pushes a single LLM usage stat to the chat for transparent model usage display",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushStat");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

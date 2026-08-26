@@ -396,6 +396,7 @@ impl NodeLogic for CallFunctionNode {
             "Calls a function defined on this board",
             "Control/Functions",
         );
+        node.set_flowscript_name("control", "callFunction");
         node.add_icon("/flow/icons/workflow.svg");
 
         node.add_input_pin(

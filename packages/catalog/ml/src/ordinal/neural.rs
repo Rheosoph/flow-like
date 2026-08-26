@@ -17,9 +17,11 @@ use crate::ml::{
     values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -30,9 +32,10 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::{Activation, OrdinalHead, OrdinalNeural};
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -95,6 +98,7 @@ impl NodeLogic for FitOrdinalNeuralNode {
             "Fit/Train a NEURAL ordinal model on a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). This is the only trainer in the catalog that is BOTH non-linear in the features AND yields calibrated, rank-consistent per-level probabilities: Frank & Hall is non-linear but votes with K-1 independent classifiers and therefore carries no probability model, while every other ordinal node here is linear in the features. A small network feeds one of two rank-consistent heads, CORAL or CORN, and both are built so that P(y > k) can never rise with k for ANY parameter values — so the level probabilities are non-negative and sum to 1 with nothing patched up afterwards. THE HONEST LIMIT: leave Hidden Layers EMPTY and CORAL becomes exactly Train Ordinal Model (Proportional Odds) with Loss = AllThreshold and Margin = Logistic, and CORN becomes exactly Train Ordinal Model (Continuation Ratio) — the same objective in the same parameters. The hidden layers are the entire contribution, so if your problem is linear in the features prefer those nodes: convex objective, no seed dependence, readable coefficients, better tested. Reach for this one when the level is genuinely not monotone in the features (a boundary that bends back on itself, which no linear ordinal model can represent at all). Two costs come with the network: it has far more parameters than a linear model and so needs far more rows — check the Architecture output — and the objective is not convex, so the Seed changes the fit. Scale your features first with the Fit Feature Scaler node; unscaled columns make this converge slowly or not at all.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "fitOrdinalNeural");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -589,7 +593,6 @@ impl NodeLogic for FitOrdinalNeuralNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

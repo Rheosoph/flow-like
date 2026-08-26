@@ -19,6 +19,7 @@ impl NodeLogic for ShiftSubtitleFileNode {
             "Offset all SRT or WebVTT cues and write a new sidecar",
             "Subtitles",
         );
+        node.set_flowscript_name("video", "shiftSubtitleFile");
         node.add_icon("/flow/icons/text.svg");
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Subtitle sidecar FlowPath");

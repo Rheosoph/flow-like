@@ -7,11 +7,11 @@ import {
 } from "../lib/board-sync-events";
 import { getErrorMessage } from "../lib/error-message";
 import { boardFingerprint } from "../lib/flow-history-stacks";
-import type { FlowScriptApplyOrigin } from "../lib/flowscript-apply-failure";
 import {
 	type BoardEditReceiptHistoryMode,
 	flowIrCommitDeliveryId,
 } from "../lib/flowpilot/board-edit-job-delivery";
+import type { FlowScriptApplyOrigin } from "../lib/flowscript-apply-failure";
 import { toastError, toastWarning } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
@@ -30,6 +30,10 @@ interface ExecuteCommandsOptions {
 	suppressBlockedToast?: boolean;
 	/** Who authored the FlowScript. Defaults to the editor; FlowPilot passes "agent". */
 	origin?: FlowScriptApplyOrigin;
+	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
+	scopeAnchors?: string[];
+	/** Module layer id whose file this FlowScript is; undefined for the root file (`main`). */
+	module?: string;
 }
 
 interface UseCommandExecutionProps {
@@ -318,6 +322,8 @@ export function useCommandExecution({
 					catalogNodes,
 					options.allowDeletions === true,
 					options.origin ?? "editor",
+					options.scopeAnchors,
+					options.module,
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(

@@ -1,34 +1,43 @@
 #[cfg(feature = "execute")]
+use crate::generative::agent::LazyFunctionRef;
+#[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
 /// # Lazy Register Function Tools Node
 /// Indexes referenced Flow-Like functions into a local LanceDB so that agents can
 /// perform hybrid (FTS + vector) searches to discover tools at runtime instead of
 /// loading every tool schema into the context window up front.
-use crate::generative::{
-    agent::{Agent, LazyFunctionRef},
-    embedding::CachedEmbeddingModel,
-};
+use crate::generative::{agent::Agent, embedding::CachedEmbeddingModel};
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
 use flow_like_types::sync::RwLock;
-use flow_like_types::{Cacheable, async_trait, json};
+#[cfg(feature = "execute")]
+use flow_like_types::{Cacheable, json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 /// Minimum number of rows before a vector (ANN) index is built.
 /// Below this threshold only FTS is available; lancedb auto-indexing works best
 /// with at least a few hundred rows, but 50 is a safe lower bound.
+#[cfg(feature = "execute")]
 const VECTOR_INDEX_THRESHOLD: usize = 50;
 
 /// Cached handle to the LanceDB used for lazy tool indexing.
+#[cfg(feature = "execute")]
 pub struct CachedLazyToolDB {
     pub db: Arc<RwLock<LanceDBVectorStore>>,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedLazyToolDB {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -57,6 +66,8 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             "Indexes referenced Flow-Like functions into a vector DB so agents can discover tools via semantic search at runtime, keeping the context window lean.",
             "AI/Agents/Builder",
         );
+        node.set_flowscript_name("agent", "lazyRegisterFunctionTools");
+        node.set_receiver("agent_in");
         node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_can_reference_fns(true);

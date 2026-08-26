@@ -234,6 +234,7 @@ impl NodeLogic for AzureProviderNode {
             "Build an Azure credential struct. Supports storage account key, SAS token, full connection string, service-principal (tenant/client/secret), managed identity, workload identity and Azure CLI cached tokens. Emits an AzureProvider that any Azure-aware node (Blob, ADLS, ...) can consume.",
             "Data/Providers",
         );
+        node.set_flowscript_name("data", "azureProvider");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(

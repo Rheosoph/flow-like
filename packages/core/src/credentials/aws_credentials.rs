@@ -1,8 +1,14 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
+#[cfg(feature = "flow-runtime")]
+use crate::credentials::{LogsDbBuilder, db_path_from_base};
+use crate::credentials::{SharedCredentialsTrait, StoreType};
+use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::lancedb;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store;
 use flow_like_storage::object_store::aws::AmazonS3Builder;
-use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -141,6 +147,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
     }
 
     #[tracing::instrument(name = "AwsSharedCredentials::to_db", skip(self), level = "debug")]
+    #[cfg(feature = "flow-runtime")]
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = self
             .content_path_prefix
@@ -164,6 +171,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         Ok(connection)
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = format!("users/{}/apps/{}", sub, app_id);
         let path = db_path_from_base(&base_path);
@@ -184,6 +192,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         Ok(connection)
     }
 
+    #[cfg(feature = "flow-runtime")]
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
         if self.logs_bucket.is_empty() {
             return Err(anyhow!(
@@ -212,6 +221,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
     }
 }
 
+#[cfg(feature = "flow-runtime")]
 fn make_s3_builder(
     bucket: &str,
     endpoint: Option<String>,

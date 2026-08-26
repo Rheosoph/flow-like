@@ -37,6 +37,8 @@ impl NodeLogic for JoinArraysNode {
             "Matches the elements of two arrays on a shared key, the way a database join does",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "joinBy");
+        node.set_receiver("array_left");
         node.add_icon("/flow/icons/grip.svg");
         node.set_scores(pure_scores());
 

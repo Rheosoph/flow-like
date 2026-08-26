@@ -86,8 +86,10 @@ mise run fix    # runs cargo clippy --fix, cargo fmt, and bunx biome check --wri
 ```
 
 **Rust code:**
-- Run `cargo clippy` before committing — warnings should be resolved
-- Run `cargo test` to ensure nothing breaks
+- `cargo clippy` and `cargo test` are intentionally fast: they cover the shared
+  AST/contracts default set. Use `cargo clippy-core` / `cargo test-core` when
+  changing core, or `cargo clippy-all` / `cargo test-all` before a broad PR.
+- Resolve warnings in every target you changed
 - Follow existing code style and naming conventions
 
 **TypeScript code:**

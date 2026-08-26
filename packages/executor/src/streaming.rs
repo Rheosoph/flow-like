@@ -9,6 +9,7 @@ use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::event::Event;
+use flow_like::flow::execution::rejection::RejectionStage;
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
@@ -233,7 +234,7 @@ async fn execute_inner(
 
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let template = crate::execute::resolve_run_template(&state, request)
+    let template = match crate::execute::resolve_run_template(&state, request)
         .await
         .map_err(|e| match e {
             ExecutorError::BoardLoad(msg) if !failed_wasm_package_ids.is_empty() => {
@@ -246,18 +247,40 @@ async fn execute_inner(
                 ))
             }
             other => other,
-        })?;
+        }) {
+        Ok(template) => template,
+        Err(error) => {
+            crate::execute::record_executor_rejection(
+                &state,
+                request,
+                run_id,
+                RejectionStage::Resolution,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
         template.board.as_ref(),
         request.wasm_packages.as_ref(),
         &failed_wasm_package_ids,
     );
     if !unavailable_wasm_packages.is_empty() {
-        return Err(ExecutorError::Execution(format!(
+        let error = ExecutorError::Execution(format!(
             "Missing WASM package artifacts for board {}: {}",
             board_id,
             unavailable_wasm_packages.join(", ")
-        )));
+        ));
+        crate::execute::record_executor_rejection(
+            &state,
+            request,
+            run_id,
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .await;
+        return Err(error);
     }
 
     emit_event(

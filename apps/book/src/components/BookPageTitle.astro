@@ -1,0 +1,87 @@
+---
+import { getBookBreadcrumbs } from "../lib/seo";
+
+const { entry } = Astro.locals.starlightRoute;
+const breadcrumbs = getBookBreadcrumbs(entry.id, entry.data.title);
+const pageTitleId = "_top";
+---
+
+{
+	breadcrumbs.length > 1 && (
+		<nav class="book-breadcrumbs" aria-label="Breadcrumb">
+			<ol>
+				{breadcrumbs.map((breadcrumb, index) => {
+					const isCurrent = index === breadcrumbs.length - 1;
+					return (
+						<li aria-current={isCurrent ? "page" : undefined}>
+							{isCurrent ? (
+								<span>{breadcrumb.name}</span>
+							) : (
+								<a href={breadcrumb.path}>{breadcrumb.name}</a>
+							)}
+						</li>
+					);
+				})}
+			</ol>
+		</nav>
+	)
+}
+
+<h1 id={pageTitleId}>{entry.data.title}</h1>
+
+<style>
+	@layer starlight.core {
+		.book-breadcrumbs {
+			margin-top: 0.35rem;
+			font: 650 0.7rem/1.45 var(--flowbook-mono, ui-monospace, monospace);
+			letter-spacing: 0.045em;
+			text-transform: uppercase;
+			color: var(--sl-color-gray-3);
+		}
+
+		.book-breadcrumbs ol {
+			margin: 0;
+			padding: 0;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.35rem;
+			list-style: none;
+		}
+
+		.book-breadcrumbs li {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.35rem;
+		}
+
+		.book-breadcrumbs li + li::before {
+			content: "/";
+			color: var(--sl-color-gray-5);
+		}
+
+		.book-breadcrumbs a {
+			color: var(--sl-color-accent-high);
+			text-decoration: none;
+		}
+
+		.book-breadcrumbs a:hover {
+			text-decoration: underline;
+			text-underline-offset: 0.2em;
+		}
+
+		.book-breadcrumbs [aria-current="page"] span {
+			max-width: min(52ch, 70vw);
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		h1 {
+			margin-top: 1rem;
+			font-size: var(--sl-text-h1);
+			line-height: var(--sl-line-height-headings);
+			font-weight: 600;
+			color: var(--sl-color-white);
+		}
+	}
+</style>

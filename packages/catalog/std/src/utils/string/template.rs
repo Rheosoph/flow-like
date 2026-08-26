@@ -28,6 +28,8 @@ impl NodeLogic for TemplateStringNode {
             "Template Engine based on Jinja Templates",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "renderTemplate");
+        node.set_receiver("template");
         node.add_icon("/flow/icons/string.svg");
 
         // inputs

@@ -147,6 +147,7 @@ impl NodeLogic for AwsProviderNode {
             "Build an AWS credential struct. Supports explicit access keys, named profiles, EC2 instance metadata, EKS web identity (IRSA), STS AssumeRole and the default environment chain. Emits an AwsProvider that any AWS-aware node (S3, Athena, Bedrock, ...) can consume.",
             "Data/Providers",
         );
+        node.set_flowscript_name("data", "awsProvider");
         node.add_icon("/flow/icons/aws.svg");
 
         node.add_input_pin(

@@ -1,0 +1,95 @@
+use log::{ error, info }
+use string::{ equal, isUuid }
+
+@description("Sentinel byte the framing layer prepends to every envelope on the wire")
+@category("Transport/Framing")
+const frameSentinel: bytes
+@description("Domain separator mixed into every envelope digest")
+@category("Transport/Framing")
+let digestDomain = "flow-like.envelope.v3"
+
+function armor(payload: string): (armored: string, buffer: bytes[], size: int) {
+    const buffer = bytes::fromText({ text: payload })
+    const armored = buffer.toBase64()
+    const { length: size } = buffer.length()
+    return armored, buffer, size
+}
+
+function dearmor(armored: string): (payload: string, buffer: bytes[], valid: bool) {
+    const buffer = bytes::fromBase64({ input: armored })
+    const { text: payload, wasValid: valid } = buffer.toText({ lossy: false })
+    return payload, buffer, valid
+}
+
+function fingerprint(payload: string): (strong: string, extended: string, fast: string, legacy: string) {
+    const scoped = `${digestDomain}|${payload}`
+    const strong = scoped.sha256()
+    const extended = scoped.sha512()
+    const fast = scoped.blake3()
+    const legacy = scoped.md5()
+    return strong, extended, fast, legacy
+}
+
+function reseal(buffer: bytes[]): (opened: bytes[], keyHex: string) {
+    const key = crypto::generateKey()
+    const sealed = crypto::aesEncryptBytes({ key: key, plaintext: buffer })
+    const opened = crypto::aesDecryptBytes({ key: key, encrypted: sealed })
+    const keyHex = key.toHex()
+    return opened, keyHex
+}
+
+function seedFromSentinel(sentinel: bytes): (seed: int) {
+    // BUG: a scalar `bytes` receiver resolves to the `bytes` namespace but every node there takes
+    // `bytes[]`, so `sentinel.toHex()` fails to type; routed through ahash's generic `input` pin.
+    const seed = hash::ahash({ input: sentinel, consistent: true })
+    return seed
+}
+
+eventsSimple sealOutboundEnvelope() {
+    const envelopeId = random::uuidV7({ uppercase: false })
+    const payload = "invoice.settled|1499|EUR|acct_8812"
+
+    const { armored, buffer, size } = armor(payload)
+    const { payload: restored, buffer: restoredBuffer, valid } = dearmor(armored)
+
+    const { strong, extended, fast, legacy } = fingerprint(payload)
+    const digestBytes = bytes::fromHex({ input: strong })
+    const digestArmored = digestBytes.toBase64()
+
+    const framed = digestBytes.concat(buffer)
+    const { result: packed, ratio } = framed.gzipCompress({ level: 6 })
+    const unpacked = packed.gzipDecompress({ maxSize: 1048576 })
+    const framingIntact = framed.equal(unpacked)
+
+    const { mimeType, isText } = buffer.detectType()
+    const head = buffer.slice({ start: 0, length: 8 })
+    const headHex = head.toHex()
+    const carriesDigest = framed.startsWith(digestBytes)
+
+    const lossyText = string::fromUtf8Lossy({ bytes: restoredBuffer })
+    const bytesMatch = buffer.equal(restoredBuffer)
+    const textMatch = equal(payload, lossyText, { ignoreCase: false })
+
+    const b64Text = payload.base64Encode()
+    const b64Back = b64Text.base64Decode()
+    const hexText = payload.hexEncode()
+    const hexBack = hexText.hexDecode()
+    const encodingMatch = b64Back.equal(hexBack, { ignoreCase: false })
+
+    const { opened, keyHex } = reseal(buffer)
+    const cryptoMatch = buffer.equal(opened)
+
+    const rawDigest = buffer.blake3()
+    const domainTag = bytes::fromText({ text: digestDomain }).toHex()
+    const packedSeed = hash::ahash({ input: packed, seed: 1315423911 })
+    const seed = seedFromSentinel(frameSentinel)
+    const receiptRef = envelopeId.urlEncode()
+    const idLooksRight = isUuid(envelopeId)
+
+    if (bytesMatch && textMatch && encodingMatch && cryptoMatch) {
+        info({ message: `envelope ${receiptRef} sealed: ${size} bytes ${mimeType} head=${headHex} sha=${strong} seed=${seed}/${packedSeed} raw=${rawDigest} domain=${domainTag}`, toast: false })
+        info({ message: `armored=${armored} digest64=${digestArmored} blake3=${fast} md5=${legacy}`, toast: false })
+    } else {
+        error({ message: `envelope ${receiptRef} failed round-trip (utf8=${valid} uuid=${idLooksRight} text=${isText} frame=${framingIntact} carries=${carriesDigest} ratio=${ratio} key=${keyHex} sha512=${extended})`, toast: true })
+    }
+}

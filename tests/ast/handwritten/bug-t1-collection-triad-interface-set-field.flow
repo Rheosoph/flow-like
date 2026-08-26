@@ -1,0 +1,25 @@
+// Minimal repro: `Set<T>` is a first-class container in `type_ref` (the global and the function
+// parameter below parse fine), but `interface_type` has no Set arm, so the same spelling in an
+// interface field is a parse error:
+//     ParseError { message: "expected identifier, found `Op(\"<\")`", line: 11, col: 17 }
+// `Map<string, T>` is accepted in BOTH positions, so this is an asymmetry, not a deliberate gap.
+use log::{ info }
+
+interface Coverage {
+    fleet: string;
+    floors: Map<string, int>;
+    regions: Set<string>;
+}
+
+let coveredRegions: Set<string>
+
+function coverage(regions: Set<string>): (count: int) {
+    const count = regions.size()
+    return count
+}
+
+eventsSimple auditCoverage() {
+    const seen = array::make().push("eu-central-1").push("us-east-1").toSet()
+    coveredRegions = seen
+    info({ message: coverage(seen), toast: false })
+}

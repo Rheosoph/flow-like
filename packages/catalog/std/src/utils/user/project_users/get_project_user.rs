@@ -23,6 +23,7 @@ impl NodeLogic for GetProjectUserNode {
             "Get Project User",
             "Gets a project user membership by user ID/sub.",
         );
+        node.set_flowscript_name("user", "getProjectUser");
         add_app_pin(&mut node);
         add_user_id_pin(&mut node);
         add_project_user_output(&mut node);

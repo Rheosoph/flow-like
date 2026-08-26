@@ -1,5 +1,8 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentials, SharedCredentialsTrait, StoreType};
+#[cfg(feature = "flow-runtime")]
+use crate::credentials::LogsDbBuilder;
+use crate::credentials::{SharedCredentials, SharedCredentialsTrait, StoreType};
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::{Result, async_trait};
 use serde::{Deserialize, Serialize};
@@ -37,14 +40,17 @@ impl SharedCredentialsTrait for MixedSharedCredentials {
         }
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
         self.content.to_db(app_id).await
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         self.content.to_db_scoped(sub, app_id).await
     }
 
+    #[cfg(feature = "flow-runtime")]
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
         self.logs.to_logs_db_builder()
     }

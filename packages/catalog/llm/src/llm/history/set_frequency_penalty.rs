@@ -26,6 +26,8 @@ impl NodeLogic for SetHistoryFrequencyPenaltyNode {
             "Stores the frequency penalty parameter used by LLM sampling",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setFrequencyPenalty");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

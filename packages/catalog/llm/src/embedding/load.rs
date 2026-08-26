@@ -31,6 +31,7 @@ impl NodeLogic for LoadModelNode {
             "Loads a model from a Bit",
             "AI/Embedding",
         );
+        node.set_flowscript_name("ai.embedding", "loadModel");
 
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(3);

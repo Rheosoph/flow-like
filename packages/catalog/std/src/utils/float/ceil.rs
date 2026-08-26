@@ -24,6 +24,8 @@ impl NodeLogic for CeilFloatNode {
             "Rounds a float up to the nearest integer",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "ceil");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float", "Float", "Input Float", VariableType::Float);

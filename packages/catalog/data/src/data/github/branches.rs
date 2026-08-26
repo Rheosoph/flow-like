@@ -46,6 +46,7 @@ impl NodeLogic for ListGitHubBranchesNode {
             "List branches for a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listBranches");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -237,6 +238,7 @@ impl NodeLogic for GetGitHubBranchNode {
             "Get details about a specific branch",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getBranch");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -398,6 +400,7 @@ impl NodeLogic for CreateGitHubBranchNode {
             "Create a new branch from a reference (branch name or SHA)",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createBranch");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -561,6 +564,7 @@ impl NodeLogic for DeleteGitHubBranchNode {
             "Delete a branch from a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "deleteBranch");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

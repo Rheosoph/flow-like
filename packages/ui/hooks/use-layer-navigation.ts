@@ -134,15 +134,60 @@ export function resolveFocusTarget(
 	const layer = layers[targetId];
 	if (!layer) return undefined;
 
-	// A function body is never drawn on its parent's canvas, so the only way to go to one
-	// is to open it. Every other layer is a real node in its parent — show it in context.
-	if (layer.type === ILayerType.Function) {
+	// Neither a function body nor a module is drawn on its parent's canvas, so the only way
+	// to go to one is to open it — the layer itself is the destination. Every other layer is
+	// a real node in its parent, so show it in context.
+	if (layer.type === ILayerType.Function || layer.type === ILayerType.Module) {
 		return { chain: resolveLayerChain(layers, layer.id) };
 	}
 	return {
 		chain: resolveLayerChain(layers, layer.id).slice(0, -1),
 		renderTargetId: layer.id,
 	};
+}
+
+/**
+ * The rendered id whose presence proves the focus target is on screen. `parseBoard` draws a
+ * layer's `-input` boundary while that layer is open — but a layer with no pins has no
+ * boundary to draw (a Module never does), and waiting for one that will never appear stalls
+ * the focus until the timeout. Those fall back to [`isFocusRendered`]'s content check.
+ */
+export function focusSentinelId(
+	layers: Record<string, ILayer>,
+	targetLayer: string | undefined,
+	renderTargetId: string | undefined,
+): string | undefined {
+	if (renderTargetId) return renderTargetId;
+	if (!targetLayer) return undefined;
+	const pins = layers[targetLayer]?.pins;
+	return pins && Object.keys(pins).length > 0
+		? `${targetLayer}-input`
+		: undefined;
+}
+
+/**
+ * Whether the canvas has caught up with the layer swap, so framing it lands on the right
+ * content. Without a sentinel the only proof is the rendered set moving off what was on
+ * screen when the focus started — fitting one frame too early would frame the layer the
+ * user just left. Two empty canvases never differ, and an empty layer has nothing to frame
+ * anyway, so that counts as arrived.
+ */
+export function isFocusRendered({
+	renderedIds,
+	sentinelId,
+	baselineIds,
+	switchesLayer,
+}: {
+	renderedIds: readonly string[];
+	sentinelId: string | undefined;
+	baselineIds: ReadonlySet<string>;
+	switchesLayer: boolean;
+}): boolean {
+	if (sentinelId) return renderedIds.includes(sentinelId);
+	if (!switchesLayer) return true;
+	if (renderedIds.length !== baselineIds.size) return true;
+	if (renderedIds.length === 0) return true;
+	return renderedIds.some((id) => !baselineIds.has(id));
 }
 
 interface UseLayerNavigationProps {
@@ -207,22 +252,27 @@ export function useLayerNavigation({
 				trail.current = dropVisitsTo(trail.current, targetPath);
 			}
 
+			const baselineIds = new Set(getNodes().map((rendered) => rendered.id));
+
 			const release = holdViewport();
 			setCurrentLayer(targetLayer);
 			setLayerPath(targetPath);
 
-			// Proof the target layer is actually rendered: parseBoard always draws a layer's
-			// `-input` boundary while that layer is open, and the target node itself in every
-			// other case.
-			const sentinelId =
-				renderTargetId ?? (targetLayer ? `${targetLayer}-input` : undefined);
+			const sentinelId = focusSentinelId(
+				boardData.layers ?? {},
+				targetLayer,
+				renderTargetId,
+			);
 			const deadline = performance.now() + FOCUS_RENDER_TIMEOUT_MS;
 
 			const focusRenderedNode = () => {
-				const rendered = getNodes();
-				const ready = sentinelId
-					? rendered.some((renderedNode) => renderedNode.id === sentinelId)
-					: rendered.length > 0;
+				const renderedIds = getNodes().map((rendered) => rendered.id);
+				const ready = isFocusRendered({
+					renderedIds,
+					sentinelId,
+					baselineIds,
+					switchesLayer,
+				});
 
 				if (ready) {
 					if (renderTargetId) {

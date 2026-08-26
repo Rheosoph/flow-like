@@ -10,17 +10,25 @@ use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
 use context::ExecutionContext;
+use flow_like_storage::Path;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_schema::{FieldRef, SchemaRef};
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::Connection;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::index::scalar::BitmapIndexBuilder;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::serde_arrow;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
-use flow_like_storage::{Path, serde_arrow};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
+#[cfg(feature = "flow-runtime")]
 use flow_like_types::json::to_vec;
 use flow_like_types::sync::{Mutex, RwLock};
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -33,6 +41,7 @@ use internal_node::InternalNode;
 use internal_pin::InternalPin;
 use log::LogMessage;
 use num_cpus;
+#[cfg(feature = "flow-runtime")]
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,6 +56,7 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+pub mod rejection;
 pub mod trace;
 pub mod user_context;
 
@@ -56,6 +66,7 @@ const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DEFAULT_RUN_LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 pub const DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD: usize = 500;
+#[cfg(feature = "flow-runtime")]
 static STORED_META_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     Vec::<FieldRef>::from_type::<StoredLogMeta>(
         TracingOptions::default()
@@ -371,6 +382,7 @@ pub struct LogMeta {
 }
 
 impl LogMeta {
+    #[cfg(feature = "flow-runtime")]
     fn to_arrow(&self) -> flow_like_types::Result<RecordBatch> {
         let fields = &*STORED_META_FIELDS;
         let stored: StoredLogMeta = self.into();
@@ -378,6 +390,7 @@ impl LogMeta {
         Ok(batch)
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn into_duckdb_types() -> String {
         let fields = &*STORED_META_FIELDS;
         let mut types = vec![];
@@ -396,6 +409,7 @@ impl LogMeta {
         types.join(", ")
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub async fn flush(
         &self,
         db: Connection,
@@ -446,6 +460,7 @@ impl LogMeta {
         Ok(())
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn create_runs_indexes(table: &flow_like_storage::lancedb::Table) {
         let _ = table
             .create_index(
@@ -507,9 +522,11 @@ pub struct Run {
 
     pub visited_nodes: AHashMap<String, LogLevel>,
     pub log_store: Option<FlowLikeStore>,
+    #[cfg(feature = "flow-runtime")]
     pub log_db: Option<
         Arc<dyn Fn(Path) -> flow_like_storage::lancedb::connection::ConnectBuilder + Send + Sync>,
     >,
+    #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
 }
 
@@ -550,6 +567,7 @@ impl Run {
         self.push_trace(trace);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub(crate) fn prepare_flush(
         &mut self,
         finalize: bool,
@@ -673,6 +691,17 @@ impl Run {
     }
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+impl Run {
+    pub(crate) fn prepare_flush(
+        &mut self,
+        _finalize: bool,
+    ) -> flow_like_types::Result<Option<PreparedFlush>> {
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "flow-runtime")]
 pub(crate) struct PreparedFlush {
     db_fn:
         Arc<dyn Fn(Path) -> flow_like_storage::lancedb::connection::ConnectBuilder + Send + Sync>,
@@ -685,11 +714,15 @@ pub(crate) struct PreparedFlush {
     write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+pub(crate) struct PreparedFlush;
+
 pub(crate) struct FlushResult {
     pub created_table: bool,
     pub meta: Option<LogMeta>,
 }
 
+#[cfg(feature = "flow-runtime")]
 impl PreparedFlush {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_BACKOFF_MS: u64 = 100;
@@ -784,6 +817,16 @@ impl PreparedFlush {
         Ok(FlushResult {
             created_table: !self.log_initialized,
             meta: self.meta.clone(),
+        })
+    }
+}
+
+#[cfg(not(feature = "flow-runtime"))]
+impl PreparedFlush {
+    pub async fn write(self) -> flow_like_types::Result<FlushResult> {
+        Ok(FlushResult {
+            created_table: false,
+            meta: None,
         })
     }
 }
@@ -1069,6 +1112,7 @@ impl InternalRun {
         let run_id = run_id.unwrap_or_else(create_id);
         let execution_mode = ExecutionMode::from_event(event.as_ref());
 
+        #[cfg(feature = "flow-runtime")]
         let (log_store, db, lance_write_options) = {
             let guard = handler.config.read().await;
             let log_store = guard.stores.log_store.clone();
@@ -1081,6 +1125,8 @@ impl InternalRun {
             );
             (log_store, db, write_opts)
         };
+        #[cfg(not(feature = "flow-runtime"))]
+        let log_store = handler.config.read().await.stores.log_store.clone();
 
         // derive sub from token (JWT) or default to the local placeholder
         let sub_value = token
@@ -1116,7 +1162,9 @@ impl InternalRun {
 
             visited_nodes: AHashMap::with_capacity(board.nodes.len()),
             log_store,
+            #[cfg(feature = "flow-runtime")]
             log_db: db,
+            #[cfg(feature = "flow-runtime")]
             lance_write_options,
         };
 
@@ -1942,45 +1990,6 @@ impl InternalRun {
             Ok(None)
         }
     }
-}
-
-fn recursive_get_deps(
-    node_id: String,
-    dependencies: &AHashMap<&String, Vec<(&String, &bool)>>,
-    lookup: &AHashMap<String, Arc<InternalNode>>,
-    recursion_filter: &mut AHashSet<String>,
-) -> Vec<Arc<InternalNode>> {
-    if recursion_filter.contains(&node_id) {
-        return vec![];
-    }
-
-    recursion_filter.insert(node_id.clone());
-
-    if !dependencies.contains_key(&node_id) {
-        return vec![];
-    }
-
-    let deps = dependencies.get(&node_id).unwrap();
-    let mut found_dependencies = Vec::with_capacity(deps.len());
-
-    for (dep_id, is_pure) in deps {
-        if !**is_pure {
-            continue;
-        }
-
-        if let Some(dep) = lookup.get(*dep_id) {
-            found_dependencies.push(dep.clone());
-        }
-
-        found_dependencies.extend(recursive_get_deps(
-            dep_id.to_string(),
-            dependencies,
-            lookup,
-            recursion_filter,
-        ));
-    }
-
-    found_dependencies
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]

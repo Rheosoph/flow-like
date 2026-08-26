@@ -41,11 +41,14 @@ impl IntCountOnesNode {
 #[async_trait]
 impl NodeLogic for IntCountOnesNode {
     fn get_node(&self) -> Node {
-        bits_node(
+        let mut node = bits_node(
             "int_count_ones",
             "Count Ones",
             "Number of bits that are set to one",
-        )
+        );
+        node.set_flowscript_name("int", "countOnes");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -66,11 +69,14 @@ impl IntLeadingZerosNode {
 #[async_trait]
 impl NodeLogic for IntLeadingZerosNode {
     fn get_node(&self) -> Node {
-        bits_node(
+        let mut node = bits_node(
             "int_leading_zeros",
             "Leading Zeros",
             "Number of zero bits before the highest set bit",
-        )
+        );
+        node.set_flowscript_name("int", "leadingZeros");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -91,11 +97,14 @@ impl IntTrailingZerosNode {
 #[async_trait]
 impl NodeLogic for IntTrailingZerosNode {
     fn get_node(&self) -> Node {
-        bits_node(
+        let mut node = bits_node(
             "int_trailing_zeros",
             "Trailing Zeros",
             "Number of zero bits after the lowest set bit",
-        )
+        );
+        node.set_flowscript_name("int", "trailingZeros");
+        node.set_receiver("integer");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {

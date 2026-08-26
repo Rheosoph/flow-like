@@ -1,17 +1,22 @@
 use async_trait::async_trait;
+#[cfg(feature = "execute")]
+use flow_like::flow::{execution::LogLevel, pin::ValueType};
 use flow_like::{
     bit::Bit,
     flow::{
         board::Board,
-        execution::{LogLevel, context::ExecutionContext},
+        execution::context::ExecutionContext,
         node::{Node, NodeLogic, NodeScores},
-        pin::{PinOptions, ValueType},
+        pin::PinOptions,
         variable::VariableType,
     },
 };
 #[cfg(feature = "execute")]
 use flow_like_model_provider::response::{LLMUsageStats, Usage};
-use flow_like_types::json::{self, Deserialize, Serialize};
+use flow_like_types::json;
+#[cfg(feature = "execute")]
+use flow_like_types::json::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use flow_like_types::{Value, anyhow};
 #[cfg(feature = "execute")]
 use rig::completion::{Completion, ToolDefinition};
@@ -19,6 +24,7 @@ use rig::completion::{Completion, ToolDefinition};
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
+#[cfg(feature = "execute")]
 use std::{fmt, time::Instant};
 
 #[crate::register_node]
@@ -181,6 +187,7 @@ impl NodeLogic for LLMExtractNode {
             "Uses an LLM plus a JSON schema to extract structured data from free-form text",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "extract");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

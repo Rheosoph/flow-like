@@ -30,6 +30,7 @@ impl NodeLogic for GetElementText {
             "Gets the text content of an element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "getElementText");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

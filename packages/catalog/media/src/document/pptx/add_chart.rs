@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddChartNode {
             "Embed a simple bar chart on a PPTX slide using DrawingML chart XML.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addChart");
         node.add_icon("/flow/icons/chart.svg");
         node.set_scores(
             NodeScores::new()

@@ -24,6 +24,8 @@ impl NodeLogic for MultiplyIntegerNode {
             "Multiplies two Integers",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "multiply");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

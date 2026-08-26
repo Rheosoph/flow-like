@@ -22,21 +22,31 @@ pub fn generate(src_dir: &str) {
     walk_dir(src, src, &mut entries);
 
     let code = generate_collect_fn(&entries);
-    fs::write(&out_path, code).unwrap_or_else(|e| {
-        panic!(
-            "catalog-build-helper: failed to write {}: {e}",
-            out_path.display()
-        );
-    });
+    let unchanged = fs::read_to_string(&out_path).is_ok_and(|existing| existing == code);
+    if !unchanged {
+        fs::write(&out_path, code).unwrap_or_else(|e| {
+            panic!(
+                "catalog-build-helper: failed to write {}: {e}",
+                out_path.display()
+            );
+        });
+    }
 }
 
 fn walk_dir(dir: &Path, src_root: &Path, entries: &mut Vec<NodeEntry>) {
     let Ok(read_dir) = fs::read_dir(dir) else {
         return;
     };
-    for entry in read_dir {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
+
+    // `read_dir` does not guarantee an order. Sorting makes the generated registry stable across
+    // filesystems, which in turn lets the content comparison in `generate` reliably avoid writes.
+    let mut paths: Vec<PathBuf> = read_dir
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    paths.sort();
+
+    for path in paths {
         if path.is_dir() {
             walk_dir(&path, src_root, entries);
         } else if path.extension().is_some_and(|e| e == "rs") {
@@ -172,5 +182,46 @@ mod tests {
         );
         assert_eq!(extract_struct_name("#[derive(Default)]"), None);
         assert_eq!(extract_struct_name("pub mod something;"), None);
+    }
+
+    #[test]
+    fn test_walk_dir_orders_entries_by_path() {
+        let unique = format!(
+            "flow-like-catalog-build-helper-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(root.join("middle")).unwrap();
+
+        fs::write(
+            root.join("z.rs"),
+            "#[crate::register_node]\npub struct ZNode;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("a.rs"),
+            "#[crate::register_node]\npub struct ANode;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("middle/b.rs"),
+            "#[crate::register_node]\npub struct BNode;\n",
+        )
+        .unwrap();
+
+        let mut entries = Vec::new();
+        walk_dir(&root, &root, &mut entries);
+
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.struct_name.as_str())
+            .collect();
+        assert_eq!(names, ["ANode", "BNode", "ZNode"]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

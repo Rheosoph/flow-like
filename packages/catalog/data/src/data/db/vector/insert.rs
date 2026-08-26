@@ -1,11 +1,17 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::object_store::buffered::BufReader;
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use futures::StreamExt;
 
 use crate::data::path::FlowPath;
@@ -31,6 +37,8 @@ impl NodeLogic for InsertLocalDatabaseNode {
             "Faster than Upsert, but might write duplicate items.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "insertOne");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -64,6 +72,7 @@ impl NodeLogic for InsertLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
@@ -88,6 +97,13 @@ impl NodeLogic for InsertLocalDatabaseNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 #[crate::register_node]
@@ -109,6 +125,8 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
             "Inserts multiple items at once. Faster than Upsert but might produce duplicates.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "batchInsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -143,6 +161,7 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
@@ -169,6 +188,13 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 #[crate::register_node]
@@ -190,6 +216,8 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
             "Inserts multiple items at once. Faster than Upsert but might produce duplicates.",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "insertCsv");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

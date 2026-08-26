@@ -28,6 +28,7 @@ impl NodeLogic for DateFromPartsNode {
             "Builds a date from year, month, day and time components",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "fromParts");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 
@@ -89,6 +90,8 @@ impl NodeLogic for DateCalendarInfoNode {
             "Week number, weekend and leap year facts about a date",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "calendarInfo");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 

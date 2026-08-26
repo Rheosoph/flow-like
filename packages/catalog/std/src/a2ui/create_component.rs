@@ -25,6 +25,7 @@ impl NodeLogic for CreateComponent {
             "Creates an A2UI component with ID, style, and component data",
             "UI/Component",
         );
+        node.set_flowscript_name("ui", "createComponent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

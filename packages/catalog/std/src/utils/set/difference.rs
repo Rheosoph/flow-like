@@ -29,6 +29,8 @@ impl NodeLogic for DifferenceSetNode {
             "Creates a set from the difference of 2 sets",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "difference");
+        node.set_receiver("set_in_1");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

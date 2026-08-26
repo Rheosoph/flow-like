@@ -24,6 +24,8 @@ impl NodeLogic for UnEqualStringNode {
             "Compares two Strings",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "unequal");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
 

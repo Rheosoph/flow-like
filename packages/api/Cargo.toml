@@ -6,23 +6,22 @@ edition = "2024"
 [build-dependencies]
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
-flow-like-types.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
 
 [dependencies]
 axum.workspace = true
 sea-orm.workspace = true
+flow-like-api-entity = { workspace = true, features = ["domain-conversions"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 pin-project-lite = "0.2.16"
 tower.workspace = true
-flow-like = { workspace = true, features = ["openapi"] }
+flow-like = { workspace = true, features = ["app-runtime", "openapi"] }
 flow-like-types.workspace = true
 flow-like-storage = { workspace = true, features = ["graph"] }
 flow-like-catalog-core.workspace = true
 uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
-flow-like-wasm = { workspace = true, features = ["openapi"] }
+flow-like-wasm-schema = { workspace = true, features = ["bundle", "nodes", "openapi"] }
 tempfile = "3"
 serde_json.workspace = true
 base64.workspace = true
@@ -35,7 +34,7 @@ tower-http.workspace = true
 chrono.workspace = true
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-axum = "0.2"
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", default-features = false, features = ["axum", "vendored"] }
 async-stripe.workspace = true
 bitflags.workspace = true
 futures.workspace = true
@@ -181,3 +180,4 @@ urlencoding = []
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenv = { workspace = true }
+flow-like-wasm.workspace = true

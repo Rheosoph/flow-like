@@ -51,6 +51,10 @@ function summarizeAcceptedWork(messages: CopilotMessage[]): string[] {
 					return "Added workflow comment";
 				case "CreateLayer":
 					return `Created layer ${command.name}`;
+				case "RenameLayer":
+					return `Renamed layer ${command.layer_id} to ${command.name}`;
+				case "MoveToLayer":
+					return `Moved ${command.ids.length} item(s) to ${command.target_layer ?? "the board root"}`;
 				case "UpdateLayerCache":
 					return `${command.cache?.enabled ? "Configured" : "Disabled"} function cache for ${command.layer_id}`;
 				case "RemoveNode":

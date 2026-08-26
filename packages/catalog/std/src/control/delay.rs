@@ -24,6 +24,7 @@ impl NodeLogic for DelayNode {
             "Delays execution for a specified amount of time",
             "Control",
         );
+        node.set_flowscript_name("control", "delay");
 
         node.set_long_running(true);
         node.add_icon("/flow/icons/clock.svg");

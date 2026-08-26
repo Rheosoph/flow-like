@@ -28,6 +28,7 @@ impl NodeLogic for SignUrlsNode {
             "Generates signed URLs for accessing files",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "signUrls");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

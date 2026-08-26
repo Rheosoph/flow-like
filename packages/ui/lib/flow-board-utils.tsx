@@ -385,27 +385,37 @@ function callFunctionData(
 	};
 }
 
-/** Prefix for break struct field pins */
-const BREAK_STRUCT_PIN_PREFIX = "__break_struct_field__";
-/** Prefix for make struct field pins */
-const MAKE_STRUCT_PIN_PREFIX = "__make_struct_field__";
-
-/**
- * Check if a pin is a break/make struct field pin.
- * These pins have special connection rules for schema matching.
- */
-function isStructFieldPin(pin: IPin): boolean {
-	return (
-		pin.name.startsWith(BREAK_STRUCT_PIN_PREFIX) ||
-		pin.name.startsWith(MAKE_STRUCT_PIN_PREFIX)
-	);
-}
-
 /**
  * Check if this is a struct_in or struct_out pin from break/make struct nodes.
  */
 function isStructIOPin(pin: IPin): boolean {
 	return pin.name === "struct_in" || pin.name === "struct_out";
+}
+
+const OPEN_OBJECT_SCHEMA_KEYS = new Set(["type", "additionalProperties"]);
+
+/**
+ * Mirrors `flow_like::flow::pin::is_open_object_schema`.
+ *
+ * `{"type":"object","additionalProperties":true}` declares that a pin's shape is open, so it can
+ * never contradict a concrete schema and must never be the basis for rejecting a peer pin. The
+ * `includes` guard keeps the drag hot path from parsing multi-KB real schemas.
+ */
+export function isOpenObjectSchema(schema: string): boolean {
+	if (!schema.includes("additionalProperties")) return false;
+	try {
+		const parsed = JSON.parse(schema);
+		return (
+			parsed !== null &&
+			typeof parsed === "object" &&
+			!Array.isArray(parsed) &&
+			parsed.type === "object" &&
+			parsed.additionalProperties === true &&
+			Object.keys(parsed).every((key) => OPEN_OBJECT_SCHEMA_KEYS.has(key))
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function doPinsMatch(
@@ -453,17 +463,18 @@ export function doPinsMatch(
 		return false;
 	}
 
-	let schemaSource = sourcePin.schema;
-	if (schemaSource) {
-		schemaSource = refs[schemaSource] ?? schemaSource;
-	}
+	// An open-object schema declares that the shape is open, not a contract to match, so it
+	// resolves to "no schema" for every comparison below.
+	const resolveSchema = (pin: IPin) => {
+		if (!pin.schema) return undefined;
+		const resolved = refs[pin.schema] ?? pin.schema;
+		return isOpenObjectSchema(resolved) ? undefined : resolved;
+	};
 
-	let schemaTarget = targetPin.schema;
-	if (schemaTarget) {
-		schemaTarget = refs[schemaTarget] ?? schemaTarget;
-	}
+	const schemaSource = resolveSchema(sourcePin);
+	const schemaTarget = resolveSchema(targetPin);
 
-	if (sourcePin.schema && targetPin.schema) {
+	if (schemaSource && schemaTarget) {
 		if (
 			schemaSource !== schemaTarget &&
 			sourcePin.options?.enforce_schema !== false &&
@@ -500,7 +511,7 @@ export function doPinsMatch(
 		targetPin.data_type === IVariableType.Struct
 	) {
 		// Allow connection if one side has a schema (the break/make node will adopt it)
-		if (sourcePin.schema || targetPin.schema) {
+		if (schemaSource || schemaTarget) {
 			if (sourcePin.value_type !== targetPin.value_type) return false;
 			return true;
 		}
@@ -515,7 +526,7 @@ export function doPinsMatch(
 		sourcePin.data_type !== "Generic" &&
 		targetPin.data_type !== "Generic"
 	) {
-		if (!sourcePin.schema || !targetPin.schema) return false;
+		if (!schemaSource || !schemaTarget) return false;
 		if (schemaSource !== schemaTarget) return false;
 	}
 
@@ -549,6 +560,7 @@ export function parseBoard(
 	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
 	selectorDataRef?: FlowSelectorDataRef,
 	selectorDataVersion?: number,
+	onOpenCommentInCode?: (comment: IComment) => void,
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
@@ -716,6 +728,10 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
+			// A module is a virtual file, not a place on the canvas: it is never drawn as a
+			// chip in its parent, and it has no boundary pins to draw when it is the layer
+			// being viewed — its nodes render as if they were at the root.
+			if (layer.type === ILayerType.Module) continue;
 			if (layer.type === ILayerType.Function && layer.id !== currentLayer)
 				continue;
 			const parentLayer =
@@ -1098,6 +1114,10 @@ export function parseBoard(
 					});
 					await executeCommand(command, false);
 				},
+				onOpenInCode:
+					comment.node_id && onOpenCommentInCode
+						? () => onOpenCommentInCode(comment)
+						: undefined,
 			},
 			selected: selected.has(comment.id),
 		});

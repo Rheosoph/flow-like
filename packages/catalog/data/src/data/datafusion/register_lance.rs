@@ -1,22 +1,28 @@
-use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
+use crate::data::datafusion::session::DataFusionSession;
+#[cfg(feature = "execute")]
+use crate::data::datafusion::session::{CachedDataFusionSession, DeferredMount};
 use crate::data::db::vector::NodeDBConnection;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::common::TableReference;
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 /// Flushing the Lance database and building its DataFusion adapter are deferred to the
 /// first query. Data written to the database between this node and the first query is
 /// therefore included — the flush happens at materialization time.
+#[cfg(feature = "execute")]
 struct LanceTableMount {
     database: NodeDBConnection,
     table_name: String,
 }
 
+#[cfg(feature = "execute")]
 #[async_trait]
 impl DeferredMount for LanceTableMount {
     fn describe(&self) -> String {
@@ -87,6 +93,8 @@ impl NodeLogic for RegisterLanceTableNode {
             "Register a LanceDB table into a DataFusion session for SQL. Supports SELECT, INSERT INTO, and UPDATE/DELETE with a column-referencing WHERE clause (SQL Query node). Uses the existing to_datafusion() implementation from the vector store.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "registerLance");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -139,6 +147,7 @@ impl NodeLogic for RegisterLanceTableNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -156,5 +165,12 @@ impl NodeLogic for RegisterLanceTableNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

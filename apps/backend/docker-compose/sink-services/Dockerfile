@@ -22,10 +22,9 @@ RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
 ENV CARGO_BUILD_JOBS=2
 
 # Use BuildKit cache mounts for faster rebuilds
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
-    --mount=type=cache,target=/app/target,id=cargo-target-sink-services \
-    cargo build --release --package docker-compose-sink-services && \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-sink-services,sharing=locked \
+    CARGO_HOME=/cargo-home cargo build --locked --release --package docker-compose-sink-services && \
     cp /app/target/release/docker-compose-sink-services /tmp/docker-compose-sink-services
 
 # ============================================================

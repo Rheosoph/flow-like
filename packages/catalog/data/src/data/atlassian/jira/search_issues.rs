@@ -30,6 +30,7 @@ impl NodeLogic for SearchJiraIssuesNode {
             "Search for Jira issues using JQL (Jira Query Language)",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "searchIssues");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(2);
 

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { type ILayer, ILayerType } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
+import type { IPin } from "../lib/schema/flow/pin";
 import {
 	type LayerVisit,
 	dropVisitsTo,
+	focusSentinelId,
+	isFocusRendered,
 	parentPath,
 	recordVisit,
 	resolveExit,
@@ -15,6 +18,7 @@ function layer(
 	id: string,
 	parentId?: string,
 	type: ILayerType = ILayerType.Collapsed,
+	pins: Record<string, IPin> = {},
 ): ILayer {
 	return {
 		id,
@@ -25,7 +29,7 @@ function layer(
 		variables: {},
 		comments: {},
 		coordinates: [0, 0, 0],
-		pins: {},
+		pins,
 	} as unknown as ILayer;
 }
 
@@ -74,11 +78,15 @@ describe("resolveFocusTarget", () => {
 		layer("outer"),
 		layer("inner", "outer"),
 		layer("fn", "outer", ILayerType.Function),
+		layer("mod", undefined, ILayerType.Module),
+		layer("nested_mod", "mod", ILayerType.Module),
+		layer("mod_fn", "mod", ILayerType.Function),
 	);
 	const nodes: Record<string, INode> = {
 		root_node: node("root_node"),
 		nested_node: node("nested_node", "inner"),
 		fn_node: node("fn_node", "fn"),
+		mod_node: node("mod_node", "mod"),
 	};
 
 	it("focuses a root node without opening a layer", () => {
@@ -125,6 +133,102 @@ describe("resolveFocusTarget", () => {
 
 	it("returns undefined for an id that is neither node nor layer", () => {
 		expect(resolveFocusTarget(nodes, layers, "deleted")).toBeUndefined();
+	});
+
+	it("opens a module, which is a file rather than a node on any canvas", () => {
+		expect(resolveFocusTarget(nodes, layers, "mod")).toEqual({
+			chain: ["mod"],
+			renderTargetId: undefined,
+		});
+	});
+
+	it("opens a nested module through its module ancestors", () => {
+		expect(resolveFocusTarget(nodes, layers, "nested_mod")).toEqual({
+			chain: ["mod", "nested_mod"],
+			renderTargetId: undefined,
+		});
+	});
+
+	it("opens a module-local function inside its module", () => {
+		expect(resolveFocusTarget(nodes, layers, "mod_fn")).toEqual({
+			chain: ["mod", "mod_fn"],
+			renderTargetId: undefined,
+		});
+	});
+
+	it("centres a node that lives in a module", () => {
+		expect(resolveFocusTarget(nodes, layers, "mod_node")).toEqual({
+			chain: ["mod"],
+			renderTargetId: "mod_node",
+		});
+	});
+});
+
+describe("focusSentinelId", () => {
+	const pin = { id: "pin" } as unknown as IPin;
+	const layers = layerMap(
+		layer("bridged", undefined, ILayerType.Collapsed, { pin }),
+		layer("pinless", undefined, ILayerType.Collapsed),
+		layer("mod", undefined, ILayerType.Module),
+	);
+
+	it("waits for the target node when there is one", () => {
+		expect(focusSentinelId(layers, "bridged", "node_a")).toBe("node_a");
+	});
+
+	it("waits for the boundary of a layer that draws one", () => {
+		expect(focusSentinelId(layers, "bridged", undefined)).toBe("bridged-input");
+	});
+
+	it("has no sentinel for a pin-less layer, which never draws a boundary", () => {
+		expect(focusSentinelId(layers, "pinless", undefined)).toBeUndefined();
+		expect(focusSentinelId(layers, "mod", undefined)).toBeUndefined();
+	});
+
+	it("has no sentinel for the board root", () => {
+		expect(focusSentinelId(layers, undefined, undefined)).toBeUndefined();
+	});
+
+	it("has no sentinel for a layer that is gone", () => {
+		expect(focusSentinelId(layers, "deleted", undefined)).toBeUndefined();
+	});
+});
+
+describe("isFocusRendered", () => {
+	const ready = (
+		renderedIds: string[],
+		sentinelId: string | undefined,
+		baseline: string[],
+		switchesLayer = true,
+	) =>
+		isFocusRendered({
+			renderedIds,
+			sentinelId,
+			baselineIds: new Set(baseline),
+			switchesLayer,
+		});
+
+	it("waits for the sentinel to appear", () => {
+		expect(ready(["a"], "b-input", ["a"])).toBe(false);
+		expect(ready(["a", "b-input"], "b-input", ["a"])).toBe(true);
+	});
+
+	it("is ready immediately when the view does not change", () => {
+		expect(ready(["a"], undefined, ["a"], false)).toBe(true);
+	});
+
+	it("waits for the canvas to move off what the focus started on", () => {
+		expect(ready(["a", "b"], undefined, ["a", "b"])).toBe(false);
+		expect(ready(["c"], undefined, ["a", "b"])).toBe(true);
+		expect(ready(["a", "c"], undefined, ["a", "b"])).toBe(true);
+	});
+
+	it("treats an emptied canvas as arrived", () => {
+		expect(ready([], undefined, ["a"])).toBe(true);
+	});
+
+	it("does not stall when an empty view follows an empty one", () => {
+		expect(ready([], undefined, [])).toBe(true);
 	});
 });
 

@@ -1,0 +1,8 @@
+use log::{ info }
+
+eventsSimple objectLiteralDynamicField() {
+    const person = faker::name::fullName()
+    const contact = { name: person }
+    const payload = json::stringify({ value: contact, pretty: true })
+    info({ message: payload, toast: false })
+}

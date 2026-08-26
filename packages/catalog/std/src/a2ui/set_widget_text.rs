@@ -52,6 +52,7 @@ impl NodeLogic for SetWidgetText {
             "Sets the text of an element inside a widget instance (from Instantiate Widget) before it is pushed to the frontend",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "widgetSetText");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

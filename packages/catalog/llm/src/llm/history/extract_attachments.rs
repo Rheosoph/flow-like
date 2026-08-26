@@ -105,6 +105,7 @@ impl NodeLogic for ExtractAttachments {
             "Pulls down image, audio, video, and document attachments referenced in the latest chat message",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "extractAttachments");
         node.add_icon("/flow/icons/paperclip.svg");
         node.set_version(2);
         node.set_scores(

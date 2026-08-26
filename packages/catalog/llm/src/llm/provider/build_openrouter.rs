@@ -34,6 +34,7 @@ impl NodeLogic for BuildOpenRouterNode {
             "Builds the OpenRouter model based on certain selection criteria",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "openrouter");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

@@ -26,6 +26,8 @@ impl NodeLogic for ClearArrayNode {
             "Removes all elements from an array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "clear");
+        node.set_receiver("array_in");
 
         node.add_icon("/flow/icons/grip.svg");
 

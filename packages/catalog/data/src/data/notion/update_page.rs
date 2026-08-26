@@ -37,6 +37,7 @@ impl NodeLogic for UpdateNotionPageNode {
             "Updates properties of an existing Notion page",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "updatePage");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

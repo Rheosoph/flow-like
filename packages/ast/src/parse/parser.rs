@@ -9,7 +9,7 @@
 
 use crate::model::*;
 use crate::parse::error::ParseError;
-use crate::parse::lexer::{Tok, Token, lex};
+use crate::parse::lexer::{TemplatePiece, Tok, Token, lex};
 use crate::schema::{apply_interface_schemas, schema_from_interface};
 use std::collections::HashSet;
 
@@ -144,6 +144,15 @@ impl Parser<'_> {
     ///
     /// This mirrors the positional rule `take_label_on_line` already applies to arm labels.
     fn take_anchor(&mut self) -> Option<String> {
+        // An optional `;` terminator sits between the statement and its trailing anchor.
+        if matches!(self.cur(), Tok::Semi)
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Comment(_))
+            )
+        {
+            self.bump();
+        }
         if self.comment_starts_its_line() {
             return None;
         }
@@ -399,8 +408,17 @@ impl Parser<'_> {
     fn board(&mut self) -> Result<BoardAst, ParseError> {
         let mut ast = BoardAst::default();
         while !self.at_eof() {
+            if self.eat(&Tok::Semi) {
+                continue;
+            }
             let decorators = self.decorators()?;
             match self.cur().clone() {
+                Tok::Ident(kw) if kw == "use" => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on `use` declarations are not supported"));
+                    }
+                    self.use_decls(&mut ast.uses)?;
+                }
                 Tok::Ident(kw) if kw == "interface" => {
                     if !decorators.is_empty() {
                         return Err(self.err("decorators on interfaces are not yet supported"));
@@ -416,6 +434,18 @@ impl Parser<'_> {
                     let mut func = self.fn_decl()?;
                     self.apply_fn_decorators(&mut func, &decorators)?;
                     ast.functions.push(func);
+                }
+                Tok::Ident(_) if self.at_module_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on modules are not supported"));
+                    }
+                    ast.modules.push(self.module_decl()?);
+                }
+                Tok::Ident(_) if self.at_detached_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on `detached` blocks are not supported"));
+                    }
+                    ast.detached.push(self.detached_block()?);
                 }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
@@ -443,12 +473,86 @@ impl Parser<'_> {
 
     // ---- declarations ---------------------------------------------------------------------
 
+    /// `use a::b, c::*` — one or more comma-separated use-trees after a consumed-by-us `use`.
+    fn use_decls(&mut self, out: &mut Vec<UseDecl>) -> Result<(), ParseError> {
+        self.bump(); // use
+        loop {
+            out.push(self.use_tree()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Rust `use`-tree subset: `a::b`, `a::b::*`, `a::b::{ x, y as z }`, `a::b as x`.
+    fn use_tree(&mut self) -> Result<UseDecl, ParseError> {
+        let mut path = vec![self.ident()?];
+        while self.eat(&Tok::PathSep) {
+            match self.cur().clone() {
+                Tok::Op(op) if op == "*" => {
+                    self.bump();
+                    return Ok(UseDecl {
+                        path,
+                        kind: UseKind::Glob,
+                    });
+                }
+                Tok::LBrace => {
+                    self.bump();
+                    let mut members = Vec::new();
+                    while !matches!(self.cur(), Tok::RBrace) {
+                        let name = self.ident()?;
+                        // `use a::b::{ x as y }` — renaming ONE member, as distinct from
+                        // `use a::b as y`, which renames the namespace.
+                        let alias = if self.is_ident("as") {
+                            self.bump();
+                            Some(self.ident()?)
+                        } else {
+                            None
+                        };
+                        members.push(UseMember { name, alias });
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RBrace)?;
+                    if members.is_empty() {
+                        return Err(self.err("`use` member list must name at least one member"));
+                    }
+                    return Ok(UseDecl {
+                        path,
+                        kind: UseKind::Members(members),
+                    });
+                }
+                _ => path.push(self.ident()?),
+            }
+        }
+        if self.is_ident("as") {
+            self.bump();
+            return Ok(UseDecl {
+                path,
+                kind: UseKind::Alias(self.ident()?),
+            });
+        }
+        Ok(UseDecl {
+            path,
+            kind: UseKind::Namespace,
+        })
+    }
+
     fn interface_decl(&mut self) -> Result<InterfaceDecl, ParseError> {
         self.bump(); // interface
         let name = self.ident()?;
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
+            // A comment between fields documents the field that follows it. The renderer never
+            // emits one, but hand-written interfaces are unreadable without them, and rejecting
+            // the token made a documented interface a parse error.
+            if matches!(self.cur(), Tok::Comment(_)) {
+                self.bump();
+                continue;
+            }
             // Non-identifier JSON-schema property names render as quoted strings.
             let field_name = match self.cur().clone() {
                 Tok::Str(name) => {
@@ -485,15 +589,34 @@ impl Parser<'_> {
 
     /// Parse a variable declaration. `exposed` is set when the keyword was `let`.
     /// Assumes the `const`/`let` keyword is the current token.
+    ///
+    /// `const x = <literal>` without a type annotation infers the type from the literal and
+    /// canonicalizes to the explicit `const x: string = "…"` form when rendered.
     fn var_decl(&mut self, exposed: bool) -> Result<VarDecl, ParseError> {
         self.bump(); // const | let
         let name = self.ident()?;
-        self.expect(&Tok::Colon)?;
-        let ty = self.type_ref()?;
-        let default = if self.eat(&Tok::Assign) {
-            Some(self.literal()?)
+        let (ty, default) = if self.eat(&Tok::Assign) {
+            let literal_token = self.cur_token().clone();
+            let literal = self.literal()?;
+            let Some(ty) = literal.inferred_type() else {
+                return Err(ParseError::new(
+                    format!(
+                        "cannot infer the type of `{name}` from `null`; add a type annotation (e.g. `const {name}: string = null`)"
+                    ),
+                    literal_token.line,
+                    literal_token.col,
+                ));
+            };
+            (ty, Some(literal))
         } else {
-            None
+            self.expect(&Tok::Colon)?;
+            let ty = self.type_ref()?;
+            let default = if self.eat(&Tok::Assign) {
+                Some(self.literal()?)
+            } else {
+                None
+            };
+            (ty, default)
         };
         let anchor = self.take_anchor();
         Ok(VarDecl {
@@ -561,6 +684,142 @@ impl Parser<'_> {
             body,
             anchor,
         })
+    }
+
+    /// Whether the cursor opens a module block.
+    ///
+    /// `module` is a *contextual* keyword: it claims the statement only in the exact shape
+    /// `module <ident> {` at a declaration position. Everywhere else (`module` as a binding, a pin
+    /// key, an event name, a call argument) it stays an ordinary identifier, so adding modules
+    /// cannot break a board that already uses the word.
+    fn at_module_header(&self) -> bool {
+        self.is_ident("module")
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::LBrace)
+            )
+    }
+
+    /// Whether the cursor opens a `detached` block.
+    ///
+    /// Contextual like `module`: only the exact shape `detached {` at a declaration position
+    /// claims the word. An event block always has a parameter list, so `detached(…) { }` still
+    /// parses as an event named `detached`.
+    fn at_detached_header(&self) -> bool {
+        self.is_ident("detached")
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::LBrace)
+            )
+    }
+
+    /// `detached { … }` — assumes [`Self::at_detached_header`] just returned true. The container
+    /// has no node behind it, so it takes no anchor of its own.
+    fn detached_block(&mut self) -> Result<Block, ParseError> {
+        self.bump(); // detached
+        self.expect(&Tok::LBrace)?;
+        self.block_body()
+    }
+
+    /// `module name { … }` — assumes [`Self::at_module_header`] just returned true.
+    fn module_decl(&mut self) -> Result<ModuleDecl, ParseError> {
+        self.bump(); // module
+        let name = self.ident()?;
+        self.expect(&Tok::LBrace)?;
+        let anchor = self.take_anchor();
+        let mut decl = ModuleDecl {
+            name,
+            anchor,
+            functions: Vec::new(),
+            events: Vec::new(),
+            detached: Vec::new(),
+            modules: Vec::new(),
+        };
+        self.module_body(&mut decl)?;
+        Ok(decl)
+    }
+
+    /// Parse a module body up to and including its closing `}`. Nesting is bounded by the same
+    /// budget as blocks and expressions so user-authored input cannot overflow the stack.
+    fn module_body(&mut self, decl: &mut ModuleDecl) -> Result<(), ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("module nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.module_body_inner(decl);
+        self.depth -= 1;
+        result
+    }
+
+    fn module_body_inner(&mut self, decl: &mut ModuleDecl) -> Result<(), ParseError> {
+        while !matches!(self.cur(), Tok::RBrace) {
+            if self.at_eof() {
+                return Err(self.err(format!(
+                    "unexpected end of input inside module `{}`",
+                    decl.name
+                )));
+            }
+            if self.eat(&Tok::Semi) {
+                continue;
+            }
+            let decorators = self.decorators()?;
+            match self.cur().clone() {
+                Tok::Ident(kw) if kw == "function" => {
+                    let mut func = self.fn_decl()?;
+                    self.apply_fn_decorators(&mut func, &decorators)?;
+                    decl.functions.push(func);
+                }
+                Tok::Ident(kw) if kw == "const" || kw == "let" => {
+                    return Err(self.err(format!(
+                        "`{kw}` is not allowed inside a `module` block: variables are declared in main.flow"
+                    )));
+                }
+                Tok::Ident(kw) if kw == "use" || kw == "interface" => {
+                    return Err(self.err(format!(
+                        "`{kw}` is not allowed inside a `module` block: use/interface declarations belong at the top of the file"
+                    )));
+                }
+                Tok::Ident(_) if self.at_module_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on modules are not supported"));
+                    }
+                    decl.modules.push(self.module_decl()?);
+                }
+                Tok::Ident(_) if self.at_detached_header() => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on `detached` blocks are not supported"));
+                    }
+                    decl.detached.push(self.detached_block()?);
+                }
+                Tok::Ident(_) => {
+                    if !decorators.is_empty() {
+                        return Err(self.err("decorators on events are not yet supported"));
+                    }
+                    decl.events.push(self.event_block()?);
+                }
+                Tok::Comment(_) => {
+                    if !decorators.is_empty() {
+                        return Err(
+                            self.err("decorators must be immediately followed by a declaration")
+                        );
+                    }
+                    // Stray comment inside a module body (no AST slot): skip.
+                    self.bump();
+                }
+                other => {
+                    return Err(self.err(format!(
+                        "unexpected token inside module `{}`: `{other:?}`",
+                        decl.name
+                    )));
+                }
+            }
+        }
+        self.bump(); // }
+        Ok(())
     }
 
     /// Parse a comma-separated `name: Type` parameter list up to (not including) `end`.
@@ -647,6 +906,13 @@ impl Parser<'_> {
                 self.bump();
                 InterfaceType::Any
             }
+            Tok::Ident(name) if name == "Set" => {
+                self.bump();
+                self.expect(&Tok::Op("<".to_string()))?;
+                let inner = self.interface_type()?;
+                self.expect(&Tok::Op(">".to_string()))?;
+                InterfaceType::Set(Box::new(inner))
+            }
             Tok::Ident(name) if name == "Map" => {
                 self.bump();
                 self.expect(&Tok::Op("<".to_string()))?;
@@ -697,6 +963,9 @@ impl Parser<'_> {
             if self.at_eof() {
                 return Err(self.err("unexpected end of input inside block"));
             }
+            if self.eat(&Tok::Semi) {
+                continue;
+            }
             if matches!(self.cur(), Tok::LBrace) {
                 self.bump();
                 let nested = self.block_body()?;
@@ -710,11 +979,17 @@ impl Parser<'_> {
     }
 
     fn stmt(&mut self) -> Result<Stmt, ParseError> {
-        // Leading decorators bind to a following local `let` declaration.
+        // Leading decorators bind to a following local `let` declaration, or `@parallel` to a
+        // sugared `for` loop.
         if matches!(self.cur(), Tok::At) {
             let decorators = self.decorators()?;
+            if self.is_ident("for") {
+                return self.parallel_for_stmt(&decorators);
+            }
             if !self.is_ident("let") {
-                return Err(self.err("decorators are only supported on `let` declarations"));
+                return Err(self.err(
+                    "decorators are only supported on `let` declarations and `@parallel for` loops",
+                ));
             }
             let mut var = self.local_decl()?;
             self.apply_var_decorators(&mut var, &decorators)?;
@@ -724,6 +999,9 @@ impl Parser<'_> {
             Tok::Comment(text) => {
                 self.bump();
                 Ok(Stmt::Comment(text))
+            }
+            Tok::Ident(kw) if kw == "use" => {
+                Err(self.err("`use` declarations are only allowed at the top level"))
             }
             Tok::Ident(kw) if kw == "const" => self.let_stmt(),
             Tok::Ident(kw) if kw == "let" => self.local_or_assignment_stmt(),
@@ -741,6 +1019,9 @@ impl Parser<'_> {
     /// `let name = expr` when rendered.
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // const
+        if let Some(stmt) = self.destructure_stmt()? {
+            return Ok(stmt);
+        }
         let name = self.ident()?;
         self.expect(&Tok::Assign)?;
         let value = self.expr()?;
@@ -753,6 +1034,55 @@ impl Parser<'_> {
                 anchor,
             }),
         }
+    }
+
+    /// `{ a, b: c } = call(...)` after a consumed `const`/`let`. Fields bind output pins by name
+    /// (`{ pin }` or `{ pin: name }`). Returns `None` when the cursor is not a pattern. Array
+    /// patterns are rejected on purpose: they would depend on output pin order, which is not a
+    /// user-visible contract.
+    fn destructure_stmt(&mut self) -> Result<Option<Stmt>, ParseError> {
+        match self.cur() {
+            Tok::LBrace => {}
+            Tok::LBracket => {
+                return Err(self.err(
+                    "array destructuring is not supported; use object destructuring by output name (`const { a, b } = call(...)`)",
+                ));
+            }
+            _ => return Ok(None),
+        }
+        self.bump(); // {
+        let mut fields = Vec::new();
+        while !matches!(self.cur(), Tok::RBrace) {
+            let pin = self.ident()?;
+            let name = if self.eat(&Tok::Colon) {
+                self.ident()?
+            } else {
+                pin.clone()
+            };
+            fields.push(DestructureField { pin, name });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        if fields.is_empty() {
+            return Err(self.err("a destructuring pattern must bind at least one output"));
+        }
+        self.expect(&Tok::Assign)?;
+        let value_token = self.cur_token().clone();
+        let Expr::Call(call) = self.expr()? else {
+            return Err(ParseError::new(
+                "object destructuring requires a call on the right-hand side",
+                value_token.line,
+                value_token.col,
+            ));
+        };
+        let anchor = self.take_anchor();
+        Ok(Some(Stmt::Destructure {
+            fields,
+            call,
+            anchor,
+        }))
     }
 
     /// `let name: Type = default` — a function-local variable declaration.
@@ -785,6 +1115,9 @@ impl Parser<'_> {
     /// `let name: Type = default` or `let name = expr`.
     fn local_or_assignment_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // let
+        if let Some(stmt) = self.destructure_stmt()? {
+            return Ok(stmt);
+        }
         let name = self.ident()?;
         if matches!(self.cur(), Tok::Assign) {
             self.bump(); // =
@@ -825,7 +1158,7 @@ impl Parser<'_> {
         self.bump(); // return
         let mut values = Vec::new();
         // A value list, if present, sits on the same source line as `return`.
-        if !matches!(self.cur(), Tok::RBrace) && self.line() == return_line {
+        if !matches!(self.cur(), Tok::RBrace | Tok::Semi) && self.line() == return_line {
             values.push(self.expr()?);
             while self.eat(&Tok::Comma) {
                 values.push(self.expr()?);
@@ -835,9 +1168,10 @@ impl Parser<'_> {
         Ok(Stmt::Return { values, anchor })
     }
 
-    /// Detect a nested event-handler header (`name(params) { … }`). Call/branch arguments are
-    /// always an object literal (`name({ … })`), so a bare typed parameter list (`name(ident:`)
-    /// or an empty list whose body is not a branch-arm map unambiguously marks a handler.
+    /// Detect a nested event-handler header (`name(params) { … }`). A call argument is never an
+    /// identifier directly followed by `:` (named arguments live inside `{ … }`), so a bare typed
+    /// parameter list (`name(ident:`) or an empty list whose body is not a branch-arm map
+    /// unambiguously marks a handler.
     fn looks_like_handler(&self) -> bool {
         if !matches!(self.cur(), Tok::Ident(_)) {
             return false;
@@ -888,32 +1222,51 @@ impl Parser<'_> {
         if self.looks_like_handler() {
             return Ok(Stmt::Handler(self.event_block()?));
         }
-        // Assignment: `target = expr` (the target is always a bare variable name).
-        if matches!(
-            self.toks.get(self.pos + 1).map(|t| &t.tok),
-            Some(Tok::Assign)
-        ) {
-            let target = self.ident()?;
-            self.bump(); // =
-            let value = self.expr()?;
-            let anchor = self.take_anchor();
-            return Ok(Stmt::Assign {
-                target,
-                value,
-                anchor,
-            });
+        // Assignment: `target = expr` (the target is always a bare variable name). The compound
+        // form `target += expr` desugars to `target = target + expr`.
+        match self.toks.get(self.pos + 1).map(|t| t.tok.clone()) {
+            Some(Tok::Assign) => {
+                let target = self.ident()?;
+                self.bump(); // =
+                let value = self.expr()?;
+                let anchor = self.take_anchor();
+                return Ok(Stmt::Assign {
+                    target,
+                    value,
+                    anchor,
+                });
+            }
+            Some(Tok::CompoundAssign(op)) => {
+                let target = self.ident()?;
+                self.bump(); // op=
+                let rhs = self.expr()?;
+                let anchor = self.take_anchor();
+                return Ok(Stmt::Assign {
+                    value: compound_assign_value(op, Expr::Ref(target.clone()), rhs),
+                    target,
+                    anchor,
+                });
+            }
+            _ => {}
         }
         let value = self.expr()?;
         // `base.field = expr` (or `base.a.b`, `base.items[0]`) — a struct-field write. Kept as a
         // first-class `Stmt::FieldAssign` (round-trips back to the dot form); reconcile expands it
         // to `structSet({ structIn: base, field: "path", value })` and rebinds `base`.
-        if matches!(self.cur(), Tok::Assign) {
+        if matches!(self.cur(), Tok::Assign | Tok::CompoundAssign(_)) {
             let (base, path) = lvalue_to_field_path(&value).filter(|(_, p)| !p.is_empty()).ok_or_else(
                 || self.err("assignment target must be a variable or a struct field path (e.g. `x.field`)"),
             )?;
-            self.bump(); // =
+            let compound = match self.bump() {
+                Tok::CompoundAssign(op) => Some(op),
+                _ => None,
+            };
             let rhs = self.expr()?;
             let anchor = self.take_anchor();
+            let rhs = match compound {
+                Some(op) => compound_assign_value(op, value, rhs),
+                None => rhs,
+            };
             return Ok(Stmt::FieldAssign {
                 base,
                 path,
@@ -1099,6 +1452,38 @@ impl Parser<'_> {
         })
     }
 
+    /// `@parallel for (…)` — the sugared `for…of` over `control_par_for_each`. Only the sugared
+    /// head is accepted: an explicit loop-node call already names its node type.
+    fn parallel_for_stmt(&mut self, decorators: &[Decorator]) -> Result<Stmt, ParseError> {
+        for dec in decorators {
+            if dec.name != "parallel" {
+                return Err(self.err(format!("unknown decorator `@{}` on a loop", dec.name)));
+            }
+            self.expect_no_arg(dec)?;
+        }
+        let for_token = self.cur_token().clone();
+        let mut stmt = self.for_stmt()?;
+        let Stmt::Loop {
+            keyword, iterable, ..
+        } = &mut stmt
+        else {
+            unreachable!("for_stmt returns a loop");
+        };
+        if iterable.is_none() {
+            return Err(ParseError::new(
+                "`@parallel` applies to the sugared `for (const item of array)` form; an explicit loop-node call already names its node type",
+                for_token.line,
+                for_token.col,
+            ));
+        }
+        *keyword = PARALLEL_FOR_EACH_KEYWORD.to_string();
+        Ok(stmt)
+    }
+
+    /// `for (const item of array)`, `for (const [i, item] of array)` or the explicit
+    /// `for (const handle of loopCall(…))`. The parser cannot tell a loop-node call from a pure
+    /// call returning an array, so a plain-identifier head whose iterable is a call stays the
+    /// handle form and reconcile decides by the resolved node type.
     fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // for
         self.expect(&Tok::LParen)?;
@@ -1106,61 +1491,81 @@ impl Parser<'_> {
             return Err(self.err("expected `const` in for-of loop"));
         }
         self.bump(); // const
-        let bind = self.ident()?;
+        let (index, name) = if self.eat(&Tok::LBracket) {
+            let index = self.ident()?;
+            self.expect(&Tok::Comma)?;
+            let element = self.ident()?;
+            self.expect(&Tok::RBracket)?;
+            (Some(index), element)
+        } else {
+            (None, self.ident()?)
+        };
         if !self.is_ident("of") {
             return Err(self.err("expected `of` in for-of loop"));
         }
         self.bump(); // of
-        self.reject_boolean_loop_head()?;
-        let call = self.expr_call()?;
+        let head = self.expr()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
         let anchor = self.take_anchor();
         let body = self.block_body()?;
-        Ok(Stmt::Loop {
-            keyword: "forEach".to_string(),
-            bind: Some(bind),
-            call,
-            body,
-            anchor,
-        })
+        let keyword = FOR_EACH_KEYWORD.to_string();
+        match head {
+            Expr::Call(call) if index.is_none() => Ok(Stmt::Loop {
+                keyword,
+                bind: Some(name),
+                call,
+                iterable: None,
+                element: None,
+                index: None,
+                body,
+                anchor,
+            }),
+            head => Ok(Stmt::Loop {
+                keyword,
+                bind: None,
+                call: placeholder_call(),
+                iterable: Some(head),
+                element: Some(name),
+                index,
+                body,
+                anchor,
+            }),
+        }
     }
 
+    /// `while (cond)` or the explicit `while (loopCall(…))`; see `for_stmt` for why a call head
+    /// is kept as the call form.
     fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // while
         self.expect(&Tok::LParen)?;
-        self.reject_boolean_loop_head()?;
-        let call = self.expr_call()?;
+        let head = self.expr()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
         let anchor = self.take_anchor();
         let body = self.block_body()?;
-        Ok(Stmt::Loop {
-            keyword: "while".to_string(),
-            bind: None,
-            call,
-            body,
-            anchor,
-        })
-    }
-
-    /// `expr_call` accepts any `Expr::Call`, and `boolNot(…)` is one — so without this a
-    /// `while (!done)` would build a `bool_not` node with ZERO exec outputs, leave the body
-    /// unwired, and report no diagnostics at all. A clean parse error beats a silently broken
-    /// board.
-    fn reject_boolean_loop_head(&mut self) -> Result<(), ParseError> {
-        if matches!(self.cur(), Tok::Bang) {
-            return Err(self.err(
-                "a loop head must be a loop-node call (e.g. `controlForEach({ array: items })`), not a boolean expression",
-            ));
-        }
-        Ok(())
-    }
-
-    fn expr_call(&mut self) -> Result<Call, ParseError> {
-        match self.expr()? {
-            Expr::Call(call) => Ok(call),
-            _ => Err(self.err("expected a call expression")),
+        let keyword = WHILE_KEYWORD.to_string();
+        match head {
+            Expr::Call(call) => Ok(Stmt::Loop {
+                keyword,
+                bind: None,
+                call,
+                iterable: None,
+                element: None,
+                index: None,
+                body,
+                anchor,
+            }),
+            head => Ok(Stmt::Loop {
+                keyword,
+                bind: None,
+                call: placeholder_call(),
+                iterable: Some(head),
+                element: None,
+                index: None,
+                body,
+                anchor,
+            }),
         }
     }
 
@@ -1233,22 +1638,42 @@ impl Parser<'_> {
         Ok(lhs)
     }
 
-    /// Prefix `!`. Desugars to a `boolNot({ boolean: … })` call, which is exactly what the
-    /// renderer emits for a pure single-data-output node — so the result is a fixpoint.
-    /// `Tok::Bang` was previously reachable only in `branch_stmt`'s negated form, which is what
-    /// makes routing `binary_precedence` through here non-breaking by construction.
+    /// Prefix `!` and `-`.
+    ///
+    /// `!` desugars to a `boolNot({ boolean: … })` call, which is exactly what the renderer
+    /// emits for a pure single-data-output node — so the result is a fixpoint. `Tok::Bang` was
+    /// previously reachable only in `branch_stmt`'s negated form, which is what makes routing
+    /// `binary_precedence` through here non-breaking by construction.
+    ///
+    /// `-x` desugars to `0 - x` (canonical rendering): reconcile picks `int_subtract` or
+    /// `float_subtract` from the operand type, which the parser cannot do blind. A negative
+    /// literal such as `-1` lexes as one token and never reaches this arm.
     fn unary(&mut self) -> Result<Expr, ParseError> {
-        if matches!(self.cur(), Tok::Bang) {
-            if self.depth >= MAX_NESTING_DEPTH {
-                return Err(self.err("expression nesting too deep"));
-            }
-            self.bump(); // !
-            self.depth += 1;
-            let operand = self.unary();
-            self.depth -= 1;
-            return Ok(not_call(operand?));
+        let negation = match self.cur() {
+            Tok::Bang => Some(false),
+            Tok::Op(op) if op == "-" => Some(true),
+            _ => None,
+        };
+        let Some(numeric) = negation else {
+            return self.postfix();
+        };
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("expression nesting too deep"));
         }
-        self.postfix()
+        self.bump(); // ! | -
+        self.depth += 1;
+        let operand = self.unary();
+        self.depth -= 1;
+        let operand = operand?;
+        Ok(if numeric {
+            Expr::Binary {
+                op: "-".to_string(),
+                lhs: Box::new(Expr::Literal(Literal::Int(0))),
+                rhs: Box::new(operand),
+            }
+        } else {
+            not_call(operand)
+        })
     }
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
@@ -1258,6 +1683,11 @@ impl Parser<'_> {
                 Tok::Dot => {
                     self.bump();
                     let name = self.ident()?;
+                    // `receiver.method(...)` — the member is a call, not an access.
+                    if matches!(self.cur(), Tok::LParen) {
+                        expr = self.call_tail(name, Vec::new(), Some(Box::new(expr)))?;
+                        continue;
+                    }
                     // A camelCase-stable identifier could be either an output-pin selection or a
                     // struct data field; they render identically, so pick `Member` only when the
                     // key carries a separator (which a pin name never would).
@@ -1301,6 +1731,10 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<Expr, ParseError> {
         match self.cur().clone() {
             Tok::Str(_) | Tok::Int(_) | Tok::Float(_) => Ok(Expr::Literal(self.literal()?)),
+            Tok::Template(pieces) => {
+                self.bump();
+                self.template_expr(&pieces)
+            }
             Tok::LParen => {
                 self.bump();
                 let inner = self.expr()?;
@@ -1323,50 +1757,162 @@ impl Parser<'_> {
                     Ok(Expr::Literal(Literal::Null))
                 }
                 _ => {
+                    let start = self.cur_token().clone();
                     self.bump();
-                    if matches!(self.cur(), Tok::LParen) {
-                        self.call_tail(name)
+                    if matches!(self.cur(), Tok::PathSep) {
+                        self.path_call(name, &start)
+                    } else if matches!(self.cur(), Tok::LParen) {
+                        self.call_tail(name, Vec::new(), None)
                     } else {
                         Ok(Expr::Ref(name))
                     }
                 }
             },
-            // There is no numeric-negation node in the catalog (`intAbs`/`floatAbs` do not
-            // negate), so `-x` has no lowering. `0 - x` does: reconcile picks
-            // `int_subtract`/`float_subtract` from the operand types, which the parser cannot do
-            // blind. A negative literal such as `-1` lexes as one token and is unaffected.
-            Tok::Op(op) if op == "-" => Err(self.err(
-                "unary `-` is not supported; write `0 - x` (a negative literal such as `-1` is fine)",
-            )),
             other => Err(self.err(format!("unexpected token in expression: `{other:?}`"))),
         }
     }
 
-    /// Parse the `(...)` tail of a call whose display name was already consumed.
-    fn call_tail(&mut self, display: String) -> Result<Expr, ParseError> {
-        self.expect(&Tok::LParen)?;
-        let mut args = Vec::new();
-        if !matches!(self.cur(), Tok::RParen) {
-            // Non-empty calls always render their arguments inside a single `{ … }` object.
-            self.expect(&Tok::LBrace)?;
-            while !matches!(self.cur(), Tok::RBrace) {
-                let name = self.arg_key()?;
-                self.expect(&Tok::Colon)?;
-                let value = self.expr()?;
-                args.push(Arg { name, value });
-                if !self.eat(&Tok::Comma) {
-                    break;
+    /// Assemble a template literal from its lexed pieces, parsing every `${ … }` as a full
+    /// expression with its own cursor over the interpolation source. Diagnostics inside an
+    /// interpolation are re-based onto the enclosing document.
+    fn template_expr(&mut self, pieces: &[TemplatePiece]) -> Result<Expr, ParseError> {
+        let mut parts = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            match piece {
+                TemplatePiece::Text(text) => parts.push(TemplatePart::Text(text.clone())),
+                TemplatePiece::Expr { src, line, col } => {
+                    let expr = self.parse_interpolation(src).map_err(|err| {
+                        let col = if err.line == 1 {
+                            err.col + col - 1
+                        } else {
+                            err.col
+                        };
+                        ParseError::new(err.message, err.line + line - 1, col)
+                    })?;
+                    parts.push(TemplatePart::Expr(expr));
                 }
             }
-            self.expect(&Tok::RBrace)?;
+        }
+        Ok(Expr::Template { parts })
+    }
+
+    fn parse_interpolation(&self, src: &str) -> Result<Expr, ParseError> {
+        let mut inner = Parser {
+            src,
+            toks: lex(src)?,
+            pos: 0,
+            depth: self.depth,
+        };
+        let expr = inner.expr()?;
+        if !inner.at_eof() {
+            return Err(inner.err(format!(
+                "unexpected token after `${{ … }}` expression: `{:?}`",
+                inner.cur()
+            )));
+        }
+        Ok(expr)
+    }
+
+    /// `a::b::c(...)` — the first segment was already consumed and the cursor is on `::`.
+    /// A path is only ever a callee: there is no value a bare `a::b` could denote.
+    fn path_call(&mut self, first: String, start: &Token) -> Result<Expr, ParseError> {
+        let mut path = vec![first];
+        while self.eat(&Tok::PathSep) {
+            path.push(self.ident()?);
+        }
+        if !matches!(self.cur(), Tok::LParen) {
+            return Err(ParseError::new(
+                format!(
+                    "namespace paths can only be called: expected `(` after `{}`",
+                    path.join("::")
+                ),
+                start.line,
+                start.col,
+            ));
+        }
+        let display = path.pop().expect("a path has at least two segments");
+        self.call_tail(display, path, None)
+    }
+
+    /// Parse the `(...)` tail of a call whose callee was already consumed.
+    ///
+    /// `call_args := expr ("," expr)* ("," named_obj)? | named_obj | ε` — a `{ … }` in the LAST
+    /// argument slot is the named-argument object (the JS options-object convention and the
+    /// renderer's sole form); a `{ … }` anywhere earlier is a positional struct-literal value.
+    fn call_tail(
+        &mut self,
+        display: String,
+        path: Vec<String>,
+        receiver: Option<Box<Expr>>,
+    ) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LParen)?;
+        let mut positional = Vec::new();
+        let mut args = Vec::new();
+        while !matches!(self.cur(), Tok::RParen) {
+            if matches!(self.cur(), Tok::LBrace) && self.brace_is_last_call_argument() {
+                args = self.named_args()?;
+                self.eat(&Tok::Comma);
+                break;
+            }
+            positional.push(self.expr()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
         }
         self.expect(&Tok::RParen)?;
         Ok(Expr::Call(Call {
             node_type: String::new(),
             display,
+            path,
+            receiver,
+            positional,
             args,
             anchor: None,
         }))
+    }
+
+    /// True when the `{` at the cursor closes the argument list: its matching `}` is followed by
+    /// `)`, optionally after a trailing comma. Brace depth alone suffices — every other bracket
+    /// kind balances inside it, and string contents are already single tokens.
+    fn brace_is_last_call_argument(&self) -> bool {
+        let mut depth = 0usize;
+        let mut index = self.pos;
+        while let Some(token) = self.toks.get(index) {
+            match token.tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let mut next = index + 1;
+                        if matches!(self.toks.get(next).map(|t| &t.tok), Some(Tok::Comma)) {
+                            next += 1;
+                        }
+                        return matches!(self.toks.get(next).map(|t| &t.tok), Some(Tok::RParen));
+                    }
+                }
+                Tok::Eof => return false,
+                _ => {}
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// The trailing `{ name: value, … }` argument object.
+    fn named_args(&mut self) -> Result<Vec<Arg>, ParseError> {
+        self.expect(&Tok::LBrace)?;
+        let mut args = Vec::new();
+        while !matches!(self.cur(), Tok::RBrace) {
+            let name = self.arg_key()?;
+            self.expect(&Tok::Colon)?;
+            let value = self.expr()?;
+            args.push(Arg { name, value });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(args)
     }
 
     fn arg_key(&mut self) -> Result<String, ParseError> {
@@ -1477,6 +2023,11 @@ impl Parser<'_> {
     }
 }
 
+/// Loop keywords carried by [`Stmt::Loop`]; core maps them to the loop node types.
+const FOR_EACH_KEYWORD: &str = "forEach";
+const PARALLEL_FOR_EACH_KEYWORD: &str = "forEachParallel";
+const WHILE_KEYWORD: &str = "while";
+
 /// A placeholder call for sugared boolean branches whose original node is not surfaced in text.
 /// Catalog coupling: `!x` has no AST-level representation, so it lowers to the boolean-NOT node.
 /// See `packages/catalog/std/src/utils/bool/not.rs`. This is this crate's only catalog coupling —
@@ -1488,6 +2039,9 @@ fn not_call(operand: Expr) -> Expr {
     Expr::Call(Call {
         node_type: String::new(),
         display: NOT_CALL_DISPLAY.to_string(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: vec![Arg {
             name: NOT_CALL_INPUT.to_string(),
             value: operand,
@@ -1499,7 +2053,12 @@ fn not_call(operand: Expr) -> Expr {
 /// The operand of a `boolNot({ boolean: x })` call, matching the root shape only.
 fn not_call_operand(expr: &Expr) -> Option<&Expr> {
     let Expr::Call(call) = expr else { return None };
-    if call.display != NOT_CALL_DISPLAY || call.args.len() != 1 {
+    if call.display != NOT_CALL_DISPLAY
+        || !call.path.is_empty()
+        || call.receiver.is_some()
+        || !call.positional.is_empty()
+        || call.args.len() != 1
+    {
         return None;
     }
     let arg = &call.args[0];
@@ -1507,11 +2066,15 @@ fn not_call_operand(expr: &Expr) -> Option<&Expr> {
 }
 
 fn placeholder_call() -> Call {
-    Call {
-        node_type: String::new(),
-        display: String::new(),
-        args: Vec::new(),
-        anchor: None,
+    Call::placeholder()
+}
+
+/// The value of a compound assignment `target op= rhs`, desugared to `target op rhs`.
+fn compound_assign_value(op: String, target: Expr, rhs: Expr) -> Expr {
+    Expr::Binary {
+        op,
+        lhs: Box::new(target),
+        rhs: Box::new(rhs),
     }
 }
 

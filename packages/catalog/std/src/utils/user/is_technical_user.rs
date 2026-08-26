@@ -25,6 +25,7 @@ impl NodeLogic for IsTechnicalUserNode {
             "Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.",
             "Utils/User",
         );
+        node.set_flowscript_name("user", "isTechnical");
         node.add_icon("/flow/icons/key.svg");
         node.set_version(2);
 

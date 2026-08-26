@@ -37,6 +37,7 @@ import {
 	type QueryClient,
 	isAzureBlobStorageUrl,
 	offlineSyncDB,
+	useAuthStatusStore,
 	useBackend,
 	useBackendStore,
 	useDownloadManager,
@@ -197,6 +198,9 @@ export class TauriBackend implements IBackendState {
 	pushAuthContext(auth: AuthContextProps) {
 		this.auth = auth;
 		this._apiState.setAuth(auth);
+		useAuthStatusStore
+			.getState()
+			.setSignedIn(Boolean(auth.isAuthenticated && auth.user?.access_token));
 		const token = auth.user?.access_token ?? null;
 		this.registryState
 			.setAuthToken?.(token)

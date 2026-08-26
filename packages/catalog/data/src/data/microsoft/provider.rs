@@ -51,6 +51,7 @@ impl NodeLogic for MicrosoftGraphTokenProviderNode {
             "Connect to Microsoft Graph API using an access token. Use for server-to-server auth or manual token management.",
             "Data/Microsoft",
         );
+        node.set_flowscript_name("microsoft", "providerToken");
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin(
@@ -138,6 +139,7 @@ impl NodeLogic for MicrosoftGraphOAuthProviderNode {
             "Connect to Microsoft Graph using OAuth Authorization Code Flow with PKCE.",
             "Data/Microsoft",
         );
+        node.set_flowscript_name("microsoft", "providerOauth");
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin(

@@ -38,6 +38,7 @@ impl NodeLogic for WidgetUpdateInputs {
             "Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "widgetUpdateInputs");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_scores(
             NodeScores::new()

@@ -25,6 +25,8 @@ impl NodeLogic for Sha512Node {
             "Computes the SHA-512 hash of the input string",
             "Utils/Hash",
         );
+        node.set_flowscript_name("hash", "sha512");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("exec_in", "Execute", "", VariableType::Execution);

@@ -916,6 +916,8 @@ fn project_graph(
             | BoardCommand::CreateLayer { .. }
             | BoardCommand::CreateVariable { .. }
             | BoardCommand::MoveNode { .. }
+            | BoardCommand::MoveToLayer { .. }
+            | BoardCommand::RenameLayer { .. }
             | BoardCommand::UpdateLayerCache { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
             | BoardCommand::AddComment { .. }
@@ -1335,6 +1337,9 @@ mod tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 

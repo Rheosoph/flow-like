@@ -18,7 +18,9 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy
-        run: cargo clippy -- -D clippy::correctness -D clippy::suspicious -D unused_mut
+        # Preserve full-workspace CI coverage after introducing developer-focused
+        # default members for local bare Cargo commands.
+        run: cargo clippy --locked --workspace -- -D clippy::correctness -D clippy::suspicious -D unused_mut
 
   fmt:
     name: Format

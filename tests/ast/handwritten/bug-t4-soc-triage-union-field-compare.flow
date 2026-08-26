@@ -1,0 +1,25 @@
+// BUG: an interface field declared as a string union types as `Struct` when read back
+// through a function return, so comparing it to a string literal is refused:
+//   binary operator `==` has incompatible operand types `Struct` and `String`
+// `disposition` is declared `"auto_close" | "escalate"` — a String union — and the
+// struct-field read finds the field (no "has no field" diagnostic), it just loses the type.
+interface Verdict {
+    alert_id: string;
+    disposition: "auto_close" | "escalate";
+}
+
+function decide(alertId: string): (verdict: Verdict) {
+    const verdict = struct::make()
+    verdict.alert_id = alertId
+    verdict.disposition = "escalate"
+    return verdict
+}
+
+eventsSimple triageOne() {
+    const verdict = decide("alert-1")
+    if (verdict.disposition == "auto_close") {
+        log::info({ message: "auto-closed", toast: false })
+    } else {
+        log::warn({ message: "escalated", toast: false })
+    }
+}

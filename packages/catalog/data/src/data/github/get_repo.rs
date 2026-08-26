@@ -55,6 +55,7 @@ impl NodeLogic for GetGitHubRepoNode {
             "Get detailed information about a specific repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getRepo");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

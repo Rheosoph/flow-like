@@ -133,6 +133,19 @@ describe("an event pinned to Remote execution", () => {
 		);
 	});
 
+	test("chat OAuth preflight settles without reaching for a board", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend();
+		const state = new EventState(backend as never);
+
+		const result = await state.checkEventOAuth(APP, remoteEvent());
+
+		expect(result).toEqual({ missingProviders: [] });
+		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+	});
+
 	test("preflight prefers the server's answer when it is reachable", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return remoteEvent();
@@ -209,6 +222,19 @@ describe("a caller who may run the event but not read its board", () => {
 		const prerun = await state.prerunEvent(APP, EVENT);
 
 		expect(prerun.can_execute_locally).toBe(false);
+	});
+
+	test("chat OAuth preflight yields to the server instead of failing", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend();
+		const state = new EventState(backend as never);
+
+		const result = await state.checkEventOAuth(APP, localEvent());
+
+		expect(result).toEqual({ missingProviders: [] });
+		expect(backend.boardState.getBoard).toHaveBeenCalledTimes(1);
 	});
 
 	test("a local-only app still surfaces the board failure", async () => {

@@ -24,6 +24,7 @@ impl NodeLogic for ShowScreen {
             "Shows the current frontend screen while the workflow continues running",
             "UI/Surface",
         );
+        node.set_flowscript_name("ui", "showScreen");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

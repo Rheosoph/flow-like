@@ -5,13 +5,14 @@ edition = "2024"
 description = "Database-less Flow-Like maintenance job for Cloud Run Jobs: runs once, calls the API, exits"
 
 [dependencies]
+anyhow = "1"
 chrono.workspace = true
 # Only the forbidden-environment guard is used. The job holds no GCP credential
 # and touches no GCP service; the API it calls authenticates with a bearer token,
 # and a proxy or ambient-credential override in the environment is exactly what
 # would route that token somewhere else.
 flow-like-gcp-data.workspace = true
-flow-like-types.workspace = true
+flow-like-types-contracts = { workspace = true, features = ["maintenance"] }
 mimalloc.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

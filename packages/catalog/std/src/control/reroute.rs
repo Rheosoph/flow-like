@@ -21,6 +21,7 @@ impl RerouteNode {
 impl NodeLogic for RerouteNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("reroute", "Reroute", "Control Flow Node", "Control");
+        node.set_flowscript_name("control", "reroute");
         node.add_input_pin("route_in", "In", "", VariableType::Generic);
         node.add_output_pin("route_out", "Out", "", VariableType::Generic);
 

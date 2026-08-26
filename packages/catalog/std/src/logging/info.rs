@@ -29,6 +29,7 @@ impl NodeLogic for InfoNode {
             "Print Debugging Information",
             "Logging",
         );
+        node.set_flowscript_name("log", "info");
         node.add_icon("/flow/icons/log-info.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

@@ -1,0 +1,397 @@
+---
+title: "14. Board ⇄ AST ⇄ Text"
+description: Learn how Flow-Like lowers a Board to a typed AST, renders canonical FlowScript, reconciles semantic edits, applies atomic patches, and preserves identity.
+seo:
+  title: "Flow-Like FlowScript Round Trips: Board, AST & Reconciliation"
+  topics:
+    - FlowScript AST
+    - round-trip editing
+    - parsing and rendering
+    - reconciliation
+    - semantic patches
+sidebar:
+  order: 14
+  badge:
+    text: Draft
+    variant: caution
+---
+
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import authoringRoundtrip from '../../../assets/authoring-roundtrip.svg';
+
+Editable text and an editable Board must stay in sync. A builder should be able to move one node
+without replacing the program; a developer should be able to change one literal without erasing
+the layout. Treating FlowScript as an export or rebuilding the graph after every text edit would
+break that contract.
+
+Flow-Like uses a typed intermediate representation called `BoardAst`. It captures what the program
+means while the Board retains visual and runtime details.
+
+<WorkflowFigure
+  src={authoringRoundtrip}
+  alt="The canvas changes a Board with commands. Lowering and rendering produce canonical FlowScript. Edited source parses to BoardAst, reconciles against the live Board and catalog, passes diagnostic and approval gates, and applies an atomic command plan. The Rust runtime executes a selected Board version."
+  caption="Apply is the guarded boundary. BoardAst carries temporary typed meaning; the Board remains the executable graph. The runtime never executes FlowScript source."
+/>
+
+The persisted Board remains executable. The AST is a temporary semantic contract. The canvas and
+FlowScript editors author the same Flow model.
+
+> **Release check:** FlowScript stays a draft until Apply. Studio can show a semantic command
+> preview; Web receives authoritative diagnostics and the command outcome during Apply. Any
+> diagnostic or unapproved destructive change blocks the batch, and failure rolls it back. Success
+> reloads canonical source while preserving hidden secret values. FlowScript cannot yet change an
+> existing anchored Function signature safely.
+
+## 14.1 One program, three representations
+
+Each representation owns different information.
+
+| Representation | Its job | Information it owns |
+| --- | --- | --- |
+| Board | Persist and execute the Flow | Node and pin identity, connections, defaults, layers, coordinates, viewport, presentation, package and runtime metadata |
+| `BoardAst` | Express the typed meaning shared by both editors | Imports, interfaces, variables, Functions, Events, modules, detached chains, ordered statements and expressions, plus identity anchors used during editing |
+| FlowScript | Give people and tools a compact authoring surface | A canonical textual projection of the AST's program structure |
+
+Flow-Like does not store two programs and synchronize them later. Its contract is:
+
+> The canvas and FlowScript editors are equal authoring surfaces over one Flow model.
+
+Board edits change the next textual projection. Applied text edits become Board commands and change
+the next visual projection. The editors share executable meaning, while characters and pixels may
+differ.
+
+A Board node needs an opaque identity so wires, logs, undo, and versions can keep referring to it.
+A programmer needs a readable name such as `productionStopped`. One serves storage; the other
+serves authoring.
+
+## 14.2 Why Board JSON cannot serve as the language
+
+Try this small experiment in Studio:
+
+1. Select two or three connected nodes on a Board.
+2. Copy them.
+3. Paste the clipboard into a text editor instead of another Board.
+
+The clipboard contains useful transport JSON: serialized nodes, comments, cursor position, layers,
+variables, schema references, pin IDs, defaults, and connections. Flow-Like can mint new identities
+and reconnect the pasted selection.
+
+At five hundred nodes, business decisions disappear inside storage identities, adjacency lists,
+coordinates, compatibility data, and UI metadata. Moving a node changes the JSON without changing
+the program. Any editor must manage graph bookkeeping before expressing a domain change. The AST
+separates those concerns.
+
+Once text became an authoritative editing surface, especially for FlowPilot, readable graph output
+was insufficient. Direct text-to-Board conversion would tie language syntax to persistence and
+encourage whole-graph reconstruction. A typed semantic pivot lets both directions meet on meaning.
+
+The first FlowScript implementation arrived with the FlowPilot update and introduced the AST,
+parser, renderer, Board lowering, and reconciliation together. The resulting division is:
+
+- Board JSON remains optimized for persistence, execution, transport, and the visual editor.
+- FlowScript remains optimized for reading, reasoning, completion, review, and focused edits.
+- `BoardAst` prevents either representation from dictating the other's accidental details.
+
+## 14.3 Lowering a Board extracts the program
+
+Lowering starts with the live Board and catalog. A graph stores connections; a program needs
+scopes, expressions, statements, and order. The lowerer recovers those language structures.
+
+It maps:
+
+- Board variables to typed top-level declarations;
+- schema-backed shapes to FlowScript interfaces;
+- Function layers to typed `function` declarations;
+- trigger nodes and their reachable execution paths to Event bodies;
+- execution chains no trigger reaches to `detached` blocks;
+- impure nodes on execution wires to ordered statements;
+- pure data dependencies to nested expressions;
+- named execution outputs to branches such as `onSuccess`, `execError`, or an `if` body; and
+- node, variable, and layer identities to editing anchors.
+
+A `detached` block represents an execution chain that no trigger reaches. FlowScript has no
+top-level statement position, and calling its ordinary root node an entry would hide its inputs.
+Nothing in the block runs; it reports existing Board content and cannot author new work.
+
+Consider the Incident Desk rule:
+
+```flow
+const productionStopped = report.contains({
+    substring: "production is on hold",
+    ignoreCase: true
+})
+if (productionStopped || customerFacing) {
+    severity = "SEV-1"
+}
+```
+
+The Board stores the String Contains, variable reads, boolean operation, Branch, Set Variable,
+pins, and connections. Lowering recognizes the shape and chooses compact expression and
+control-flow syntax.
+
+Visual helpers may disappear from the semantic projection. Lowering follows through reroutes and
+may flatten collapsed boundaries. Coordinates can order independent entries without becoming
+source syntax. The live Board retains this visual information while text is edited.
+
+## 14.4 Rendering chooses one canonical spelling
+
+Rendering `BoardAst` is deterministic. The renderer chooses document order, indentation, quotes,
+decorator order, spacing, parentheses, and declaration layout.
+
+Canonical source makes comparisons smaller and removes debates over semicolons or quote style.
+After Apply, the system reloads and standardizes source from the Board.
+
+For example, an author may type:
+
+```flow
+if (customerFacing && impact == 'production-stopped') {
+    severity = 'SEV-1';
+}
+```
+
+Pure parse-and-format produces the canonical form:
+
+```flow
+if (customerFacing && (impact == "production-stopped")) {
+    severity = "SEV-1"
+}
+```
+
+The added parentheses expose precedence; quotes and semicolons are standardized. The semantic AST
+does not reproduce keystrokes.
+
+Board lowering also chooses graph-derived sugar. Pure outputs may become nested expressions, and
+catalog metadata may turn a static call into a method. Imports appear only when they clarify calls
+without ambiguity.
+
+If two namespaces expose `contains`, the lowerer keeps qualified calls:
+
+```flow
+const inReport = string::contains({
+    string: report,
+    substring: "production is on hold",
+    ignoreCase: true
+})
+const inSystems = array::contains({ array: affectedSystems, value: systemId })
+```
+
+The qualified spelling remains until an import is unambiguous.
+
+### Secrets do not need a readable value
+
+A secret variable can have a configured value on the Board while its textual declaration has no
+initializer:
+
+```flow
+@secret
+const incidentApiKey: string
+```
+
+The AST omits the secret value. An unchanged declaration carries no replacement value, so unrelated
+edits preserve the configured secret. FlowScript also rejects a nonempty initializer for a new
+secret.
+
+This does not make downstream values safe to log or return, or imply that every sensitive pin and
+rendering path has been audited. Secret handling still depends on the node, execution boundary, and
+storage path.
+
+## 14.5 Parsing turns a draft back into typed meaning
+
+Typing does not mutate the Board. Flow-Like parses the draft for feedback and changes the Board only
+on a valid Apply. Studio can reconcile against a cloned Board for an authoritative command preview
+without persistence or undo mutation. Web performs that step during server Apply.
+
+Parsing answers questions such as:
+
+- Are delimiters balanced?
+- Is this declaration allowed in this scope?
+- Does the expression have a valid syntactic shape?
+- Is a decorator written correctly?
+- Is the document nested within the defensive parser limit?
+
+Parsing cannot answer every program question. It recognizes
+`madeUp::operation({ value: 1 })` and named arguments without knowing whether the catalog contains
+the node or a compatible pin. Those checks need the live catalog and Board, so reconciliation owns
+them.
+
+The editor has two feedback layers:
+
+1. **Parse feedback** identifies the first syntactic problem with a line and column.
+2. **Reconcile feedback**, when the client requests that authoritative check or Apply reaches the
+   server, reports unresolved calls, ambiguous names, missing pins, incompatible types or shapes,
+   invalid boundaries, policy limits, and unsafe edits.
+
+Only a revision that passes both layers can be applied. Invalid source stays a draft with a
+specific problem to fix.
+
+### For experts: the small parser behind the editor
+
+The parser is hand-written and compact:
+
+```text
+characters
+  → context-free tokens
+  → recursive-descent declarations and statements
+  → Pratt-parsed expressions
+  → typed BoardAst
+```
+
+The lexer records line, column, and byte position. Recursive descent handles document structure; a
+Pratt parser handles precedence and associativity. A shared nesting budget of 128 limits blocks,
+modules, expressions, and nested interface types in editor or API input.
+
+Parsing stops at the first error and reports a line and column rather than a multi-error span set.
+Template-expression errors receive rebased source coordinates; later semantic diagnostics locate
+tokens on a best-effort basis. This supports a guarded editor, though it is not a finished compiler
+diagnostics system.
+
+The formatter follows this invariant:
+
+```text
+canonical = render(parse(authored))
+render(parse(canonical)) == canonical
+```
+
+The stable second rendering takes priority over preserving authored style.
+
+## 14.6 Reconciliation plans the smallest valid change
+
+After parsing, the reconciler compares the edited AST with the Board. It resolves catalog calls,
+derives expected pins, checks types and shapes, accounts for dynamic pins, and matches existing
+entities through stable identities.
+
+It produces a command plan for the persisted Board:
+
+- update one node pin;
+- add, update, or remove a node;
+- connect or disconnect two pins;
+- add or update a variable;
+- add, update, or remove a layer; and
+- move a node into another layer.
+
+Canvas movement uses the same command vocabulary, though FlowScript reconciliation does not
+reposition existing nodes. New structures receive automatic placement; existing coordinates stay
+untouched.
+
+This boundary preserves the Board. A literal edit can update one pin while leaving identities,
+coordinates, comments, connections, package fields, and visual choices alone. In Studio, a
+structural edit is visible in the preview before any command runs.
+
+Studio's Apply preview groups semantic consequences, distinguishing configuration updates from
+structural or destructive edits. Web returns authoritative diagnostics and the command outcome
+during Apply without showing the plan beforehand. Deletions need separate approval; Chapter 15
+covers the details.
+
+Apply then follows a fail-closed sequence:
+
+1. Reconcile the complete draft against the current Board and catalog.
+2. Stop with no executed commands if any diagnostic exists.
+3. Stop if a destructive plan has not received explicit approval.
+4. Validate and execute the command batch against a staged Board.
+5. Roll back earlier commands if a later command fails.
+6. Persist the Board only after the complete application succeeds.
+7. Lower and render the result back into canonical FlowScript.
+
+Apply preserves the accepted program and unrelated Board information, then restores canonical
+spelling.
+
+## 14.7 Follow one Incident Desk change through the loop
+
+Start with the anchored line that recognizes the report from the 3 A.M. call. Its identity is
+shortened here:
+
+```flow
+const productionStopped = report.contains({
+    substring: "production is on hold",
+    ignoreCase: true
+}) //@n:contains-report
+```
+
+Change only the literal:
+
+```flow
+const productionStopped = report.contains({
+    substring: "customer-facing outage",
+    ignoreCase: true
+}) //@n:contains-report
+```
+
+The parser produces the same statement with a new string. The anchor identifies the existing
+Contains node. Because its `substring` input is unconnected and only its stored value changed, the
+plan contains one `UpdateNodePin`. The node is not recreated.
+
+The change follows this path:
+
+```text
+one source literal
+    → one AST literal
+    → one changed input pin
+    → one Board command
+    → the same node in the same place
+```
+
+For a structural edit, derive another signal without changing the Function boundary:
+
+```flow
+const customerFacing = report.contains({
+    substring: "customer-facing",
+    ignoreCase: true
+})
+```
+
+Then revise the rule:
+
+```diff
+-if (productionStopped) {
++if (productionStopped || customerFacing) {
+     severity = "SEV-1"
+ }
+```
+
+With the standard catalog, the delta adds String Contains and Boolean OR operations, their literal
+settings, and data wires into the existing Branch. Other nodes retain their identity and placement.
+The exact plan depends on the installed catalog and live graph, so the product shows the real count.
+
+The example does not add `customerFacing` to the anchored `decideIncident` Function. The reconciler
+rejects signature changes to established Function boundaries because it cannot yet migrate the
+layer and all callers safely. Create a new Function with the desired signature instead.
+
+## 14.8 FlowScript leaves canvas presentation intact
+
+A domain expert may place the severity branch beside its input, color its layer, add a Board
+comment, and route a connection around another cluster. FlowScript needs no keyword for these
+choices.
+
+Because Apply patches the live Board instead of reconstructing it, an unrelated text edit can
+preserve:
+
+- node and pin IDs;
+- coordinates and viewport;
+- layer colors, icons, and presentation settings;
+- package, score, version, and runtime metadata;
+- decorative Board comments; and
+- reroutes that make wires readable.
+
+Visual constructs need no equivalent source line. A reroute may disappear from FlowScript yet stay
+on the Board because no command touched it. Board comments are not lowered into FlowScript comments,
+and source comments cannot reliably create or replace them. A text-only rebuild cannot promise
+pixel-identical recovery.
+
+> FlowScript preserves supported program meaning and untouched Board identity. It does not preserve
+> arbitrary author formatting or provide byte-for-byte or pixel-for-pixel serialization.
+
+Existing Function signature migration remains unsupported. Whole-Board round trips also have known
+difficult cases involving duplicate handler names and cross-handler references. Report them with
+the Flow-Like version, a minimal Board, and the text before and after Apply.
+
+## 14.9 The mental model to keep
+
+Board edits retain graph identity and project readable source. A FlowScript edit proposes a
+semantic patch to that graph. The AST gives both paths the same typed meaning.
+
+The opening figure is the working checklist. A Board lowers and renders to canonical source. An
+edited draft parses and reconciles against the live Board and catalog. After the plan passes its
+guards, Apply updates the Board and Studio reloads the accepted program.
+
+The next chapter looks at the identity anchors, correction proposals, deletion guards, and scoped
+editing rules that make step four safe on large Flows.

@@ -1,0 +1,18 @@
+use control::{ parallel }
+use log::{ info }
+
+function updateSearchIndex() {
+    info({ message: "Update search index", toast: false })
+}
+
+function continueAfterTasks() {
+    info({ message: "Continue after tasks settle", toast: false })
+}
+
+eventsGeneric refreshViews(payload: Struct) {
+    if (parallel({ threadModel: "tasks" })) { // exec_out
+        updateSearchIndex()
+    } else { // done
+        continueAfterTasks()
+    }
+}

@@ -26,6 +26,8 @@ impl NodeLogic for ReadToStringNode {
             "Reads the content of a file to a string",
             "Data/Files/Content",
         );
+        node.set_flowscript_name("files", "readToString");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

@@ -40,6 +40,7 @@ impl NodeLogic for OsrmNearestNode {
             "Finds the nearest routable point(s) to a coordinate using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "osrmNearest");
         node.add_icon("/flow/icons/map-pin.svg");
 
         node.add_input_pin(

@@ -26,6 +26,7 @@ impl NodeLogic for CellToBoundaryNode {
             "Returns the polygon boundary (vertices) of an H3 cell. Useful for visualization and geospatial operations.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellToBoundary");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

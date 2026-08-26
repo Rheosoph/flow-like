@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddTableToSlideNode {
             "Add a branded table to a PPTX slide. Header row uses #FF4343 with white text.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addTable");
         node.add_icon("/flow/icons/table.svg");
         node.set_scores(
             NodeScores::new()

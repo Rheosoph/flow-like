@@ -25,6 +25,7 @@ impl NodeLogic for BrowserGetTextNode {
             "Gets the text content of an element",
             "Automation/Browser/Extract",
         );
+        node.set_flowscript_name("browser", "getText");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -131,6 +132,7 @@ impl NodeLogic for BrowserGetAttributeNode {
             "Gets an attribute value of an element",
             "Automation/Browser/Extract",
         );
+        node.set_flowscript_name("browser", "getAttribute");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -247,6 +249,7 @@ impl NodeLogic for BrowserGetHtmlNode {
             "Gets the HTML content of an element or the entire page",
             "Automation/Browser/Extract",
         );
+        node.set_flowscript_name("browser", "getHtml");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -371,6 +374,7 @@ impl NodeLogic for BrowserExecuteJsNode {
             "Executes JavaScript code in the browser and returns the result",
             "Automation/Browser/Extract",
         );
+        node.set_flowscript_name("browser", "executeJs");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

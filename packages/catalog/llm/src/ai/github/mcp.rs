@@ -25,6 +25,7 @@ impl NodeLogic for CopilotMcpLocalServerNode {
             "Configures a local/stdio MCP server for tool integration",
             "AI/GitHub/Copilot/MCP",
         );
+        node.set_flowscript_name("github.copilot", "mcpLocalServer");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -120,6 +121,7 @@ impl NodeLogic for CopilotMcpHttpServerNode {
             "Configures an HTTP/SSE MCP server for remote tool integration",
             "AI/GitHub/Copilot/MCP",
         );
+        node.set_flowscript_name("github.copilot", "mcpHttpServer");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

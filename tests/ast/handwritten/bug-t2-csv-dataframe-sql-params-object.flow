@@ -1,0 +1,23 @@
+use df::*
+use files::{ storageDir }
+use log::{ info }
+use path::*
+
+// BUG: `params` is the documented, injection-safe way to bind values into a df query
+// ("Values for the query's $placeholders, as an object keyed by placeholder name"), but an object
+// literal whose members are event params / node outputs never reaches the pin. Reconcile reports:
+//   argument `params` on `sqlQuery` is not a literal or resolvable node output; skipped connection
+// and then STOPS -- there is no "missing required inputs" follow-up, because `params` is optional.
+// So the board is built with a query full of unbound $placeholders and no wire feeding them: the
+// apply looks successful and the flow fails at run time instead.
+// Replacing the members with string literals (`{ region: "emea" }`) reconciles cleanly, so this is
+// the computed member, not the object syntax. The only workaround is to interpolate the values
+// into the SQL text with a template literal, which is exactly what parameter binding exists to
+// avoid.
+eventsGeneric probeSqlParamsObject(payload: Struct, region: string, floor: int) {
+    const root = storageDir({ nodeScope: false }).child("orders")
+    const session = createSession({ sessionName: "params-probe" })
+    session.mountCsv({ path: root, tableName: "orders_raw", hasHeader: true, delimiter: "," })
+    const { rows } = session.sqlQuery({ query: "SELECT * FROM orders_raw WHERE region = $region AND net_amount >= $floor", params: { region: region, floor: floor } })
+    info({ message: rows, toast: false })
+}

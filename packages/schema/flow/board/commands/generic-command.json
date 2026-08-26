@@ -155,6 +155,17 @@
 			},
 			"$ref": "#/$defs/RemoveLayerCommand",
 			"required": ["command_type"]
+		},
+		{
+			"type": "object",
+			"properties": {
+				"command_type": {
+					"type": "string",
+					"const": "MoveToLayer"
+				}
+			},
+			"$ref": "#/$defs/MoveToLayerCommand",
+			"required": ["command_type"]
 		}
 	],
 	"$defs": {
@@ -220,6 +231,10 @@
 				},
 				"is_locked": {
 					"type": ["boolean", "null"]
+				},
+				"node_id": {
+					"description": "Soft reference to a board node this comment is attached to (e.g. the statement a FlowScript thread anchors on).\nPresentation metadata only \u2014 dangling references are legal; a missing node means unanchored.",
+					"type": ["string", "null"]
 				}
 			},
 			"required": ["id", "content", "comment_type", "timestamp", "coordinates"]
@@ -405,6 +420,18 @@
 							"type": "null"
 						}
 					]
+				},
+				"namespace": {
+					"description": "FlowScript namespace path (`string`, `http`, `utils.markdown`; dotted when nested).\nPresentation only — never part of node identity (`name` stays the id).",
+					"type": ["string", "null"]
+				},
+				"alias": {
+					"description": "FlowScript member name inside `namespace` (`trim`, `fetch`, `createIssue`).\nPresentation only — never part of node identity.",
+					"type": ["string", "null"]
+				},
+				"receiver": {
+					"description": "Name of the data input pin that receives the value in FlowScript method form (`s` in `s.trim()`).\nPresentation only. Absent applies the default rule; an empty string opts out (static only).",
+					"type": ["string", "null"]
 				}
 			},
 			"required": [
@@ -868,7 +895,7 @@
 		},
 		"LayerType": {
 			"type": "string",
-			"enum": ["Function", "Macro", "Collapsed"]
+			"enum": ["Function", "Macro", "Collapsed", "Module"]
 		},
 		"Variable": {
 			"type": "object",
@@ -1304,6 +1331,28 @@
 				"nodes",
 				"preserve_nodes"
 			]
+		},
+		"MoveToLayerCommand": {
+			"type": "object",
+			"properties": {
+				"ids": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"target": {
+					"type": ["string", "null"]
+				},
+				"previous": {
+					"type": "object",
+					"additionalProperties": {
+						"type": ["string", "null"]
+					},
+					"default": {}
+				}
+			},
+			"required": ["ids"]
 		},
 		"LayerCache": {
 			"description": "Result caching for a layer invoked as a function.\n\nA hit replaces the whole call: the function body never runs, so its side effects do\nnot happen either. Only turn this on for layers whose outputs are a function of their\ninputs.",

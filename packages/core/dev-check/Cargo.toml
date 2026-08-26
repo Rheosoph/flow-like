@@ -1,0 +1,10 @@
+[package]
+name = "flow-like-dev-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The root workspace dependency selects the lightweight `flow` surface while
+# keeping flow-like's public default (`full`) backward compatible.
+flow-like.workspace = true

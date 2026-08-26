@@ -1,4 +1,7 @@
-use super::config::{MemoryConfig, RecallStrategy};
+use super::config::MemoryConfig;
+#[cfg(feature = "execute")]
+use super::config::RecallStrategy;
+#[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -6,11 +9,11 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{
-    Value, async_trait, bail,
-    json::{self, json},
-};
+#[cfg(feature = "execute")]
+use flow_like_types::{Value, bail, json};
+use flow_like_types::{async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -31,6 +34,8 @@ impl NodeLogic for SearchMemoryNode {
             "Searches the memory store using the configured recall strategy (recent, relevance, or hybrid)",
             "AI/Memory",
         );
+        node.set_flowscript_name("ai.memory", "search");
+        node.set_receiver("memory_config");
         node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
@@ -98,6 +103,7 @@ impl NodeLogic for SearchMemoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -177,8 +183,16 @@ impl NodeLogic for SearchMemoryNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Memory search requires the 'execute' feature"
+        ))
+    }
 }
 
+#[cfg(feature = "execute")]
 #[allow(dead_code)]
 async fn embed_query(
     context: &mut ExecutionContext,

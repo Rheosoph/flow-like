@@ -3,13 +3,17 @@
 //! Returns the cluster centers from a trained KMeans model.
 
 use crate::ml::{KMeansCentroids, NodeMLModel};
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Result, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{Result, async_trait};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -30,6 +34,8 @@ impl NodeLogic for GetKMeansCentroidsNode {
             "Extract cluster centroids from a trained KMeans model",
             "AI/ML/Model Info",
         );
+        node.set_flowscript_name("ml", "getKmeansCentroids");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

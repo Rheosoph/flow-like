@@ -29,6 +29,7 @@ impl NodeLogic for WriteManifestNode {
             "Commits all or selected paths from a directory diff session to its manifest, so the next diff only reports uncommitted changes",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "writeManifest");
         node.set_version(1);
         node.add_icon("/flow/icons/path.svg");
 

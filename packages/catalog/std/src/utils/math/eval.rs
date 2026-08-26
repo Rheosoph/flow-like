@@ -28,6 +28,7 @@ impl NodeLogic for EvalNode {
             "Evaluates a mathematical expression",
             "Math",
         );
+        node.set_flowscript_name("math", "eval");
         node.add_icon("/flow/icons/calculator.svg");
 
         node.add_input_pin(

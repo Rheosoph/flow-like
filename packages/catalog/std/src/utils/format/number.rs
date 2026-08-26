@@ -55,6 +55,7 @@ impl NodeLogic for FormatNumberNode {
             "Format Number",
             "Renders a number for display with fixed decimals and separators",
         );
+        node.set_flowscript_name("fmt", "number");
 
         node.add_input_pin("value", "Value", "Number to format", VariableType::Float);
         node.add_input_pin(
@@ -160,6 +161,7 @@ impl NodeLogic for FormatBytesNode {
             "Format File Size",
             "Turns a byte count into a readable size such as 1.4 MB",
         );
+        node.set_flowscript_name("fmt", "bytes");
 
         node.add_input_pin("bytes", "Bytes", "Number of bytes", VariableType::Integer)
             .set_default_value(Some(json!(0)));
@@ -246,6 +248,8 @@ impl NodeLogic for FormatOrdinalNode {
             "Ordinal",
             "Writes a number as 1st, 2nd, 3rd and so on",
         );
+        node.set_flowscript_name("fmt", "ordinal");
+        node.set_receiver("value");
 
         node.add_input_pin("value", "Value", "Number to write", VariableType::Integer)
             .set_default_value(Some(json!(1)));
@@ -299,6 +303,8 @@ impl NodeLogic for MapRangeNode {
             "Rescales a value from one range into another",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "mapRange");
+        node.set_receiver("value");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 
@@ -380,6 +386,8 @@ impl NodeLogic for PercentChangeNode {
             "How much a value moved relative to where it started",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "percentChange");
+        node.set_receiver("from");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 
@@ -441,6 +449,7 @@ impl NodeLogic for FormatDurationNode {
             "Format Duration",
             "Writes a number of seconds as a readable duration such as 2h 15m",
         );
+        node.set_flowscript_name("fmt", "duration");
 
         node.add_input_pin(
             "seconds",
@@ -568,6 +577,8 @@ impl NodeLogic for RoundToMultipleNode {
             "Snaps a value to the nearest multiple, for example the nearest 0.05 or 25",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "roundToMultiple");
+        node.set_receiver("value");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

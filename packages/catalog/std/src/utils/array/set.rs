@@ -26,6 +26,8 @@ impl NodeLogic for SetIndexArrayNode {
             "Sets an element at a specific index in an array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "setIndex");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

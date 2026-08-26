@@ -1,13 +1,16 @@
 use aws_credentials::AwsSharedCredentials;
 use azure_credentials::AzureSharedCredentials;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::Path;
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::Result;
 use flow_like_types::async_trait;
 use gcp_credentials::GcpSharedCredentials;
 use mixed_credentials::MixedSharedCredentials;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "flow-runtime")]
 use std::sync::Arc;
 
 pub mod aws_credentials;
@@ -18,8 +21,10 @@ pub mod mixed_credentials;
 pub use aws_credentials::BucketConfig;
 
 /// Type alias for the logs database builder callback
+#[cfg(feature = "flow-runtime")]
 pub type LogsDbBuilder = Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>;
 
+#[cfg(feature = "flow-runtime")]
 pub(crate) fn db_path_from_base(base_path: &str) -> Path {
     let base = Path::from(base_path);
 
@@ -47,8 +52,11 @@ pub enum StoreType {
 pub trait SharedCredentialsTrait {
     async fn to_store(&self, meta: bool) -> Result<FlowLikeStore>;
     async fn to_store_type(&self, store_type: StoreType) -> Result<FlowLikeStore>;
+    #[cfg(feature = "flow-runtime")]
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder>;
+    #[cfg(feature = "flow-runtime")]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder>;
+    #[cfg(feature = "flow-runtime")]
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder>;
 }
 
@@ -79,6 +87,7 @@ impl SharedCredentials {
         }
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
         match self {
             SharedCredentials::Aws(aws) => aws.to_db(app_id).await,
@@ -88,6 +97,7 @@ impl SharedCredentials {
         }
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         match self {
             SharedCredentials::Aws(aws) => aws.to_db_scoped(sub, app_id).await,
@@ -97,6 +107,7 @@ impl SharedCredentials {
         }
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
         match self {
             SharedCredentials::Aws(aws) => aws.to_logs_db_builder(),
@@ -113,6 +124,7 @@ mod tests {
     use flow_like_types::json::{from_str, to_string};
 
     #[test]
+    #[cfg(feature = "flow-runtime")]
     fn test_db_path_from_base_for_app_scope() {
         let path = db_path_from_base("apps/test-app");
 
@@ -120,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "flow-runtime")]
     fn test_db_path_from_base_for_user_scope() {
         let path = db_path_from_base("users/test-user/apps/test-app");
 

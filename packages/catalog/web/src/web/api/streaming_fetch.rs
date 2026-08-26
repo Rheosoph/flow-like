@@ -35,6 +35,8 @@ impl NodeLogic for StreamingHttpFetchNode {
             "Performs an HTTP request",
             "Web/API",
         );
+        node.set_flowscript_name("http", "fetchStreaming");
+        node.set_receiver("request");
 
         node.add_icon("/flow/icons/web.svg");
 

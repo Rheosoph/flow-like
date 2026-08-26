@@ -24,6 +24,7 @@ impl NodeLogic for ReturnGenericResultNode {
             "Return a result",
             "Events/Generic",
         );
+        node.set_flowscript_name("events", "returnResult");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

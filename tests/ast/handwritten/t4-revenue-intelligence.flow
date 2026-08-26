@@ -1,0 +1,610 @@
+// Revenue intelligence sweep: pull a tenant's calendars and mailbox, transcribe the call
+// recordings that came out of them, score every deal for risk, and push a weekly rollup to the
+// manager board in Teams.
+use log::{ info, warn }
+use microsoft::calendar as msCal
+use google::calendar as gCal
+use fmt::{ duration, number }
+
+interface TranscriptQuote {
+    speaker: string;
+    role: "rep" | "champion" | "economic_buyer" | "detractor";
+    said_at_seconds: float;
+    text: string;
+}
+
+interface DealSignal {
+    deal_id: string;
+    account: string;
+    owner_email: string;
+    stage: "discovery" | "evaluation" | "negotiation" | "closed_won" | "closed_lost";
+    risk_band: "green" | "amber" | "red";
+    source: "outlook" | "google_calendar" | "exchange_calendar" | "teams" | "webhook";
+    confidence?: float = 0.5;
+    next_step?: string = "";
+    talk_ratio?: float = 0.5;
+    days_since_touch?: int = 0;
+    competitors: string[];
+    "deal.stage_at_risk": bool;
+    evidence?: Map<string, TranscriptQuote[]> = {};
+    embedding: float[];
+}
+
+interface RollupRow {
+    period_start: string;
+    segment: string;
+    open_pipeline: float;
+    at_risk_pipeline: float;
+    meetings: int;
+    win_rate?: float = 0.0;
+}
+
+@description("Tenant whose mail, calendars and call recordings are swept")
+@category("Revenue/Tenant")
+let tenantId = "acme-emea"
+
+@description("Graph delegated token for the revenue service principal")
+@secret
+const graphToken: string
+
+@description("Mailbox the revenue rep's threads are read from")
+@category("Revenue/Tenant")
+let ownerEmail = "dana.reed@acme.example"
+
+@description("Teams team the manager board is posted into")
+@category("Revenue/Distribution")
+let managerTeamId = "19:pipeline-review@thread.tacv2"
+
+@description("Channel inside the manager team")
+@category("Revenue/Distribution")
+let managerChannelId = "19:weekly-rollup@thread.tacv2"
+
+@description("Embedding bit used for transcript similarity")
+@category("Revenue/Models")
+let embeddingBitId = "text-embedding-3-large"
+
+@description("Cosine similarity above which a call counts as an escalation echo")
+@category("Revenue/Scoring")
+let escalationThreshold = 0.78
+
+@description("Human summary of the most recent nightly sweep")
+@runtime
+let lastSweepSummary = ""
+
+module ingest {
+    function meetingKey(tenant: string, calendarId: string, eventId: string): (key: string) {
+        const raw = `${tenant}/${calendarId}/${eventId}`
+        return string::kebabCase({ string: raw })
+    }
+
+    function sweepWindow(): (start: Date, end: Date, isoStart: string, isoEnd: string) {
+        const now = datetime::now()
+        const start = datetime::startOf({ date: datetime::add({ date: now, days: -1 }), unit: "day" })
+        const end = datetime::endOf({ date: now, unit: "day" })
+        const isoStart = datetime::format({ date: start, format: "%Y-%m-%dT%H:%M:%SZ" })
+        const isoEnd = datetime::format({ date: end, format: "%Y-%m-%dT%H:%M:%SZ" })
+        return start, end, isoStart, isoEnd
+    }
+
+    function recordingPaths(root: Struct, key: string): (wav: Struct, thumbnail: Struct) {
+        const base = root.child("recordings").child(key)
+        const wav = base.setExtension("wav")
+        const thumbnail = base.setExtension("png")
+        return wav, thumbnail
+    }
+
+    // Google Calendar hands back nothing but an opaque page token, so the number of pages is
+    // unknowable up front: this has to be a while loop over the cursor, not a for loop.
+    function calendarPages(provider: Struct, isoStart: string, isoEnd: string): (meetings: Struct[], pages: int) {
+        let collected = array::make()
+        let cursor = ""
+        let hasMorePages = true
+        let pageCount = 0
+
+        while (hasMorePages) {
+            const page = gCal::listEvents({
+                provider: provider,
+                calendarId: "primary",
+                timeMin: isoStart,
+                timeMax: isoEnd,
+                maxResults: 250,
+                pageToken: cursor
+            })
+            page {
+                execOut: {
+                    collected = array::extend({ arrayIn: collected, values: page.events })
+                    cursor = page.nextPageToken
+                    pageCount = pageCount + 1
+                    hasMorePages = !(cursor == "")
+                }
+                error: {
+                    warn({ message: `Google Calendar page ${pageCount} stopped the sweep`, toast: false })
+                    hasMorePages = false
+                }
+            }
+        }
+        return collected, pageCount
+    }
+
+    // Exchange exposes a member with exactly the same name as Google's; only the alias tells the
+    // two `listEvents` apart, and their argument lists are not even the same shape.
+    function exchangeEvents(graph: Struct, windowStart: Date, windowEnd: Date): (meetings: Struct[]) {
+        const exchange = msCal::listEvents({
+            provider: graph,
+            calendarId: "primary",
+            startDate: windowStart,
+            endDate: windowEnd,
+            top: 250
+        })
+        return exchange.events
+    }
+
+    function mailThreads(graph: Struct, isoStart: string): (senders: string[], decks: int) {
+        const inbox = microsoft::outlook::listMessages({
+            provider: graph,
+            folderId: "inbox",
+            filter: `receivedDateTime ge ${isoStart}`,
+            top: 200
+        })
+
+        let senders = array::make()
+        let decks = 0
+        for (const message of inbox.messages) {
+            const subject = struct::get({ struct: message, field: "subject" })
+            const sender = struct::get({ struct: message, field: "from" })
+            const carried = microsoft::outlook::getMessageAttachments({ provider: graph, message: message })
+            for (const attachment of carried.attachments) {
+                const fields = microsoft::outlook::attachmentToFields({ attachment: attachment })
+                if (fields.contentType == "application/pdf") {
+                    decks = decks + 1
+                    const size = fmt::bytes({ bytes: fields.size, decimals: 1 }).text
+                    info({ message: `Deck ${fields.filename} (${size}) on ${subject}`, toast: false })
+                }
+            }
+            senders = array::push({ arrayIn: senders, value: sender })
+        }
+        return senders, decks
+    }
+
+    module quotes {
+        function attribute(speaker: string, owner: string): (role: string) {
+            const isOwner = speaker.contains({ substring: owner, ignoreCase: true })
+            return isOwner ? "rep" : "champion"
+        }
+    }
+}
+
+module scoring {
+    function talkRatio(spokenSeconds: float, totalSeconds: float): (ratio: float) {
+        if (totalSeconds <= 0.0) {
+            return 0.5
+        }
+        return spokenSeconds / totalSeconds
+    }
+
+    function blend(similarity: float, ratio: float, daysSinceTouch: int): (score: float) {
+        const elapsed = int::toFloat({ integer: daysSinceTouch })
+        const staleness = elapsed / 60.0
+        const dominance = ratio - 0.5
+        return similarity * 0.5 + dominance * 0.3 + staleness * 0.2
+    }
+
+    function echoes(vector: float[], neighbours: Struct[]): (count: int, strongest: float) {
+        let count = 0
+        let strongest = 0.0
+        @parallel
+        for (const neighbour of neighbours) {
+            const other = struct::get({ struct: neighbour, field: "embedding" })
+            const similarity = math::vector::cosineSimilarity({ vector1: vector, vector2: other })
+            if (similarity > escalationThreshold) {
+                count = count + 1
+            }
+            strongest = similarity > strongest ? similarity : strongest
+        }
+        return count, strongest
+    }
+}
+
+@cache({ namespace: "revenue-risk-v3", ttlSeconds: 900, scope: "user" })
+function riskBand(talkRatio: float, daysSinceTouch: int, competitorMentions: int): (band: string) {
+    let band = "green"
+    if (daysSinceTouch > 21 || talkRatio > 0.72) {
+        band = "amber"
+    }
+    if (competitorMentions > 2) {
+        band = "amber"
+    }
+    if (daysSinceTouch > 45 || competitorMentions > 5) {
+        band = "red"
+    }
+    return band
+}
+
+// BUG: an object literal with any computed member is rejected wholesale
+// (bug-t4-pr-review-bot-computed-object-literal.flow), and returning one straight out of a
+// function is rejected as well, so every row is assembled with struct::set instead.
+function signalRow(dealId: string, account: string, owner: string, band: string, origin: string, ratio: float, days: int, vector: float[]): (row: DealSignal) {
+    const atRisk = !(band == "green")
+    const row = struct::make()
+        .set("deal_id", dealId)
+        .set("account", account)
+        .set("owner_email", owner)
+        .set("stage", "evaluation")
+        .set("risk_band", band)
+        .set("source", origin)
+        .set("confidence", 0.62)
+        .set("next_step", "")
+        .set("talk_ratio", ratio)
+        .set("days_since_touch", days)
+        .set("competitors", array::make())
+        .set("deal.stage_at_risk", atRisk)
+        .set("evidence", struct::make())
+        .set("embedding", vector)
+    return row
+}
+
+function rollupRow(periodStart: string, segment: string, open: float, atRisk: float, meetings: int): (row: RollupRow) {
+    const denominator = float::max({ float1: open, float2: 1.0 })
+    const share = float::divide({ dividend: atRisk, divisor: denominator })
+    const winRate = float::subtract({ float1: 1.0, float2: share })
+    const row = struct::make()
+        .set("period_start", periodStart)
+        .set("segment", segment)
+        .set("open_pipeline", open)
+        .set("at_risk_pipeline", atRisk)
+        .set("meetings", meetings)
+        .set("win_rate", winRate)
+    return row
+}
+
+module capture {
+    function transcribe(provider: Struct, workspace: Struct, transcriber: Struct, embeddingModel: Struct, sttOptions: Struct, fileId: string, account: string, ordinal: int): (row: DealSignal, band: string) {
+        const key = ingest::meetingKey(tenantId, "primary", fileId)
+        const { wav, thumbnail } = ingest::recordingPaths(workspace, key)
+
+        let row = struct::make()
+        let band = "green"
+
+        const download = google::drive::download({
+            provider: provider,
+            fileId: fileId,
+            outputPath: workspace.child("inbox").child(key)
+        })
+
+        download {
+            execOut: {
+                const probe = video::probeMediaInfo({ source: download.path })
+                video::extractThumbnail({
+                    source: download.path,
+                    target: thumbnail,
+                    frameIndex: 120,
+                    format: "png",
+                    width: 640,
+                    height: 360
+                })
+                audio::toWav({ source: download.path, target: wav, audioTrackId: 0 })
+
+                const acoustics = audio::analyze({
+                    source: wav,
+                    waveformBuckets: 240,
+                    silenceThresholdDb: -38.0,
+                    windowMs: 250,
+                    minSilenceMs: 900
+                })
+
+                const spoken = ai::audio::speechToText({
+                    provider: transcriber,
+                    audio: wav,
+                    providerOptions: sttOptions
+                })
+
+                const cleaned = ai::processing::maskPiiRegex({
+                    text: spoken.text,
+                    detectEmail: true,
+                    detectPhone: true,
+                    detectCreditCard: false,
+                    maskText: "[redacted]"
+                })
+
+                const totalSeconds = struct::get({ struct: probe.media, field: "duration_seconds" })
+                const speechSeconds = struct::get({ struct: acoustics.report, field: "speech_seconds" })
+                const ratio = scoring::talkRatio(speechSeconds, totalSeconds)
+                const role = ingest::quotes::attribute(account, ownerEmail)
+
+                const keywords = ai::processing::extractKeywordsYake({
+                    text: cleaned.maskedText,
+                    language: "en",
+                    ngrams: 3,
+                    maxKeywords: 12
+                })
+
+                const vector = ai::embedding::embedDocument({
+                    queryString: cleaned.maskedText,
+                    model: embeddingModel
+                })
+
+                band = riskBand(ratio, ordinal, cleaned.detectionCount)
+                row = signalRow(key, account, ownerEmail, band, "google_calendar", ratio, ordinal, vector)
+
+                const spokenFor = duration({ seconds: totalSeconds, style: "short" })
+                info({
+                    message: `${account} [${role}]: ${spokenFor} call, band ${band}, keywords ${keywords.keywords}`,
+                    toast: false
+                })
+            }
+            error: {
+                warn({ message: `Recording ${fileId} could not be pulled from Drive`, toast: false })
+            }
+        }
+        return row, band
+    }
+}
+
+module analytics {
+    function bandRows(signals: Struct): (rows: Struct[], bands: int) {
+        const session = df::createSession({
+            sessionName: "revenue-rollup",
+            targetPartitions: 8,
+            batchSize: 8192,
+            collectStatistics: true
+        })
+        session.registerLance(signals, "signals")
+
+        const binned = df::timeBinAggregation({
+            session: session,
+            sourceTable: "signals",
+            timestampColumn: "captured_at",
+            interval: "1 day",
+            valueColumns: "talk_ratio,days_since_touch",
+            aggregations: "avg,max",
+            groupBy: "risk_band",
+            outputTable: "signal_trend"
+        })
+
+        const pipeline = df::sqlQuery({
+            session: binned.sessionOut,
+            query: "SELECT risk_band, count(*) AS deals, avg(talk_ratio) AS talk FROM signals WHERE days_since_touch < $window GROUP BY risk_band ORDER BY deals DESC",
+            paramWindow: 90
+        })
+        return pipeline.rows, pipeline.rowCount
+    }
+
+    function trainRiskModel(signals: Struct, workspace: Struct): (topFeature: string, accuracy: Struct) {
+        const riskModel = ml::fitRandomForest({
+            source: "Database",
+            database: signals,
+            records: "embedding",
+            targets: "risk_band",
+            ensembleSize: 240,
+            bootstrapProportion: 0.8,
+            featureProportion: 0.6,
+            maxDepth: 8,
+            seed: 1337
+        })
+
+        const importance = riskModel.featureImportance(["talk_ratio", "days_since_touch", "competitor_mentions", "similarity"])
+        riskModel.save(workspace.child("models").child("revenue-risk").setExtension("bin"))
+
+        const accuracy = ml::evalAccuracy({
+            database: signals,
+            predictionsCol: "predicted_band",
+            actualsCol: "risk_band"
+        })
+        return importance.topFeature, accuracy
+    }
+
+    function digest(buckets: Struct[], meetings: int): (text: string, rollup: Struct[]) {
+        const periodStart = datetime::format({
+            date: datetime::startOf({ date: datetime::now(), unit: "week" }),
+            format: "%Y-%m-%d"
+        })
+        let lines = array::make()
+        let rollup = array::make()
+
+        for (const bucket of buckets) {
+            // BUG: struct::get is Generic and the operator type check refuses Generic == String,
+            // so the band has to be laundered through a string node first --
+            // see bug-t4-revenue-intelligence-generic-compare.flow.
+            const band = string::trim({ string: struct::get({ struct: bucket, field: "deals_band" }) })
+            const dealsText = string::trim({ string: struct::get({ struct: bucket, field: "deals" }) })
+            const talkText = string::trim({ string: struct::get({ struct: bucket, field: "talk" }) })
+            const deals = string::toFloat({ string: dealsText, fallback: 0.0 }).float
+            const talk = string::toFloat({ string: talkText, fallback: 0.5 }).float
+
+            const atRisk = band == "green" ? 0.0 : deals
+            rollup = array::push({ arrayIn: rollup, value: rollupRow(periodStart, band, deals, atRisk, meetings) })
+
+            const share = number({ value: talk, decimals: 1, asPercent: true })
+            const dealsLabel = number({ value: deals, decimals: 0 })
+            lines = array::push({ arrayIn: lines, value: `${band}: ${dealsLabel} deals, avg talk ${share}` })
+        }
+
+        const text = string::join({ strings: lines, separator: "<br/>" })
+        return text, rollup
+    }
+}
+
+module board {
+    function postRollup(graph: Struct, digest: string, topFeature: string, bands: int) {
+        const posted = microsoft::teams::sendMessage({
+            provider: graph,
+            teamId: managerTeamId,
+            channelId: managerChannelId,
+            message: `<b>${tenantId} weekly pipeline</b><br/>${digest}<br/>top driver: ${topFeature}`,
+            contentType: "html"
+        })
+
+        posted {
+            execOut: {
+                info({ message: `Rollup ${posted.messageId} posted, ${bands} bands`, toast: false })
+            }
+            error: {
+                warn({ message: `Manager board post failed: ${posted.errorMessage}`, toast: false })
+            }
+        }
+    }
+
+    function renderBanner(instanceId: string, dealId: string, chosenBand: string, eventName: string) {
+        const banner = ui::getElement({ elementRef: `risk-banner-${instanceId}` })
+        ui::setElementLoading({ elementRef: banner.element, loading: true })
+
+        const signals = db::open({ name: "revenue_signals", userScoped: false })
+        const matches = db::filter({
+            database: signals,
+            filter: `deal_id = '${dealId}'`,
+            limit: 1
+        })
+        const hitCount = array::length({ array: matches })
+
+        if (hitCount == 0) {
+            ui::setElementText({ elementRef: banner.element, text: `No signal captured for ${dealId} yet` })
+        } else {
+            const hit = array::get({ arrayIn: matches, index: 0 })
+            const ratioText = string::trim({ string: struct::get({ struct: hit.element, field: "talk_ratio" }) })
+            const ratio = string::toFloat({ string: ratioText, fallback: 0.5 }).float
+            const days = struct::get({ struct: hit.element, field: "days_since_touch" })
+            const share = number({ value: ratio, decimals: 1, asPercent: true })
+
+            ui::setElementText({
+                elementRef: banner.element,
+                text: `${dealId}: talk ${share}, last touch ${days}d ago`
+            })
+            ui::setBadgeContent({ elementRef: banner.element, content: chosenBand })
+            ui::setProgress({ elementRef: banner.element, value: ratio })
+            ui::setPageState({ key: "active_deal", value: dealId })
+            ui::setGlobalState({ key: "last_reviewed_band", value: chosenBand })
+        }
+
+        ui::setElementLoading({ elementRef: banner.element, loading: false })
+
+        if (eventName == "escalate") {
+            const params = struct::make().set("deal", dealId)
+            ui::navigateTo({ route: "/pipeline/escalations", queryParams: params, replace: false })
+        }
+    }
+}
+
+eventsSimple nightlyRevenueSweep() {
+    const googleProvider = google::provider()
+    const graph = microsoft::providerToken({ token: graphToken })
+
+    const { start: windowStart, end: windowEnd, isoStart, isoEnd } = ingest::sweepWindow()
+
+    const signals = db::open({ name: "revenue_signals", userScoped: false })
+    const workspace = files::userDir({ nodeScope: false })
+
+    const embeddingModel = ai::embedding::loadModel({ bit: ai::loadBit({ bitId: embeddingBitId }) })
+    const transcriber = ai::findModel({ preferences: ai::preferences::make({ multimodal: true }) })
+    const sttOptions = ai::audio::options::sttOpenaiCompatible({
+        prompt: "Sales discovery call. Keep speaker labels and product names verbatim.",
+        language: "en",
+        responseFormat: "verbose_json",
+        translate: false
+    })
+
+    const { meetings: googleMeetings, pages } = ingest::calendarPages(googleProvider, isoStart, isoEnd)
+    const exchangeMeetings = ingest::exchangeEvents(graph, windowStart, windowEnd)
+    const meetings = array::extend({ arrayIn: googleMeetings, values: exchangeMeetings })
+    const { senders, decks } = ingest::mailThreads(graph, isoStart)
+
+    const recordings = google::drive::search({
+        provider: googleProvider,
+        query: "mimeType contains 'video/' and modifiedTime > 'yesterday'",
+        pageSize: 100
+    })
+
+    let rows = array::make()
+    let escalations = 0
+
+    for (const [index, recording] of recordings.files) {
+        const fileId = struct::get({ struct: recording, field: "id" })
+        const account = struct::get({ struct: recording, field: "name" })
+        const { row, band } = capture::transcribe(googleProvider, workspace, transcriber, embeddingModel, sttOptions, fileId, account, index)
+        rows = array::push({ arrayIn: rows, value: row })
+        if (!(band == "green")) {
+            escalations = escalations + 1
+        }
+    }
+
+    db::batchUpsert({ database: signals, idRow: "deal_id", value: rows })
+
+    const signalCount = array::length({ array: rows })
+    const meetingCount = array::length({ array: meetings })
+    const threadCount = array::length({ array: senders })
+    lastSweepSummary = `${signalCount} signals from ${meetingCount} meetings, ${pages} calendar pages, ${threadCount} mail threads, ${decks} decks, ${escalations} escalations`
+    info({ message: lastSweepSummary, toast: false })
+}
+
+eventsSimple weeklyPipelineRollup() {
+    const graph = microsoft::providerToken({ token: graphToken })
+    const signals = db::open({ name: "revenue_signals", userScoped: false })
+    const workspace = files::userDir({ nodeScope: false })
+
+    const { rows: buckets, bands } = analytics::bandRows(signals)
+    const { topFeature, accuracy } = analytics::trainRiskModel(signals, workspace)
+
+    const { text, rollup } = analytics::digest(buckets, bands)
+
+    const rollups = db::open({ name: "revenue_rollup", userScoped: false })
+    db::batchUpsert({ database: rollups, idRow: "period_start", value: rollup })
+
+    board::postRollup(graph, text, topFeature, bands)
+    info({ message: json::stringify({ value: accuracy, pretty: false }), toast: false })
+}
+
+eventsGeneric revenueWebhook(payload: Struct) {
+    const dealId = struct::get({ struct: payload, field: "deal_id" })
+    const account = struct::get({ struct: payload, field: "account" })
+    const notes = struct::get({ struct: payload, field: "notes" })
+    const daysSinceTouch = struct::get({ struct: payload, field: "days_since_touch" })
+
+    const signals = db::open({ name: "revenue_signals", userScoped: false })
+    const embeddingModel = ai::embedding::loadModel({ bit: ai::loadBit({ bitId: embeddingBitId }) })
+
+    const raw = ai::embedding::embedQuery({ queryString: notes, model: embeddingModel })
+    const normalized = math::vector::normalize({ vector: raw })
+
+    const neighbours = db::vectorSearch({
+        database: signals,
+        vector: normalized,
+        filter: "risk_band != 'green'",
+        limit: 8
+    })
+
+    const { count: echoes, strongest } = scoring::echoes(normalized, neighbours)
+
+    const extracted = ai::extract({
+        model: ai::findModel({ preferences: ai::preferences::make({ multimodal: false }) }),
+        schema: "{\"type\":\"object\",\"properties\":{\"next_step\":{\"type\":\"string\"},\"competitors\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}",
+        text: notes,
+        hint: "Only pull the committed next step and any named competitor."
+    })
+
+    const band = riskBand(0.61, daysSinceTouch, echoes)
+    const score = scoring::blend(strongest, 0.61, daysSinceTouch)
+    const row = signalRow(dealId, account, ownerEmail, band, "webhook", 0.61, daysSinceTouch, normalized)
+
+    db::upsert({ database: signals, idRow: "deal_id", value: row })
+
+    const summary = struct::make()
+        .set("deal_id", dealId)
+        .set("risk_band", band)
+        .set("risk_score", score)
+        .set("echoes", echoes)
+        .set("strongest_similarity", strongest)
+        .set("extraction", extracted.response)
+
+    info({ message: json::stringify({ value: summary, pretty: true }), toast: false })
+    return summary
+}
+
+eventsWidgetAction dealReviewAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const dealId = events::extractActionContext({ actionContext: actionContext, fieldName: "deal_id" })
+    const chosenBand = events::extractInputValue({ inputValues: inputValues, componentId: "band_select" })
+    board::renderBanner(widgetInstanceId, dealId, chosenBand, eventName)
+}
+
+detached {
+    const stale = db::open({ name: "revenue_signals", userScoped: false })
+    db::delete({ database: stale, filter: "days_since_touch > 365" })
+}

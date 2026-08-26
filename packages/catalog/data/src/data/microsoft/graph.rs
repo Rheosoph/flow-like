@@ -326,6 +326,7 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             "Call any Microsoft Graph endpoint with optional collection pagination",
             "Data/Microsoft",
         );
+        node.set_flowscript_name("microsoft", "graphRequest");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 

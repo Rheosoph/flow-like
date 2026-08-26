@@ -55,6 +55,7 @@ impl NodeLogic for PptxReplaceTableDataNode {
             "Populate a table on a slide that contains a placeholder in its first cell with structured data (JSON array of arrays). Inherits the table's existing styling.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "replaceTableData");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

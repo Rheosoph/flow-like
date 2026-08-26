@@ -26,6 +26,8 @@ impl NodeLogic for SetHistoryTemperatureNode {
             "Stores the sampling temperature used for later LLM invocations",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setTemperature");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

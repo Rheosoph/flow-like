@@ -39,7 +39,8 @@ export class WebWidgetState implements IWidgetState {
 		widgetId: string,
 		version?: Version,
 	): Promise<IWidget> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		// The handler parses MAJOR_MINOR_PATCH; dots fail to parse as u32.
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IWidget>(
 			`apps/${appId}/widgets/${widgetId}${params}`,
 			this.backend.auth,

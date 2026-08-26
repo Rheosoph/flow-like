@@ -57,6 +57,7 @@ import {
 	SidebarProvider,
 	SidebarRail,
 	useBackend,
+	useBackendReady,
 	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
@@ -64,6 +65,7 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
@@ -211,10 +213,11 @@ export function AppSidebar({
 		typeof window !== "undefined"
 			? localStorage.getItem("sidebar_state") === "true"
 			: true;
+	const chromeless = ownsWindowChrome(usePathname());
 
 	return (
-		<SidebarProvider defaultOpen={defaultOpen}>
-			<InnerSidebar />
+		<SidebarProvider defaultOpen={defaultOpen} enableShortcut={!chromeless}>
+			<GlobalChrome chromeless={chromeless} />
 			<main className="w-full h-vvh flex flex-col overflow-hidden pt-safe">
 				<MobileHeaderProvider>
 					<MobileHeader showSidebarTrigger={false} />
@@ -222,6 +225,7 @@ export function AppSidebar({
 						<FlowBackground
 							intensity="subtle"
 							interactive
+							active={!chromeless}
 							className="flex flex-col flex-1 min-h-0 h-full"
 						>
 							{children}
@@ -232,6 +236,28 @@ export function AppSidebar({
 			</main>
 		</SidebarProvider>
 	);
+}
+
+/**
+ * The global sidebar, absent on routes that draw their own navigation.
+ *
+ * Unmounted rather than collapsed: `setOpen` writes `sidebar_state` to
+ * localStorage unconditionally, so collapsing here would rewrite the user's
+ * preference for every other route. Mobile keeps it — there it is a Radix Sheet
+ * costing no layout space, and it is the only menu a phone has.
+ *
+ * Must stay a child of `SidebarProvider`; `useSidebar` throws outside it.
+ */
+function GlobalChrome({ chromeless }: Readonly<{ chromeless: boolean }>) {
+	const { isMobile, openMobile, setOpenMobile } = useSidebar();
+
+	useEffect(() => {
+		// A Sheet torn down mid-open strands `pointer-events: none` on the body.
+		if (chromeless && !isMobile && openMobile) setOpenMobile(false);
+	}, [chromeless, isMobile, openMobile, setOpenMobile]);
+
+	if (chromeless && !isMobile) return null;
+	return <InnerSidebar />;
 }
 
 function IOSQuickMenuTrigger() {
@@ -1015,6 +1041,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const backendReady = useBackendReady();
 	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const profile = useInvoke(
@@ -1050,7 +1077,10 @@ export function NavUser({
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
-		true, // getNotifications returns local counts offline; keep it enabled signed-out
+		// getNotifications returns local counts offline, so it stays enabled while
+		// signed out - but not against the prerender placeholder backend, whose
+		// states throw for every call.
+		backendReady,
 		[auth?.user?.profile?.sub, auth?.isAuthenticated],
 		0, // staleTime: 0 to always refetch on mount
 	);

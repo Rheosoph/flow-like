@@ -86,6 +86,7 @@ impl NodeLogic for ListNotionBlockChildrenNode {
             "Lists child blocks for a Notion block or page",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "listBlockChildren");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -268,6 +269,7 @@ impl NodeLogic for AppendNotionBlockChildrenNode {
             "Appends child blocks to a Notion block or page",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "appendBlockChildren");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -415,6 +417,7 @@ impl NodeLogic for UpdateNotionBlockNode {
             "Updates a Notion block with a raw Notion block update object",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "updateBlock");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -556,6 +559,7 @@ impl NodeLogic for DeleteNotionBlockNode {
             "Moves a Notion block to trash",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "deleteBlock");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

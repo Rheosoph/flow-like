@@ -1,11 +1,16 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeGraphConnection;
-use flow_like_types::{Cacheable, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Cacheable;
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 pub mod analytics;
@@ -138,6 +143,7 @@ impl NodeLogic for OpenGraphOverlayNode {
             "Opens an existing graph overlay and returns a connection for querying",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "openOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -319,6 +325,7 @@ impl NodeLogic for CreateGraphOverlayNode {
             "Creates a new graph overlay definition over existing database tables",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "createOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

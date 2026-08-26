@@ -23,6 +23,7 @@ impl NodeLogic for CheckUserHasRoleNode {
             "Check User Has Role",
             "Checks whether a project user has the specified role ID or exact role name.",
         );
+        node.set_flowscript_name("user", "checkRole");
         add_app_pin(&mut node);
         add_user_id_pin(&mut node);
         node.add_input_pin(

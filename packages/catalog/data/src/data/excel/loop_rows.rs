@@ -35,6 +35,7 @@ impl NodeLogic for RowLoopNode {
             "Loops over all rows of a table",
             "Control",
         );
+        node.set_flowscript_name("control", "forEachRow");
         node.add_icon("/flow/icons/for-each.svg");
 
         // Exec in

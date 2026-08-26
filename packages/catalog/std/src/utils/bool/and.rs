@@ -19,6 +19,8 @@ impl BoolAnd {
 impl NodeLogic for BoolAnd {
     fn get_node(&self) -> Node {
         let mut node = Node::new("bool_and", "And", "Boolean And operation", "Utils/Bool");
+        node.set_flowscript_name("bool", "and");
+        node.set_receiver("boolean");
 
         node.add_icon("/flow/icons/bool.svg");
 

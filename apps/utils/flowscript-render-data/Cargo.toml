@@ -1,0 +1,15 @@
+[package]
+name = "flowscript-render-data"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clap = { version = "4.5.44", features = ["derive"] }
+flow-like.workspace = true
+flow-like-catalog = { workspace = true, features = ["all-metadata"] }
+flow-like-storage.workspace = true
+flow-like-types.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true

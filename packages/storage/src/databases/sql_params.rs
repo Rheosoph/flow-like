@@ -17,13 +17,16 @@
 //! be parameterized, so callers that interpolate identifiers still have to quote or
 //! allowlist them — parameters alone do not make a fully caller-authored query safe.
 
-use datafusion::common::{ParamValues, ScalarValue};
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::tokenizer::{Token, Tokenizer};
-use flow_like_types::{Result, Value, anyhow};
-use std::collections::HashMap;
-
+use anyhow::{Result, anyhow};
+#[cfg(feature = "database-runtime")]
 use datafusion::arrow::datatypes::DataType;
+#[cfg(feature = "database-runtime")]
+use datafusion::common::{ParamValues, ScalarValue};
+use serde_json::Value;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::tokenizer::{Token, Tokenizer};
+#[cfg(feature = "database-runtime")]
+use std::collections::HashMap;
 
 /// Upper bound on distinct placeholders in one statement. A parameterized query is a
 /// hand-written filter, not a generated one; the cap exists so a pathological literal
@@ -156,6 +159,7 @@ pub fn resolve_declared(
 }
 
 /// DataFusion named parameter values for an already-resolved parameter list.
+#[cfg(feature = "database-runtime")]
 pub fn to_param_values(params: &[(String, Value)]) -> Result<ParamValues> {
     let mut values: HashMap<String, ScalarValue> = HashMap::with_capacity(params.len());
     for (name, value) in params {
@@ -173,6 +177,7 @@ pub fn to_param_values(params: &[(String, Value)]) -> Result<ParamValues> {
 /// Unlike [`resolve_query_params`] this binds whatever is supplied without consulting the
 /// statement, so an unused parameter is not an error and a missing one surfaces later as a
 /// planner error.
+#[cfg(feature = "database-runtime")]
 pub fn bind_params(params: &Value) -> Result<ParamValues> {
     let map = as_param_object(params)?;
 
@@ -187,7 +192,7 @@ pub fn bind_params(params: &Value) -> Result<ParamValues> {
 
 /// A parameter bag is a JSON object; null stands for "no parameters" so an unset pin or
 /// omitted request field does not have to be special-cased by every caller.
-fn as_param_object(params: &Value) -> Result<Option<&flow_like_types::json::Map<String, Value>>> {
+fn as_param_object(params: &Value) -> Result<Option<&serde_json::Map<String, Value>>> {
     match params {
         Value::Object(map) => Ok(Some(map)),
         Value::Null => Ok(None),
@@ -195,6 +200,7 @@ fn as_param_object(params: &Value) -> Result<Option<&flow_like_types::json::Map<
     }
 }
 
+#[cfg(feature = "database-runtime")]
 fn json_to_scalar(value: &Value) -> Result<ScalarValue> {
     Ok(match value {
         Value::Null => ScalarValue::Null,
@@ -210,6 +216,7 @@ fn json_to_scalar(value: &Value) -> Result<ScalarValue> {
     })
 }
 
+#[cfg(feature = "database-runtime")]
 fn json_number_to_scalar(value: &Value) -> Result<ScalarValue> {
     let Value::Number(number) = value else {
         return Err(anyhow!("expected a number"));
@@ -232,6 +239,7 @@ fn json_number_to_scalar(value: &Value) -> Result<ScalarValue> {
 /// Elements are unified to one Arrow type up front. This is not cosmetic —
 /// `ScalarValue::new_list_nullable` panics on a heterogeneous element iterator, so a
 /// mixed array has to be rejected here rather than reaching Arrow.
+#[cfg(feature = "database-runtime")]
 fn json_array_to_scalar(items: &[Value]) -> Result<ScalarValue> {
     let element_type = unified_element_type(items)?;
     let mut elements = Vec::with_capacity(items.len());
@@ -247,6 +255,7 @@ fn json_array_to_scalar(items: &[Value]) -> Result<ScalarValue> {
 /// The single Arrow type every element of an array parameter is bound as. Integers stay
 /// exact where they can (`Int64`), widen to `Float64` only when the array actually mixes
 /// in a fractional or out-of-range value.
+#[cfg(feature = "database-runtime")]
 fn unified_element_type(items: &[Value]) -> Result<DataType> {
     let mut saw_bool = false;
     let mut saw_string = false;
@@ -295,6 +304,7 @@ fn unified_element_type(items: &[Value]) -> Result<DataType> {
     })
 }
 
+#[cfg(feature = "database-runtime")]
 fn coerce_element(item: &Value, element_type: &DataType) -> Result<ScalarValue> {
     Ok(match (item, element_type) {
         (Value::Null, DataType::Boolean) => ScalarValue::Boolean(None),
@@ -320,7 +330,7 @@ fn coerce_element(item: &Value, element_type: &DataType) -> Result<ScalarValue> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::json::json;
+    use serde_json::json;
 
     fn placeholders(sql: &str) -> Vec<String> {
         declared_placeholders(sql).expect("tokenizes")
@@ -417,6 +427,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn scalars_map_to_typed_values() {
         assert_eq!(json_to_scalar(&json!(null)).unwrap(), ScalarValue::Null);
@@ -438,6 +449,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn homogeneous_arrays_become_lists() {
         let scalar = json_to_scalar(&json!(["a", "b"])).expect("list");
@@ -458,6 +470,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn arrays_with_nulls_and_empty_arrays_bind() {
         assert!(matches!(
@@ -474,6 +487,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn integers_and_floats_in_one_array_widen_to_float() {
         let scalar = json_to_scalar(&json!([1, 2.5])).expect("list");
@@ -485,6 +499,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn mixed_type_arrays_are_rejected_rather_than_panicking_arrow() {
         assert!(json_to_scalar(&json!([1, "a"])).is_err());
@@ -493,11 +508,13 @@ mod tests {
         assert!(json_to_scalar(&json!([{"a": 1}])).is_err());
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn object_parameters_are_rejected() {
         assert!(json_to_scalar(&json!({"a": 1})).is_err());
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn bind_params_accepts_objects_and_null() {
         assert!(matches!(
@@ -511,6 +528,7 @@ mod tests {
         assert!(bind_params(&json!([1, 2])).is_err());
     }
 
+    #[cfg(feature = "database-runtime")]
     #[test]
     fn to_param_values_reports_the_offending_parameter() {
         let error = to_param_values(&[("ids".to_string(), json!({"a": 1}))])
@@ -522,6 +540,7 @@ mod tests {
     /// Binds `sql` through the same path the nodes use and returns the single-cell result
     /// as a display string, so these tests assert against DataFusion itself rather than
     /// against our own idea of what it accepts.
+    #[cfg(feature = "database-runtime")]
     async fn run_scalar(sql: &str, params: &Value) -> Result<String> {
         use datafusion::prelude::SessionContext;
 
@@ -541,6 +560,7 @@ mod tests {
         )?)
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn named_parameters_bind_on_a_plain_sql_call() {
         let total = run_scalar(
@@ -552,6 +572,7 @@ mod tests {
         assert_eq!(total, "42");
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn numbered_parameters_bind_too() {
         let value = run_scalar("SELECT $1 AS v", &json!({"1": "hello"}))
@@ -560,6 +581,7 @@ mod tests {
         assert_eq!(value, "hello");
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn a_repeated_named_parameter_binds_once_at_every_occurrence() {
         // `ParamValues::Map` does not verify arity, which is what lets one value serve
@@ -570,6 +592,7 @@ mod tests {
         assert_eq!(value, "42");
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn a_string_parameter_cannot_extend_the_statement() {
         // The classic injection payload stays a single string comparison: it is a literal
@@ -584,6 +607,7 @@ mod tests {
         assert_eq!(value, "false");
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn a_list_parameter_drives_a_set_filter() {
         // This is the `IN (…)` replacement: without list binding a set filter has to be
@@ -605,6 +629,7 @@ mod tests {
         assert_eq!(missed, "false");
     }
 
+    #[cfg(feature = "database-runtime")]
     #[tokio::test]
     async fn a_null_parameter_binds_as_null() {
         let value = run_scalar("SELECT $x IS NULL AS is_null", &json!({"x": null}))

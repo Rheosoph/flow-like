@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package flow_like_types;
+
+import "google/protobuf/timestamp.proto";
+
+enum CommentType {
+  TEXT = 0;
+  IMAGE = 1;
+  VIDEO = 2;
+}
+
+message Comment {
+  string id = 1;
+  string author = 2;
+  string content = 3;
+  CommentType comment_type = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  float coord_x = 6;
+  float coord_y = 7;
+  float coord_z = 8;
+  optional string layer = 9;
+  optional float width = 10;
+  optional float height = 11;
+  optional string color = 12;
+  optional int32 z_index = 13;
+  optional uint64 hash = 14;
+  optional bool is_locked = 15;
+  optional string node_id = 16;
+}

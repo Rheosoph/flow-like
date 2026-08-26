@@ -12,6 +12,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "execute")]
 use flow_like_storage::files::store::smb_store::{
     SmbAuth, SmbConfig, SmbKerberosCcacheConfig, SmbObjectStore,
 };
@@ -20,6 +21,7 @@ use flow_like_storage::object_store::{
 };
 use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
+#[cfg(feature = "execute")]
 use std::time::Duration;
 
 // =============================================================================
@@ -45,6 +47,7 @@ impl NodeLogic for S3StoreNode {
             "Turn an S3 bucket (or any S3-compatible endpoint) into a FlowPath. Takes an AwsProvider for authentication. Use a CloudflareProvider + R2 node for Cloudflare R2 — it's specialised.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "s3");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -100,6 +103,7 @@ impl NodeLogic for S3StoreNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -136,6 +140,13 @@ impl NodeLogic for S3StoreNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // =============================================================================
@@ -161,6 +172,7 @@ impl NodeLogic for S3ExpressStoreNode {
             "Turn an S3 Express One Zone bucket into a FlowPath. Ultra-low latency single-AZ storage. Takes an AwsProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "s3Express");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -271,6 +283,7 @@ impl NodeLogic for AzureBlobStoreNode {
             "Turn an Azure Blob Storage container into a FlowPath. Takes an AzureProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "azureBlob");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -379,6 +392,7 @@ impl NodeLogic for GcpStorageStoreNode {
             "Turn a Google Cloud Storage bucket into a FlowPath. Takes a GcpProvider.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "gcs");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -483,6 +497,7 @@ impl NodeLogic for CloudflareR2StoreNode {
             "Turn a Cloudflare R2 bucket into a FlowPath. Takes a CloudflareProvider in 'r2' auth mode (account_id + R2 access key/secret).",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "r2");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -588,6 +603,7 @@ impl NodeLogic for SmbStoreNode {
             "Turn an SMB2/3 share into a FlowPath.",
             "Data/Files/External",
         );
+        node.set_flowscript_name("files", "smb");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(
@@ -658,6 +674,7 @@ impl NodeLogic for SmbStoreNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -758,6 +775,13 @@ impl NodeLogic for SmbStoreNode {
         context.set_pin_value("path", json!(path)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {
@@ -930,6 +954,7 @@ fn sync_smb_auth_mode_pins(node: &mut Node, auth_mode: &str) {
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
     let address = address.trim();
     if address.is_empty() {
@@ -956,6 +981,7 @@ fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 fn smb_address_port(address: &str) -> flow_like_types::Result<Option<u16>> {
     if address.starts_with('[') {
         let (_, suffix) = split_bracketed_smb_address(address)?;
@@ -988,6 +1014,7 @@ fn smb_address_port(address: &str) -> flow_like_types::Result<Option<u16>> {
     parse_smb_port(port).map(Some)
 }
 
+#[cfg(any(feature = "execute", test))]
 fn split_bracketed_smb_address(address: &str) -> flow_like_types::Result<(&str, &str)> {
     let Some((host, suffix)) = address.rsplit_once(']') else {
         return Err(flow_like_types::anyhow!(
@@ -1001,6 +1028,7 @@ fn split_bracketed_smb_address(address: &str) -> flow_like_types::Result<(&str, 
     Ok((host, suffix.trim()))
 }
 
+#[cfg(any(feature = "execute", test))]
 fn parse_smb_port(port: &str) -> flow_like_types::Result<u16> {
     let port = port.trim();
     let port = port

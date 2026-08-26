@@ -1,0 +1,447 @@
+use log::{ error, info, warn }
+use microsoft::sharepoint as library
+
+interface ContractTerm {
+    contract_id: string;
+    counterparty: string;
+    obligation: string;
+    "due-date": string;
+    severity: "low" | "medium" | "high" | "critical";
+    owner_email?: string | null = null;
+    notice_days?: int = 30;
+    clause_refs: string[];
+    field_labels?: Map<string, string> = {};
+    risk_weights?: Map<string, float> = {};
+}
+interface PolicyRule {
+    rule_id: string;
+    revision: string;
+    applies_to: string;
+    max_notice_days: int;
+    weight: float;
+    waivable: bool;
+}
+interface ExceptionRecord {
+    record_id: string;
+    contract_id: string;
+    rule_id: string;
+    disposition: "waive" | "escalate" | "block";
+    rationale: string;
+    risk_score: float;
+    detected_at: string;
+    prev_hash: string;
+    chain_hash: string;
+    reviewer_email?: string | null = null;
+}
+
+@description("Graph access token for the obligation desk service principal")
+@secret
+const graphToken: string
+@description("SharePoint tenant that hosts the executed contract library")
+@readonly
+const librarySiteHost = "rheosoph.sharepoint.com"
+@description("Rulebook revision every sweep evaluates against")
+@category("Exception Desk/Policy")
+let rulebookRevision = "rulebook-2026.08"
+@description("Business days of notice below which an obligation counts as breached")
+@category("Exception Desk/Policy")
+let breachNoticeDays = 14
+@category("Exception Desk/Routing")
+let reviewerTeamId = "9f2b1c44-8a70-4f1d-9d2e-contract-ops"
+@category("Exception Desk/Routing")
+let escalationChannelId = "19:exception-desk@thread.tacv2"
+
+function graphProvider(): (provider: Struct) {
+    const provider = microsoft::providerToken({ token: graphToken, baseUrl: "https://graph.microsoft.com/v1.0" })
+    return provider
+}
+
+@cache({ namespace: "obligation-rulebook-v3", ttlSeconds: 21600, scope: "app" })
+function loadRulebook(revision: string): (rules: Struct[], ruleCount: int) {
+    const rulebook = db::open({ name: "policy_rulebook", userScoped: false })
+    const empty = struct::make()
+    const bindings = struct::set({ structIn: empty, field: "revision", value: revision })
+    const rules = db::filter({ database: rulebook, filter: "revision = $revision", params: bindings, limit: 500 })
+    const ruleCount = array::length({ array: rules })
+    info({ message: `rulebook ${revision} carries ${ruleCount} obligations clauses`, toast: false })
+    return rules, ruleCount
+}
+
+@cache({ namespace: "reviewer-directory-v2", ttlSeconds: 900, scope: "user" })
+function reviewerFor(counterparty: string, severity: string): (email: string) {
+    const directory = db::open({ name: "contract_reviewers", userScoped: true })
+    const empty = struct::make()
+    const bindings = struct::set({ structIn: empty, field: "counterparty", value: counterparty })
+    const matches = db::filter({ database: directory, filter: "counterparty = $counterparty", params: bindings, limit: 1 })
+    const candidate = array::get({ arrayIn: matches, index: 0 })
+    const mailbox = struct::get({ struct: candidate, field: "email" })
+    const deskBox = severity == "critical" ? "contract-escalations@rheosoph.com" : "contract-desk@rheosoph.com"
+    const email = types::fallback({ value: mailbox, default: deskBox })
+    return email
+}
+
+function termSchema(): (schema: string) {
+    const example = json::stringify({ value: { contract_id: "MSA-2026-0041", counterparty: "Northwind Traders", obligation: "Deliver the SOC 2 Type II report", "due-date": "2026-09-30", severity: "high", clause_refs: ["7.2", "11.4"] }, pretty: false })
+    const generated = json::makeSchema({ exampleJson: example })
+    const schema = json::stringify({ value: generated, pretty: false })
+    return schema
+}
+
+function noticeWindow(dueDate: string): (daysLeft: int, breached: bool) {
+    const due = datetime::parse({ input: dueDate, format: "%Y-%m-%d" })
+    const today = datetime::now()
+    const daysLeft = datetime::businessDaysBetween({ start: today, end: due, includeEnd: false })
+    const breached = daysLeft < breachNoticeDays
+    return daysLeft, breached
+}
+
+function stampNow(): (stamp: string) {
+    const now = datetime::now()
+    const stamp = datetime::format({ date: now, format: "%Y-%m-%dT%H:%M:%SZ" })
+    return stamp
+}
+
+function sealRecord(record: Struct, previousHash: string): (chainHash: string, sealed: Struct) {
+    const canonical = json::stringify({ value: record, pretty: false })
+    const chainHash = hash::sha256({ input: `${previousHash}|${canonical}` })
+    const stamped = struct::set({ structIn: record, field: "prev_hash", value: previousHash })
+    const sealed = struct::set({ structIn: stamped, field: "chain_hash", value: chainHash })
+    return chainHash, sealed
+}
+
+module intake {
+    function executedDrive(desk: Struct): (driveId: string) {
+        const { resolvedSiteId } = library::getSite({ provider: desk, hostname: librarySiteHost, sitePath: "/sites/legal-operations" })
+        const drives = library::listDrives({ provider: desk, siteId: resolvedSiteId })
+        const primary = array::get({ arrayIn: drives, index: 0 })
+        const driveId = struct::get({ struct: primary, field: "id" })
+        return driveId
+    }
+
+    function registerRow(item: Struct): (row: Struct) {
+        const documentName = struct::get({ struct: item, field: "name" })
+        const itemId = struct::get({ struct: item, field: "id" })
+        const modified = struct::get({ struct: item, field: "lastModifiedDateTime" })
+        const row = struct::make()
+        row.item_id = itemId
+        row.document = documentName
+        row.last_modified = modified
+        return row
+    }
+
+    function libraryRegister(desk: Struct, driveId: string): (register: Struct[], filed: int) {
+        const documents = library::listDriveItems({ provider: desk, driveId: driveId, folderPath: "/Executed Contracts" })
+        let register = array::make()
+        for (const item of documents) {
+            const row = intake::registerRow(item)
+            register = array::push({ arrayIn: register, value: row })
+        }
+        const filed = array::length({ array: register })
+        info({ message: `the executed library holds ${filed} contracts`, toast: false })
+        return register, filed
+    }
+
+    function attachmentText(attachment: Struct): (text: string, kind: string) {
+        const { filename, contentType, data } = microsoft::outlook::attachmentToFields({ attachment: attachment })
+        const staging = files::cacheDir({ nodeScope: true, userScope: false })
+        const target = staging.child(filename)
+        files::put({ path: target, bytes: data })
+        let text = ""
+        let kind = "unsupported"
+        if (filename.endsWith(".pdf", true)) {
+            text = pdf::extractText({ template: target })
+            kind = "pdf"
+        } else if (filename.endsWith(".docx", true)) {
+            const { author } = docx::getMetadata({ template: target })
+            text = docx::extractText({ template: target })
+            kind = "docx"
+            info({ message: `${filename} was authored by ${author}`, toast: false })
+        } else {
+            warn({ message: `skipped ${filename} (${contentType})`, toast: false })
+        }
+        return text, kind
+    }
+
+    function harvestTerms(desk: Struct): (terms: Struct[], harvested: int) {
+        const model = ai::findModel({ preferences: { reasoning_weight: 0.8, cost_weight: 0.3, model_hint: "long-context" } })
+        const schema = termSchema()
+        const notices = microsoft::outlook::listMessages({ provider: desk, filter: "hasAttachments eq true and isRead eq false", top: 25 })
+        let terms = array::make()
+        for (const notice of notices) {
+            const attachments = microsoft::outlook::getMessageAttachments({ provider: desk, message: notice })
+            for (const attachment of attachments) {
+                const { text, kind } = intake::attachmentText(attachment)
+                const blank = types::isEmpty({ value: text, trim: true })
+                if (!blank) {
+                    const extracted = ai::extract({ model: model, schema: schema, text: text, hint: "only extract obligations that carry an explicit due date" }).response
+                    const term = struct::set({ structIn: extracted, field: "source_kind", value: kind })
+                    terms = array::push({ arrayIn: terms, value: term })
+                }
+            }
+        }
+        const harvested = array::length({ array: terms })
+        return terms, harvested
+    }
+}
+
+module policy {
+    function severityWeight(severity: string): (weight: float) {
+        let weight = 0.25
+        if (severity == "critical") {
+            weight = 1.0
+        } else if (severity == "high") {
+            weight = 0.7
+        } else if (severity == "medium") {
+            weight = 0.45
+        }
+        return weight
+    }
+
+    function riskScore(severity: string, daysLeft: int, ruleWeight: float): (score: float) {
+        const base = policy::severityWeight(severity)
+        const runway = int::toFloat({ integer: daysLeft })
+        const urgency = float::mapRange({ value: runway, inMin: 0.0, inMax: 60.0, outMin: 1.0, outMax: 0.1, clamp: true })
+        const blended = float::multiply({ float1: base, float2: urgency })
+        const weighted = float::multiply({ float1: blended, float2: ruleWeight })
+        const score = float::round({ float: weighted, decimals: 3 })
+        return score
+    }
+
+    function decide(breached: bool, waivable: bool, score: float): (disposition: string, rationale: string) {
+        let disposition = "waive"
+        let rationale = "inside the contractual notice window"
+        if (breached) {
+            if (score >= 0.75) {
+                disposition = "block"
+                rationale = "notice breached with critical exposure"
+            } else if (waivable) {
+                disposition = "waive"
+                rationale = "notice breached but the clause is waivable"
+            } else {
+                disposition = "escalate"
+                rationale = "notice breached and the clause is not waivable"
+            }
+        } else if (score >= 0.9) {
+            disposition = "escalate"
+            rationale = "approaching breach with critical exposure"
+        }
+        return disposition, rationale
+    }
+
+    function assessTerm(term: Struct, rule: Struct, position: int): (draft: Struct, disposition: string, rationale: string, score: float, contractId: string, counterparty: string, severityKey: string, daysLeft: int, breached: bool) {
+        const contractId = struct::get({ struct: term, field: "contract_id" })
+        const counterparty = struct::get({ struct: term, field: "counterparty" })
+        const severity = struct::get({ struct: term, field: "severity" })
+        const severityKey = string::toLower({ string: severity })
+        const dueDate = struct::get({ struct: term, field: "due-date" })
+        const { daysLeft, breached } = noticeWindow(dueDate)
+        const ruleId = struct::get({ struct: rule, field: "rule_id" })
+        const ruleWeight = struct::get({ struct: rule, field: "weight" })
+        const waivable = struct::get({ struct: rule, field: "waivable" })
+        const score = policy::riskScore(severityKey, daysLeft, ruleWeight)
+        const { disposition, rationale } = policy::decide(breached, waivable, score)
+        const draft = struct::make()
+        draft.record_id = `${rulebookRevision}-${position}`
+        draft.contract_id = contractId
+        draft.counterparty = counterparty
+        draft.rule_id = ruleId
+        draft.disposition = disposition
+        draft.rationale = rationale
+        draft.risk_score = score
+        draft.detected_at = stampNow()
+        return draft, disposition, rationale, score, contractId, counterparty, severityKey, daysLeft, breached
+    }
+}
+
+module notify {
+    function memoPath(contractId: string): (path: Struct) {
+        const staging = files::cacheDir({ nodeScope: false, userScope: false })
+        const path = staging.child(`exception-${contractId}.docx`)
+        return path
+    }
+
+    function buildMemo(record: Struct, counterparty: string, headline: string): (memo: Struct) {
+        const contractId = struct::get({ struct: record, field: "contract_id" })
+        const target = notify::memoPath(contractId)
+        const blank = docx::create({ fontFamily: "Aptos", fontSize: 11.0, themeColor: "#1F3864", output: target })
+        const titled = docx::addParagraph({ template: blank, text: `Obligation exception - ${counterparty}`, style: "Heading1", bold: true, alignment: "left", output: target })
+        const body = docx::addParagraph({ template: titled, text: headline, style: "Normal", fontSize: 11.0, output: target })
+        const rows = json::stringify({ value: record, pretty: false })
+        const tabled = docx::addTable({ template: body, data: rows, headerRow: true, alternateRows: true, borderColor: "#D0D5DD", fontSize: 9.0, output: target })
+        const memo = docx::addHeaderFooter({ template: tabled, headerText: "Contract Obligation Exception Desk", footerText: rulebookRevision, includePageNumber: true, output: target })
+        return memo
+    }
+
+    function digestPdf(markdown: string): (digestFile: Struct, pages: int) {
+        const staging = files::cacheDir({ nodeScope: false, userScope: true })
+        const target = staging.child("exception-digest.pdf")
+        const { result, pages } = pdf::fromMarkdown({ markdown: markdown, output: target, pageSize: "A4", embedImages: false, pageNumbers: true, title: "Obligation exception digest", subtitle: rulebookRevision, cover: true, author: "Exception Desk" })
+        return result, pages
+    }
+
+    function escalate(desk: Struct, sealed: Struct, contractId: string, counterparty: string, severityKey: string, rationale: string): (owned: Struct) {
+        const reviewer = reviewerFor(counterparty, severityKey)
+        const owned = struct::set({ structIn: sealed, field: "reviewer_email", value: reviewer })
+        microsoft::outlook::sendMessage({ provider: desk, to: reviewer, subject: `Obligation exception ${contractId}`, body: rationale, isHtml: false, attachments: [], saveToSentItems: true })
+        return owned
+    }
+
+    function vault(ledger: Struct, vaultKey: bytes[], sealed: Struct, contractId: string, rationale: string): (stored: Struct) {
+        const stored = crypto::aesEncryptValue({ key: vaultKey, value: sealed, associatedData: { "record-scope": "obligation-block" } })
+        db::upsert({ database: ledger, idRow: "record_id", value: stored })
+        error({ message: `${contractId} blocked: ${rationale}`, toast: true })
+        return stored
+    }
+
+    function closeSweep(desk: Struct, escalations: Struct[], openCount: int, driveId: string): (headline: string) {
+        const digest = json::stringify({ value: escalations, pretty: true })
+        const lead = array::get({ arrayIn: escalations, index: 0 })
+        const leadContract = struct::get({ struct: lead, field: "contract_id" })
+        const leadParty = struct::get({ struct: lead, field: "counterparty" })
+        const headline = `${openCount} obligations failed ${rulebookRevision}, worst offender ${leadContract}`
+        const memo = notify::buildMemo(lead, leadParty, headline)
+        library::uploadFile({ provider: desk, driveId: driveId, filePath: "/Exception Memos", file: memo, conflictBehavior: "replace" })
+        const { digestFile, pages } = notify::digestPdf(digest)
+        const digestName = path::filename({ path: digestFile, removeExtension: false })
+        microsoft::teams::sendMessage({ provider: desk, teamId: reviewerTeamId, channelId: escalationChannelId, message: `${headline} - ${pages} page digest filed as ${digestName}`, contentType: "text" })
+        return headline
+    }
+}
+
+module review {
+    function verifyCallback(payload: Struct): (accepted: bool, recordId: string, disposition: string) {
+        const recordId = struct::get({ struct: payload, field: "record_id" })
+        const disposition = struct::get({ struct: payload, field: "disposition" })
+        const claimed = struct::get({ struct: payload, field: "signature" })
+        const signature = string::trim({ string: claimed })
+        const body = json::stringify({ value: payload, pretty: false })
+        const expected = hash::blake3({ input: `${rulebookRevision}:${body}` })
+        const accepted = signature == expected
+        return accepted, recordId, disposition
+    }
+
+    function closeException(recordId: string, disposition: string): (remaining: int) {
+        const ledger = db::open({ name: "obligation_exceptions", userScoped: false })
+        const empty = struct::make()
+        const bindings = struct::set({ structIn: empty, field: "record_id", value: recordId })
+        const existing = db::filter({ database: ledger, filter: "record_id = $record_id", params: bindings, limit: 1 })
+        const record = array::get({ arrayIn: existing, index: 0 })
+        const closed = struct::set({ structIn: record, field: "disposition", value: disposition })
+        const updated = struct::set({ structIn: closed, field: "closed_at", value: stampNow() })
+        db::upsert({ database: ledger, idRow: "record_id", value: updated })
+        const remaining = db::count({ database: ledger, filter: "disposition = 'escalate'" })
+        return remaining
+    }
+
+    function waiverEvidence(uploads: Struct): (evidence: string) {
+        const { flowPaths, exists } = ui::getFileInputFiles({ elementRef: uploads })
+        let evidence = "no signed waiver attached"
+        if (exists) {
+            const waiver = array::get({ arrayIn: flowPaths, index: 0 })
+            const pageCount = pdf::pageCount({ pdf: waiver })
+            const waiverText = pdf::extractText({ template: waiver })
+            const characters = string::length({ string: waiverText })
+            evidence = `${pageCount} page waiver, ${characters} characters`
+        }
+        return evidence
+    }
+}
+
+detached {
+    const listener = rest::serverConfig({ host: "0.0.0.0", port: 8787, timeoutSeconds: 30, maxConnections: 64, maxBodyBytes: 1048576, tls: { secure: false, accept_invalid_certificates: false } })
+        .registerFunction("/obligations/callback", "POST")
+        .registerOpenApi("/obligations/openapi.json", "/obligations/docs")
+    rest::server({ config: listener })
+}
+
+eventsSimple sweepContractLibrary() {
+    const desk = graphProvider()
+    const driveId = intake::executedDrive(desk)
+    const { filed } = intake::libraryRegister(desk, driveId)
+    const { rules, ruleCount } = loadRulebook(rulebookRevision)
+    const { terms, harvested } = intake::harvestTerms(desk)
+    info({ message: `${harvested} obligations extracted from ${filed} contracts against ${ruleCount} rules`, toast: false })
+
+    const ledger = db::open({ name: "obligation_exceptions", userScoped: false })
+    const vaultKey = crypto::generateKey()
+    let chainHash = "genesis"
+    let escalations = array::make()
+    let blocked = 0
+
+    for (const [position, term] of terms) {
+        const rule = array::get({ arrayIn: rules, index: 0 })
+        const { draft, disposition, rationale, score, contractId, counterparty, severityKey, daysLeft } = policy::assessTerm(term, rule, position)
+        const { chainHash: sealedHash, sealed } = sealRecord(draft, chainHash)
+        chainHash = sealedHash
+
+        const routed = control::switch({ value: disposition, cases: "waive,escalate,block" })
+        routed {
+            caseEscalate: {
+                const owned = notify::escalate(desk, sealed, contractId, counterparty, severityKey, rationale)
+                escalations = array::push({ arrayIn: escalations, value: owned })
+                if (score >= 0.95) {
+                    microsoft::teams::sendMessage({ provider: desk, teamId: reviewerTeamId, channelId: escalationChannelId, message: `Critical obligation exception on ${contractId}: ${rationale}`, contentType: "text" })
+                } else {
+                    info({ message: `${contractId} queued for the next review cycle`, toast: false })
+                }
+            }
+            caseBlock: {
+                blocked = blocked + 1
+                notify::vault(ledger, vaultKey, sealed, contractId, rationale)
+            }
+            caseWaive: {
+                if (daysLeft > 45) {
+                    info({ message: `${contractId} waived, ${daysLeft} business days of runway`, toast: false })
+                } else {
+                    info({ message: `${contractId} waived under review`, toast: false })
+                }
+            }
+            default: {
+                warn({ message: `unrouted disposition ${routed} on ${contractId}`, toast: false })
+            }
+        }
+
+        db::upsert({ database: ledger, idRow: "record_id", value: sealed })
+    }
+
+    const openCount = array::length({ array: escalations })
+    info({ message: `sweep sealed ${harvested} records, ${blocked} blocked, chain head ${chainHash}`, toast: false })
+    if (openCount > 0) {
+        notify::closeSweep(desk, escalations, openCount, driveId)
+    } else {
+        info({ message: `no obligation breached ${rulebookRevision} this sweep`, toast: false })
+    }
+}
+
+eventsGeneric obligationCallback(payload: Struct) {
+    const { accepted, recordId, disposition } = review::verifyCallback(payload)
+    let outcome = "rejected"
+    if (accepted) {
+        const remaining = review::closeException(recordId, disposition)
+        info({ message: `callback closed ${recordId}; ${remaining} exceptions still open`, toast: false })
+        outcome = "accepted"
+    } else {
+        warn({ message: `rejected callback for ${recordId}: signature mismatch`, toast: false })
+    }
+    return outcome
+}
+
+eventsWidgetAction reviewException(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const { userContext, hasUser } = user::getExecuting()
+    const allowed = user::hasPermission({ permission: "contracts.review" })
+    if (allowed) {
+        const recordId = events::extractActionContext({ actionContext: actionContext, fieldName: "record_id" })
+        const decision = events::extractInputValue({ inputValues: inputValues, componentId: "disposition-select" })
+        const noteText = events::extractInputValue({ inputValues: inputValues, componentId: "reviewer-note" })
+        const uploads = ui::getElement({ elementRef: "waiver-upload" })
+        const evidence = review::waiverEvidence(uploads)
+        const reviewerId = struct::get({ struct: userContext, field: "sub" })
+        const note = string::normalizeWhitespace({ string: noteText })
+        const summary = `${decision} by ${reviewerId}: ${note} (${evidence})`
+        ui::setElementText({ elementRef: uploads, text: summary })
+        ui::setGlobalState({ key: `exception-desk:${recordId}`, value: summary })
+        info({ message: `${widgetInstanceId}/${eventName} resolved for user ${hasUser}: ${summary}`, toast: false })
+    } else {
+        warn({ message: "review denied: the caller is missing contracts.review", toast: true })
+    }
+}

@@ -2,6 +2,7 @@
 
 import {
 	useBackend,
+	useBackendReady,
 	useInvoke,
 	useNetworkStatus,
 } from "@flow-like/flow-like-ui";
@@ -34,6 +35,7 @@ const pushTrayUpdate = (update: TrayUpdate) =>
 const TrayProvider: React.FC = () => {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
+	const backendReady = useBackendReady();
 	const isOnline = useNetworkStatus();
 	const router = useRouter();
 
@@ -58,6 +60,7 @@ const TrayProvider: React.FC = () => {
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
+		backendReady,
 	);
 
 	useEffect(() => {

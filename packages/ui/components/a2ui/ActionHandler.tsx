@@ -39,6 +39,11 @@ import {
 } from "./layout/A2UIWidgetInstance";
 import { notifyLivePageRun } from "./live-page-registry";
 import { collectMicroWidgetValueKeys } from "./micro-widget-host";
+import {
+	type A2UINavigationMessageInterceptor,
+	createNavigateToMessage,
+	interceptA2UINavigationMessage,
+} from "./navigation-message";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -271,6 +276,7 @@ interface ActionContextValue {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
 	getElementValues: () => Record<string, unknown>;
 	setElementValue: (elementId: string, value: unknown) => void;
 	resolveTemporaryUploadTarget: (
@@ -300,6 +306,8 @@ interface ActionProviderProps {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	/** Consume page navigation inside an embedded owner instead of changing the host router. */
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
 }
 
 export function ActionProvider({
@@ -315,6 +323,7 @@ export function ActionProvider({
 	isPreviewMode = false,
 	openDialog: openDialogProp,
 	closeDialog: closeDialogProp,
+	onNavigationMessage,
 }: ActionProviderProps) {
 	const pathname = usePathname();
 	const backend = useBackend();
@@ -742,6 +751,7 @@ export function ActionProvider({
 				isPreviewMode,
 				openDialog,
 				closeDialog,
+				onNavigationMessage,
 				getElementValues,
 				setElementValue,
 				resolveTemporaryUploadTarget,
@@ -1034,6 +1044,7 @@ export function useExecuteAction() {
 		isPreviewMode,
 		openDialog,
 		closeDialog,
+		onNavigationMessage,
 		getElementValues,
 		markComponentTriggering,
 	} = useContext(ActionContext) ?? {};
@@ -1070,6 +1081,10 @@ export function useExecuteAction() {
 					console.log("[A2UI] A2UI message:", message);
 
 					if (handleWidgetQueryMessage(message)) {
+						continue;
+					}
+
+					if (interceptA2UINavigationMessage(message, onNavigationMessage)) {
 						continue;
 					}
 
@@ -1224,7 +1239,15 @@ export function useExecuteAction() {
 				}
 			}
 		},
-		[router, pathname, onA2UIMessage, appId, openDialog, closeDialog],
+		[
+			router,
+			pathname,
+			onA2UIMessage,
+			onNavigationMessage,
+			appId,
+			openDialog,
+			closeDialog,
+		],
 	);
 
 	const executeAction = useCallback(
@@ -1281,6 +1304,14 @@ export function useExecuteAction() {
 							extraParams,
 						});
 						if (route) {
+							if (
+								interceptA2UINavigationMessage(
+									createNavigateToMessage(route, extraParams),
+									onNavigationMessage,
+								)
+							) {
+								break;
+							}
 							// Build query params URL for internal routes
 							if (
 								appId &&
@@ -1518,23 +1549,6 @@ export function useExecuteAction() {
 
 								// Merge in-memory element values (user input state)
 								const storedValues = getElementValues?.() ?? {};
-								console.log("[A2UI] workflow_event merging elements:", {
-									elementsMapKeys: Object.keys(elementsMap),
-									storedValuesKeys: Object.keys(storedValues),
-									storedValues,
-								});
-
-								for (const [elementId, element] of Object.entries(
-									elementsMap,
-								)) {
-									const storedValue = storedValues[elementId];
-									console.log("[A2UI] Checking element:", {
-										elementId,
-										hasStoredValue: storedValue !== undefined,
-										storedValue,
-									});
-								}
-
 								const mergedElements = mergeStoredElementValues(
 									elementsMap,
 									storedValues,
@@ -1912,6 +1926,7 @@ export function useExecuteAction() {
 			widgetInstance,
 			getElementValues,
 			markComponentTriggering,
+			onNavigationMessage,
 		],
 	);
 	executeActionRef.current = executeAction;

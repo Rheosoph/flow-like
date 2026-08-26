@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use flow_like_types::dispatch::{CompilationJob, CompilationResult, CompilationStatus};
+use flow_like_types_contracts::dispatch::{CompilationJob, CompilationResult, CompilationStatus};
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::error;

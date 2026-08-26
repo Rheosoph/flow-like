@@ -38,6 +38,18 @@ export function colorFromSub(sub?: string): string {
 	return PEER_COLORS[index];
 }
 
+export const PEER_COLOR_COUNT = PEER_COLORS.length;
+
+/**
+ * Palette slot for a peer — the index behind {@link colorFromSub}. Static CSS
+ * classes (e.g. `flowscript-peer-slot-N` in global.css) mirror PEER_COLORS by
+ * this index so DOM/decoration styling matches the canvas color exactly.
+ */
+export function peerColorSlot(sub?: string): number | undefined {
+	if (!sub) return undefined;
+	return hashString(sub) % PEER_COLORS.length;
+}
+
 /** Truncate a name with ellipsis if it exceeds maxLength */
 export function truncateName(name: string | undefined, maxLength = 12): string {
 	if (!name) return "User";

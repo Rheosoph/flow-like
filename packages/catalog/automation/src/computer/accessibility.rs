@@ -47,6 +47,7 @@ impl NodeLogic for ComputerGetAccessibilityTreeNode {
             "Retrieves the accessibility tree for a window (requires platform-specific accessibility APIs)",
             "Automation/Computer/Accessibility",
         );
+        node.set_flowscript_name("computer", "getAccessibilityTree");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -203,6 +204,7 @@ impl NodeLogic for ComputerFindAccessibilityElementNode {
             "Finds an element in the accessibility tree by role, name, or other attributes",
             "Automation/Computer/Accessibility",
         );
+        node.set_flowscript_name("computer", "findAccessibilityElement");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

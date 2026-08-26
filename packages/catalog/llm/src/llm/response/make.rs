@@ -26,6 +26,7 @@ impl NodeLogic for MakeResponseNode {
             "Creates an empty Response struct for manual composition",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "make");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

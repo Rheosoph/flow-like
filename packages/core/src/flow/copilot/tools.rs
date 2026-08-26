@@ -416,7 +416,7 @@ fn declaration_exact_signature_line(section: &str) -> Option<&str> {
     section
         .lines()
         .map(str::trim)
-        .find(|line| line.starts_with("declare function "))
+        .find(|line| flow_like_ast::is_signature_line(line))
 }
 
 fn declaration_section_identity(section: &str) -> String {
@@ -781,7 +781,7 @@ impl Tool for CatalogTool {
             description: r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact `ns::alias({ pin: type })` signatures plus the `use ns::*` idiom.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#.to_string(),
             parameters: json!({
                 "type": "object",
@@ -829,7 +829,7 @@ EXAMPLES: search_by_pin("String", true) finds nodes with String input pins"#.to_
                 "properties": {
                     "pin_type": {
                         "type": "string",
-                        "description": "Data type: String, Integer, Float, Boolean, Struct, Generic, Execution"
+                        "description": "Data type: String, Integer, Float, Boolean, Struct, Generic, Date, PathBuf, Byte, Execution"
                     },
                     "is_input": {
                         "type": "boolean",
@@ -1411,7 +1411,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                 {
                                     "properties": {
                                         "command_type": { "const": "AddNode" },
-                                        "node_type": { "type": "string", "description": "EXACT node_type from catalog_search (e.g., 'flow_like_catalog_nodes::example::Example')" },
+                                        "node_type": { "type": "string", "description": "EXACT node_type from catalog_search (e.g., 'string_contains', 'control_branch')" },
                                         "ref_id": { "type": "string", "description": "Reference ID like '$0', '$1' to use in ConnectPins/UpdateNodePin" },
                                         "position": {
                                             "type": "object",
@@ -1900,6 +1900,39 @@ impl Tool for QueryExecutionLogsTool {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RunBoardTestsArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "appId")]
+    pub app_id: Option<String>,
+    #[serde(alias = "boardId")]
+    pub board_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "maxTests")]
+    pub max_tests: Option<u32>,
+}
+
+pub struct RunBoardTestsTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for RunBoardTestsTool {
+    const NAME: &'static str = "run_board_tests";
+
+    type Error = RuntimeVerificationToolError;
+    type Args = RunBoardTestsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        runtime_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let arguments = runtime_tool_arguments(Self::NAME, args)?;
+        Ok(self.bridge.call(Self::NAME, arguments).await)
+    }
+}
+
 // ============================================================================
 // Legacy selected-run Log Query Tool
 // ============================================================================
@@ -1969,6 +2002,7 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
         flowpilot_debug_log!("[QueryLogsTool] Using limit={}, filter='{}'", limit, filter);
 
         // Build LogMeta from RunContext
+        #[cfg(feature = "flow-runtime")]
         let log_meta = crate::flow::execution::LogMeta {
             app_id: run_context.app_id.clone(),
             run_id: run_context.run_id.clone(),
@@ -2074,9 +2108,13 @@ impl Tool for GetCurrentFlowScriptTool {
             name: "get_current_flowscript".to_string(),
             description: r#"Return the current live board as anchored FlowScript.
 
-Use this once before starting a new retained draft for an existing board. The returned document is
-the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` anchors
-and every `@cache` decorator on functions you keep. Cache settings use
+The system prompt already embeds this exact render — do not call this before authoring; use it only
+to re-read the board after the host applies an incremental segment. The returned document is
+the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` and
+`//@l:<id>` anchors and every `@cache` decorator on functions you keep. `module name { ... }`
+blocks are the board's namespaces; the written structure is authoritative: renaming an anchored
+module block renames it, and moving an anchored function/event/module block into a different
+module block moves it there — anchors keep identity, so reorganizing for readability is safe. Cache settings use
 `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })`; bare `@cache` defaults to the
 `global` namespace, a 300-second lifetime, and app scope. Use `ttlSeconds: 0` for no expiry.
 If existing context reports `ttl_seconds: null`, it is a permanent cache; preserve it as
@@ -2105,7 +2143,7 @@ retained source and revision with patch_flowscript/check_flowscript/commit_flows
 /// Retrieve `.flow.d`-style FlowScript declarations for nodes matching a query.
 ///
 /// This is the FlowScript counterpart to `catalog_search`/`get_node_details`: instead of
-/// per-pin JSON, it returns the exact `declare function …` signatures the agent should call when
+/// per-pin JSON, it returns the exact `function ns::alias(…)` signatures the agent should call when
 /// writing FlowScript, including third-party package nodes injected into the catalog.
 pub struct GetDeclarationsTool {
     pub provider: Arc<dyn CatalogProvider>,
@@ -2123,12 +2161,14 @@ impl Tool for GetDeclarationsTool {
             name: "get_declarations".to_string(),
             description: r#"Look up FlowScript node declarations (.flow.d) by intent. The initial pass is ONE bounded, focused batch (at most 32 queries) for the highest-leverage catalog calls needed to establish the workflow's end-to-end shape — not an inventory of every utility operation.
 
-Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
-signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Exact live
-metadata also contributes bounded usage notes for required and repeated pins, Struct schema fields,
-and companion calls/structural chains. Treat those notes as authoritative: repeat same-name inputs
-in declaration order and never invent Struct members. The result is deliberately bounded and
-self-contained. Never try to read a temporary/persisted-output path with filesystem tools; if
+Returns a compact ranked list of exact `function <ns>::<alias>(this: T, { pin: type, ... }): R;`
+signatures per query, the `// use <ns>::*` line that lets you call the bare `<alias>({ ... })`, and
+an `// impure` marker for side-effecting / control-flow nodes. A `this:` parameter names the
+receiver pin: that node is also callable as a method on the value (`x.alias(...)`); the legacy
+camelCase name still resolves. Exact live metadata also contributes bounded usage notes for
+required and repeated pins, Struct schema fields, and companion calls/structural chains. Treat
+those notes as authoritative: repeat same-name inputs in declaration order and never invent Struct
+members. The result is deliberately bounded and self-contained. Never try to read a temporary/persisted-output path with filesystem tools; if
 validation later names a failing node/pin or a comparison/type-conversion mismatch, use one focused
 repair lookup for that diagnostic. Empty queries intentionally return guidance only, not the full
 catalog.
@@ -2143,8 +2183,9 @@ retain its ACTIVE SEGMENT, even when compiler repairs are expected. Do not make 
 declaration batch or chase `omitted_queries` / `unmatched_queries` before the first write. Defer
 those searches until compiler diagnostics identify a concrete gap, then use one narrow repair lookup.
 
-Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
-typed arguments. This covers every package in the project's catalog, including third-party ones."#
+Use this BEFORE writing FlowScript so you call nodes by their exact qualified name with correctly
+typed and exactly named arguments. This covers every package in the project's catalog, including
+third-party ones."#
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -2691,6 +2732,12 @@ pub fn profile_flowscript_candidate(source: &str) -> FlowScriptCandidateProfile 
                 }
                 profile_flowscript_block(&event.body, &mut profile);
             }
+            // A detached chain is unreachable, not absent. Its nodes are still board scope the
+            // shrink detector has to weigh, or an edit that leaves work detached reads as a
+            // collapse to an empty draft.
+            for block in &ast.detached {
+                profile_flowscript_block(block, &mut profile);
+            }
             profile
         }
         Err(_) => profile_flowscript_candidate_lexically(source),
@@ -2707,9 +2754,9 @@ fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCan
             profile.meaningful_statements = profile.meaningful_statements.saturating_add(1);
         }
         match statement {
-            FlowScriptStmt::Let { call, .. } | FlowScriptStmt::Call { call, .. } => {
-                profile_flowscript_call(call, profile)
-            }
+            FlowScriptStmt::Let { call, .. }
+            | FlowScriptStmt::Destructure { call, .. }
+            | FlowScriptStmt::Call { call, .. } => profile_flowscript_call(call, profile),
             FlowScriptStmt::Branch {
                 call,
                 condition,
@@ -2724,8 +2771,16 @@ fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCan
                     profile_flowscript_block(&arm.body, profile);
                 }
             }
-            FlowScriptStmt::Loop { call, body, .. } => {
+            FlowScriptStmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
                 profile_flowscript_call(call, profile);
+                if let Some(iterable) = iterable {
+                    profile_flowscript_expr(iterable, profile);
+                }
                 profile_flowscript_block(body, profile);
             }
             FlowScriptStmt::Assign { value, .. }
@@ -2763,9 +2818,9 @@ fn flowscript_block_calls_any(block: &FlowScriptBlock, names: &HashSet<String>) 
 fn collect_flowscript_block_call_names(block: &FlowScriptBlock, calls: &mut Vec<String>) {
     for statement in &block.stmts {
         match statement {
-            FlowScriptStmt::Let { call, .. } | FlowScriptStmt::Call { call, .. } => {
-                collect_flowscript_call_names(call, calls)
-            }
+            FlowScriptStmt::Let { call, .. }
+            | FlowScriptStmt::Destructure { call, .. }
+            | FlowScriptStmt::Call { call, .. } => collect_flowscript_call_names(call, calls),
             FlowScriptStmt::Branch {
                 call,
                 condition,
@@ -2780,8 +2835,16 @@ fn collect_flowscript_block_call_names(block: &FlowScriptBlock, calls: &mut Vec<
                     collect_flowscript_block_call_names(&arm.body, calls);
                 }
             }
-            FlowScriptStmt::Loop { call, body, .. } => {
+            FlowScriptStmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
                 collect_flowscript_call_names(call, calls);
+                if let Some(iterable) = iterable {
+                    collect_flowscript_expr_call_names(iterable, calls);
+                }
                 collect_flowscript_block_call_names(body, calls);
             }
             FlowScriptStmt::Assign { value, .. }
@@ -2810,9 +2873,18 @@ fn collect_flowscript_call_names(call: &FlowScriptCall, calls: &mut Vec<String>)
             &call.display
         },
     ));
-    for argument in &call.args {
-        collect_flowscript_expr_call_names(&argument.value, calls);
+    for operand in flowscript_call_operands(call) {
+        collect_flowscript_expr_call_names(operand, calls);
     }
+}
+
+/// Every expression a call evaluates: the method receiver, positional values and named values.
+fn flowscript_call_operands(call: &FlowScriptCall) -> impl Iterator<Item = &FlowScriptExpr> {
+    call.receiver
+        .iter()
+        .map(|receiver| receiver.as_ref())
+        .chain(call.positional.iter())
+        .chain(call.args.iter().map(|argument| &argument.value))
 }
 
 fn collect_flowscript_expr_call_names(expression: &FlowScriptExpr, calls: &mut Vec<String>) {
@@ -2848,6 +2920,13 @@ fn collect_flowscript_expr_call_names(expression: &FlowScriptExpr, calls: &mut V
             collect_flowscript_expr_call_names(lhs, calls);
             collect_flowscript_expr_call_names(rhs, calls);
         }
+        FlowScriptExpr::Template { parts } => {
+            for part in parts {
+                if let flow_like_ast::TemplatePart::Expr(expr) = part {
+                    collect_flowscript_expr_call_names(expr, calls);
+                }
+            }
+        }
         FlowScriptExpr::Ref(_) | FlowScriptExpr::Literal(_) => {}
     }
 }
@@ -2880,8 +2959,8 @@ fn profile_flowscript_call(call: &FlowScriptCall, profile: &mut FlowScriptCandid
             &call.display
         },
     ));
-    for argument in &call.args {
-        profile_flowscript_expr(&argument.value, profile);
+    for operand in flowscript_call_operands(call) {
+        profile_flowscript_expr(operand, profile);
     }
 }
 
@@ -2918,6 +2997,13 @@ fn profile_flowscript_expr(expression: &FlowScriptExpr, profile: &mut FlowScript
             profile_flowscript_expr(lhs, profile);
             profile_flowscript_expr(rhs, profile);
         }
+        FlowScriptExpr::Template { parts } => {
+            for part in parts {
+                if let flow_like_ast::TemplatePart::Expr(expr) = part {
+                    profile_flowscript_expr(expr, profile);
+                }
+            }
+        }
         FlowScriptExpr::Ref(_) | FlowScriptExpr::Literal(_) => {}
     }
 }
@@ -2926,11 +3012,17 @@ fn profile_flowscript_candidate_lexically(source: &str) -> FlowScriptCandidatePr
     let mut profile = FlowScriptCandidateProfile::default();
     for line in source.lines() {
         let trimmed = line.trim();
+        // Every other block header names a board object this profile records separately.
+        // `detached {` names nothing — it has no node and therefore no anchor — so it is
+        // punctuation like the brace lines above it, and only the chain inside it counts.
         if trimmed.is_empty()
             || trimmed == "{"
             || trimmed == "}"
             || trimmed.starts_with("//")
             || trimmed.starts_with('@')
+            || trimmed
+                .strip_prefix("detached")
+                .is_some_and(|rest| rest.trim() == "{")
         {
             continue;
         }
@@ -3744,6 +3836,12 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
             .and_then(|value| value.as_str())
             .map(|node_id| format!("Executing workflow from node {node_id}..."))
             .unwrap_or_else(|| "Executing workflow from board node...".to_string()),
+        "run_board_tests" => arguments
+            .get("board_id")
+            .or_else(|| arguments.get("boardId"))
+            .and_then(|value| value.as_str())
+            .map(|board_id| format!("Running test events on board {board_id}..."))
+            .unwrap_or_else(|| "Running board test events...".to_string()),
         "query_execution_logs" => arguments
             .get("run_id")
             .or_else(|| arguments.get("runId"))
@@ -4023,6 +4121,8 @@ mod tests {
             "DeleteVariable",
             "CreateLayer",
             "RemoveLayer",
+            "RenameLayer",
+            "MoveToLayer",
         ] {
             assert!(
                 !encoded.contains(executable),
@@ -4501,6 +4601,40 @@ eventsGeneric(payload: Struct) {
         assert_eq!(profile.event_entries, 2);
         assert_eq!(profile.top_level_variables.len(), 2);
         assert_eq!(profile.events_calling_helpers, 2);
+    }
+
+    #[test]
+    fn detached_chains_count_as_workflow_scope_in_both_profile_paths() {
+        let detached = r#"detached {
+    logInfo({ message: "keep me" })
+}
+
+detached {
+    emailSmtpConnect({ host: "smtp.example.com" })
+}
+"#;
+
+        let profile = profile_flowscript_candidate(detached);
+        assert_eq!(profile.call_sites, 2);
+        assert_eq!(profile.meaningful_statements, 2);
+
+        // The container is punctuation, not a statement, so a draft that fails to parse and falls
+        // back to the lexical estimate measures the same shape.
+        let lexical = profile_flowscript_candidate_lexically(detached);
+        assert_eq!(lexical.call_sites, profile.call_sites);
+        assert_eq!(lexical.meaningful_statements, profile.meaningful_statements);
+
+        // `detached` only opens a container immediately before `{`; anywhere else it is an
+        // ordinary identifier the lexical estimate must keep counting.
+        assert_eq!(
+            profile_flowscript_candidate_lexically("detachedFoo {\n}\n").meaningful_statements,
+            1
+        );
+        assert_eq!(
+            profile_flowscript_candidate_lexically("detached(payload: Struct) {\n}\n")
+                .meaningful_statements,
+            1
+        );
     }
 
     #[test]

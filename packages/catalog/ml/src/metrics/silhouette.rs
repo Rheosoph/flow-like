@@ -45,6 +45,7 @@ impl NodeLogic for SilhouetteScoreNode {
             "Evaluate clustering quality: how much closer each sample sits to its own cluster than to the nearest other one (-1 to +1)",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "silhouetteScore");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

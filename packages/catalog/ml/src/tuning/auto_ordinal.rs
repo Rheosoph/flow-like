@@ -14,14 +14,15 @@ use crate::ml::{
     values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_ordinal::{
@@ -516,6 +517,7 @@ impl NodeLogic for AutoOrdinalNode {
             "Automatically finds the best model for a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Cross-validates the ordinal families - Proportional Odds and Ordered Probit, the all-threshold model and its support-vector form, Ordinal Ridge, Continuation Ratio and Adjacent Category, plus an optional rank-consistent neural family that is off by default because it costs far more than all the others combined - on identical folds, ranks them by an ordinal metric that knows how far a miss was, then retrains the winner on the full data. Use this rather than Auto Classifier, which resolves the target without its order and ranks by accuracy or macro-F1, scoring a five-level miss exactly like a one-level one. Every candidate here is a gradient or a least-squares fit on the raw columns, so scale your features with the Fit Feature Scaler node first: unscaled columns change which family wins, not just how fast it converges.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "autoOrdinal");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -1062,7 +1064,6 @@ impl NodeLogic for AutoOrdinalNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let source_pin: String = node
             .get_pin_by_name("source")

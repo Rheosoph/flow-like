@@ -1,5 +1,6 @@
 use flow_like_catalog_core::{BoundingBox, NodeImage};
 
+use ab_glyph::FontArc;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -7,15 +8,13 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{
-    Error,
-    ab_glyph::FontArc,
-    async_trait,
+    Error, async_trait,
     image::{DynamicImage, Rgba},
-    imageproc::{
-        drawing::{draw_hollow_rect_mut, draw_text_mut},
-        rect::Rect,
-    },
     json::json,
+};
+use imageproc::{
+    drawing::{draw_hollow_rect_mut, draw_text_mut},
+    rect::Rect,
 };
 
 /// Pastelle Colors for Bounding Boxes
@@ -134,6 +133,8 @@ impl NodeLogic for DrawBoxesNode {
             "Draw Bounding Boxes",
             "Image/Annotate",
         );
+        node.set_flowscript_name("image", "drawBoxes");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

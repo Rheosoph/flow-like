@@ -27,6 +27,8 @@ impl NodeLogic for GetRangeNode {
             "Reads a range of bytes from a file",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "getRange");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

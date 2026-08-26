@@ -42,6 +42,10 @@ import {
 	useRouteDialog,
 } from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
+import {
+	type A2UINavigationMessageInterceptor,
+	interceptA2UINavigationMessage,
+} from "../a2ui/navigation-message";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -72,6 +76,12 @@ export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
 	route?: string;
 	page?: IPage;
+	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
+	queryParams?: Record<string, string>;
+	/** Consume page-owned route and query changes inside an embedded runtime. */
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
+	/** False while an embedded runtime keeps this page mounted off screen. */
+	active?: boolean;
 }
 
 /**
@@ -159,12 +169,34 @@ function PageInterfaceInner({
 	config,
 	route,
 	page: providedPage,
+	queryParams: providedQueryParams,
+	onNavigationMessage,
+	active = true,
 }: PageInterfaceProps) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const router = useRouter();
-	const search = useSearchParams().toString();
+	const hostSearch = useSearchParams().toString();
+	const runtimeQueryParams = useMemo(() => {
+		if (providedQueryParams) return { ...providedQueryParams };
+		const result: Record<string, string> = {};
+		new URLSearchParams(hostSearch).forEach((value, key) => {
+			result[key] = value;
+		});
+		return result;
+	}, [hostSearch, providedQueryParams]);
+	const search = useMemo(() => {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(runtimeQueryParams).toSorted(
+			([left], [right]) => left.localeCompare(right),
+		)) {
+			params.set(key, value);
+		}
+		return params.toString();
+	}, [runtimeQueryParams]);
+	const runtimeQueryParamsRef = useRef(runtimeQueryParams);
+	runtimeQueryParamsRef.current = runtimeQueryParams;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
@@ -346,6 +378,10 @@ function PageInterfaceInner({
 				return;
 			}
 
+			if (interceptA2UINavigationMessage(message, onNavigationMessage)) {
+				return;
+			}
+
 			// Reveal the current screen while the workflow continues running.
 			if (message.type === "showScreen") {
 				setIsScreenRevealed(true);
@@ -451,7 +487,14 @@ function PageInterfaceInner({
 			// Handle element updates
 			handleServerMessage(message);
 		},
-		[appId, router, openDialog, closeDialog, handleServerMessage],
+		[
+			appId,
+			router,
+			openDialog,
+			closeDialog,
+			handleServerMessage,
+			onNavigationMessage,
+		],
 	);
 
 	// Use ref to access current surface without creating dependency cycles
@@ -546,21 +589,13 @@ function PageInterfaceInner({
 				// Get component data from surface (for GetElement to work)
 				const surfaceElements = getElementsFromSurface();
 
-				const queryParams: Record<string, string> = {};
-				if (typeof window !== "undefined") {
-					const searchParams = new URLSearchParams(window.location.search);
-					searchParams.forEach((value, key) => {
-						queryParams[key] = value;
-					});
-				}
-
 				const payload = withBoardVersion(
 					{
 						id: eventNodeId,
 						payload: {
 							_elements: surfaceElements,
 							_route: pageRoute || "/",
-							_query_params: queryParams,
+							_query_params: { ...runtimeQueryParamsRef.current },
 							_page_id: page.id,
 							_event_type: eventName,
 							...extraPayload,
@@ -666,6 +701,7 @@ function PageInterfaceInner({
 	}, [page?.onUnloadEventId, executePageEvent]);
 
 	// Execute onInterval event at configured time intervals
+	const lastIntervalTickRef = useRef(0);
 	useEffect(() => {
 		if (
 			!page?.onIntervalEventId ||
@@ -673,17 +709,32 @@ function PageInterfaceInner({
 			page.onIntervalSeconds <= 0
 		)
 			return;
+		// An embedded runtime parks its host instead of unmounting, so a page nobody is
+		// looking at is still mounted and would otherwise keep spending a board run every
+		// tick, forever, invisibly.
+		if (!active) return;
 
 		const intervalMs = page.onIntervalSeconds * 1000;
-
-		const intervalId = setInterval(() => {
+		const tick = () => {
+			lastIntervalTickRef.current = Date.now();
 			executePageEvent(page.onIntervalEventId, "onInterval", {
 				_interval_seconds: page.onIntervalSeconds,
 			});
-		}, intervalMs);
+		};
 
+		// Coming back on screen after more than a full period should show current data
+		// rather than whatever was on the page when it parked.
+		const sinceLastTick = Date.now() - lastIntervalTickRef.current;
+		if (lastIntervalTickRef.current > 0 && sinceLastTick >= intervalMs) tick();
+
+		const intervalId = setInterval(tick, intervalMs);
 		return () => clearInterval(intervalId);
-	}, [page?.onIntervalEventId, page?.onIntervalSeconds, executePageEvent]);
+	}, [
+		page?.onIntervalEventId,
+		page?.onIntervalSeconds,
+		executePageEvent,
+		active,
+	]);
 
 	// Strip canvasSettings from the surface for A2UIRenderer — this component
 	// already handles CSS injection and canvas styling at the outer level.
@@ -813,6 +864,7 @@ function PageInterfaceInner({
 						boardVersion={pageExecutionVersion}
 						eventId={activePageEvent?.id}
 						onA2UIMessage={handleA2UIMessage}
+						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}
 						closeDialog={closeDialog}

@@ -49,6 +49,7 @@ impl NodeLogic for InvokeLLM {
             "Invokes the configured model with the provided chat history. Set history streaming off to preserve and replay structured media responses.",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "invoke");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

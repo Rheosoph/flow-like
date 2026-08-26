@@ -463,15 +463,40 @@ export function ForkAppDialog({
 								</p>
 							)}
 							{response.report.skipped.length > 0 && (
-								<p>
-									{t("countItemsWereSkippedSeeTheDestinationAppForDetails", {
-										defaultValue_one:
-											"{{count}} item was skipped — see the destination App for details.",
-										defaultValue_other:
-											"{{count}} items were skipped — see the destination App for details.",
-										count: response.report.skipped.length,
-									})}
-								</p>
+								<div className="space-y-1">
+									<p>
+										{t("countItemsWereSkippedSeeTheDestinationAppForDetails", {
+											defaultValue_one:
+												"{{count}} item was skipped — see the destination App for details.",
+											defaultValue_other:
+												"{{count}} items were skipped — see the destination App for details.",
+											count: response.report.skipped.length,
+										})}
+									</p>
+									{/* Reasons are server-authored English; the dialog is the only
+									    place they are ever shown, so they are listed verbatim
+									    rather than summarised away. */}
+									{/* Ids and reasons come from the source app's payload, so they
+									    can be arbitrarily long and are wrapped rather than allowed
+									    to stretch the dialog. */}
+									<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground wrap-break-word">
+										{response.report.skipped.map((item, index) => (
+											<li key={`${index}:${item.source_id}`}>
+												<code className="text-[10px] break-all">
+													{item.source_id}
+												</code>{" "}
+												{item.reason}
+											</li>
+										))}
+									</ul>
+								</div>
+							)}
+							{response.report.warnings.length > 0 && (
+								<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground">
+									{response.report.warnings.map((warning, index) => (
+										<li key={`${index}:${warning}`}>{warning}</li>
+									))}
+								</ul>
 							)}
 						</AlertDescription>
 					</Alert>

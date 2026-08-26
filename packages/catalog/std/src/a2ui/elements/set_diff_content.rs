@@ -28,6 +28,7 @@ impl NodeLogic for SetDiffContent {
             "Sets the original and modified content of a diff view element",
             "UI/Elements/Display",
         );
+        node.set_flowscript_name("ui", "setDiffContent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

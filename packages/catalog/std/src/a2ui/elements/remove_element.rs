@@ -27,6 +27,7 @@ impl NodeLogic for RemoveElement {
             "Removes an element from the page",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "removeElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

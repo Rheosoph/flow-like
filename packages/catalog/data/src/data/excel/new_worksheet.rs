@@ -1,10 +1,14 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, bail, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::bail;
+use flow_like_types::{async_trait, json::json};
 
 use crate::data::path::FlowPath;
 
@@ -36,6 +40,7 @@ impl NodeLogic for NewWorksheetNode {
             "Creates a new worksheet (tab) inside an existing .xlsx file",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "newWorksheet");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

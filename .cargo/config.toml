@@ -1,0 +1,47 @@
+[net]
+# Use the git CLI (with its credential helper) to fetch private git
+# dependencies such as any-speech-to-text. Cargo's built-in libgit2
+# fetcher cannot authenticate against the private Rheosoph repos.
+git-fetch-with-cli = true
+
+[registries.crates-io]
+# Sparse is Cargo's default for crates.io, but keeping it explicit makes the
+# repository behave consistently with older Cargo installations and builders.
+protocol = "sparse"
+
+[alias]
+# Stable, memorable entry points for the common developer loops. Explicit
+# package selection avoids accidentally compiling every backend and platform.
+check-core = "check --package flow-like --no-default-features --features flow"
+check-core-runtime = "check --package flow-like --no-default-features --features app-runtime"
+test-core = "test --package flow-like --no-default-features --features flow"
+test-core-runtime = "test --package flow-like --no-default-features --features app-runtime"
+clippy-core = "clippy --package flow-like --all-targets --no-default-features --features flow"
+clippy-core-runtime = "clippy --package flow-like --all-targets --no-default-features --features app-runtime"
+check-storage = "check --package flow-like-storage --no-default-features --features files,query-parser"
+check-storage-runtime = "check --package flow-like-storage --no-default-features --features database-runtime"
+check-wasm = "check --package flow-like-wasm"
+check-executor = "check --package flow-like-executor --no-default-features --features executor-local-ml"
+check-executor-server = "check --package flow-like-executor --no-default-features --features server"
+check-desktop = "check --package flow-like-desktop"
+check-api = "check --package flow-like-api"
+check-catalog = "check --package flow-like-catalog --no-default-features --features all-metadata"
+check-catalog-desktop = "check --package flow-like-catalog --no-default-features --features desktop"
+check-catalog-server = "check --package flow-like-catalog --no-default-features --features server"
+check-all = "check --workspace"
+test-all = "test --workspace"
+clippy-all = "clippy --workspace"
+# Cargo aliases expand to Cargo subcommands, not arbitrary shell commands. Run
+# `tools/check-feature-boundaries.sh` and `tools/compile-times.sh` directly.
+run-desktop = "run --package flow-like-desktop --profile dev-run"
+
+# Do not set build.jobs here. Cargo detects the host/runner CPU quota and a
+# repository-wide value either oversubscribes laptops or exhausts small CI
+# runners while compiling Arrow, Lance, Wasmtime, and ONNX Runtime.
+#
+# Linker selection is also intentionally left to the pinned Rust toolchain:
+# - macOS's system linker is the well-supported fast path for Apple frameworks;
+# - Linux keeps the broadly available system C linker in the portable base;
+#   `.cargo/fast-compile.toml` opts into Clang + LLD when installed;
+# - Windows keeps the MSVC-compatible default. The desktop binary's required
+#   stack reservation is emitted only for that binary by its build script.

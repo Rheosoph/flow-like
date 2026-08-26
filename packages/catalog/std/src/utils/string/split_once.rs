@@ -26,6 +26,8 @@ impl NodeLogic for StringSplitOnceNode {
             "Splits a string at the first (or last) occurrence of a separator",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "splitOnce");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 
@@ -112,6 +114,8 @@ impl NodeLogic for StringSplitWhitespaceNode {
             "Splits a string into words, collapsing runs of whitespace",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "splitWhitespace");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_scores(pure_scores());
 

@@ -26,6 +26,8 @@ impl NodeLogic for WriteBytesNode {
             "Writes bytes to a file",
             "Data/Files/Content",
         );
+        node.set_flowscript_name("files", "writeBytes");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg"); // Consider a more appropriate icon
 
         node.add_input_pin(

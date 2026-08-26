@@ -1,0 +1,22 @@
+// BUG: returning an object literal from a function is only resolvable when EVERY member value is a
+// literal. One member reading a parameter voids the whole return:
+//   return value 1 (`{...}`) in function `computedReturn` is not a resolvable FlowScript value;
+//   return a literal, a call output bound earlier in the body (`const x = call(...)`), or a variable
+// `literalReturn` below is the same statement with the parameter swapped for a string literal and
+// it reconciles clean, so the fault is the computed member, not the object syntax or the return.
+// Workaround: `struct::make()` plus one `note.field = value` statement per member.
+use log::{ info }
+
+function literalReturn(): (note: Struct) {
+    return { label: "general-support", priority: "normal" }
+}
+
+function computedReturn(label: string): (note: Struct) {
+    return { label: label, priority: "normal" }
+}
+
+eventsSimple compareReturns() {
+    const fixed = literalReturn()
+    const built = computedReturn("billing")
+    info({ message: `${fixed.label} ${built.label}`, toast: false })
+}

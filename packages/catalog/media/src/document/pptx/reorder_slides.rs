@@ -29,6 +29,7 @@ impl NodeLogic for PptxReorderSlidesNode {
             "Move a slide from one position to another",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "reorderSlides");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

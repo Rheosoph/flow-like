@@ -1,0 +1,26 @@
+use log::*
+
+interface Incident {
+    report: string;
+    source?: string | null = null;
+    tags?: string[] = [];
+}
+
+@description("Phrase that marks an urgent incident")
+@category("Triage")
+const urgentPhrase = "production is on hold"
+@description("Whether the incident phrase ignores letter case")
+let ignoreCase = true
+
+function normalizeReport(report: string): (normalized: string) {
+    return report.trim()
+}
+
+eventsGeneric triageIncident(payload: Struct, incident: Incident) {
+    const normalized = normalizeReport({ report: incident.report })
+    if (normalized.contains({ substring: urgentPhrase, ignoreCase: ignoreCase })) {
+        error({ message: normalized, toast: false })
+    } else {
+        info({ message: normalized, toast: false })
+    }
+}

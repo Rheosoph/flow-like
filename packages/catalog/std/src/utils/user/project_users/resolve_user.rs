@@ -23,6 +23,7 @@ impl NodeLogic for ResolveUserNode {
             "Resolve User",
             "Resolves a project user by user ID/sub or by email when email is exposed by platform lookup settings. Email matching is constrained to project members.",
         );
+        node.set_flowscript_name("user", "resolve");
         add_app_pin(&mut node);
         node.add_input_pin(
             "identifier",

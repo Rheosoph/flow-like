@@ -28,6 +28,8 @@ impl NodeLogic for SetModelHintNode {
             "Adds a soft preference hint for downstream model selection",
             "AI/Generative/Preferences",
         );
+        node.set_flowscript_name("ai.preferences", "setModelHint");
+        node.set_receiver("preferences_in");
         node.add_icon("/flow/icons/struct.svg");
         node.set_scores(
             NodeScores::new()

@@ -35,6 +35,7 @@ impl NodeLogic for SummarizeNode {
             "Summarizes long text using an LLM with configurable strategies. Supports Map-Reduce (parallel, fast), Refine (sequential, coherent), Hierarchical (structure-aware), Hybrid (parallel + coherent), and Sliding Window (memory-efficient). Optional Chain of Density post-processing for optimal information density.",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "summarize");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

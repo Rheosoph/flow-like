@@ -30,6 +30,7 @@ impl NodeLogic for SetPageState {
             "Sets a value in page-local state by key",
             "UI/State",
         );
+        node.set_flowscript_name("ui", "setPageState");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -21,7 +21,7 @@ use crate::{
     error::ApiError,
     execution::{
         DispatchRequest, ExecutionJwtParams, TokenType, fetch_profile_for_dispatch,
-        is_jwt_configured, payload_storage, resolve_wasm_packages, sign_execution_jwt,
+        is_jwt_configured, payload_storage, rejection, resolve_wasm_packages, sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -145,15 +145,30 @@ pub async fn invoke_event_async(
     // rather than silently executing a different version than the caller asked
     // for. A malformed version string is likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
-        let parsed = super::parse_version_tuple(requested).ok_or_else(|| {
-            ApiError::bad_request(format!(
+        let reason = match super::parse_version_tuple(requested) {
+            Some(parsed) if event.board_version == Some(parsed) => None,
+            Some(_) => Some(
+                "Executing a board version other than the event's configured version is not supported"
+                    .to_string(),
+            ),
+            None => Some(format!(
                 "Invalid version '{requested}': expected MAJOR_MINOR_PATCH"
-            ))
-        })?;
-        if event.board_version != Some(parsed) {
-            return Err(ApiError::bad_request(
-                "Executing a board version other than the event's configured version is not supported",
-            ));
+            )),
+        };
+
+        if let Some(reason) = reason {
+            let context = rejection::RejectedRunContext::new(
+                app_id.clone(),
+                rejection::RejectionStage::Payload,
+                reason.clone(),
+            )
+            .with_event_definition(&event)
+            .with_mode(RunMode::Queue)
+            .with_actor(Some(sub.clone()), technical_user_id.clone())
+            .with_credential_subject(sub.clone())
+            .with_payload(params.payload.clone());
+            rejection::record(&state, context).await;
+            return Err(ApiError::bad_request(reason));
         }
     }
 

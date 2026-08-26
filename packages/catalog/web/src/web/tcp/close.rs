@@ -31,6 +31,8 @@ impl NodeLogic for TcpCloseNode {
             "Closes an open TCP connection gracefully",
             "Web/TCP",
         );
+        node.set_flowscript_name("tcp", "close");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

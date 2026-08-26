@@ -997,9 +997,9 @@ mod tests {
                 "Widget reference",
                 VariableType::Struct,
             )
+            .set_schema::<flow_like::a2ui::ElementRef>()
             .id
-            .clone()
-            .set_schema::<flow_like::a2ui::ElementRef>();
+            .clone();
 
         let mut bridge = Node::new("bridge", "Bridge", "Bridge", "Test");
         let bridge_pin = bridge.add_output_pin(

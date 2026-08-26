@@ -24,6 +24,7 @@ const CHART_TYPE_OPTIONS: &[&str] = &[
     "auto", "bar", "line", "pie", "radar", "heatmap", "scatter", "funnel",
 ];
 
+#[cfg(feature = "execute")]
 fn get_chart_format_description(chart_type: &str) -> &'static str {
     match chart_type {
         "bar" | "auto" => {
@@ -59,6 +60,7 @@ Example: [{"id":"visits","label":"Visits","value":10000},{"id":"signups","label"
     }
 }
 
+#[cfg(feature = "execute")]
 fn build_system_prompt(chart_type: &str, schema_desc: &str, description: &str) -> String {
     let fmt = get_chart_format_description(chart_type);
     format!(
@@ -119,6 +121,7 @@ impl NodeLogic for ChartDataAgent {
             "Uses an LLM to write and run SQL against a DataFusion session, returning chart-ready struct data.",
             "UI/Elements/Charts/Agent",
         );
+        node.set_flowscript_name("ui", "chartDataAgent");
         node.set_version(5);
         node.add_icon("/flow/icons/a2ui.svg");
 

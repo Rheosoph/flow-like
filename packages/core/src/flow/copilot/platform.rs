@@ -18,7 +18,11 @@ use async_trait::async_trait;
 use flow_like_model_provider::llm::CompletionClientDyn;
 use flow_like_model_provider::provider::ModelProvider;
 use flow_like_model_provider::response::{LLMUsageStats, Usage};
-use flow_like_types::{Result, tokio};
+use flow_like_types::{
+    Result,
+    base64::{Engine as _, engine::general_purpose::STANDARD},
+    tokio,
+};
 use futures::StreamExt;
 use rig::{
     OneOrMany,
@@ -54,7 +58,7 @@ use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
-/// Private frontend-tool result field used to carry temporary vision URLs alongside normal JSON.
+/// Private frontend-tool result field used to carry bounded vision attachments alongside JSON.
 /// Host adapters remove it before exposing the textual result to the model or diagnostics.
 pub const PLATFORM_TOOL_IMAGE_URLS_FIELD: &str = "_flowpilot_image_urls";
 
@@ -65,12 +69,20 @@ const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_TITLE_CHARS: usize = 300;
 const MAX_SEARCH_SNIPPET_CHARS: usize = 1_200;
 const MAX_CONCURRENT_SEARCH_CALLS: usize = 8;
+const MAX_PLATFORM_TOOL_IMAGE_REFS: usize = 12;
+const MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PLATFORM_TOOL_INLINE_TOTAL_BYTES: usize = 24 * 1024 * 1024;
+const MAX_PLATFORM_TOOL_INLINE_BASE64_CHARS: usize =
+    MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES.div_ceil(3) * 4;
 static SEARCH_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_SEARCH_CALLS));
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PlatformToolImageUrl {
-    pub url: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub data: Option<String>,
     pub media_type: String,
 }
 
@@ -78,36 +90,128 @@ pub struct PlatformToolImageUrl {
 /// `(tool_call_id, tool_name, output, images)`.
 type PlatformToolResult = (String, String, String, Vec<PlatformToolImageUrl>);
 
-/// Remove and validate temporary image references from a frontend tool result.
+/// Remove and validate private image attachments from a frontend tool result.
 pub fn take_platform_tool_image_urls(value: &mut Value) -> Vec<PlatformToolImageUrl> {
     let Some(object) = value.as_object_mut() else {
         return Vec::new();
     };
-    object
+    let candidates = object
         .remove(PLATFORM_TOOL_IMAGE_URLS_FIELD)
         .and_then(|images| serde_json::from_value::<Vec<PlatformToolImageUrl>>(images).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|image| {
-            image.media_type.starts_with("image/")
-                && (image.url.starts_with("https://") || image.url.starts_with("http://"))
-        })
-        .take(12)
-        .collect()
+        .unwrap_or_default();
+    let mut accepted = Vec::with_capacity(candidates.len().min(MAX_PLATFORM_TOOL_IMAGE_REFS));
+    let mut inline_bytes = 0usize;
+    for mut image in candidates {
+        if accepted.len() >= MAX_PLATFORM_TOOL_IMAGE_REFS
+            || parse_image_media_type(&image.media_type).is_none()
+        {
+            break;
+        }
+
+        if let Some(data) = image.data.take()
+            && data.len() <= MAX_PLATFORM_TOOL_INLINE_BASE64_CHARS
+            && let Ok(decoded) = STANDARD.decode(&data)
+            && decoded.len() <= MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES
+            && inline_bytes.saturating_add(decoded.len()) <= MAX_PLATFORM_TOOL_INLINE_TOTAL_BYTES
+        {
+            inline_bytes += decoded.len();
+            image.url = None;
+            image.data = Some(data);
+            accepted.push(image);
+            continue;
+        }
+
+        image.data = None;
+        if image
+            .url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
+        {
+            accepted.push(image);
+            continue;
+        }
+
+        break;
+    }
+    accepted
+}
+
+fn mark_platform_tool_attachment_partial(object: &mut serde_json::Map<String, Value>) {
+    let should_mark_partial = match object.get("status").and_then(Value::as_str) {
+        None | Some("ok" | "success" | "complete") => true,
+        Some(_) => false,
+    };
+    if should_mark_partial {
+        object.insert("status".to_string(), Value::String("partial".to_string()));
+    }
 }
 
 fn split_platform_tool_output(output: String) -> (String, Vec<PlatformToolImageUrl>) {
     let Ok(mut value) = serde_json::from_str::<Value>(&output) else {
         return (output, Vec::new());
     };
-    let had_image_field = value
+    let image_field_present = value
         .as_object()
         .is_some_and(|object| object.contains_key(PLATFORM_TOOL_IMAGE_URLS_FIELD));
-    let images = take_platform_tool_image_urls(&mut value);
-    if !had_image_field {
-        return (output, images);
+    if !image_field_present {
+        return (output, Vec::new());
     }
-    let clean = serde_json::to_string(&value).unwrap_or(output);
+    let supplied_image_count = value
+        .as_object()
+        .and_then(|object| object.get(PLATFORM_TOOL_IMAGE_URLS_FIELD))
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    let declared_image_count = value
+        .as_object()
+        .and_then(|object| object.get("screenshot_count"))
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok());
+    let images = take_platform_tool_image_urls(&mut value);
+    let mut attachment_errors = Vec::new();
+    if supplied_image_count.is_none() {
+        attachment_errors.push(
+            "The capture attachment payload was rejected because it was not an array.".to_string(),
+        );
+    } else if supplied_image_count.is_some_and(|count| count > images.len()) {
+        attachment_errors.push(format!(
+            "{} capture attachment reference(s) were rejected or skipped to preserve top-to-bottom ordering because their type, source, size, or encoding was invalid.",
+            supplied_image_count.unwrap_or_default() - images.len()
+        ));
+    }
+    if attachment_errors.is_empty()
+        && declared_image_count.is_some_and(|count| count != images.len())
+    {
+        attachment_errors.push(format!(
+            "The declared screenshot count did not match the {} accepted capture attachment(s).",
+            images.len()
+        ));
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert("screenshot_count".to_string(), json!(images.len()));
+        if !attachment_errors.is_empty() {
+            object.insert("screenshot_complete".to_string(), Value::Bool(false));
+            mark_platform_tool_attachment_partial(object);
+            let mut errors = object
+                .remove("screenshot_attachment_errors")
+                .and_then(|errors| errors.as_array().cloned())
+                .unwrap_or_default();
+            errors.extend(attachment_errors.into_iter().map(Value::String));
+            errors.truncate(6);
+            object.insert(
+                "screenshot_attachment_errors".to_string(),
+                Value::Array(errors),
+            );
+        }
+    }
+    let clean = serde_json::to_string(&value).unwrap_or_else(|_| {
+        json!({
+            "status": "partial",
+            "screenshot_count": 0,
+            "screenshot_complete": false,
+            "screenshot_attachment_errors": ["The capture attachment result could not be serialized safely."]
+        })
+        .to_string()
+    });
     (clean, images)
 }
 
@@ -1219,13 +1323,18 @@ impl PlatformCopilot {
                         "Rendered app page capture(s) from the preceding page tool result (open_app_page / interact_app_page), ordered top-to-bottom. Inspect all images before answering about the page's content.",
                     ));
                 }
-                image_contents.extend(tool_images.into_iter().map(|image| {
-                    UserContent::Image(Image {
-                        data: DocumentSourceKind::Url(image.url.clone()),
+                image_contents.extend(tool_images.into_iter().filter_map(|image| {
+                    let data = image
+                        .data
+                        .clone()
+                        .map(DocumentSourceKind::Base64)
+                        .or_else(|| image.url.clone().map(DocumentSourceKind::Url))?;
+                    Some(UserContent::Image(Image {
+                        data,
                         media_type: parse_image_media_type(&image.media_type),
                         detail: Some(ImageDetail::High),
                         additional_params: None,
-                    })
+                    }))
                 }));
                 current_prompt = rig::message::Message::User {
                     content: OneOrMany::many(image_contents)
@@ -2222,7 +2331,11 @@ mod tests {
 
         let (text, images) = split_platform_tool_output(raw);
         assert_eq!(images.len(), 2);
-        assert_eq!(images[0].url, "https://tmp.example/first.png");
+        assert_eq!(
+            images[0].url.as_deref(),
+            Some("https://tmp.example/first.png")
+        );
+        assert!(images[0].data.is_none());
         assert!(!text.contains(PLATFORM_TOOL_IMAGE_URLS_FIELD));
         assert!(!text.contains("tmp.example"));
         assert_eq!(
@@ -2243,6 +2356,94 @@ mod tests {
         assert!(images.is_empty());
         assert!(!text.contains(PLATFORM_TOOL_IMAGE_URLS_FIELD));
         assert!(!text.contains("base64"));
+        let clean = serde_json::from_str::<Value>(&text).unwrap();
+        assert_eq!(clean["status"], "partial");
+        assert_eq!(clean["screenshot_count"], 0);
+        assert_eq!(clean["screenshot_complete"], false);
+        assert_eq!(
+            clean["screenshot_attachment_errors"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn malformed_page_capture_field_shape_is_removed_and_marked_partial() {
+        let raw = json!({
+            "status": "ok",
+            "screenshot_count": 1,
+            "screenshot_complete": true,
+            "_flowpilot_image_urls": "private-image-data",
+        })
+        .to_string();
+
+        let (text, images) = split_platform_tool_output(raw);
+        assert!(images.is_empty());
+        assert!(!text.contains(PLATFORM_TOOL_IMAGE_URLS_FIELD));
+        assert!(!text.contains("private-image-data"));
+        let clean = serde_json::from_str::<Value>(&text).unwrap();
+        assert_eq!(clean["status"], "partial");
+        assert_eq!(clean["screenshot_count"], 0);
+        assert_eq!(clean["screenshot_complete"], false);
+        assert!(
+            clean["screenshot_attachment_errors"][0]
+                .as_str()
+                .is_some_and(|error| error.contains("not an array"))
+        );
+    }
+
+    #[test]
+    fn page_capture_validation_keeps_only_the_prefix_before_an_invalid_reference() {
+        let raw = json!({
+            "status": "ok",
+            "screenshot_count": 3,
+            "screenshot_complete": true,
+            "_flowpilot_image_urls": [
+                { "data": "Zmlyc3Q=", "media_type": "image/png" },
+                { "data": "c2Vjb25k", "media_type": "text/plain" },
+                { "data": "dGhpcmQ=", "media_type": "image/png" },
+            ],
+        })
+        .to_string();
+
+        let (text, images) = split_platform_tool_output(raw);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data.as_deref(), Some("Zmlyc3Q="));
+        let clean = serde_json::from_str::<Value>(&text).unwrap();
+        assert_eq!(clean["status"], "partial");
+        assert_eq!(clean["screenshot_count"], 1);
+        assert_eq!(clean["screenshot_complete"], false);
+        assert!(
+            clean["screenshot_attachment_errors"][0]
+                .as_str()
+                .is_some_and(|error| error.contains("top-to-bottom ordering"))
+        );
+    }
+
+    #[test]
+    fn bounded_inline_page_capture_is_accepted_and_removed_from_text() {
+        let raw = json!({
+            "status": "ok",
+            "screenshot_count": 1,
+            "_flowpilot_image_urls": [{
+                "data": "aW1hZ2U=",
+                "media_type": "image/png"
+            }],
+        })
+        .to_string();
+
+        let (text, images) = split_platform_tool_output(raw);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data.as_deref(), Some("aW1hZ2U="));
+        assert!(images[0].url.is_none());
+        assert!(!text.contains(PLATFORM_TOOL_IMAGE_URLS_FIELD));
+        assert!(!text.contains("aW1hZ2U="));
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["screenshot_count"],
+            1
+        );
     }
 
     #[test]

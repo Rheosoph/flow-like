@@ -27,6 +27,8 @@ impl NodeLogic for SetIsEmptyNode {
             "Checks if a hash set is empty or not",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "isEmpty");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

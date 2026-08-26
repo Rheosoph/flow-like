@@ -104,6 +104,7 @@ export type { IUpsertPin } from "./flow/board/commands/upsert-pin";
 export type { IUpsertVariable } from "./flow/board/commands/upsert-variable";
 export type { IUpsertLayer } from "./flow/board/commands/upsert-layer";
 export type { IRemoveLayer } from "./flow/board/commands/remove-layer";
+export type { IMoveToLayer } from "./flow/board/commands/move-to-layer";
 export * from "./hub/hub";
 export * from "./llm/history";
 export * from "./llm/response";

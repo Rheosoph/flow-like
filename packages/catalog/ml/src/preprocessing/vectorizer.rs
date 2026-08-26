@@ -6,9 +6,11 @@
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -17,9 +19,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa_preprocessing::tf_idf_vectorization::{FittedTfIdfVectorizer, TfIdfVectorizer};
 #[cfg(feature = "execute")]
@@ -83,6 +86,7 @@ impl NodeLogic for FitTfIdfVectorizerNode {
             "Learn a vocabulary from a text column and turn documents into numeric vectors weighted by term frequency times inverse document frequency. Feed the fitted vectorizer to Apply Transform to vectorize a column, then train a classifier such as Multinomial Naive Bayes on the result. Tokenization always uses the built-in regex tokenizer, because a custom tokenizer function cannot be persisted and would make the saved model unloadable.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "fitTfidfVectorizer");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -394,7 +398,6 @@ impl NodeLogic for FitTfIdfVectorizerNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

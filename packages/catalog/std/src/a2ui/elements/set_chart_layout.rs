@@ -28,6 +28,7 @@ impl NodeLogic for SetChartLayout {
             "Sets the layout configuration for a Plotly chart",
             "UI/Elements/Charts",
         );
+        node.set_flowscript_name("ui", "setChartLayout");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

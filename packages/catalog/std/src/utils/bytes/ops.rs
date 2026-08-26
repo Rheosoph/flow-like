@@ -42,6 +42,8 @@ impl NodeLogic for BytesLengthNode {
             "Byte Length",
             "How many bytes the buffer holds",
         );
+        node.set_flowscript_name("bytes", "length");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         node.add_output_pin("length", "Length", "Number of bytes", VariableType::Integer);
         node.add_output_pin(
@@ -84,6 +86,8 @@ impl NodeLogic for BytesConcatNode {
             "Concat Bytes",
             "Appends byte buffers to each other",
         );
+        node.set_flowscript_name("bytes", "concat");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Part to append");
         bytes_input(&mut node, "bytes", "Bytes", "Part to append");
         bytes_output(&mut node, "result", "Bytes", "All parts appended in order");
@@ -123,6 +127,8 @@ impl NodeLogic for BytesSliceNode {
             "Slice Bytes",
             "Takes a range out of a byte buffer",
         );
+        node.set_flowscript_name("bytes", "slice");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         node.add_input_pin(
             "start",
@@ -189,6 +195,8 @@ impl NodeLogic for BytesEqualNode {
             "== (Bytes)",
             "Compares two byte buffers for equality",
         );
+        node.set_flowscript_name("bytes", "equal");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         bytes_input(&mut node, "other", "Other", "Input Bytes");
         node.add_output_pin(
@@ -229,6 +237,8 @@ impl NodeLogic for BytesStartsWithNode {
             "Starts With (Bytes)",
             "Checks a buffer against a leading byte sequence, for example a file signature",
         );
+        node.set_flowscript_name("bytes", "startsWith");
+        node.set_receiver("bytes");
         bytes_input(&mut node, "bytes", "Bytes", "Input Bytes");
         bytes_input(&mut node, "prefix", "Prefix", "Bytes to look for");
         node.add_output_pin(

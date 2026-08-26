@@ -122,6 +122,7 @@ impl NodeLogic for ListGoogleCalendarsNode {
             "List all Google Calendars",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "list");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -245,6 +246,7 @@ impl NodeLogic for ListGoogleCalendarEventsNode {
             "List events from a Google Calendar",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "listEvents");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -413,6 +415,7 @@ impl NodeLogic for GetGoogleCalendarEventNode {
             "Get a specific calendar event",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "getEvent");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -524,6 +527,7 @@ impl NodeLogic for CreateGoogleCalendarEventNode {
             "Create a new calendar event",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "createEvent");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -748,6 +752,7 @@ impl NodeLogic for UpdateGoogleCalendarEventNode {
             "Update an existing calendar event",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "updateEvent");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -927,6 +932,7 @@ impl NodeLogic for DeleteGoogleCalendarEventNode {
             "Delete a calendar event",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "deleteEvent");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1045,6 +1051,7 @@ impl NodeLogic for QuickAddGoogleCalendarEventNode {
             "Create an event from natural language text",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "quickAdd");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1158,6 +1165,7 @@ impl NodeLogic for QueryFreeBusyNode {
             "Query free/busy information for calendars",
             "Data/Google/Calendar",
         );
+        node.set_flowscript_name("google.calendar", "freeBusy");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

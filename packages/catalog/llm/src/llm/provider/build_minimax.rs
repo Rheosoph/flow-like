@@ -59,6 +59,7 @@ impl NodeLogic for BuildMiniMaxNode {
             "Prepares a Bit for the MiniMax API using the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "minimax");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(2);
 

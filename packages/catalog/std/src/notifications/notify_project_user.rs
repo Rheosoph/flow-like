@@ -38,6 +38,7 @@ impl NodeLogic for NotifyProjectUserNode {
             "Send a notification to a specific user in this project",
             "Notifications",
         );
+        node.set_flowscript_name("notify", "projectUser");
         node.add_icon("/flow/icons/bell-ring.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

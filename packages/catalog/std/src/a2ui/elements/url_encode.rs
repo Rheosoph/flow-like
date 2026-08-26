@@ -25,6 +25,7 @@ impl NodeLogic for UrlEncode {
             "Encodes a string for safe use in URLs (percent-encoding)",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "urlEncode");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

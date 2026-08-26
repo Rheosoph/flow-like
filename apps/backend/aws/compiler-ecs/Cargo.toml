@@ -6,7 +6,7 @@ description = "Flow-Like ECS WASM Compiler (EventBridge Pipe → ECS RunTask)"
 
 [dependencies]
 flow-like-compiler.workspace = true
-flow-like-types.workspace = true
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
 
 mimalloc.workspace = true
 reqwest.workspace = true
@@ -17,11 +17,3 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 sentry.workspace = true
 sentry-tracing.workspace = true
 tokio = { version = "1", features = ["full"] }
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

@@ -24,6 +24,8 @@ impl NodeLogic for StringEscapeNode {
             "Escapes special characters in a string (newlines, tabs, carriage returns, backslashes, quotes).",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "escape");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);

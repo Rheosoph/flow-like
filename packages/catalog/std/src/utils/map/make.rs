@@ -27,6 +27,7 @@ impl NodeLogic for MakeMapNode {
             "Creates an empty map (string keys)",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "make");
 
         node.add_icon("/flow/icons/book-key.svg");
 

@@ -44,6 +44,7 @@ impl NodeLogic for UpdateLabeler {
             "Add, remove, or manage bounding boxes on an ImageLabeler element",
             "UI/Elements/Labeler",
         );
+        node.set_flowscript_name("ui", "updateLabeler");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

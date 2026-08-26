@@ -13,6 +13,7 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 #[cfg(feature = "execute")]
 use teloxide::prelude::*;

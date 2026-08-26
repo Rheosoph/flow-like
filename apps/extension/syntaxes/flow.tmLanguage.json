@@ -5,12 +5,15 @@
 	"patterns": [
 		{ "include": "#comments" },
 		{ "include": "#decorators" },
+		{ "include": "#use" },
 		{ "include": "#declarations" },
 		{ "include": "#keywords" },
 		{ "include": "#types" },
 		{ "include": "#constants" },
 		{ "include": "#strings" },
 		{ "include": "#numbers" },
+		{ "include": "#namespace-path" },
+		{ "include": "#method-call" },
 		{ "include": "#function-call" },
 		{ "include": "#operators" },
 		{ "include": "#object-keys" }
@@ -33,7 +36,7 @@
 			"patterns": [
 				{
 					"name": "meta.decorator.flow",
-					"match": "(@)(secret|readonly|runtime|category|description|schema|cache)\\b",
+					"match": "(@)(secret|readonly|runtime|category|description|schema|cache|parallel)\\b",
 					"captures": {
 						"1": { "name": "punctuation.decorator.flow" },
 						"2": { "name": "entity.name.function.decorator.flow" }
@@ -63,6 +66,12 @@
 						"1": { "name": "storage.type.function.flow" },
 						"2": { "name": "entity.name.function.flow" }
 					}
+				},
+				{
+					"match": "\\b(detached)\\s*(?=\\{)",
+					"captures": {
+						"1": { "name": "storage.type.detached.flow" }
+					}
 				}
 			]
 		},
@@ -70,7 +79,7 @@
 			"patterns": [
 				{
 					"name": "keyword.control.flow",
-					"match": "\\b(if|else|for|of|return)\\b"
+					"match": "\\b(if|else|for|of|in|while|break|continue|return|use|as)\\b"
 				}
 			]
 		},
@@ -111,13 +120,53 @@
 			]
 		},
 		"strings": {
-			"name": "string.quoted.double.flow",
-			"begin": "\"",
-			"end": "\"",
 			"patterns": [
 				{
-					"name": "constant.character.escape.flow",
-					"match": "\\\\(?:[\"\\\\/nrt]|u[0-9A-Fa-f]{4})"
+					"name": "string.quoted.double.flow",
+					"begin": "\"",
+					"end": "\"",
+					"patterns": [
+						{
+							"name": "constant.character.escape.flow",
+							"match": "\\\\(?:[\"'\\\\/bfnrt]|u[0-9A-Fa-f]{4})"
+						}
+					]
+				},
+				{
+					"name": "string.quoted.single.flow",
+					"begin": "'",
+					"end": "'",
+					"patterns": [
+						{
+							"name": "constant.character.escape.flow",
+							"match": "\\\\(?:[\"'\\\\/bfnrt]|u[0-9A-Fa-f]{4})"
+						}
+					]
+				},
+				{
+					"name": "string.template.flow",
+					"begin": "`",
+					"end": "`",
+					"patterns": [
+						{
+							"name": "constant.character.escape.flow",
+							"match": "\\\\(?:[`\\\\$/bfnrt]|u[0-9A-Fa-f]{4})"
+						},
+						{
+							"name": "meta.template.expression.flow",
+							"begin": "\\$\\{",
+							"end": "\\}",
+							"beginCaptures": {
+								"0": { "name": "punctuation.definition.template-expression.begin.flow" }
+							},
+							"endCaptures": {
+								"0": { "name": "punctuation.definition.template-expression.end.flow" }
+							},
+							"patterns": [
+								{ "include": "#template-expression-body" }
+							]
+						}
+					]
 				}
 			]
 		},
@@ -147,7 +196,7 @@
 		"object-keys": {
 			"patterns": [
 				{
-					"match": "([A-Za-z_$][\\w$]*)\\s*(:)",
+					"match": "([A-Za-z_$][\\w$]*)\\s*(:)(?!:)",
 					"captures": {
 						"1": { "name": "variable.parameter.flow" },
 						"2": { "name": "punctuation.separator.key-value.flow" }
@@ -157,6 +206,10 @@
 		},
 		"operators": {
 			"patterns": [
+				{
+					"name": "keyword.operator.assignment.compound.flow",
+					"match": "\\+=|-=|\\*=|/="
+				},
 				{
 					"name": "keyword.operator.comparison.flow",
 					"match": "===|!==|==|!=|>=|<=|>|<"
@@ -177,6 +230,68 @@
 					"name": "keyword.operator.ternary.flow",
 					"match": "\\?"
 				}
+			]
+		},
+		"use": {
+			"patterns": [
+				{
+					"begin": "^\\s*(use)\\b",
+					"end": "$",
+					"beginCaptures": {
+						"1": { "name": "keyword.control.import.flow" }
+					},
+					"patterns": [
+						{ "include": "#comments" },
+						{
+							"match": "\\b(as)\\b",
+							"name": "keyword.control.as.flow"
+						},
+						{ "match": "\\*", "name": "keyword.operator.glob.flow" },
+						{ "include": "#namespace-path" },
+						{
+							"match": "[A-Za-z_$][\\w$]*",
+							"name": "entity.name.namespace.flow"
+						},
+						{
+							"match": "[{},]",
+							"name": "punctuation.separator.use.flow"
+						}
+					]
+				}
+			]
+		},
+		"namespace-path": {
+			"patterns": [
+				{
+					"match": "([A-Za-z_$][\\w$]*)\\s*(::)",
+					"captures": {
+						"1": { "name": "entity.name.namespace.flow" },
+						"2": { "name": "punctuation.separator.namespace.flow" }
+					}
+				}
+			]
+		},
+		"method-call": {
+			"patterns": [
+				{
+					"match": "(\\.)\\s*([A-Za-z_$][\\w$]*)\\s*(?=\\()",
+					"captures": {
+						"1": { "name": "punctuation.accessor.flow" },
+						"2": { "name": "entity.name.function.method.flow" }
+					}
+				}
+			]
+		},
+		"template-expression-body": {
+			"patterns": [
+				{
+					"begin": "\\{",
+					"end": "\\}",
+					"patterns": [
+						{ "include": "#template-expression-body" }
+					]
+				},
+				{ "include": "$self" }
 			]
 		}
 	}

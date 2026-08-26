@@ -1,19 +1,136 @@
 import * as vscode from "vscode";
-import { analyzeFlowDocument } from "./flowDocument";
+import {
+	type FlowCall,
+	type FlowDocumentModel,
+	analyzeFlowDocument,
+	expandUsePath,
+	scanCode,
+} from "./flowDocument";
 import { getDecorator } from "./providers";
-import type { SignatureRegistry } from "./signatures";
+import type { NodeSignature, SignatureRegistry } from "./signatures";
+import {
+	type ResolveContext,
+	contextOf,
+	expressionShape,
+	openedMembers,
+	resolveMethod,
+} from "./typeResolver";
 
 const CONTROL_NAMES = new Set([
 	"if",
 	"else",
 	"for",
 	"of",
+	"while",
 	"return",
 	"const",
 	"let",
 	"function",
 	"interface",
+	"use",
+	"as",
 ]);
+
+export interface UnknownCallIssue {
+	readonly call: FlowCall;
+	readonly message: string;
+}
+
+/** "Did you mean …" from nodes sharing the alias or flat name. */
+function spellingHint(member: string, registry: SignatureRegistry): string {
+	const wanted = member.toLowerCase();
+	const hints: string[] = [];
+	for (const sig of registry.all()) {
+		if (sig.alias?.toLowerCase() === wanted || sig.flat.toLowerCase() === wanted) {
+			const spelling = `${sig.name}(…)`;
+			if (!hints.includes(spelling)) {
+				hints.push(spelling);
+			}
+		}
+	}
+	return hints.length > 0
+		? ` Did you mean ${hints
+				.slice(0, 3)
+				.map((hint) => `\`${hint}\``)
+				.join(" or ")}?`
+		: "";
+}
+
+/**
+ * Calls that resolve to no declared node: bare names (flat, or opened by `use`), `ns::member`
+ * paths (after `use` expansion) and `receiver.method()` calls dispatched on the receiver's
+ * class. User functions, event handlers and UFCS calls on user functions never count.
+ */
+export function unknownCallIssues(
+	model: FlowDocumentModel,
+	registry: SignatureRegistry,
+): UnknownCallIssue[] {
+	const ctx = contextOf(registry, model);
+	const issues: UnknownCallIssue[] = [];
+	for (const call of model.calls) {
+		if (call.inTemplate || (call.kind === "bare" && CONTROL_NAMES.has(call.name))) {
+			continue;
+		}
+		if (model.localNames.has(call.name)) {
+			continue;
+		}
+		const message = unknownCallMessage(call, ctx);
+		if (message) {
+			issues.push({ call, message });
+		}
+	}
+	return issues;
+}
+
+function unknownCallMessage(call: FlowCall, ctx: ResolveContext): string | undefined {
+	const { registry } = ctx;
+	switch (call.kind) {
+		case "path": {
+			const path = expandUsePath(call.path ?? [], ctx.uses);
+			const ns = registry.namespace(path);
+			if (!ns) {
+				return `Unknown function '${call.display}' — namespace '${(call.path ?? []).join("::")}' is not declared in any .flow.d file.${spellingHint(call.name, registry)}`;
+			}
+			return ns.members.has(call.name)
+				? undefined
+				: `Unknown function '${call.display}' — '${call.name}' is not a member of namespace '${ns.key}'.${spellingHint(call.name, registry)}`;
+		}
+		case "method": {
+			if (registry.methodCount === 0) {
+				return undefined; // No method tables (legacy declarations without names.json).
+			}
+			const receiver = expressionShape(call.receiverText ?? "", ctx, call.range.start);
+			const { candidates, cls } = resolveMethod(receiver, call.name, ctx);
+			if (candidates.length > 0) {
+				return undefined;
+			}
+			// `ns.member(...)` with an unbound namespace root is accepted (namespace walk).
+			const walked = (call.receiverText ?? "").split(".");
+			if (
+				walked.every((segment) => /^[A-Za-z_$][\w$]*$/.test(segment)) &&
+				registry.member(expandUsePath(walked, ctx.uses), call.name)
+			) {
+				return undefined;
+			}
+			return cls
+				? `Unknown method '${call.name}' on ${cls}.${spellingHint(call.name, registry)}`
+				: `Unknown method '${call.name}' — no declared node is callable as .${call.name}().${spellingHint(call.name, registry)}`;
+		}
+		default: {
+			if (registry.get(call.name)) {
+				return undefined;
+			}
+			const opened: NodeSignature[] = openedMembers(call.name, ctx);
+			if (opened.length === 1) {
+				return undefined;
+			}
+			if (opened.length > 1) {
+				return `'${call.name}' is ambiguous: ${opened.map((sig) => `\`${sig.name}\``).join(", ")}. Write the qualified name.`;
+			}
+			return `Unknown function '${call.name}' — not declared in any .flow.d file or locally.${spellingHint(call.name, registry)}`;
+		}
+	}
+}
 
 export interface DecoratorValidationIssue {
 	readonly message: string;
@@ -147,16 +264,41 @@ export class FlowLinter {
 			return; // No declarations loaded — avoid false positives.
 		}
 		const model = analyzeFlowDocument(document);
-		for (const call of model.calls) {
-			if (CONTROL_NAMES.has(call.name)) {
+		for (const use of model.uses) {
+			if (use.kind === "invalid") {
+				this.pushWarning(use.range, use.error, "invalid-use", diagnostics);
 				continue;
 			}
-			if (this.registry.has(call.name) || model.localNames.has(call.name)) {
+			if (this.registry.namespaceCount === 0) {
 				continue;
 			}
+			const ns = this.registry.namespace(expandUsePath(use.path, model.uses));
+			if (!ns) {
+				this.pushWarning(
+					use.range,
+					`Unknown namespace '${use.path.join("::")}' — not declared in any .flow.d file.`,
+					"unknown-namespace",
+					diagnostics,
+				);
+				continue;
+			}
+			if (use.kind === "members") {
+				for (const member of use.members) {
+					if (!ns.members.has(member)) {
+						this.pushWarning(
+							use.range,
+							`'${member}' is not a member of namespace '${ns.key}'.`,
+							"unknown-namespace-member",
+							diagnostics,
+						);
+					}
+				}
+			}
+		}
+		for (const issue of unknownCallIssues(model, this.registry)) {
 			const diag = new vscode.Diagnostic(
-				call.range,
-				`Unknown function '${call.name}' — not declared in any .flow.d file or locally.`,
+				issue.call.kind === "path" ? issue.call.headRange : issue.call.range,
+				issue.message,
 				vscode.DiagnosticSeverity.Warning,
 			);
 			diag.source = "flowscript";
@@ -172,10 +314,12 @@ export class FlowLinter {
 	): void {
 		const stack: Array<{ ch: string; offset: number }> = [];
 		const pairs: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-		let inString = false;
+
+		// Unterminated `"…"` / `'…'` strings (template literals may span lines).
+		let inString: string | undefined;
 		let stringStart = 0;
 		let inComment = false;
-
+		let inTemplate = 0;
 		for (let i = 0; i < text.length; i++) {
 			const ch = text[i];
 			if (inComment) {
@@ -187,8 +331,8 @@ export class FlowLinter {
 			if (inString) {
 				if (ch === "\\") {
 					i++;
-				} else if (ch === '"') {
-					inString = false;
+				} else if (ch === inString) {
+					inString = undefined;
 				} else if (ch === "\n") {
 					this.pushAt(
 						document,
@@ -197,31 +341,27 @@ export class FlowLinter {
 						"Unterminated string literal.",
 						diagnostics,
 					);
-					inString = false;
+					inString = undefined;
 				}
 				continue;
 			}
-			if (ch === '"') {
-				inString = true;
+			if (inTemplate > 0) {
+				if (ch === "\\") {
+					i++;
+				} else if (ch === "`") {
+					inTemplate--;
+				}
+				continue;
+			}
+			if (ch === '"' || ch === "'") {
+				inString = ch;
 				stringStart = i;
+			} else if (ch === "`") {
+				inTemplate++;
 			} else if (ch === "/" && text[i + 1] === "/") {
 				inComment = true;
-			} else if (ch === "(" || ch === "[" || ch === "{") {
-				stack.push({ ch, offset: i });
-			} else if (ch === ")" || ch === "]" || ch === "}") {
-				const open = stack.pop();
-				if (!open || open.ch !== pairs[ch]) {
-					this.pushAt(
-						document,
-						i,
-						i + 1,
-						`Unmatched closing '${ch}'.`,
-						diagnostics,
-					);
-				}
 			}
 		}
-
 		if (inString) {
 			this.pushAt(
 				document,
@@ -231,6 +371,23 @@ export class FlowLinter {
 				diagnostics,
 			);
 		}
+
+		scanCode(text, (ch, offset) => {
+			if (ch === "(" || ch === "[" || ch === "{") {
+				stack.push({ ch, offset });
+			} else if (ch === ")" || ch === "]" || ch === "}") {
+				const open = stack.pop();
+				if (!open || open.ch !== pairs[ch]) {
+					this.pushAt(
+						document,
+						offset,
+						offset + 1,
+						`Unmatched closing '${ch}'.`,
+						diagnostics,
+					);
+				}
+			}
+		});
 		for (const open of stack) {
 			this.pushAt(
 				document,

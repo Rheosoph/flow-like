@@ -4,7 +4,9 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{anyhow, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::anyhow;
+use flow_like_types::{async_trait, json::json};
 
 use crate::data::path::FlowPath;
 
@@ -49,6 +51,7 @@ impl NodeLogic for InsertRowNode {
             "Insert one or more rows into a worksheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "insertRow");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Exec

@@ -18,7 +18,7 @@ flow-like-api = { workspace = true, default-features = false, features = ["gcp",
 flow-like-secrets.workspace = true
 flow-like-gcp-data.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+flow-like-catalog = { workspace = true, features = ["all-metadata"] }
 mimalloc.workspace = true
 axum.workspace = true
 sea-orm.workspace = true

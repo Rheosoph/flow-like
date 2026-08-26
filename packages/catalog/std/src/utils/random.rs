@@ -6,7 +6,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
 
 const ALPHABETS: [(&str, &str); 5] = [
     (
@@ -41,6 +43,7 @@ impl NodeLogic for RandomStringNode {
             "Generates a random string, for example a token or a short code",
             "Utils/Random",
         );
+        node.set_flowscript_name("random", "string");
         node.add_icon("/flow/icons/random.svg");
         node.set_scores(pure_scores());
 
@@ -148,6 +151,7 @@ impl NodeLogic for RandomChoiceNode {
             "Picks elements out of an array at random",
             "Utils/Random",
         );
+        node.set_flowscript_name("random", "choice");
         node.add_icon("/flow/icons/random.svg");
         node.set_scores(pure_scores());
 

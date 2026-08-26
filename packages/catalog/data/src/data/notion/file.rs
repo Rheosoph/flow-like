@@ -135,6 +135,7 @@ impl NodeLogic for UploadNotionFileNode {
             "Uploads a FlowPath file to Notion and returns a file_upload object",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "uploadFile");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -397,6 +398,7 @@ impl NodeLogic for DownloadNotionFileNode {
             "Downloads a Notion file URL into a FlowPath",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "downloadFile");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

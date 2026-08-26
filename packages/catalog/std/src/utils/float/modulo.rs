@@ -25,6 +25,8 @@ impl NodeLogic for FloatModuloNode {
             "Remainder of a float division",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "modulo");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

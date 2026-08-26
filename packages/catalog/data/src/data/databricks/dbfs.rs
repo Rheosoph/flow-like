@@ -48,6 +48,7 @@ impl NodeLogic for ListDatabricksDbfsNode {
             "List files and directories in the Databricks File System (DBFS)",
             "Data/Databricks/DBFS",
         );
+        node.set_flowscript_name("databricks", "listDbfs");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -208,6 +209,7 @@ impl NodeLogic for ReadDatabricksDbfsNode {
             "Read the contents of a file from DBFS. Returns base64 encoded content for binary files.",
             "Data/Databricks/DBFS",
         );
+        node.set_flowscript_name("databricks", "readDbfs");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -394,6 +396,7 @@ impl NodeLogic for GetDatabricksDbfsStatusNode {
             "Get the status (metadata) of a file or directory in DBFS",
             "Data/Databricks/DBFS",
         );
+        node.set_flowscript_name("databricks", "getDbfsStatus");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -26,6 +26,7 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
             "Typesets Markdown into a paginated PDF with selectable text, tables, code blocks, charts and embedded images",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "fromMarkdown");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

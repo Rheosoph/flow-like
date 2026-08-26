@@ -1,0 +1,11 @@
+use log::{ info }
+
+eventsGeneric explainIncident(payload: Struct, incident: Struct, report: string, attempts: int, production: bool) {
+    const normalized = report.trim()
+    let urgent = production && (attempts >= 3)
+    let status = urgent ? "critical" : "investigate"
+    let previousStatus = incident.status
+    incident.status = status
+    incident.summary = `${status}: ${normalized} after ${attempts} attempt(s)`
+    info({ message: `${previousStatus} -> ${incident.status}: ${incident.summary}`, toast: false })
+}

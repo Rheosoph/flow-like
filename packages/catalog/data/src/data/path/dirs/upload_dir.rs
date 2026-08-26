@@ -25,6 +25,7 @@ impl NodeLogic for PathFromUploadDirNode {
             "Converts the upload directory to a Path",
             "Data/Files/Directories",
         );
+        node.set_flowscript_name("files", "uploadDir");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_output_pin("path", "Path", "Output Path", VariableType::Struct)

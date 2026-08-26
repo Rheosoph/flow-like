@@ -36,6 +36,7 @@ impl NodeLogic for CellAreaNode {
             "Calculates the area of an H3 cell in the specified unit.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellArea");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin("cell", "Cell", "H3 cell index", VariableType::String)

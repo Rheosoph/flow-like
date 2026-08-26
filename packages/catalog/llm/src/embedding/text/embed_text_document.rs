@@ -26,6 +26,7 @@ impl NodeLogic for EmbedDocumentNode {
             "Creates an embedding vector for a document string using a cached embedding model",
             "AI/Embedding",
         );
+        node.set_flowscript_name("ai.embedding", "embedDocument");
 
         node.set_scores(
             NodeScores::new()

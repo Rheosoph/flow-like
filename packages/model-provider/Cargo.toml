@@ -32,6 +32,7 @@ nnapi = ["ort/nnapi"]
 xnnpack = ["ort/xnnpack"]
 
 [dependencies]
+flow-like-model-protocol.workspace = true
 flow-like-types.workspace = true
 base64 = "0.22"
 text-splitter = {version = "0.27.0", features = ["markdown", "tokenizers", "tiktoken-rs"]}
@@ -42,12 +43,10 @@ tracing.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tiktoken-rs = "0.7.0"
 aws-config = { workspace = true, features = ["behavior-version-latest"] }
-aws-sdk-bedrockruntime = { version = "1.101.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 ndarray.workspace = true
 rig.workspace = true
 rig-vertexai.workspace = true
 google-cloud-auth.workspace = true
-rmcp.workspace = true
 http = "1.4.0"
 reqwest = { workspace = true, optional = true }
 

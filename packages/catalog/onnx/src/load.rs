@@ -588,6 +588,7 @@ impl NodeLogic for LoadOnnxNode {
             "Load ONNX Model from Path",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "load");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

@@ -78,6 +78,7 @@ impl NodeLogic for GetLinkTypesNode {
             "Get all available issue link types",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getLinkTypes");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -185,6 +186,7 @@ impl NodeLogic for GetIssueLinksNode {
             "Get all links for an issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getIssueLinks");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -302,6 +304,7 @@ impl NodeLogic for CreateIssueLinkNode {
             "Create a link between two issues",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "createIssueLink");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -478,6 +481,7 @@ impl NodeLogic for RemoveIssueLinkNode {
             "Remove a link between issues",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "removeIssueLink");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

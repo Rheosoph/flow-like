@@ -25,6 +25,7 @@ impl NodeLogic for PathFromCacheDirNode {
             "Converts the cache directory to a Path",
             "Data/Files/Directories",
         );
+        node.set_flowscript_name("files", "cacheDir");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_output_pin("path", "Path", "Output Path", VariableType::Struct)

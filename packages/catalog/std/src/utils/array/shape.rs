@@ -28,6 +28,8 @@ impl NodeLogic for ChunkArrayNode {
             "Splits an array into batches of a fixed size",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "chunk");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
         node.set_scores(pure_scores());
 
@@ -103,6 +105,8 @@ impl NodeLogic for FlattenArrayNode {
             "Pulls nested arrays up into a single array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "flatten");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
         node.set_scores(pure_scores());
 

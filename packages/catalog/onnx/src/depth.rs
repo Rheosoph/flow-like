@@ -124,6 +124,7 @@ impl NodeLogic for DepthEstimationNode {
             "Estimate depth from a single image using ONNX models. Download models from: MiDaS (https://github.com/isl-org/MiDaS/releases), DPT (https://huggingface.co/Intel/dpt-large/tree/main), Depth Anything (https://huggingface.co/depth-anything/Depth-Anything-V2-Small/tree/main)",
             "AI/ML/ONNX/Vision",
         );
+        node.set_flowscript_name("onnx", "depthEstimation");
         node.set_version(1);
 
         node.add_icon("/flow/icons/depth.svg");
@@ -310,6 +311,7 @@ impl NodeLogic for DepthToPointCloudNode {
             "Convert depth map to 3D point cloud coordinates",
             "AI/ML/ONNX/Vision",
         );
+        node.set_flowscript_name("onnx", "depthToPointCloud");
 
         node.add_icon("/flow/icons/3d.svg");
 
@@ -415,6 +417,7 @@ impl NodeLogic for DepthColorizeNode {
             "Convert depth map to rainbow-colored visualization",
             "AI/ML/ONNX/Vision",
         );
+        node.set_flowscript_name("onnx", "depthColorize");
 
         node.add_icon("/flow/icons/palette.svg");
 

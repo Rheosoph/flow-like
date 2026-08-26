@@ -1,0 +1,151 @@
+---
+import { getCollection } from "astro:content";
+import { Icon } from "@astrojs/starlight/components";
+import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
+
+interface Props {
+	partId: string;
+}
+
+const { partId } = Astro.props;
+const part = CURRENT_BOOK_EDITION.parts.find((candidate) => candidate.id === partId);
+if (!part) throw new Error(`Unknown FlowBook part: ${partId}`);
+
+const docs = await getCollection("docs");
+const entries = new Map(docs.map((entry) => [entry.id, entry]));
+const chapters = part.chapters.map((chapter) => {
+	const entry = entries.get(chapter.entryId);
+	if (!entry) throw new Error(`Missing FlowBook chapter: ${chapter.entryId}`);
+	return { ...chapter, entry };
+});
+---
+
+<section class="book-part-chapters" aria-labelledby="part-chapters-title">
+	<div class="book-part-chapters__heading">
+		<p>{part.label} · {CURRENT_BOOK_EDITION.editionLabel}</p>
+		<h2 id="part-chapters-title">Chapters in this part</h2>
+	</div>
+	<ol>
+		{
+			chapters.map((chapter) => (
+				<li>
+					<a href={`/${chapter.entryId}/`}>
+						<span>{String(chapter.number).padStart(2, "0")}</span>
+						<div>
+							<h3>{chapter.entry.data.title.replace(/^\d+\.\s*/, "")}</h3>
+							{chapter.entry.data.description && (
+								<p>{chapter.entry.data.description}</p>
+							)}
+						</div>
+						<Icon name="right-arrow" />
+					</a>
+				</li>
+			))
+		}
+	</ol>
+	<p class="book-part-chapters__all">
+		<a href="/contents/">See the complete FlowBook plan <Icon name="open-book" /></a>
+	</p>
+</section>
+
+<style>
+	.book-part-chapters {
+		margin-top: 3rem;
+		padding-top: 2rem;
+		border-top: 1px solid var(--sl-color-hairline);
+	}
+
+	.book-part-chapters__heading p {
+		margin: 0 0 0.5rem;
+		font: 700 0.68rem/1.3 var(--flowbook-mono, ui-monospace, monospace);
+		letter-spacing: 0.11em;
+		text-transform: uppercase;
+		color: var(--sl-color-accent-high);
+	}
+
+	.book-part-chapters__heading h2 {
+		margin: 0;
+	}
+
+	.book-part-chapters ol {
+		margin: 1.5rem 0 0;
+		padding: 0;
+		display: grid;
+		gap: 0.75rem;
+		list-style: none;
+	}
+
+	.book-part-chapters li {
+		margin: 0;
+	}
+
+	.book-part-chapters li > a {
+		padding: 1.15rem;
+		display: grid;
+		grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+		gap: 1rem;
+		align-items: start;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.75rem;
+		background: color-mix(in srgb, var(--sl-color-bg-nav) 78%, transparent);
+		color: inherit;
+		text-decoration: none;
+		transition: border-color 150ms ease, transform 150ms ease;
+	}
+
+	.book-part-chapters li > a:hover {
+		border-color: var(--sl-color-accent-high);
+		transform: translateY(-1px);
+	}
+
+	.book-part-chapters li > a > span {
+		font: 750 0.78rem/1.4 var(--flowbook-mono, ui-monospace, monospace);
+		letter-spacing: 0.08em;
+		color: var(--sl-color-accent-high);
+	}
+
+	.book-part-chapters h3,
+	.book-part-chapters p {
+		margin: 0;
+	}
+
+	.book-part-chapters h3 {
+		font-size: 1.05rem;
+		color: var(--sl-color-white);
+	}
+
+	.book-part-chapters h3 + p {
+		margin-top: 0.4rem;
+		font-size: 0.9rem;
+		line-height: 1.55;
+		color: var(--sl-color-gray-2);
+	}
+
+	.book-part-chapters li :global(svg) {
+		width: 1.1rem;
+		margin-top: 0.15rem;
+		color: var(--sl-color-accent-high);
+	}
+
+	.book-part-chapters__all {
+		margin-top: 1.25rem;
+		text-align: right;
+	}
+
+	.book-part-chapters__all a {
+		display: inline-flex;
+		gap: 0.5rem;
+		align-items: center;
+		font-weight: 650;
+	}
+
+	@media (max-width: 34rem) {
+		.book-part-chapters li > a {
+			grid-template-columns: 2rem minmax(0, 1fr);
+		}
+
+		.book-part-chapters li :global(svg) {
+			display: none;
+		}
+	}
+</style>

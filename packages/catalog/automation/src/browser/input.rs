@@ -25,6 +25,7 @@ impl NodeLogic for BrowserTypeTextNode {
             "Types text into an element matching the selector",
             "Automation/Browser/Input",
         );
+        node.set_flowscript_name("browser", "typeText");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -148,6 +149,7 @@ impl NodeLogic for BrowserPressKeyNode {
             "Presses a keyboard key (Enter, Tab, Escape, etc.)",
             "Automation/Browser/Input",
         );
+        node.set_flowscript_name("browser", "pressKey");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -296,6 +298,7 @@ impl NodeLogic for BrowserSelectOptionNode {
             "Selects an option in a dropdown/select element",
             "Automation/Browser/Input",
         );
+        node.set_flowscript_name("browser", "selectOption");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

@@ -24,6 +24,8 @@ impl NodeLogic for AbsFloatNode {
             "Calculates the absolute value of a float",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "abs");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float", "Float", "Input Float", VariableType::Float);

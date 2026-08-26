@@ -166,6 +166,7 @@ impl NodeLogic for SearchSharePointSitesNode {
             "Search for SharePoint sites by keyword",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "searchSites");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -264,6 +265,7 @@ impl NodeLogic for GetSharePointSiteNode {
             "Get a SharePoint site by hostname and path or site ID",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "getSite");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -393,6 +395,7 @@ impl NodeLogic for ListSharePointDrivesNode {
             "List document libraries (drives) in a SharePoint site",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "listDrives");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -484,6 +487,7 @@ impl NodeLogic for ListSharePointDriveItemsNode {
             "List files and folders in a SharePoint drive (document library)",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "listDriveItems");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -610,6 +614,7 @@ impl NodeLogic for DownloadSharePointFileNode {
             "Download a file from SharePoint",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "downloadFile");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -741,6 +746,7 @@ impl NodeLogic for GetSharePointDriveItemNode {
             "Get metadata for a SharePoint drive item by ID or path",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "getDriveItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -853,6 +859,7 @@ impl NodeLogic for UploadSharePointFileNode {
             "Upload a FlowPath file to a SharePoint drive; automatically uses an upload session for larger files",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "uploadFile");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1017,6 +1024,7 @@ impl NodeLogic for CreateSharePointFolderNode {
             "Create a folder in a SharePoint drive",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "createFolder");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1184,6 +1192,7 @@ impl NodeLogic for DeleteSharePointDriveItemNode {
             "Delete a file or folder from a SharePoint drive",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "deleteDriveItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1268,6 +1277,7 @@ impl NodeLogic for MoveSharePointDriveItemNode {
             "Move or rename a SharePoint drive item",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "moveDriveItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1406,6 +1416,7 @@ impl NodeLogic for CopySharePointDriveItemNode {
             "Copy a SharePoint drive item asynchronously",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "copyDriveItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1597,6 +1608,7 @@ impl NodeLogic for SearchSharePointDriveItemsNode {
             "Search files and folders in a SharePoint drive",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "searchDriveItems");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1686,6 +1698,7 @@ impl NodeLogic for ListSharePointListsNode {
             "List all SharePoint lists in a site",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "listLists");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1777,6 +1790,7 @@ impl NodeLogic for GetSharePointListItemsNode {
             "Get items from a SharePoint list",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "getListItems");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1884,6 +1898,7 @@ impl NodeLogic for GetSharePointListItemNode {
             "Get a single SharePoint list item",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "getListItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -1994,6 +2009,7 @@ impl NodeLogic for CreateSharePointListItemNode {
             "Create a SharePoint list item from field values",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "createListItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -2112,6 +2128,7 @@ impl NodeLogic for UpdateSharePointListItemFieldsNode {
             "Update field values on a SharePoint list item",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "updateListItemFields");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 
@@ -2232,6 +2249,7 @@ impl NodeLogic for DeleteSharePointListItemNode {
             "Delete a SharePoint list item",
             "Data/Microsoft/SharePoint",
         );
+        node.set_flowscript_name("microsoft.sharepoint", "deleteListItem");
         node.set_version(1);
         node.add_icon("/flow/icons/sharepoint.svg");
 

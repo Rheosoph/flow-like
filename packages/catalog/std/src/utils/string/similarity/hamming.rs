@@ -25,6 +25,8 @@ impl NodeLogic for HammingDistanceNode {
             "Calculates the Hamming distance between two strings",
             "Utils/String/Similarity",
         );
+        node.set_flowscript_name("string", "hammingDistance");
+        node.set_receiver("string1");
         node.add_icon("/flow/icons/distance.svg");
 
         node.add_input_pin("string1", "String 1", "First String", VariableType::String);

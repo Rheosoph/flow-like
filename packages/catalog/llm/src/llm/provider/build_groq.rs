@@ -34,6 +34,7 @@ impl NodeLogic for BuildGroqNode {
             "Prepares a Bit for Groq's API using the supplied endpoint and key",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "groq");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

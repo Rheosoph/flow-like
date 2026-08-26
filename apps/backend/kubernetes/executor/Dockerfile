@@ -22,13 +22,11 @@ RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
 
 # Limit build parallelism to reduce memory pressure during lance compilation
 ENV CARGO_BUILD_JOBS=2
-ENV RUSTFLAGS="--cfg tokio_unstable"
 
 # Use BuildKit cache mounts for faster rebuilds
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
-    --mount=type=cache,target=/app/target,id=cargo-target-k8s-executor \
-    cargo build --release --package k8s-executor && \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-k8s-executor,sharing=locked \
+    CARGO_HOME=/cargo-home cargo build --locked --release --package k8s-executor && \
     cp /app/target/release/k8s-executor /tmp/k8s-executor
 
 # ============================================================

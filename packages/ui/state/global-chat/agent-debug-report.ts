@@ -487,12 +487,16 @@ function redactValue(
 		const record = value as Record<string, unknown>;
 		const entries = Object.entries(record);
 		const hasSecretSibling = record.secret === true;
+		// Page interaction values can contain passwords, payment details, or other form data.
+		// Diagnostics need the target and action kind, never the value FlowPilot entered.
+		const isPageValueAction = record.action === "set_value";
 		const redacted = Object.fromEntries(
 			entries
 				.slice(0, 50)
 				.map(([childKey, childValue]) => [
 					childKey,
-					hasSecretSibling && SECRET_VALUE_SIBLING.test(childKey)
+					(hasSecretSibling && SECRET_VALUE_SIBLING.test(childKey)) ||
+					(isPageValueAction && childKey === "value")
 						? "[REDACTED]"
 						: redactValue(
 								childValue,

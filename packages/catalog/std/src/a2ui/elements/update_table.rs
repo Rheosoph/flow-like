@@ -41,6 +41,7 @@ impl NodeLogic for UpdateTable {
             "Add, remove, or update table data and structure",
             "UI/Elements/Table",
         );
+        node.set_flowscript_name("ui", "updateTable");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

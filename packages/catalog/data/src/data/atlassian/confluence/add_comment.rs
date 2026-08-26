@@ -39,6 +39,7 @@ impl NodeLogic for AddConfluenceCommentNode {
             "Add a comment to a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "addComment");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

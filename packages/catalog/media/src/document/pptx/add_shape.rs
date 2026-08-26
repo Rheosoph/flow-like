@@ -29,6 +29,7 @@ impl NodeLogic for PptxAddShapeNode {
             "Add a shape (rectangle, ellipse, arrow, etc.) to a PPTX slide.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addShape");
         node.add_icon("/flow/icons/shape.svg");
         node.set_scores(
             NodeScores::new()

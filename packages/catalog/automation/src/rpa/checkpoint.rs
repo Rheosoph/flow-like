@@ -24,6 +24,7 @@ impl NodeLogic for SaveCheckpointNode {
             "Creates checkpoint data for potential recovery",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "saveCheckpoint");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -123,6 +124,7 @@ impl NodeLogic for ParseCheckpointNode {
             "Parses checkpoint data from a saved JSON string",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "parseCheckpoint");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

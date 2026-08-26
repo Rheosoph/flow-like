@@ -144,6 +144,7 @@ impl NodeLogic for GetExecutionEnvironmentNode {
             "Returns where and how the current run is executing.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "getEnvironment");
         node.add_icon("/flow/icons/computer.svg");
 
         node.add_output_pin(
@@ -319,6 +320,7 @@ impl NodeLogic for IsLocalEnvironmentNode {
             "Returns true when the current run is executing on a local/client runtime.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "isLocalEnvironment");
         node.add_icon("/flow/icons/computer.svg");
         node.add_output_pin(
             "is_local",
@@ -354,6 +356,7 @@ impl NodeLogic for IsServerEnvironmentNode {
             "Returns true when the current run is executing on the server.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "isServerEnvironment");
         node.add_icon("/flow/icons/cloud.svg");
         node.add_output_pin(
             "is_server",
@@ -392,6 +395,7 @@ impl NodeLogic for IsMobileEnvironmentNode {
             "Returns true when the current run is executing on a mobile runtime.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "isMobileEnvironment");
         node.add_icon("/flow/icons/smartphone.svg");
         node.add_output_pin(
             "is_mobile",
@@ -430,6 +434,7 @@ impl NodeLogic for GetRunIdNode {
             "Returns the current execution run identifier.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "getRunId");
         node.add_icon("/flow/icons/hash.svg");
         node.add_output_pin(
             "run_id",
@@ -462,6 +467,7 @@ impl NodeLogic for GetAppIdNode {
             "Returns the current app identifier.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "getAppId");
         node.add_icon("/flow/icons/box.svg");
         node.add_output_pin(
             "app_id",
@@ -497,6 +503,7 @@ impl NodeLogic for GetUserIdNode {
             "Returns the current user identifier, when available.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "getUserId");
         node.add_icon("/flow/icons/user.svg");
         node.add_output_pin(
             "user_id",
@@ -529,6 +536,7 @@ impl NodeLogic for GetExecutionModeNode {
             "Returns the current execution mode.",
             "Utils/Execution",
         );
+        node.set_flowscript_name("execution", "getMode");
         node.add_icon("/flow/icons/play.svg");
         node.add_output_pin(
             "mode",

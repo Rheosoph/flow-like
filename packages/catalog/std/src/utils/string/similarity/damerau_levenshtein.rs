@@ -24,6 +24,8 @@ impl NodeLogic for DamerauLevenshteinDistanceNode {
             "Calculates the Damerau-Levenshtein distance between two strings",
             "Utils/String/Similarity",
         );
+        node.set_flowscript_name("string", "damerauLevenshteinDistance");
+        node.set_receiver("string1");
         node.add_icon("/flow/icons/distance.svg");
 
         node.add_input_pin("string1", "String 1", "First String", VariableType::String);

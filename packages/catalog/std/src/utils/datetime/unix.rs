@@ -39,6 +39,8 @@ impl NodeLogic for DateToUnixNode {
             "Converts a date into an epoch timestamp",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "toUnix");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/clock.svg");
         node.set_scores(pure_scores());
 
@@ -90,6 +92,7 @@ impl NodeLogic for DateFromUnixNode {
             "Converts an epoch timestamp into a date",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "fromUnix");
         node.add_icon("/flow/icons/clock.svg");
         node.set_scores(pure_scores());
 

@@ -21,6 +21,7 @@ impl NodeLogic for FakeWord {
             "Generates a random lorem ipsum word for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "word");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -59,6 +60,7 @@ impl NodeLogic for FakeWords {
             "Generates random lorem ipsum words for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "words");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -118,6 +120,7 @@ impl NodeLogic for FakeSentence {
             "Generates a random lorem ipsum sentence for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "sentence");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -177,6 +180,7 @@ impl NodeLogic for FakeSentences {
             "Generates random lorem ipsum sentences for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "sentences");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -236,6 +240,7 @@ impl NodeLogic for FakeParagraph {
             "Generates a random lorem ipsum paragraph for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "paragraph");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -295,6 +300,7 @@ impl NodeLogic for FakeParagraphs {
             "Generates random lorem ipsum paragraphs for mocking data",
             "Utils/Faker/Lorem",
         );
+        node.set_flowscript_name("faker.lorem", "paragraphs");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

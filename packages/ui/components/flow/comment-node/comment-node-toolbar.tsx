@@ -1,5 +1,7 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
+	FileCode2Icon,
 	LockIcon,
 	SquareChevronDownIcon,
 	SquareChevronUpIcon,
@@ -15,6 +17,8 @@ interface CommentNodeToolbarProps {
 	onMoveUp: () => void;
 	onMoveDown: () => void;
 	onToggleLock: () => void;
+	/** Anchored comments only: reveal the bound statement in the FlowScript panel. */
+	onGoToCode?: () => void;
 }
 
 const ToolbarButton = memo(
@@ -60,7 +64,9 @@ const CommentNodeToolbar = memo(
 		onMoveUp,
 		onMoveDown,
 		onToggleLock,
+		onGoToCode,
 	}: CommentNodeToolbarProps) => {
+		const { t } = useTranslation("flow");
 		return (
 			<>
 				{/* Invisible bridge to maintain hover */}
@@ -75,6 +81,13 @@ const CommentNodeToolbar = memo(
 					onMouseDown={(e) => e.stopPropagation()}
 				>
 					<ToolbarButton onClick={onEdit} icon={SquarePenIcon} tooltip="Edit" />
+					{onGoToCode && (
+						<ToolbarButton
+							onClick={onGoToCode}
+							icon={FileCode2Icon}
+							tooltip={t("flowscriptGoToCode", "Go to code")}
+						/>
+					)}
 					<Divider />
 					<ToolbarButton
 						onClick={onMoveUp}

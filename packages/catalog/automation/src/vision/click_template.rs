@@ -26,6 +26,7 @@ impl NodeLogic for ClickTemplateNode {
             "Finds a template image on screen and clicks on it",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "clickTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(

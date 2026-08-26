@@ -27,6 +27,8 @@ impl NodeLogic for HasCacheNode {
             "Checks whether a key holds a live value, without downloading the value. To decide whether to compute something, prefer Get or Write Cache — it has no gap between the check and the write.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "has");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-pub mod entity;
+pub use flow_like_api_entity as entity;
 mod middleware;
 pub mod openapi;
 mod routes;

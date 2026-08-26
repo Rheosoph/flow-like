@@ -95,7 +95,7 @@ export interface BundleValidation {
 /**
  * Validate a built `.flwb`: manifest shape, per-entry hashes, contract
  * validity, entry paths. Mirrors `WidgetBundleReader::validate` in
- * packages/wasm/src/widget_bundle.rs.
+ * packages/wasm/schema/src/widget_bundle.rs.
  */
 export function validateBundle(flwbPath: string): BundleValidation {
 	const errors: string[] = [];

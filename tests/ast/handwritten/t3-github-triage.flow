@@ -1,0 +1,242 @@
+// Issue triage bot for a busy open-source repository.
+//
+// A webhook fires on every `issues` event. The bot re-reads the issue and its whole comment
+// thread from the API (the webhook payload is not trusted to be current), condenses the thread
+// into a digest, asks a small agent for a one-paragraph summary, routes the issue to a label and
+// an owner, and then writes the label, the assignee and a triage note back to GitHub. Every
+// write is guarded so a rejected API call never silently loses the triage decision.
+use github::*
+use ai::response as llm
+use array::{ length, push, unique }
+use log::{ error, info, warn }
+use string::{ containsAny, ellipsis, isEmpty, join, toLower }
+
+interface TriageIssue {
+    number: int;
+    title: string;
+    state: string;
+    author: string;
+    comment_count: int;
+    participants: string[];
+    summary: string;
+    label: string;
+    assignee: string;
+    priority: "P0" | "P1" | "P2" | "P3";
+}
+
+interface TriageDecision {
+    label: string;
+    assignee: string;
+    priority: "P0" | "P1" | "P2" | "P3";
+    comment: string;
+    close_as_duplicate: bool;
+}
+
+@description("Personal access token the triage bot authenticates with")
+@category("GitHub")
+@secret
+const githubToken: string
+@description("Owner of the repository under triage")
+@category("GitHub")
+let repoOwner = "flow-like"
+@description("Repository under triage")
+@category("GitHub")
+let repoName = "flow-like"
+@description("Login the bot posts as; its own comments never count as participation")
+@category("GitHub")
+let botLogin = "flowlike-triage-bot"
+@description("Model the current triage pass resolved to")
+@category("Triage")
+const triageModel: Struct = {}
+@description("Issues routed since the worker last restarted")
+@category("Triage")
+let routedCount = 0
+@description("Ledger row written for the most recent issue this worker handled")
+@category("Triage")
+const lastTriaged: TriageIssue = {}
+
+// Fold a comment thread into one prompt-sized digest and the set of people already involved.
+// Bot comments are skipped so a re-run never treats its own triage note as human discussion.
+function digestThread(comments: Struct[], ignoreLogin: string): (digest: string, participants: string[]) {
+    let lines = []
+    let handles = []
+    for (const [position, comment] of comments) {
+        const commenter = struct::get({ struct: struct::get({ struct: comment, field: "user" }).value, field: "login" }).value
+        const body = struct::get({ struct: comment, field: "body" }).value
+        const isBot = string::equal({ string: commenter, string: ignoreLogin, ignoreCase: true }).equal
+        if (!isBot) {
+            const excerpt = string::ellipsis({ string: body, maxLength: 240, ellipsis: "..." })
+            lines = lines.push({ value: `[${position}] @${commenter}: ${excerpt}` })
+            handles = handles.push({ value: string::toLower({ string: commenter }) })
+            const { matches: mentions } = string::regexFindAll({ string: body, pattern: "@[A-Za-z0-9][A-Za-z0-9-]{0,38}" })
+            for (const mention of mentions) {
+                handles = handles.push({ value: string::toLower({ string: mention }) })
+            }
+        }
+    }
+    const digest = join({ strings: lines, separator: "\n" })
+    const { arrayOut: participants } = handles.unique()
+    return digest, participants
+}
+
+// The routing table. Order matters: security beats stability beats everything else.
+function routeIssue(title: string, body: string, digest: string, summary: string, participantCount: int): (label: string, assignee: string, priority: string, comment: string, closeAsDuplicate: bool) {
+    // BUG: `join({ strings: [title, body, digest, summary], ... })` is refused with
+    // "argument `strings` on `join` is not a literal or resolvable node output" — an array literal
+    // holding anything but literals cannot be materialised. See the sibling repro
+    // bug-t2-csv-dataframe-array-literal-receiver.flow; concatenating by template instead.
+    const corpus = `${title} ${body} ${digest} ${summary}`
+    const haystack = corpus.toLower()
+    const { contains: isSecurity, matched: securityTerm } = haystack.containsAny({ substrings: ["cve-","remote code execution","token leak","privilege escalation","vulnerability"], ignoreCase: true })
+    const { contains: isBroken } = haystack.containsAny({ substrings: ["panic","segfault","data loss","will not start","corrupted"], ignoreCase: true })
+    const { contains: isDuplicate } = haystack.containsAny({ substrings: ["duplicate of #","already reported in #","same as #"], ignoreCase: true })
+    const { contains: isDocs } = haystack.containsAny({ substrings: ["typo","documentation","readme","broken link"], ignoreCase: true })
+    const { contains: isProposal } = haystack.containsAny({ substrings: ["feature request","it would be nice","please add","rfc:"], ignoreCase: true })
+    let label = "needs-triage"
+    let assignee = "flowlike-maintainers"
+    let priority = "P3"
+    let comment = "Thanks for the report. Nobody has picked this up yet, so it stays in the triage queue for now."
+    let closeAsDuplicate = false
+    if (isSecurity) {
+        label = "area/security"
+        assignee = "flowlike-security"
+        priority = "P0"
+        comment = `This looks security relevant (matched "${securityTerm}"), so it is going straight to the security rotation. Please avoid posting further exploit detail in this public thread.`
+    } else if (isBroken) {
+        label = "type/bug"
+        assignee = "flowlike-runtime"
+        priority = "P0"
+        comment = "This reads like a hard failure rather than a papercut, so it is on the runtime rotation with P0 priority."
+    } else if (isDuplicate) {
+        label = "status/duplicate"
+        assignee = "flowlike-maintainers"
+        priority = "P3"
+        comment = "This appears to duplicate an existing report. Closing here so the discussion stays in one place; reopen if the linked issue does not cover your case."
+        closeAsDuplicate = true
+    } else if (isDocs) {
+        label = "area/docs"
+        assignee = "flowlike-docs"
+        priority = "P2"
+        comment = "Filed as a documentation fix. These are good first issues, so it is deliberately left unassigned to a specific engineer."
+    } else if (isProposal) {
+        label = "type/enhancement"
+        assignee = "flowlike-product"
+        priority = "P2"
+        comment = "Recorded as a feature proposal. It goes to product review before anyone picks up implementation."
+    }
+    if (participantCount > 4) {
+        priority = "P1"
+    }
+    // BUG: `return { label: label, ... }` (an object literal with any computed member) is rejected
+    // with "return value 1 (`{...}`) ... is not a resolvable FlowScript value". Returning the
+    // fields and re-assembling them in `decisionRecord` below is the workaround.
+    // See bug-t3-github-triage-object-literal-return.flow.
+    return label, assignee, priority, comment, closeAsDuplicate
+}
+
+// Re-assemble the routing scalars into the shape the ledger and the comment renderer expect.
+function decisionRecord(label: string, assignee: string, priority: string, comment: string, closeAsDuplicate: bool): (decision: TriageDecision) {
+    const decision = struct::make()
+    decision.label = label
+    decision.assignee = assignee
+    decision.priority = priority
+    decision.comment = comment
+    decision.close_as_duplicate = closeAsDuplicate
+    return decision
+}
+
+// Every mutation the bot performs on GitHub lives here, and every one of them is branched: a
+// rejected label write must not take the triage note down with it, and a rejected note must not
+// stop the duplicate close.
+function publishTriage(provider: Struct, owner: string, repo: string, issueNumber: int, decision: TriageDecision, summary: string): (noteId: int) {
+    const labels = array::make().push({ value: decision.label })
+    const assignees = array::make().push({ value: decision.assignee })
+    const relabel = updateIssue({ provider: provider, owner: owner, repo: repo, issueNumber: issueNumber, labels: labels, assignees: assignees, issueFieldValues: [] })
+    relabel {
+        execOut: {
+            info({ message: `#${issueNumber} -> ${decision.label}, @${decision.assignee}, ${decision.priority}`, toast: false })
+        }
+        error: {
+            warn({ message: `GitHub refused the label/assignee write on #${issueNumber}; the triage note still goes out`, toast: true })
+        }
+    }
+    const posted = addIssueComment({ provider: provider, owner: owner, repo: repo, issueNumber: issueNumber, body: `**Triage: ${decision.priority} / ${decision.label}**\n\n${decision.comment}\n\n<details><summary>What the bot read</summary>\n\n${summary}\n\n</details>` })
+    posted {
+        execOut: {
+            info({ message: `Triage note ${posted.commentId} posted on #${issueNumber}`, toast: false })
+        }
+        error: {
+            error({ message: `Triage note for #${issueNumber} was rejected; the issue is labelled but silent`, toast: true })
+        }
+    }
+    if (decision.close_as_duplicate) {
+        const closed = updateIssue({ provider: provider, owner: owner, repo: repo, issueNumber: issueNumber, state: "closed", stateReason: "not_planned", labels: labels, assignees: assignees, issueFieldValues: [] })
+        closed {
+            execOut: {
+                info({ message: `Closed #${issueNumber} as a duplicate`, toast: false })
+            }
+            error: {
+                warn({ message: `Could not close #${issueNumber}; it stays open with the duplicate label`, toast: false })
+            }
+        }
+    }
+    return posted.commentId
+}
+
+eventsGeneric onIssueEvent(payload: Struct, action: string, issueNumber: int) {
+    const provider = providerPat({ token: githubToken })
+    const preferences = ai::preferences::make({ multimodal: false }).setWeight({ preferencesKey: "Cost", weight: 1 })
+    const model = ai::findModel({ preferences: preferences })
+    triageModel = model
+    const ledger = db::open({ name: "issue_triage", userScoped: false, batchSize: 100 })
+
+    const fetched = getIssue({ provider: provider, owner: repoOwner, repo: repoName, issueNumber: issueNumber })
+    fetched {
+        execOut: {
+            info({ message: `${action} on ${repoOwner}/${repoName}#${issueNumber}: "${fetched.title}" [${fetched.state}]`, toast: false })
+        }
+        error: {
+            error({ message: `Cannot read ${repoOwner}/${repoName}#${issueNumber}; leaving it untouched`, toast: true })
+        }
+    }
+
+    const authorField = struct::get({ struct: fetched.issue, field: "user" }).value
+    const author = struct::get({ struct: authorField, field: "login" }).value
+    const { comments, count: commentCount } = listIssueComments({ provider: provider, owner: repoOwner, repo: repoName, issueNumber: issueNumber, perPage: 100, page: 1 })
+    const { digest, participants } = digestThread(comments, botLogin)
+    const participantCount = length({ array: participants })
+    const excerpt = ellipsis({ string: fetched.body, maxLength: 1600, ellipsis: "..." })
+
+    const analyst = agent::fromModel({ model: model, maxIter: 3, infiniteContext: false, maxContextTokens: 16000 })
+    const briefed = agent::setSystemPrompt({ agentIn: analyst, systemPrompt: "You are an issue triage assistant for an open-source workflow engine. Answer with one paragraph: what the reporter is actually blocked on, and whether the thread already contains a workaround. Never speculate about code you cannot see." })
+    const thread = history::fromString({ modelName: "triage", message: `TITLE: ${fetched.title}\n\nBODY:\n${excerpt}\n\nTHREAD (${commentCount} comments):\n${digest}` })
+    const run = agent::invoke({ agent: briefed, history: thread })
+    const { content: summary } = llm::lastContent({ response: run })
+
+    const emptySummary = isEmpty({ string: summary, ignoreWhitespace: true })
+    if (emptySummary) {
+        warn({ message: `Model returned nothing for #${issueNumber} (@${author}); routing on keywords alone`, toast: false })
+    }
+    const { label, assignee, priority, comment, closeAsDuplicate } = routeIssue(fetched.title, excerpt, digest, summary, participantCount)
+    const decision = decisionRecord(label, assignee, priority, comment, closeAsDuplicate)
+    for (const participant of participants) {
+        info({ message: `#${issueNumber} already involves ${participant}`, toast: false })
+    }
+
+    const noteId = publishTriage(provider, repoOwner, repoName, issueNumber, decision, summary)
+    info({ message: `Triage note ${noteId} closes out #${issueNumber}`, toast: false })
+
+    const record = struct::set({ structIn: {}, field: "number", value: issueNumber }).set({ field: "title", value: fetched.title }).set({ field: "state", value: fetched.state }).set({ field: "author", value: author }).set({ field: "comment_count", value: commentCount }).set({ field: "participants", value: participants }).set({ field: "summary", value: summary }).set({ field: "label", value: decision.label }).set({ field: "assignee", value: decision.assignee }).set({ field: "priority", value: decision.priority })
+    lastTriaged = record
+    const saved = db::insertOne({ database: ledger, value: record })
+    saved {
+        execOut: {
+            routedCount = routedCount + 1
+        }
+        error: {
+            error({ message: `Triage ledger rejected #${issueNumber}: ${saved.errorMessage}`, toast: false })
+        }
+    }
+
+    return decision.label
+}

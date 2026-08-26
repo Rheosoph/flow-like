@@ -25,6 +25,7 @@ impl NodeLogic for FloatVectorAdditionNode {
             "Adds two float vectors together element-wise",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "add");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

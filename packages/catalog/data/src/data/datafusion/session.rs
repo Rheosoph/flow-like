@@ -1,23 +1,35 @@
+#[cfg(feature = "execute")]
 use crate::data::db::vector::NodeDBConnection;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow::{
-    execution::{ExecutionEnvironment, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::common::TableReference;
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::execution::object_store::{
     DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-#[cfg(feature = "federation")]
+#[cfg(all(feature = "execute", feature = "federation"))]
 use flow_like_storage::datafusion::execution::session_state::SessionStateBuilder;
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
-#[cfg(feature = "federation")]
+#[cfg(all(feature = "execute", feature = "federation"))]
 use flow_like_storage::datafusion_federation::{FederatedQueryPlanner, default_optimizer_rules};
+#[cfg(feature = "execute")]
 use flow_like_storage::num_cpus;
+#[cfg(feature = "execute")]
 use flow_like_types::reqwest::Url;
-use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json, sync::Mutex};
+#[cfg(feature = "execute")]
+use flow_like_types::{Cacheable, sync::Mutex};
+use flow_like_types::{JsonSchema, async_trait, json::json};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Default, Serialize, Deserialize, JsonSchema, Clone)]
@@ -32,6 +44,7 @@ pub struct DataFusionSession {
 /// of registering immediately; [`DataFusionSession::load`] applies the queue before any
 /// consumer touches `ctx`. A cached query that never loads the session therefore never
 /// pays for the mounts either.
+#[cfg(feature = "execute")]
 #[async_trait]
 pub trait DeferredMount: Send + Sync {
     /// Short human-readable description used in logs and error messages, e.g.
@@ -56,6 +69,7 @@ pub trait DeferredMount: Send + Sync {
     ) -> flow_like_types::Result<()>;
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 pub struct CachedDataFusionSession {
     pub ctx: Arc<SessionContext>,
@@ -63,12 +77,14 @@ pub struct CachedDataFusionSession {
     pending_mounts: Arc<Mutex<Vec<Arc<dyn DeferredMount>>>>,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 struct LanceTableRegistration {
     database: NodeDBConnection,
     generation: u64,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedDataFusionSession {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -79,6 +95,7 @@ impl Cacheable for CachedDataFusionSession {
     }
 }
 
+#[cfg(feature = "execute")]
 impl DataFusionSession {
     /// Load the session and make it fully queryable: queued deferred mounts are applied
     /// and Lance registrations refreshed. Every node that reads from `ctx` must use
@@ -118,6 +135,7 @@ impl DataFusionSession {
     }
 }
 
+#[cfg(feature = "execute")]
 impl CachedDataFusionSession {
     /// Queue a mount to run when the session is next materialized by a consumer. A
     /// queued mount with the same dedupe key is replaced, not duplicated.
@@ -196,6 +214,7 @@ impl CachedDataFusionSession {
     }
 }
 
+#[cfg(feature = "execute")]
 #[allow(clippy::too_many_arguments)]
 fn build_session_config(
     target_partitions: i64,
@@ -235,6 +254,7 @@ fn build_session_config(
 /// can. Server-side, only explicitly registered stores (`flowlike://`, mounted
 /// object stores) exist; a `file://` URL then fails with DataFusion's own
 /// "No suitable object store found" error.
+#[cfg(feature = "execute")]
 fn create_runtime_env(environment: ExecutionEnvironment) -> Arc<RuntimeEnv> {
     let registry = DefaultObjectStoreRegistry::new();
     if environment == ExecutionEnvironment::Server
@@ -250,7 +270,7 @@ fn create_runtime_env(environment: ExecutionEnvironment) -> Arc<RuntimeEnv> {
 
 /// Every DataFusion session in this crate must be built through here so the
 /// server-side `file://` restriction applies to all SQL entry points.
-#[cfg(feature = "federation")]
+#[cfg(all(feature = "execute", feature = "federation"))]
 pub fn create_session_context(
     config: SessionConfig,
     environment: ExecutionEnvironment,
@@ -268,7 +288,7 @@ pub fn create_session_context(
 
 /// Every DataFusion session in this crate must be built through here so the
 /// server-side `file://` restriction applies to all SQL entry points.
-#[cfg(not(feature = "federation"))]
+#[cfg(all(feature = "execute", not(feature = "federation")))]
 pub fn create_session_context(
     config: SessionConfig,
     environment: ExecutionEnvironment,
@@ -295,6 +315,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
             "Creates a new DataFusion session for SQL analytics. Configure optimization settings for production workloads.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "createSession");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -403,6 +424,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -452,6 +474,13 @@ impl NodeLogic for CreateDataFusionSessionNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 

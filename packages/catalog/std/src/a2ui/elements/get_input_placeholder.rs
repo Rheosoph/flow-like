@@ -30,6 +30,7 @@ impl NodeLogic for GetInputPlaceholder {
             "Gets the placeholder text of an input element",
             "UI/Elements/Input",
         );
+        node.set_flowscript_name("ui", "getInputPlaceholder");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

@@ -26,6 +26,8 @@ impl NodeLogic for GetNode {
             "Reads all bytes from a file",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "get");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

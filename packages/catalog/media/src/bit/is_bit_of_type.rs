@@ -31,6 +31,7 @@ impl NodeLogic for IsBitOfTypeNode {
             "Checks if the Bit is of the specified type and branches the execution flow accordingly.",
             "Bit",
         );
+        node.set_flowscript_name("ai", "isBitOfType");
         node.add_icon("/flow/icons/bit.svg");
         node.set_version(4);
 

@@ -27,6 +27,7 @@ impl NodeLogic for UpdateConfluencePageNode {
             "Update an existing Confluence page's title or body",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "updatePage");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

@@ -19,6 +19,8 @@ impl AddIntegerNode {
 impl NodeLogic for AddIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("int_add", "+ (Int)", "Adds two Integers", "Math/Int");
+        node.set_flowscript_name("int", "add");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

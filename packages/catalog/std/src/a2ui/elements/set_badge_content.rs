@@ -28,6 +28,7 @@ impl NodeLogic for SetBadgeContent {
             "Sets the content/text of a badge element",
             "UI/Elements/Display",
         );
+        node.set_flowscript_name("ui", "setBadgeContent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

@@ -6,8 +6,10 @@
 #[cfg(feature = "execute")]
 use crate::ml::MLModel;
 use crate::ml::NodeMLModel;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -34,6 +36,7 @@ impl NodeLogic for LoadMLModelBinaryNode {
             "Load Trained ML Model from Path using fast binary format (Fory)",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "loadBinary");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

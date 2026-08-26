@@ -29,6 +29,7 @@ impl NodeLogic for PdfAddImageStampNode {
             "Stamp an image at a specified position on selected PDF pages.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "addImageStamp");
         node.add_icon("/flow/icons/image.svg");
         node.set_scores(
             NodeScores::new()

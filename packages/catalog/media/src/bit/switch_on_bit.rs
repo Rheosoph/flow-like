@@ -28,6 +28,7 @@ impl NodeLogic for SwitchOnBitNode {
             "Routes execution based on the type of the Bit",
             "Bit",
         );
+        node.set_flowscript_name("ai", "switchOnBit");
 
         node.add_icon("/flow/icons/bit.svg");
         node.set_version(4);

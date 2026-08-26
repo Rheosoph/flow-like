@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package flow_like_types;
+
+import "pin.proto";
+import "variable.proto";
+
+message NodeScores {
+    uint32 privacy = 1;
+    uint32 security = 2;
+    uint32 performance = 3;
+    uint32 governance = 4;
+    uint32 reliability = 5;
+    uint32 cost = 6;
+}
+
+message FnRefs {
+    repeated string fn_refs = 1;
+    bool can_reference_fns = 2;
+    bool can_be_referenced_by_fns = 3;
+}
+
+message Node {
+    string id = 1;
+    string name = 2;
+    string friendly_name = 3;
+    string description = 4;
+    float coord_x = 5;
+    float coord_y = 6;
+    float coord_z = 7;
+    string category = 8;
+    NodeScores scores = 9;
+    map<string, Pin> pins = 10;
+    bool start = 11;
+    string icon = 12;
+    optional string comment = 13;
+    bool long_running = 14;
+    optional string error = 15;
+    optional string docs = 16;
+    optional string layer = 17;
+    bool event_callback = 18;
+    optional uint64 hash = 19;
+    optional FnRefs fn_refs = 20;
+    repeated string oauth_providers = 21;
+    map<string, StringList> required_oauth_scopes = 22;
+    bool only_offline = 23;
+    optional uint32 version = 24;
+    optional NodeWasm wasm = 25;
+    optional string namespace = 26;
+    optional string alias = 27;
+    optional string receiver = 28;
+}
+
+message NodeWasm {
+    string package_id = 1;
+    repeated string permissions = 2;
+}
+
+message StringList {
+    repeated string values = 1;
+}

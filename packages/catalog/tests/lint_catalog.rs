@@ -10,11 +10,16 @@
 //!   so the count can only go *down* over time.
 
 use flow_like::flow::{
+    ast::{
+        NodeNames, binary_operator_node_types, check_names, node_name_entry, node_names,
+        pin_is_untouched_default,
+    },
     board::Board,
     node::{Node, NodeLogic},
-    pin::PinType,
+    pin::{PinType, ValueType},
     variable::VariableType,
 };
+use flow_like_ast::NAME_OVERRIDES;
 use flow_like_catalog::CatalogBuilder;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::json::json;
@@ -156,6 +161,8 @@ fn assert_ceiling(label: &str, violations: &[LintViolation], ceiling: usize) {
 
 /// The board prompt names these accessors verbatim so the model stops reading file attributes off
 /// the FlowPath struct. A rename here would turn that guidance into a lie the model cannot act on.
+/// Any accepted spelling counts: the qualified `ns::alias(`, the bare `alias(` opened by
+/// `use ns::*`, the method form `.alias(` or the legacy flat name.
 #[test]
 fn flow_path_accessor_nodes_named_in_guidance_exist() {
     let guidance = flow_like::copilot::prompts::FLOW_PATH_ACCESSOR_GUIDANCE;
@@ -172,25 +179,19 @@ fn flow_path_accessor_nodes_named_in_guidance_exist() {
         "path_replace_segment",
     ] {
         let node = nodes.iter().find(|(name, _)| name == id);
-        assert!(node.is_some(), "catalog no longer has node `{id}`");
-        let camel = id
-            .split('_')
-            .enumerate()
-            .map(|(index, part)| {
-                if index == 0 {
-                    part.to_string()
-                } else {
-                    let mut chars = part.chars();
-                    match chars.next() {
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                        None => String::new(),
-                    }
-                }
-            })
-            .collect::<String>();
+        let Some((_, node)) = node else {
+            panic!("catalog no longer has node `{id}`");
+        };
+        let names = node_names(node);
+        let opened = guidance.contains(&format!("`use {}::*`", names.namespace));
+        let mentioned = guidance.contains(&format!("{}(", names.qualified))
+            || guidance.contains(&format!(".{}(", names.alias))
+            || guidance.contains(&format!("{}(", names.flat))
+            || (opened && guidance.contains(&format!("{}(", names.alias)));
         assert!(
-            guidance.contains(&format!("{camel}(")),
-            "FLOW_PATH_ACCESSOR_GUIDANCE no longer mentions `{camel}`"
+            mentioned,
+            "FLOW_PATH_ACCESSOR_GUIDANCE no longer mentions `{}` (namespace opened: {opened})",
+            names.qualified
         );
     }
 }
@@ -208,6 +209,45 @@ fn every_node_has_a_description() {
     assert!(
         violations.is_empty(),
         "Nodes without descriptions:\n{}",
+        format_violations(&violations)
+    );
+}
+
+/// FlowScript renders these nodes as `a op b`, which leaves every input after the first two at
+/// its catalog default and re-materializes them the same way. Lowering only chooses the operator
+/// form when those trailing pins hold their zero value, so a catalog default that is not the zero
+/// value would flip on a round-trip; a trailing pin without a default can never be implied.
+#[test]
+fn binary_operator_nodes_trailing_inputs_default_to_zero() {
+    let operator_types: HashSet<&str> = binary_operator_node_types().collect();
+    let violations = collect_violations(|node| {
+        if !operator_types.contains(node.name.as_str()) {
+            return vec![];
+        }
+        let mut inputs: Vec<_> = node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution
+            })
+            .collect();
+        inputs.sort_by_key(|pin| pin.index);
+        inputs
+            .iter()
+            .skip(2)
+            .filter(|pin| pin.default_value.is_none() || !pin_is_untouched_default(pin))
+            .map(|pin| {
+                format!(
+                    "trailing operator input `{}` must default to its zero value (false / 0 / \"\" / null)",
+                    pin.name
+                )
+            })
+            .collect()
+    });
+
+    assert!(
+        violations.is_empty(),
+        "Binary-operator nodes whose trailing inputs cannot be implied by the operator form:\n{}",
         format_violations(&violations)
     );
 }
@@ -551,4 +591,203 @@ fn warn_pathbuf_pins() {
     });
 
     assert_ceiling("pathbuf_pins", &violations, 1);
+}
+
+// ── FlowScript names ───────────────────────────────────────────────────
+
+/// The committed review snapshot of every node's effective FlowScript names.
+fn names_snapshot_path() -> PathBuf {
+    FsPath::new(env!("CARGO_MANIFEST_DIR")).join("../ast/flow.d/names.json")
+}
+
+fn derived_names() -> BTreeMap<String, NodeNames> {
+    all_nodes()
+        .into_iter()
+        .map(|(name, node)| (name, node_names(&node)))
+        .collect()
+}
+
+/// The A.3 naming contract over the real catalog: one case-insensitive key space across flat
+/// names, aliases and qualified names; one method per `(class, alias)`. A collision is resolved
+/// by giving one of the nodes an explicit `set_flowscript_name` / `set_receiver`.
+#[test]
+fn flowscript_names_do_not_collide() {
+    let nodes = all_nodes();
+    let entries: Vec<_> = nodes
+        .iter()
+        .map(|(_, node)| node_name_entry(node))
+        .collect();
+    let qualified: BTreeMap<&str, String> = nodes
+        .iter()
+        .map(|(name, node)| (name.as_str(), node_names(node).qualified))
+        .collect();
+    let collisions = check_names(&entries, &[]);
+    let report = collisions
+        .iter()
+        .map(|c| {
+            let involved = c
+                .node_types
+                .iter()
+                .map(|n| {
+                    format!(
+                        "{n} ({})",
+                        qualified.get(n.as_str()).map_or("?", String::as_str)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("  {:?} `{}`: {involved}", c.kind, c.key)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        collisions.is_empty(),
+        "{} FlowScript name collision(s):\n{report}",
+        collisions.len()
+    );
+}
+
+/// Every effective receiver (explicit `set_receiver`, the `NAME_OVERRIDES` residue table or the
+/// default rule) names a data input of its node, and a `Generic` receiver — a method of every
+/// class — is listed here on purpose.
+#[test]
+fn flowscript_receivers_name_existing_inputs() {
+    const UNIVERSAL_RECEIVERS: &[&str] = &[
+        "utils_hash_ahash",
+        "utils_hash_blake3",
+        "utils_types_fallback",
+        "utils_types_type_of",
+    ];
+    let mut violations = Vec::new();
+    for (name, node) in all_nodes() {
+        let Some(receiver) = node.flowscript_receiver() else {
+            continue;
+        };
+        let Some(pin) = node
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == receiver)
+        else {
+            violations.push(format!("{name}: receiver `{receiver}` is not an input pin"));
+            continue;
+        };
+        if pin.data_type == VariableType::Execution {
+            violations.push(format!("{name}: receiver `{receiver}` is an execution pin"));
+        }
+        let universal =
+            pin.data_type == VariableType::Generic && pin.value_type == ValueType::Normal;
+        if universal && !UNIVERSAL_RECEIVERS.contains(&name.as_str()) {
+            violations.push(format!(
+                "{name}: receiver `{receiver}` is Generic (a method of every class); add it to UNIVERSAL_RECEIVERS on purpose"
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} receiver violation(s):\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// First-party nodes own their FlowScript names in source: every catalog node carries explicit
+/// `set_flowscript_name(…)` (and `set_receiver(…)` where it is callable as a method), so the
+/// derivation in `flow_like_ast::naming` only ever serves third-party/WASM nodes. The only
+/// allowlist is the `NAME_OVERRIDES` residue table itself, so it cannot drift from the resolver.
+#[test]
+fn flowscript_names_are_explicit_on_first_party_nodes() {
+    let residue: HashSet<&str> = NAME_OVERRIDES
+        .iter()
+        .map(|(node_type, ..)| *node_type)
+        .collect();
+    let nodes = all_nodes();
+    let mut violations = Vec::new();
+    for (name, node) in &nodes {
+        if residue.contains(name.as_str()) {
+            continue;
+        }
+        let explicit =
+            |field: &Option<String>| field.as_deref().is_some_and(|v| !v.trim().is_empty());
+        if !explicit(&node.namespace) || !explicit(&node.alias) {
+            violations.push(format!(
+                "{name}: missing set_flowscript_name(\"{}\", \"{}\") after Node::new",
+                node.flowscript_namespace(),
+                node.flowscript_alias()
+            ));
+        }
+        if node.receiver.is_none()
+            && let Some(receiver) = node.flowscript_receiver()
+        {
+            violations.push(format!(
+                "{name}: receiver `{receiver}` comes from the default rule; add set_receiver(\"{receiver}\")"
+            ));
+        }
+    }
+    for node_type in &residue {
+        if !nodes.iter().any(|(name, _)| name == node_type) {
+            violations.push(format!(
+                "{node_type}: NAME_OVERRIDES row names a node that is not in the catalog"
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} node(s) without explicit FlowScript names:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// `flow.d/names.json` must match the names the catalog derives right now. Run with
+/// `UPDATE_FLOWSCRIPT_NAMES=1` to rewrite the snapshot on purpose.
+#[test]
+fn flowscript_names_snapshot_is_current() {
+    let derived = derived_names();
+    let path = names_snapshot_path();
+    let json = flow_like_types::json::to_string_pretty(&derived).expect("serialize names");
+    let json = format!("{json}\n");
+
+    if std::env::var_os("UPDATE_FLOWSCRIPT_NAMES").is_some() {
+        std::fs::write(&path, &json).unwrap_or_else(|e| panic!("write {path:?}: {e}"));
+        eprintln!("rewrote {} with {} nodes", path.display(), derived.len());
+        return;
+    }
+
+    let committed: BTreeMap<String, NodeNames> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| flow_like_types::json::from_str(&text).ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "{} is missing or unreadable; run with UPDATE_FLOWSCRIPT_NAMES=1 to generate it",
+                path.display()
+            )
+        });
+
+    let mut diff = Vec::new();
+    for (node_type, names) in &derived {
+        match committed.get(node_type) {
+            None => diff.push(format!("  + {node_type}: {}", names.qualified)),
+            Some(old) if old != names => diff.push(format!(
+                "  ~ {node_type}: {} -> {} (receiver {:?} -> {:?}, class {:?} -> {:?})",
+                old.qualified,
+                names.qualified,
+                old.receiver,
+                names.receiver,
+                old.class,
+                names.class
+            )),
+            Some(_) => {}
+        }
+    }
+    for node_type in committed.keys() {
+        if !derived.contains_key(node_type) {
+            diff.push(format!("  - {node_type}"));
+        }
+    }
+    assert!(
+        diff.is_empty(),
+        "flow.d/names.json is stale ({} change(s)); rerun with UPDATE_FLOWSCRIPT_NAMES=1:\n{}",
+        diff.len(),
+        diff.join("\n")
+    );
 }

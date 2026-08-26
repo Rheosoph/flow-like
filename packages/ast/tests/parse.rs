@@ -25,20 +25,17 @@ fn assert_idempotent(text: &str, opts: &RenderOptions) {
 
 #[test]
 fn roundtrip_variable_with_default() {
-    assert_idempotent(
-        "const inputText: string = \"hi\"\n",
-        &RenderOptions::default(),
-    );
+    assert_idempotent("const inputText = \"hi\"\n", &RenderOptions::default());
 }
 
 #[test]
 fn roundtrip_exposed_variable() {
-    assert_idempotent("let exposedFlag: bool = true\n", &RenderOptions::default());
+    assert_idempotent("let exposedFlag = true\n", &RenderOptions::default());
 }
 
 #[test]
 fn roundtrip_secret_decorator() {
-    let text = "@secret\nconst apiKey: string = \"\"\n";
+    let text = "@secret\nconst apiKey = \"\"\n";
     let ast = parse(text).expect("parse should succeed");
     assert!(ast.variables[0].secret, "secret decorator should set flag");
     assert_eq!(render(&ast, &RenderOptions::default()), text);
@@ -348,7 +345,7 @@ fn subtraction_is_not_lexed_as_a_negative_rhs() {
 #[test]
 fn roundtrip_minimum_integer_literal() {
     assert_idempotent(
-        "const floor: int = -9223372036854775808\n",
+        "const floor = -9223372036854775808\n",
         &RenderOptions::default(),
     );
 }
@@ -1134,26 +1131,921 @@ fn else_if_desugars_to_the_nested_ladder() {
     );
 }
 
-/// A loop head must be a loop-node call. `boolNot` IS an `Expr::Call` but has zero exec outputs,
-/// so accepting it built a node whose body was never wired, with no diagnostics at all.
+// ---- loops (phase 3) ---------------------------------------------------------------------
+
+/// A boolean loop head is the sugared `while (cond)`: `!done` parses to a `boolNot(…)` call
+/// (its canonical spelling), which the parser stores as the head and reconcile turns into the
+/// loop node's condition because `bool_not` is not a loop node.
 #[test]
-fn boolean_loop_head_is_rejected_with_an_actionable_message() {
-    for source in [
-        "eventsSimple() {\n    while (!done) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
-        "eventsSimple() {\n    for (const v of !items) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
+fn boolean_loop_heads_are_sugared_loop_conditions() {
+    let text =
+        "eventsSimple() {\n    while (!done) {\n        logInfo({ message: \"x\" })\n    }\n}\n";
+    let ast = parse(text).expect("boolean loop heads parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    while (boolNot({ boolean: done })) {\n        logInfo({ message: \"x\" })\n    }\n}\n"
+    );
+    // A call head with a plain binding is the handle form; reconcile reclassifies a non-loop
+    // call as the iterable.
+    let text = "eventsSimple() {\n    for (const v of !items) {\n    }\n}\n";
+    let flow_like_ast::Stmt::Loop {
+        bind,
+        call,
+        iterable,
+        ..
+    } = first_stmt(text)
+    else {
+        panic!("expected a loop");
+    };
+    assert!(iterable.is_none());
+    assert_eq!(bind.as_deref(), Some("v"));
+    assert_eq!(call.display, "boolNot");
+}
+
+#[test]
+fn roundtrip_sugared_loop_forms() {
+    for text in [
+        "eventsSimple() {\n    for (const item of items) {\n        logInfo({ message: item })\n    }\n}\n",
+        "eventsSimple() {\n    for (const [i, item] of items) {\n        logInfo({ message: i })\n    }\n}\n",
+        "eventsSimple() {\n    @parallel\n    for (const item of items) {\n    }\n}\n",
+        "eventsSimple() {\n    @parallel\n    for (const [i, item] of user.sources) {\n    }\n}\n",
+        "eventsSimple() {\n    while (i < 3) {\n        i = i + 1\n    }\n}\n",
+        "eventsSimple() {\n    while (boolNot({ boolean: done })) {\n    }\n}\n",
+        "eventsSimple() {\n    for (const [i, x] of items.chunk(2)) {\n    }\n}\n",
+        "eventsSimple() {\n    for (const x of items.chunk({ size: 2 })) {\n        logInfo({ message: x.value })\n    }\n}\n",
+        "eventsSimple() {\n    for (const x of items[0].rows) {\n    }\n}\n",
     ] {
-        let err = parse(source).expect_err("a boolean loop head must be rejected");
-        assert!(err.message.contains("loop-node call"), "{:?}", err.message);
+        assert_idempotent(text, &RenderOptions::default());
+    }
+    assert_idempotent(
+        "eventsSimple() {\n    for (const item of items) {   //@n:loop1\n    }\n    @parallel\n    for (const [i, item] of items) {   //@n:loop2\n    }\n    while (done == false) {   //@n:loop3\n    }\n}\n",
+        &anchored_opts(),
+    );
+}
+
+#[test]
+fn sugared_loop_heads_carry_iterable_and_bindings() {
+    let flow_like_ast::Stmt::Loop {
+        keyword,
+        bind,
+        call,
+        iterable,
+        element,
+        index,
+        ..
+    } = first_stmt("eventsSimple() {\n    for (const item of items) {\n    }\n}\n")
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(keyword, "forEach");
+    assert!(bind.is_none() && call.display.is_empty());
+    assert!(matches!(iterable, Some(flow_like_ast::Expr::Ref(name)) if name == "items"));
+    assert_eq!(element.as_deref(), Some("item"));
+    assert!(index.is_none());
+
+    let flow_like_ast::Stmt::Loop {
+        keyword,
+        iterable,
+        element,
+        index,
+        ..
+    } = first_stmt(
+        "eventsSimple() {\n    @parallel\n    for (const [i, x] of items.chunk(2)) {\n    }\n}\n",
+    )
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(keyword, "forEachParallel");
+    assert!(matches!(iterable, Some(flow_like_ast::Expr::Call(_))));
+    assert_eq!(
+        (element.as_deref(), index.as_deref()),
+        (Some("x"), Some("i"))
+    );
+
+    // A plain-identifier head over a call keeps the explicit handle form; reconcile decides
+    // whether the call is a loop node.
+    let flow_like_ast::Stmt::Loop {
+        bind,
+        call,
+        iterable,
+        ..
+    } = first_stmt("eventsSimple() {\n    for (const x of items.chunk({ size: 2 })) {\n    }\n}\n")
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(bind.as_deref(), Some("x"));
+    assert_eq!(call.display, "chunk");
+    assert!(iterable.is_none());
+
+    let flow_like_ast::Stmt::Loop {
+        keyword,
+        iterable,
+        element,
+        ..
+    } = first_stmt("eventsSimple() {\n    while (i < 3) {\n    }\n}\n")
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(keyword, "while");
+    assert!(matches!(iterable, Some(flow_like_ast::Expr::Binary { .. })));
+    assert!(element.is_none());
+}
+
+#[test]
+fn parallel_decorator_requires_the_sugared_for_head() {
+    let err = parse(
+        "eventsSimple() {\n    @parallel\n    for (const h of controlForEach({ array: items })) {\n    }\n}\n",
+    )
+    .expect_err("explicit call head");
+    assert!(err.message.contains("@parallel"), "{}", err.message);
+    assert_eq!((err.line, err.col), (3, 5));
+
+    let err =
+        parse("eventsSimple() {\n    @parallel(\"x\")\n    for (const h of items) {\n    }\n}\n")
+            .expect_err("argument");
+    assert!(
+        err.message.contains("does not take an argument"),
+        "{}",
+        err.message
+    );
+
+    let err = parse("eventsSimple() {\n    @secret\n    for (const h of items) {\n    }\n}\n")
+        .expect_err("unknown loop decorator");
+    assert!(
+        err.message.contains("unknown decorator `@secret`"),
+        "{}",
+        err.message
+    );
+}
+
+// ---- template literals (phase 3) ---------------------------------------------------------
+
+#[test]
+fn roundtrip_template_literals() {
+    for text in [
+        "eventsSimple() {\n    let m = `hello ${name}`\n}\n",
+        "eventsSimple() {\n    let m = `Topic ${label}\nGoal: ${source.goal}`\n}\n",
+        "eventsSimple() {\n    let m = `${a.b} and ${f({ x: 1 })} or ${cond ? \"a\" : \"b\"}`\n}\n",
+        "eventsSimple() {\n    let m = `outer ${`inner ${x}`} done`\n}\n",
+        "eventsSimple() {\n    let m = `literal {name} braces`\n}\n",
+        "eventsSimple() {\n    let m = `escaped \\` tick, \\${not} and back\\\\slash`\n}\n",
+        "eventsSimple() {\n    let m = `tab\\there\\r`\n}\n",
+        "eventsSimple() {\n    let m = ``\n}\n",
+        "eventsSimple() {\n    logInfo({ message: `${count} item(s)` })\n}\n",
+        "eventsSimple() {\n    let m = `quote \" and ' inside`\n}\n",
+        "eventsSimple() {\n    let m = `${\"str with } brace\"} ${g({ a: { b: 1 } })}`\n}\n",
+    ] {
+        assert_idempotent(text, &RenderOptions::default());
     }
 }
 
-/// `-x` has no catalog lowering, so it stays an error — but an actionable one instead of a
-/// `Debug`-formatted token dump. A negative literal is unaffected.
 #[test]
-fn unary_minus_is_rejected_with_a_workaround_and_negative_literals_still_parse() {
-    let err = parse("eventsSimple() {\n    const a = intAdd({ integer1: -x, integer2: 1 })\n}\n")
-        .expect_err("unary minus must be rejected");
-    assert!(err.message.contains("0 - x"), "{:?}", err.message);
-    parse("eventsSimple() {\n    const a = intAdd({ integer1: -1, integer2: 1 })\n}\n")
-        .expect("a negative literal must still parse");
+fn template_literal_parts_are_text_and_expressions() {
+    let flow_like_ast::Stmt::LocalAlias { value, .. } =
+        first_stmt("eventsSimple() {\n    let m = `Topic ${label}\nGoal: ${source.goal}`\n}\n")
+    else {
+        panic!("expected a local alias");
+    };
+    let flow_like_ast::Expr::Template { parts } = value else {
+        panic!("expected a template literal, got {value:?}");
+    };
+    assert_eq!(parts.len(), 4);
+    assert!(matches!(&parts[0], flow_like_ast::TemplatePart::Text(t) if t == "Topic "));
+    assert!(matches!(
+        &parts[1],
+        flow_like_ast::TemplatePart::Expr(flow_like_ast::Expr::Ref(name)) if name == "label"
+    ));
+    assert!(matches!(&parts[2], flow_like_ast::TemplatePart::Text(t) if t == "\nGoal: "));
+    assert!(matches!(
+        &parts[3],
+        flow_like_ast::TemplatePart::Expr(flow_like_ast::Expr::Field { pin, .. }) if pin == "goal"
+    ));
+
+    // Single-quoted and double-quoted strings normalize the same way a template's escapes do.
+    let flow_like_ast::Stmt::LocalAlias { value, .. } =
+        first_stmt("eventsSimple() {\n    let m = `a\\`b\\${c}\\u0041`\n}\n")
+    else {
+        panic!("expected a local alias");
+    };
+    let flow_like_ast::Expr::Template { parts } = value else {
+        panic!("expected a template literal");
+    };
+    assert!(matches!(&parts[0], flow_like_ast::TemplatePart::Text(t) if t == "a`b${c}A"));
+}
+
+#[test]
+fn template_literal_errors_are_positioned_in_the_document() {
+    let err = parse("eventsSimple() {\n    let m = `open ${x}\n}\n").expect_err("unterminated");
+    assert!(
+        err.message.contains("unterminated template literal"),
+        "{}",
+        err.message
+    );
+    assert_eq!((err.line, err.col), (2, 13));
+
+    let err = parse("eventsSimple() {\n    let m = `x ${a +} y`\n}\n").expect_err("bad expr");
+    assert_eq!(err.line, 2);
+    assert!(err.col > 13, "{err:?}");
+
+    let err = parse("eventsSimple() {\n    let m = `x ${} y`\n}\n").expect_err("empty");
+    assert!(err.message.contains("empty `${}`"), "{}", err.message);
+
+    let err = parse("eventsSimple() {\n    let m = `x ${a b} y`\n}\n").expect_err("trailing");
+    assert!(
+        err.message.contains("unexpected token after"),
+        "{}",
+        err.message
+    );
+
+    let err = parse("eventsSimple() {\n    let m = `bad \\q escape`\n}\n").expect_err("escape");
+    assert!(err.message.contains("invalid escape"), "{}", err.message);
+}
+
+#[test]
+fn template_literal_after_binary_operator_and_as_receiver() {
+    assert_idempotent(
+        "eventsSimple() {\n    let m = `a${x}` + `b`\n    let n = `x ${y}`.trim()\n    let o = `${1 - 2}`\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+// ---- hand-writability leniency (phase 0) -------------------------------------------------
+
+/// `-x` desugars to `0 - x`, which reconcile lowers to `int_subtract`/`float_subtract` by
+/// operand type. A negative literal keeps lexing as one token, and the unary binds tighter
+/// than any binary operator.
+#[test]
+fn unary_minus_desugars_to_zero_minus_operand() {
+    let ast = parse("eventsSimple() {\n    const a = intAdd({ integer1: -x, integer2: 1 })\n}\n")
+        .expect("unary minus must parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    const a = intAdd({ integer1: 0 - x, integer2: 1 })\n}\n"
+    );
+
+    let ast = parse("eventsSimple() {\n    let y = -x * 2 + -(a.b)\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    let y = ((0 - x) * 2) + (0 - a.b)\n}\n"
+    );
+
+    assert_idempotent(
+        "eventsSimple() {\n    const a = intAdd({ integer1: -1, integer2: 1 })\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+/// Statement terminators are optional noise: any number of `;` between statements, before a
+/// closing brace, at top level, and between a statement and its trailing anchor.
+#[test]
+fn semicolons_are_skipped_everywhere_and_never_rendered() {
+    let source = "const n: int = 1;;\n\neventsSimple() {\n    ;\n    const a = foo({ x: n });   //@n:A\n    bar();\n    return;\n    ;\n};\n";
+    let ast = parse(source).expect("semicolons must be accepted");
+    assert_eq!(
+        render(&ast, &anchored_opts()),
+        "const n = 1\n\neventsSimple() {\n    const a = foo({ x: n })   //@n:A\n    bar()\n    return\n}\n"
+    );
+    assert_idempotent(
+        "function f(): (out: int) {\n    return 1\n}\n",
+        &RenderOptions::default(),
+    );
+    let ast = parse("function f(): (out: int) {\n    return 1;\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "function f(): (out: int) {\n    return 1\n}\n"
+    );
+}
+
+/// Single-quoted strings lex with the same escape rules as double-quoted ones and render
+/// double-quoted.
+#[test]
+fn single_quoted_strings_render_double_quoted() {
+    let ast = parse(
+        "const greeting = 'say \"hi\"'\n\neventsSimple() {\n    logInfo({ message: 'it\\'s\\n' })\n}\n",
+    )
+    .expect("single-quoted strings must lex");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "const greeting = \"say \\\"hi\\\"\"\n\neventsSimple() {\n    logInfo({ message: \"it's\\n\" })\n}\n"
+    );
+    assert!(parse("eventsSimple() {\n    logInfo({ message: 'open })\n}\n").is_err());
+}
+
+/// Top-level declarations infer their type from a literal initializer; scalar declarations
+/// render without the annotation while struct/array defaults canonicalize to the annotated
+/// form. `null` carries no type and keeps requiring an annotation.
+#[test]
+fn top_level_declarations_infer_types_from_literals() {
+    let ast = parse(
+        "const s = \"a\"\nlet n = 5\nconst f = 1.5\nlet b = true\nconst o = {\"k\":1}\nconst xs = [1,2]\n",
+    )
+    .expect("inferred declarations must parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "const s = \"a\"\nlet n = 5\nconst f = 1.5\nlet b = true\nconst o: Struct = {\"k\":1}\nconst xs: any[] = [1,2]\n"
+    );
+    assert!(ast.variables[1].exposed, "`let` stays exposed");
+    assert_eq!(
+        render(
+            &parse("const s: string = \"a\"\nconst n: float = 1\nconst t: string\n").unwrap(),
+            &RenderOptions::default()
+        ),
+        "const s = \"a\"\nconst n: float = 1\nconst t: string\n",
+        "a default that infers another type keeps its annotation"
+    );
+
+    let err = parse("const nothing = null\n").expect_err("null needs an annotation");
+    assert!(
+        err.message.contains("add a type annotation"),
+        "{}",
+        err.message
+    );
+    assert_eq!((err.line, err.col), (1, 17));
+    assert!(
+        parse("const call = foo()\n").is_err(),
+        "only literals are inferable"
+    );
+}
+
+/// `x += v` (and `-=`, `*=`, `/=`) desugar to `x = x + v`; the same works on a struct field
+/// path. `+=` must not lex as `+` followed by `=`.
+#[test]
+fn compound_assignment_desugars_to_binary_assign() {
+    let ast = parse(
+        "eventsSimple() {\n    count += 1\n    total -= n * 2\n    scale *= 2.0\n    ratio /= 4\n    cfg.hits += 1\n}\n",
+    )
+    .expect("compound assignment must parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    count = count + 1\n    total = total - (n * 2)\n    scale = scale * 2.0\n    ratio = ratio / 4\n    cfg.hits = cfg.hits + 1\n}\n"
+    );
+    let flow_like_ast::Stmt::Assign { target, value, .. } = &ast.events[0].body.stmts[0] else {
+        panic!("expected an assignment");
+    };
+    assert_eq!(target, "count");
+    assert!(matches!(
+        value,
+        flow_like_ast::Expr::Binary { op, lhs, .. }
+            if op == "+" && matches!(lhs.as_ref(), flow_like_ast::Expr::Ref(name) if name == "count")
+    ));
+    assert!(matches!(
+        &ast.events[0].body.stmts[4],
+        flow_like_ast::Stmt::FieldAssign { base, path, .. } if base == "cfg" && path == "hits"
+    ));
+}
+
+// ---- phase 2a: namespaces, method calls, positional args, `use`, destructuring -------------
+
+fn first_stmt(text: &str) -> flow_like_ast::Stmt {
+    let ast = parse(text).expect("parse should succeed");
+    ast.events[0].body.stmts[0].clone()
+}
+
+fn first_call(text: &str) -> flow_like_ast::Call {
+    match first_stmt(text) {
+        flow_like_ast::Stmt::Call { call, .. } | flow_like_ast::Stmt::Let { call, .. } => call,
+        other => panic!("expected a call statement, got {other:?}"),
+    }
+}
+
+#[test]
+fn roundtrip_namespace_path_calls() {
+    assert_idempotent(
+        "eventsSimple() {\n    const t = string::trim({ string: s })\n    ai::ml::model::read({ path: p })\n}\n",
+        &RenderOptions::default(),
+    );
+    let call = first_call("eventsSimple() {\n    ai::ml::model::read({ path: p })\n}\n");
+    assert_eq!(call.path, vec!["ai", "ml", "model"]);
+    assert_eq!(call.display, "read");
+    assert!(call.receiver.is_none());
+    assert!(call.positional.is_empty());
+    assert_eq!(call.args[0].name, "path");
+}
+
+#[test]
+fn roundtrip_method_calls() {
+    for text in [
+        "eventsSimple() {\n    const t = s.trim()\n}\n",
+        "eventsSimple() {\n    const t = s.contains(\"?\")\n}\n",
+        "eventsSimple() {\n    const t = s.contains(\"?\", { ignoreCase: true })\n}\n",
+        "eventsSimple() {\n    const t = x.a.b().c[0].d()\n}\n",
+        "eventsSimple() {\n    const t = (a ? b : c).trim()\n}\n",
+        "eventsSimple() {\n    const t = (a + b).toString()\n}\n",
+        "eventsSimple() {\n    const t = (5).abs()\n}\n",
+        "eventsSimple() {\n    const t = \"lit\".trim()\n}\n",
+        "eventsSimple() {\n    let t = f().g().h\n}\n",
+    ] {
+        assert_idempotent(text, &RenderOptions::default());
+    }
+
+    let call =
+        first_call("eventsSimple() {\n    const t = s.contains(\"?\", { ignoreCase: true })\n}\n");
+    assert_eq!(call.display, "contains");
+    assert!(call.path.is_empty());
+    assert!(matches!(
+        call.receiver.as_deref(),
+        Some(flow_like_ast::Expr::Ref(name)) if name == "s"
+    ));
+    assert_eq!(call.positional.len(), 1);
+    assert!(matches!(
+        &call.positional[0],
+        flow_like_ast::Expr::Literal(flow_like_ast::Literal::String(s)) if s == "?"
+    ));
+    assert_eq!(call.args.len(), 1);
+    assert_eq!(call.args[0].name, "ignoreCase");
+
+    // `x.a.b().c[0].d()`: the outer call's receiver is the index expression, whose base chains
+    // back through a field on an inner method call.
+    let call = first_call("eventsSimple() {\n    const t = x.a.b().c[0].d()\n}\n");
+    assert_eq!(call.display, "d");
+    let flow_like_ast::Expr::Index { base, .. } = call.receiver.as_deref().expect("receiver")
+    else {
+        panic!("expected an index receiver");
+    };
+    let flow_like_ast::Expr::Field { base, pin } = base.as_ref() else {
+        panic!("expected `.c` field");
+    };
+    assert_eq!(pin, "c");
+    let flow_like_ast::Expr::Call(inner) = base.as_ref() else {
+        panic!("expected inner method call `b()`");
+    };
+    assert_eq!(inner.display, "b");
+    assert!(matches!(
+        inner.receiver.as_deref(),
+        Some(flow_like_ast::Expr::Field { pin, .. }) if pin == "a"
+    ));
+
+    // Numeric literal receivers are canonicalised into parentheses.
+    let ast = parse("eventsSimple() {\n    const t = 5.abs()\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    const t = (5).abs()\n}\n"
+    );
+}
+
+#[test]
+fn bang_on_method_call_desugars_to_bool_not() {
+    let ast = parse("eventsSimple() {\n    const t = !s.isEmpty()\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    const t = boolNot({ boolean: s.isEmpty() })\n}\n"
+    );
+}
+
+#[test]
+fn positional_arguments_precede_the_trailing_named_object() {
+    assert_idempotent(
+        "eventsSimple() {\n    f({ a: 1 })\n    f({ a: 1 }, { b: 2 })\n    f(x, y)\n    f(1, \"a\", { b: 2 })\n    f()\n}\n",
+        &RenderOptions::default(),
+    );
+    // A sole `{}` is the empty named object and keeps canonicalising to `f()`.
+    let ast = parse("eventsSimple() {\n    f({})\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    f()\n}\n"
+    );
+
+    let call = first_call("eventsSimple() {\n    f({ a: 1 })\n}\n");
+    assert!(call.positional.is_empty());
+    assert_eq!(call.args.len(), 1);
+
+    let call = first_call("eventsSimple() {\n    f({ a: 1 }, { b: 2 })\n}\n");
+    assert_eq!(call.positional.len(), 1);
+    assert!(
+        matches!(&call.positional[0], flow_like_ast::Expr::Object(fields) if fields[0].key == "a")
+    );
+    assert_eq!(call.args.len(), 1);
+    assert_eq!(call.args[0].name, "b");
+
+    let call = first_call("eventsSimple() {\n    f({})\n}\n");
+    assert!(call.positional.is_empty());
+    assert!(call.args.is_empty());
+
+    // A trailing comma after the named object is tolerated and never rendered.
+    let ast = parse("eventsSimple() {\n    f(x, { b: 2 },)\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "eventsSimple() {\n    f(x, { b: 2 })\n}\n"
+    );
+}
+
+#[test]
+fn method_calls_nest_inside_object_values_and_named_arguments() {
+    assert_idempotent(
+        "eventsSimple() {\n    f({ a: s.trim(), b: { c: x.y() } })\n    let o = { k: a.b(), n: ns::g(1) }\n}\n",
+        &RenderOptions::default(),
+    );
+    let call = first_call("eventsSimple() {\n    f({ a: s.trim() })\n}\n");
+    assert!(matches!(
+        &call.args[0].value,
+        flow_like_ast::Expr::Call(inner) if inner.display == "trim" && inner.receiver.is_some()
+    ));
+}
+
+#[test]
+fn roundtrip_use_declarations() {
+    let text = "use ai::ml\nuse ai::ml::*\nuse a::b as x\nuse ui::{ setElementText, navigateTo }\n\nconst s = \"\"\n\neventsSimple() {\n    x::run()\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("parses");
+    use flow_like_ast::{UseDecl, UseKind};
+    assert_eq!(
+        ast.uses,
+        vec![
+            UseDecl {
+                path: vec!["ai".into(), "ml".into()],
+                kind: UseKind::Namespace,
+            },
+            UseDecl {
+                path: vec!["ai".into(), "ml".into()],
+                kind: UseKind::Glob,
+            },
+            UseDecl {
+                path: vec!["a".into(), "b".into()],
+                kind: UseKind::Alias("x".into()),
+            },
+            UseDecl {
+                path: vec!["ui".into()],
+                kind: UseKind::Members(vec!["setElementText".into(), "navigateTo".into()]),
+            },
+        ]
+    );
+
+    // A comma-separated list is one declaration per tree and renders one per line.
+    let ast = parse("use string::*, array::*;\n\neventsSimple() {\n}\n").expect("parses");
+    assert_eq!(ast.uses.len(), 2);
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "use string::*\nuse array::*\n\neventsSimple() {\n}\n"
+    );
+
+    // `use` lines precede interfaces, separated by a blank line.
+    assert_idempotent(
+        "use ai::ml\n\ninterface Row {\n    id: string;\n}\n\nconst row: Row = {}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn roundtrip_object_destructuring() {
+    let text = "eventsSimple() {\n    const { text, usage: u } = ai::invoke({ model: m })\n    const { hash } = content.md5()\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let flow_like_ast::Stmt::Destructure {
+        fields,
+        call,
+        anchor,
+    } = first_stmt(text)
+    else {
+        panic!("expected a destructuring statement");
+    };
+    assert_eq!(
+        fields,
+        vec![
+            flow_like_ast::DestructureField {
+                pin: "text".into(),
+                name: "text".into(),
+            },
+            flow_like_ast::DestructureField {
+                pin: "usage".into(),
+                name: "u".into(),
+            },
+        ]
+    );
+    assert_eq!(call.path, vec!["ai"]);
+    assert_eq!(call.display, "invoke");
+    assert!(anchor.is_none());
+
+    // `let { … }` is accepted and canonicalises to `const`; anchors stay trailing.
+    let ast = parse("eventsSimple() {\n    let { a } = f()   //@n:node1\n}\n").expect("parses");
+    assert_eq!(
+        render(&ast, &anchored_opts()),
+        "eventsSimple() {\n    const { a } = f()   //@n:node1\n}\n"
+    );
+    assert!(matches!(
+        &ast.events[0].body.stmts[0],
+        flow_like_ast::Stmt::Destructure { anchor: Some(anchor), .. } if anchor == "node1"
+    ));
+}
+
+#[test]
+fn method_and_path_calls_in_every_statement_position() {
+    assert_idempotent(
+        "function f(s: string): (out: string) {\n    return s.trim()\n}\n\neventsSimple() {\n    s.trim()\n    log::info({ message: s })\n    if (s.isEmpty()) {\n        log::warn({ message: \"empty\" })\n    }\n    for (const x of items.chunk({ size: 2 })) {\n        log::info({ message: x.value })\n    }\n    while (it.hasNext()) {\n        it.next()\n    }\n    s.trim()   //@n:a1\n}\n",
+        &anchored_opts(),
+    );
+    let flow_like_ast::Stmt::Loop { call, .. } =
+        first_stmt("eventsSimple() {\n    for (const x of items.chunk({ size: 2 })) {\n    }\n}\n")
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(call.display, "chunk");
+    assert!(call.receiver.is_some());
+
+    let text = "eventsSimple() {\n    for (const x of control::forEach({ array: items })) {\n    }\n    while (control::whileLoop({ condition: c })) {\n    }\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let flow_like_ast::Stmt::Loop { call, .. } = first_stmt(text) else {
+        panic!("expected a loop");
+    };
+    assert_eq!(call.path, vec!["control"]);
+    assert_eq!(call.display, "forEach");
+}
+
+#[test]
+fn bare_namespace_path_is_rejected() {
+    let err = parse("eventsSimple() {\n    let x = a::b\n}\n").expect_err("a path is not a value");
+    assert!(
+        err.message.contains("namespace paths can only be called"),
+        "{}",
+        err.message
+    );
+    assert_eq!((err.line, err.col), (2, 13));
+}
+
+#[test]
+fn array_destructuring_is_rejected() {
+    let err = parse("eventsSimple() {\n    const [a, b] = f()\n}\n").expect_err("array patterns");
+    assert!(
+        err.message
+            .contains("use object destructuring by output name"),
+        "{}",
+        err.message
+    );
+    let err = parse("eventsSimple() {\n    const { a } = x.y\n}\n").expect_err("non-call rhs");
+    assert!(err.message.contains("requires a call"), "{}", err.message);
+}
+
+#[test]
+fn use_inside_a_block_is_rejected() {
+    let err = parse("eventsSimple() {\n    use string::*\n}\n").expect_err("block-level use");
+    assert!(err.message.contains("top level"), "{}", err.message);
+}
+
+#[test]
+fn call_serde_omits_empty_phase2_fields_and_accepts_their_absence() {
+    let call = first_call("eventsSimple() {\n    f({ a: 1 })\n}\n");
+    let json = serde_json::to_value(&call).expect("serializes");
+    assert!(json.get("path").is_none());
+    assert!(json.get("receiver").is_none());
+    assert!(json.get("positional").is_none());
+    let legacy = serde_json::json!({
+        "node_type": "log_info",
+        "display": "logInfo",
+        "args": [],
+        "anchor": null
+    });
+    let call: flow_like_ast::Call = serde_json::from_value(legacy).expect("legacy shape loads");
+    assert!(call.path.is_empty() && call.receiver.is_none() && call.positional.is_empty());
+}
+
+// ---- module blocks (phase 3a) --------------------------------------------------------------
+
+#[test]
+fn roundtrip_module_blocks() {
+    let text = concat!(
+        "module checkout {\n",
+        "    function helper(x: string): (out: string) {\n",
+        "        return x\n",
+        "    }\n",
+        "\n",
+        "    eventsSimple onLoad() {\n",
+        "        logInfo({ message: \"hi\" })\n",
+        "    }\n",
+        "\n",
+        "    module payments {\n",
+        "        function charge(amount: float): (ok: bool) {\n",
+        "            return true\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "module shipping {\n",
+        "    eventsSimple shipped() {\n",
+        "        logInfo({ message: \"shipped\" })\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("module blocks parse");
+    assert_eq!(ast.modules.len(), 2);
+    assert_eq!(ast.modules[0].name, "checkout");
+    assert_eq!(ast.modules[0].functions.len(), 1);
+    assert_eq!(ast.modules[0].events.len(), 1);
+    assert_eq!(ast.modules[0].modules[0].name, "payments");
+    assert_eq!(ast.modules[0].modules[0].functions[0].name, "charge");
+    assert_eq!(ast.modules[1].name, "shipping");
+    assert!(ast.functions.is_empty() && ast.events.is_empty());
+
+    // Rendering is stable across passes, not just equal to the source once.
+    let once = render(&ast, &RenderOptions::default());
+    let twice = render(&parse(&once).expect("re-parses"), &RenderOptions::default());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn modules_render_after_the_other_sections() {
+    let text = concat!(
+        "use string::*\n",
+        "\n",
+        "const goal = \"ship\"\n",
+        "\n",
+        "function root(): (out: string) {\n",
+        "    return goal\n",
+        "}\n",
+        "\n",
+        "eventsSimple() {\n",
+        "    logInfo({ message: goal })\n",
+        "}\n",
+        "\n",
+        "module checkout {\n",
+        "    function helper(): (out: string) {\n",
+        "        return \"a\"\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn empty_module_block_round_trips() {
+    let text = "module checkout {\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("empty module parses");
+    assert_eq!(ast.modules.len(), 1);
+    assert!(ast.modules[0].functions.is_empty());
+    assert!(ast.modules[0].events.is_empty());
+    assert!(ast.modules[0].modules.is_empty());
+}
+
+#[test]
+fn module_anchor_survives_a_round_trip() {
+    let text = concat!(
+        "module checkout {   //@l:mod1\n",
+        "    function helper(): (out: string) {   //@l:fn1\n",
+        "        return \"a\"\n",
+        "    }\n",
+        "\n",
+        "    module payments {   //@l:mod2\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &anchored_opts());
+
+    let ast = parse(text).expect("anchored module parses");
+    assert_eq!(ast.modules[0].anchor.as_deref(), Some("mod1"));
+    assert_eq!(ast.modules[0].functions[0].anchor.as_deref(), Some("fn1"));
+    assert_eq!(ast.modules[0].modules[0].anchor.as_deref(), Some("mod2"));
+}
+
+#[test]
+fn module_is_a_contextual_keyword() {
+    // `module` only opens a block in the exact `module <ident> {` shape; everywhere else it is an
+    // ordinary identifier and must keep parsing as one.
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    const module = loadModule({ name: \"a\" })\n",
+        "    logInfo({ message: module, module: module.id })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("`module` as a binding parses");
+    assert!(ast.modules.is_empty());
+
+    // An event *type* or event *name* spelled `module` is still an event, not a module block.
+    let ast = parse("module() {\n    logInfo({ message: \"x\" })\n}\n").expect("event `module`");
+    assert!(ast.modules.is_empty());
+    assert_eq!(ast.events[0].name, "module");
+
+    let ast = parse("eventsSimple module() {\n    logInfo({ message: \"x\" })\n}\n")
+        .expect("event named `module`");
+    assert!(ast.modules.is_empty());
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("module"));
+}
+
+#[test]
+fn variable_declarations_inside_a_module_are_rejected() {
+    for source in [
+        "module checkout {\n    const x: string = \"a\"\n}\n",
+        "module checkout {\n    let x: string = \"a\"\n}\n",
+    ] {
+        let err = parse(source).expect_err("module bodies hold no variables");
+        assert!(
+            err.message.contains("variables are declared in main.flow"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn use_and_interface_declarations_inside_a_module_are_rejected() {
+    for source in [
+        "module checkout {\n    use foo::*\n}\n",
+        "module checkout {\n    interface X {}\n}\n",
+    ] {
+        let err = parse(source).expect_err("module bodies hold no use/interface declarations");
+        assert!(
+            err.message
+                .contains("declarations belong at the top of the file"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn unterminated_module_block_names_the_module() {
+    let err = parse("module checkout {\n    function helper() {\n    }\n").expect_err("unclosed");
+    assert!(
+        err.message.contains("inside module `checkout`"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn roundtrip_detached_blocks() {
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    logInfo({ message: \"reachable\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"first\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"second\" })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(
+        ast.detached.len(),
+        2,
+        "each chain keeps its own block rather than merging into one"
+    );
+    assert_eq!(ast.detached[0].stmts.len(), 1);
+}
+
+#[test]
+fn detached_renders_after_events_and_before_modules() {
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    logInfo({ message: \"e\" })\n",
+        "}\n",
+        "\n",
+        "detached {\n",
+        "    logInfo({ message: \"d\" })\n",
+        "}\n",
+        "\n",
+        "module checkout {\n",
+        "    detached {\n",
+        "        logInfo({ message: \"m\" })\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(ast.detached.len(), 1);
+    assert_eq!(ast.modules[0].detached.len(), 1);
+}
+
+#[test]
+fn detached_statement_anchors_survive_a_round_trip() {
+    let text = "detached {\n    logInfo({ message: \"x\" })   //@n:orphan\n}\n";
+    assert_idempotent(text, &anchored_opts());
+
+    let ast = parse(text).expect("parse should succeed");
+    assert_eq!(ast.detached[0].root_anchor(), Some("orphan"));
+}
+
+#[test]
+fn detached_is_a_contextual_keyword() {
+    // `detached` opens a block only in the exact `detached {` shape; an event block always has a
+    // parameter list, so both spellings stay reachable.
+    let ast =
+        parse("detached() {\n    logInfo({ message: \"x\" })\n}\n").expect("event `detached`");
+    assert!(ast.detached.is_empty());
+    assert_eq!(ast.events[0].name, "detached");
+
+    let ast = parse("eventsSimple detached() {\n    logInfo({ message: \"x\" })\n}\n")
+        .expect("event named `detached`");
+    assert!(ast.detached.is_empty());
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("detached"));
+
+    let text = concat!(
+        "eventsSimple() {\n",
+        "    const detached = loadThing({ name: \"a\" })\n",
+        "    logInfo({ message: detached, detached: detached.id })\n",
+        "}\n",
+    );
+    assert_idempotent(text, &RenderOptions::default());
+    assert!(
+        parse(text)
+            .expect("`detached` as a binding parses")
+            .detached
+            .is_empty()
+    );
 }

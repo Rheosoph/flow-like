@@ -24,6 +24,8 @@ impl NodeLogic for StringStartsWithNode {
             "Checks if a string starts with a specific string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "startsWith");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
 

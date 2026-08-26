@@ -34,6 +34,7 @@ impl NodeLogic for BufferedCsvReaderNode {
             "Stream Read a CSV File",
             "Utils/CSV",
         );
+        node.set_flowscript_name("files", "readCsvBuffered");
 
         // node.add_icon("/flow/icons/bool.svg");
 

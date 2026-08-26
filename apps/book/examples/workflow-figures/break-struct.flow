@@ -1,0 +1,12 @@
+use log::{ info }
+
+interface IncidentRecord {
+    id: string;
+    report: string;
+    observedAt: Date;
+}
+
+eventsGeneric inspectIncident(payload: Struct, incident: IncidentRecord) {
+    struct::break({ structIn: incident })
+    info({ message: "Inspect incident fields", toast: false })
+}

@@ -16,6 +16,11 @@ const nextConfig = {
 		"@flow-like/widget-sdk",
 		"tauri-plugin-remote-push-api",
 	],
+	// Keep yjs out of the server bundle: Turbopack re-evaluates bundled modules
+	// on every dev recompile, and yjs's duplicate-import guard is a flag on
+	// globalThis that survives those rebuilds ("Yjs was already imported").
+	// Required from node_modules it is evaluated once per process instead.
+	serverExternalPackages: ["yjs"],
 	staticPageGenerationTimeout: 120,
 	reactCompiler: true,
 	missingSuspenseWithCSRBailout: false,

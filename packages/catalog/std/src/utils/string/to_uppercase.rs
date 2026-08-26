@@ -24,6 +24,8 @@ impl NodeLogic for StringToUpperNode {
             "Converts a string to uppercase",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "toUpper");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);

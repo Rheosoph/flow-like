@@ -1,9 +1,14 @@
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lance::session::Session as LanceSession;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+#[cfg(any(feature = "flow-runtime", test))]
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Ok;
-use flow_like_types::sync::{DashMap, Mutex, RwLock};
+#[cfg(feature = "flow")]
+use flow_like_types::sync::DashMap;
+use flow_like_types::sync::{Mutex, RwLock};
 #[cfg(feature = "flow-runtime")]
 use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -12,18 +17,20 @@ use std::sync::{Arc, Weak};
 #[cfg(feature = "flow-runtime")]
 use std::time::Instant;
 
+#[cfg(feature = "flow-runtime")]
 use crate::flow::event::Event;
 #[cfg(feature = "flow")]
 use crate::flow::execution::ExecutionEnvironment;
 #[cfg(feature = "flow-runtime")]
 use crate::flow::execution::{LogMeta, log::LogMessage};
 
-#[cfg(feature = "flow-runtime")]
+#[cfg(feature = "flow")]
 use crate::flow::board::Board;
 use crate::flow::node::Node;
-#[cfg(feature = "flow-runtime")]
+#[cfg(feature = "flow")]
 use crate::flow::node::NodeLogic;
 
+#[cfg(feature = "model")]
 use crate::models::embedding_factory::EmbeddingFactory;
 #[cfg(feature = "model")]
 use crate::models::llm::ModelFactory;
@@ -45,19 +52,27 @@ pub struct FlowLikeStores {
 
 #[derive(Clone)]
 pub struct FlowLikeCallbacks {
+    #[cfg(feature = "flow-runtime")]
     pub build_project_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
+    #[cfg(feature = "flow-runtime")]
     pub build_user_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
+    #[cfg(feature = "flow-runtime")]
     pub build_logs_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     /// Default write options for LanceDB. Android overrides these to add its object store wrapper.
+    #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
 }
 
 impl Default for FlowLikeCallbacks {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "flow-runtime")]
             build_project_database: None,
+            #[cfg(feature = "flow-runtime")]
             build_user_database: None,
+            #[cfg(feature = "flow-runtime")]
             build_logs_database: None,
+            #[cfg(feature = "flow-runtime")]
             lance_write_options: Some(
                 flow_like_storage::lancedb_write_options::default_write_options(),
             ),
@@ -117,6 +132,7 @@ impl FlowLikeConfig {
         self.stores.log_store = Some(store);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn register_build_project_database(
         &mut self,
         callback: Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>,
@@ -124,6 +140,7 @@ impl FlowLikeConfig {
         self.callbacks.build_project_database = Some(callback);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn register_build_user_database(
         &mut self,
         callback: Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>,
@@ -131,6 +148,7 @@ impl FlowLikeConfig {
         self.callbacks.build_user_database = Some(callback);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn register_build_logs_database(
         &mut self,
         callback: Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>,
@@ -138,6 +156,7 @@ impl FlowLikeConfig {
         self.callbacks.build_logs_database = Some(callback);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn register_lance_write_options(
         &mut self,
         options: flow_like_storage::lancedb::table::WriteOptions,
@@ -146,7 +165,7 @@ impl FlowLikeConfig {
     }
 }
 
-#[cfg(feature = "flow-runtime")]
+#[cfg(feature = "flow")]
 #[derive(Default, Clone)]
 pub struct FlowNodeRegistryInner {
     pub registry: HashMap<String, (Node, Arc<dyn NodeLogic>)>,
@@ -272,19 +291,20 @@ impl FlowNodeRegistryInner {
     }
 }
 
-#[cfg(feature = "flow-runtime")]
+#[cfg(feature = "flow")]
 pub struct FlowNodeRegistry {
     pub node_registry: Arc<FlowNodeRegistryInner>,
     pub parent: Option<Weak<FlowLikeState>>,
 }
 
-#[cfg(feature = "flow-runtime")]
+#[cfg(feature = "flow")]
 impl Default for FlowNodeRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "flow")]
 impl FlowNodeRegistry {
     pub fn new() -> Self {
         FlowNodeRegistry {
@@ -332,8 +352,10 @@ impl FlowNodeRegistry {
     }
 }
 
+#[cfg(feature = "flow-runtime")]
 use std::sync::atomic::AtomicU64;
 
+#[cfg(feature = "flow-runtime")]
 #[derive(Clone)]
 pub struct RunData {
     pub start_time: Instant,
@@ -349,6 +371,7 @@ pub struct RunData {
     last_node_update_ms: Arc<AtomicU64>,
 }
 
+#[cfg(feature = "flow-runtime")]
 impl RunData {
     pub fn new(
         board_id: &str,
@@ -444,6 +467,7 @@ impl RunData {
 pub struct FlowLikeState {
     pub config: Arc<RwLock<FlowLikeConfig>>,
     pub http_client: Arc<HTTPClient>,
+    #[cfg(feature = "flow-runtime")]
     pub lance_session: Arc<LanceSession>,
 
     #[cfg(feature = "bit")]
@@ -457,9 +481,9 @@ pub struct FlowLikeState {
     #[cfg(feature = "model")]
     pub embedding_factory: Arc<Mutex<EmbeddingFactory>>,
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub node_registry: Arc<RwLock<FlowNodeRegistry>>,
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub board_registry: Arc<DashMap<String, Arc<Mutex<Board>>>>, // TODO: should board be wrapped in RWLock or Mutex?
     #[cfg(feature = "flow-runtime")]
     pub board_run_registry: Arc<DashMap<String, Arc<RunData>>>,
@@ -487,6 +511,7 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
             #[cfg(feature = "flow")]
             execution_environment: ExecutionEnvironment::default(),
@@ -502,9 +527,9 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
 
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -527,6 +552,7 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
             #[cfg(feature = "flow")]
             execution_environment: ExecutionEnvironment::default(),
@@ -538,9 +564,9 @@ impl FlowLikeState {
             model_factory: Arc::new(Mutex::new(ModelFactory::new())),
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
 
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -579,14 +605,44 @@ impl FlowLikeState {
         self.model_factory.clone()
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn with_lance_session(&self, builder: ConnectBuilder) -> ConnectBuilder {
         builder.session(self.lance_session.clone())
+    }
+
+    /// Persist a trigger that never became a run, so it still shows up in the
+    /// board's run history with the reason attached.
+    #[cfg(feature = "flow-runtime")]
+    pub async fn record_rejected_run(
+        &self,
+        rejection: &crate::flow::execution::rejection::RejectedRun,
+    ) -> flow_like_types::Result<LogMeta> {
+        use flow_like_types::anyhow;
+
+        let (db_fn, write_options) = {
+            let guard = self.config.read().await;
+            (
+                guard.callbacks.build_logs_database.clone(),
+                guard.callbacks.lance_write_options.clone(),
+            )
+        };
+
+        let db_fn = db_fn.ok_or_else(|| anyhow!("No log database configured"))?;
+        let base_path = rejection.base_path()?;
+        let db = self
+            .with_lance_session(db_fn(base_path.clone()))
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to open log database: {}, {:?}", base_path, e))?;
+
+        rejection.write(db, write_options.as_ref()).await
     }
 
     pub fn for_execution_run(&self) -> Self {
         FlowLikeState {
             config: self.config.clone(),
             http_client: self.http_client.clone(),
+            #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
             #[cfg(feature = "flow")]
             execution_environment: self.execution_environment,
@@ -601,9 +657,9 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             embedding_factory: self.embedding_factory.clone(),
 
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             node_registry: self.node_registry.clone(),
-            #[cfg(feature = "flow-runtime")]
+            #[cfg(feature = "flow")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -617,17 +673,17 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn node_registry(&self) -> Arc<RwLock<FlowNodeRegistry>> {
         self.node_registry.clone()
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn board_registry(&self) -> Arc<DashMap<String, Arc<Mutex<Board>>>> {
         self.board_registry.clone()
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn get_board(
         &self,
         board_id: &str,
@@ -649,7 +705,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn get_template(
         &self,
         template_id: &str,
@@ -671,7 +727,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn remove_board(
         &self,
         board_id: &str,
@@ -684,7 +740,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow-runtime")]
+    #[cfg(feature = "flow")]
     pub fn register_board(
         &self,
         board_id: &str,

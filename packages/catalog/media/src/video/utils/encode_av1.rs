@@ -19,6 +19,7 @@ impl NodeLogic for EncodeAv1Node {
             "Decode a selected video stream and encode it to AV1 with the Rust rav1e backend",
             "Video/Transcode",
         );
+        node.set_flowscript_name("video", "encodeAv1");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

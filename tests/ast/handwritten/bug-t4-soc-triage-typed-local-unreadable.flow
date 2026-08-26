@@ -1,0 +1,32 @@
+// BUG: the documented typed local declaration `let n: <Type> = <literal>`
+// (FLOWSCRIPT.md "let n: int = 0    function-local declaration", and the exact form the
+// reconciler's own remediation advice recommends: "declare that variable with `let` and a
+// literal initializer before the block, then assign it in each arm") lowers to a variable
+// that NO expression can read back:
+//   argument `integer1` on `intLessThan` is not a literal or resolvable node output
+//   argument `integer1` on `intAdd` is not a literal or resolvable node output
+//   argument `structIn` on `structSet` is not a literal or resolvable node output
+//   node `structSet` is missing required inputs: struct_in
+// The untyped alias forms `let n = 0` / `let bag = {}` reconcile cleanly, so only the
+// annotated declaration is broken. Both events below are the same program.
+use log::{ info }
+
+eventsSimple typedLocalCounter() {
+    let n: int = 0
+    let bag: Struct = {}
+    while (n < 3) {
+        bag.tick = n
+        n = n + 1
+    }
+    info({ message: json::stringify({ value: bag, pretty: false }), toast: false })
+}
+
+eventsSimple untypedLocalCounter() {
+    let m = 0
+    let sack = {}
+    while (m < 3) {
+        sack.tick = m
+        m = m + 1
+    }
+    info({ message: json::stringify({ value: sack, pretty: false }), toast: false })
+}

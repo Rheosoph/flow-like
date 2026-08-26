@@ -3,7 +3,7 @@ use flow_like::{
     flow::{
         board::Board,
         execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
-        node::{Node, NodeLogic, NodeScores},
+        node::{Node, NodeLogic, NodeScores, remove_unwired_pins},
         pin::{PinOptions, PinType},
         variable::VariableType,
     },
@@ -101,6 +101,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             "Invokes an LLM that can call Flow tools/functions and routes each call to execution pins.",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "invokeWithTools");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 
@@ -365,13 +366,22 @@ impl NodeLogic for InvokeLLMWithToolsNode {
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
+
+        // Every output pin the definition does not declare is a tool-execution pin this
+        // `on_update` minted. Deriving that from `get_node()` rather than a hand-kept exclusion
+        // list is what keeps a newly added static pin from being mistaken for a stale tool pin
+        // and deleted on every board parse — which is exactly what happened to `stats`.
+        let declared_pins: HashSet<String> = self
+            .get_node()
+            .pins
+            .values()
+            .map(|pin| pin.name.clone())
+            .collect();
+
         let current_tool_exec_pins: Vec<_> = node
             .pins
             .values()
-            .filter(|p| {
-                p.pin_type == PinType::Output
-                    && (p.name != "exec_done" && p.name != "response" && p.name != "tool_call_args") // p.description == "Tool Exec" doesn't seem to work as filter cond
-            })
+            .filter(|p| p.pin_type == PinType::Output && !declared_pins.contains(&p.name))
             .collect();
 
         let tools_str: String = node
@@ -411,9 +421,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             .values()
             .map(|p| p.id.clone())
             .collect::<Vec<_>>();
-        ids_to_remove.iter().for_each(|id| {
-            node.pins.remove(id);
-        });
+        remove_unwired_pins(node, &ids_to_remove);
 
         for missing_tool_ref in missing_tool_exec_refs {
             node.add_output_pin(

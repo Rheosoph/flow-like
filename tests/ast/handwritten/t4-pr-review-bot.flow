@@ -1,0 +1,488 @@
+use github::{ addIssueComment, createIssue, createPrReview, getFileContents, getPullRequest, listPrFiles }
+use log::{ error, info, warn }
+
+interface ReviewRun {
+    run_id: string;
+    pr_number: int;
+    head_sha: string;
+    repo_full_name: string;
+    risk_band: "clean" | "advisory" | "blocking";
+    opened_at: string;
+    findings_count?: int | null;
+    posted_review_id?: int | null;
+}
+interface Finding {
+    rule_id: string;
+    file_path: string;
+    hunk_index: int;
+    severity: "info" | "warning" | "blocking";
+    title: string;
+    body: string;
+    suggestion?: string | null;
+}
+interface Suppression {
+    rule_id: string;
+    path_prefix: string;
+    reason: string;
+}
+
+@description("GitHub App installation token, used for every REST call the bot makes")
+@secret
+const githubToken: string
+@description("Atlassian API token used when a blocking review escalates to a ticket")
+@secret
+const jiraToken: string
+@description("Shared secret the pull_request webhook is signed with")
+@secret
+const webhookSecret: string
+@category("Repo")
+let reviewOwner = "flow-like"
+@category("Repo")
+let reviewRepo = "flow-like"
+@category("Repo")
+let jiraProjectKey = "REV"
+@category("Repo")
+let jiraAccountEmail = "review-bot@flow-like.com"
+@category("Budget")
+let filesPerPage = 50
+@category("Budget")
+let hunkBudget = 24
+@category("Budget")
+let blockingThreshold = 2
+@category("Run")
+const activeRun: ReviewRun = {"run_id":"","pr_number":0,"head_sha":"","repo_full_name":"","risk_band":"clean","opened_at":""}
+@category("Run")
+const repoContext: Struct = {}
+@category("Run/Paging")
+let pageCursor = 1
+@category("Run/Paging")
+let pagesFetched = 0
+@category("Run/Paging")
+const changedFiles: Struct[] = []
+@category("Run/Findings")
+const findings: Struct[] = []
+@category("Run/Findings")
+let hunksScanned = 0
+@category("Run/Findings")
+let blockingFindings = 0
+@category("Run/Findings")
+let budgetSpent = false
+@category("Policy")
+const suppressions: Suppression[] = []
+@category("Run/Findings")
+const currentFinding: Struct = {}
+@category("Publish")
+const reviewLines: string[] = []
+@category("Publish")
+let lastDecision = "skip"
+@category("Sweep")
+const sweptPrs: any
+@category("Sweep")
+let sweptCount = 0
+@category("Dashboard")
+const dashboardCounts: any
+@category("Prompts")
+let reviewerPrompt = "You are a diff reviewer. Judge exactly one hunk. Answer with a single JSON object: rule_id, severity (info|warning|blocking), title, body, suggestion. Cite the repository conventions you were given. Never invent a file you were not shown."
+
+function riskBand(blocking: int, warnings: int): (band: string) {
+    if (blocking >= blockingThreshold) {
+        return "blocking"
+    }
+    return (warnings > 0) ? "advisory" : "clean"
+}
+
+function runKey(prNumber: int, headSha: string): (key: string) {
+    return hash::sha256(`${reviewOwner}/${reviewRepo}#${prNumber}@${headSha}`)
+}
+
+eventsGeneric prWebhook(prNumber: int, action: string, headSha: string, payload: Struct) {
+    const pr = getPullRequest({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, prNumber: prNumber })
+    pr {
+        execOut: {
+            ingest::openRun(prNumber, headSha)
+            ingest::repoContextMap(reviewOwner, reviewRepo, pr.pullRequest.base.ref)
+            const listed = ingest::collectChangedFiles(prNumber)
+            const reviewable = ingest::reviewableFiles(listed)
+            analyze::scanChangedFiles(reviewable)
+            const band = publish::dispatch(prNumber, headSha)
+            events::returnResult(`${band} on #${prNumber} after ${action}`)
+        }
+        error: {
+            error({ message: `PR #${prNumber} could not be loaded`, toast: false })
+            events::returnResult(`unavailable`)
+        }
+    }
+}
+
+eventsChat reviewTriage(history: Struct, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: Struct) {
+    const stepId = chat::pushStep({ title: "Review triage", description: "Deciding what to do with the open review run" })
+    const scope = chat::askSingleChoice({ name: "Which pull request?", description: "Pick the review run to triage.", allowFreeform: true, ttlSeconds: 300 })
+    scope {
+        execOut: {
+            chat::pushTextToStep(`triaging ${scope.response}`)
+        }
+        execTimeout: {
+            chat::pushTextToStep(`no pull request chosen, defaulting to the open run`)
+        }
+    }
+    let prNumber = string::toInt({ string: scope.response, fallback: 0 }).integer
+    const decision = publish::confirmEscalation(prNumber, activeRun.risk_band)
+    if (decision == "Escalate") {
+        const details = chat::askForm({ name: "Escalation details", description: "Confirm the ticket fields before the bot files it.", ttlSeconds: 900, fnRefs: [escalationForm] })
+        details {
+            execOut: {
+                chat::pushResponse(ai::response::fromString(`Filed with: ${details.response}`))
+            }
+            execTimeout: {
+                chat::pushResponse(ai::response::fromString(`The escalation form timed out; nothing was filed.`))
+            }
+        }
+    } else {
+        chat::pushResponse(ai::response::fromString(`Nothing escalated for #${prNumber}.`))
+    }
+    chat::removeStep(stepId)
+    eventsGeneric escalationForm(component: string, severityOverride: string, note: string, payload: Struct) {
+        let ticket = publish::escalate(activeRun.pr_number, severityOverride).issueKey
+        return `${ticket} - ${component}: ${note}`
+    }
+}
+
+eventsWidgetAction reviewWidgetAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const bandFilter = events::extractActionContext({ actionContext: actionContext, fieldName: "band" })
+    if (eventName == "reindex") {
+        const dropped = ingest::contextCache().invalidateNamespace()
+        info({ message: `dropped ${dropped} cached repository context entries`, toast: true })
+        ingest::repoContextMap(reviewOwner, reviewRepo, "main")
+    } else {
+        const matched = publish::renderBandBoard(widgetInstanceId, bandFilter)
+        info({ message: `showing ${matched} run(s) in band ${bandFilter}`, toast: false })
+    }
+}
+
+eventsSimple staleReviewSweep() {
+    const nudged = ingest::sweepStaleRuns()
+    info({ message: `stale sweep nudged ${nudged} pull request(s)`, toast: false })
+}
+
+eventsSimple reviewDashboardLoad() {
+    const counts = publish::bandTally()
+    const panel = ui::instantiateWidget({ widgetSelector: "Review Overview", instanceId: "review-overview" })
+    ui::setMarkdownContent({ elementRef: panel, content: `Tracked bands: ${json::stringify({ value: map::keys({ mapIn: counts }), pretty: false })}` })
+    ui::setPageState({ key: "reviewBandCounts", value: counts })
+}
+
+detached {
+    const inboundAuth = auth::hmacSha256({ secret: webhookSecret, signatureHeader: "X-Hub-Signature-256", timestampHeader: "X-GitHub-Delivery", maxSkewSeconds: 300 })
+    info({ message: json::stringify({ value: inboundAuth, pretty: true }), toast: false })
+}
+
+module ingest {
+    function githubClient(): (provider: Struct) {
+        return github::providerPat({ token: githubToken })
+    }
+
+    function jiraClient(): (provider: Struct) {
+        return atlassian::providerApiToken({ baseUrl: "https://flow-like.atlassian.net", email: jiraAccountEmail, apiToken: jiraToken, isCloud: true })
+    }
+
+    function contextCache(): (cache: Struct) {
+        return data::cache::open({ scope: "app", namespace: "pr-repo-context-v4" })
+    }
+
+    @cache({ namespace: "pr-repo-context-v4", ttlSeconds: 21600 })
+    function repoContextMap(owner: string, repo: string, ref: string): (context: Struct) {
+        const client = ingest::githubClient()
+        repoContext = {}
+        repoContext.repo_full_name = `${owner}/${repo}`
+        repoContext.default_branch = ref
+        const manifest = getFileContents({ provider: client, owner: owner, repo: repo, path: "flow-like.toml", ref: ref })
+        manifest {
+            execOut: {
+                repoContext.manifest = manifest.content
+            }
+            error: {
+                warn({ message: `no flow-like.toml on ${owner}/${repo}@${ref}, falling back to defaults`, toast: false })
+            }
+        }
+        const conventions = getFileContents({ provider: client, owner: owner, repo: repo, path: "CLAUDE.md", ref: ref })
+        conventions {
+            execOut: {
+                repoContext.convention_notes = string::truncate({ string: conventions.content, maxLength: 8000, ellipsis: "..." }).truncated
+            }
+            error: {
+                repoContext.convention_notes = "no repository conventions checked in"
+            }
+        }
+        repoContext.indexed_at = datetime::now().format("%Y-%m-%dT%H:%M:%S")
+        return repoContext
+    }
+
+    function collectChangedFiles(prNumber: int): (files: Struct[], pages: int) {
+        // BUG: `pageCursor` / `pagesFetched` / `changedFiles` want to be function-local `let`
+        // declarations, but a local `let name: Type = <literal>` is never CREATED on an empty
+        // board - reconcile only re-binds locals that already exist, so every read of one fails
+        // to resolve. They are hoisted to file-scope variables instead.
+        // See bug-t4-pr-review-bot-function-local-let.flow
+        const client = ingest::githubClient()
+        changedFiles = []
+        pagesFetched = 0
+        pageCursor = 1
+        while (pageCursor != null) {
+            const listed = listPrFiles({ provider: client, owner: reviewOwner, repo: reviewRepo, prNumber: prNumber, perPage: filesPerPage, page: pageCursor })
+            listed {
+                execOut: {
+                    changedFiles = array::extend({ arrayIn: changedFiles, values: listed.files })
+                    pagesFetched = pagesFetched + 1
+                    if (listed.count == filesPerPage) {
+                        pageCursor = pageCursor + 1
+                    } else {
+                        pageCursor = null
+                    }
+                }
+                error: {
+                    warn({ message: `page ${pageCursor} of PR #${prNumber} could not be listed`, toast: false })
+                    pageCursor = null
+                }
+            }
+        }
+        return changedFiles, pagesFetched
+    }
+
+    function openRun(prNumber: int, headSha: string): (runId: string) {
+        // BUG: `activeRun = { run_id: runKey(...), pr_number: prNumber, ... }` is rejected -
+        // an object literal with any computed member is "not a resolvable value", even though
+        // board -> text renders exactly that shape. Seeded from a literal, then written field by
+        // field. See bug-t4-pr-review-bot-computed-object-literal.flow
+        activeRun = {"run_id":"","pr_number":0,"head_sha":"","repo_full_name":"","risk_band":"clean","opened_at":""}
+        activeRun.run_id = runKey(prNumber, headSha)
+        activeRun.pr_number = prNumber
+        activeRun.head_sha = headSha
+        activeRun.repo_full_name = `${reviewOwner}/${reviewRepo}`
+        activeRun.opened_at = datetime::now().format("%Y-%m-%dT%H:%M:%S")
+        activeRun.prior_reviews = ingest::priorReviews(prNumber)
+        const commit = github::getCommit({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, sha: headSha })
+        activeRun.head_additions = commit.additions
+        activeRun.head_deletions = commit.deletions
+        return activeRun.run_id
+    }
+
+    function priorReviews(prNumber: int): (count: int) {
+        const reviews = github::listPrReviews({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, prNumber: prNumber, perPage: 100, page: 1 })
+        return reviews.count
+    }
+
+    function sweepStaleRuns(): (nudged: int) {
+        const database = db::open({ name: "pr_review_runs", userScoped: false, batchSize: 256 })
+        const cutoff = datetime::now().add({ days: -3, hours: 0, minutes: 0, seconds: 0 })
+        const stale = database.filter({ filter: "risk_band != 'clean'", params: {}, limit: 200, offset: 0 })
+        sweptPrs = set::make()
+        sweptCount = 0
+        for (const run of stale) {
+            const opened = datetime::parse({ input: run.opened_at, format: "%Y-%m-%dT%H:%M:%S" })
+            if (opened.isBefore(cutoff)) {
+                const inserted = set::insert({ setIn: sweptPrs, value: run.pr_number })
+                sweptPrs = inserted
+                if (!(inserted.existedBefore)) {
+                    addIssueComment({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, issueNumber: run.pr_number, body: `This review has sat at ${run.risk_band} for three days. Re-running the bot.` })
+                    sweptCount = sweptCount + 1
+                }
+            }
+        }
+        let summary = `swept ${set::size({ setIn: sweptPrs })} pull request(s), nudged ${sweptCount}`
+        files::storageDir({ nodeScope: false }).child("review-sweep.log").writeString(summary)
+        return sweptCount
+    }
+
+    function reviewableFiles(files: Struct[]): (reviewable: Struct[]) {
+        const withPatch = array::filterBy({ arrayIn: files, key: "patch", operator: "IsNotEmpty", value: "", compare: "Text", ignoreCase: false, invert: false })
+        return array::filterBy({ arrayIn: withPatch.arrayOut, key: "status", operator: "Equals", value: "removed", compare: "Text", ignoreCase: true, invert: true }).arrayOut
+    }
+}
+
+module analyze {
+    function reviewerModel(): (model: Struct) {
+        const preferences = ai::preferences::make({ multimodal: false }).setModelHint("code-review")
+        return ai::findModel(preferences)
+    }
+
+    function splitHunks(patch: string): (hunks: string[]) {
+        return string::split({ string: patch, separator: "@@ ", isRegex: false, limit: 0, skipEmpty: true })
+    }
+
+    function isSuppressed(ruleId: string, filePath: string): (suppressed: bool) {
+        let hit = false
+        for (const rule of suppressions) {
+            if (string::equal(rule.rule_id, ruleId) && string::startsWith({ string: filePath, prefix: rule.path_prefix, ignoreCase: false })) {
+                hit = true
+            }
+        }
+        return hit
+    }
+
+    function judgeHunk(filePath: string, hunkIndex: int, hunk: string): (finding: Struct) {
+        const model = analyze::reviewerModel()
+        let prompt = `File: ${filePath}
+Hunk: ${hunkIndex}
+
+## Repository conventions
+${repoContext.convention_notes}
+
+## Diff
+@@ ${hunk}`
+        const history = history::make({ modelName: "review" }).setSystemPrompt(reviewerPrompt).addMessage(history::makeMessage({ role: "user", type: "text", text: prompt }))
+        const reviewer = agent::fromModel({ model: model, maxIter: 6, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [readRepoFile, lookupSuppression] })
+        const judged = reviewer.invoke(history)
+        let verdict = ai::response::lastContent(judged.response).content
+        currentFinding = json::repairParse(verdict)
+        currentFinding.file_path = filePath
+        currentFinding.hunk_index = hunkIndex
+        return currentFinding
+        eventsGeneric readRepoFile(path: string, ref: string, payload: Struct) {
+            const blob = getFileContents({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, path: path, ref: ref })
+            blob {
+                execOut: {
+                    return string::truncate({ string: blob.content, maxLength: 12000, ellipsis: "..." }).truncated
+                }
+                error: {
+                    return `FILE NOT FOUND: ${path}@${ref}`
+                }
+            }
+        }
+        eventsGeneric lookupSuppression(ruleId: string, payload: Struct) {
+            const suppressed = analyze::isSuppressed(ruleId, filePath)
+            return suppressed ? `SUPPRESSED for ${filePath}` : `ACTIVE`
+        }
+    }
+
+    function scanChangedFiles(files: Struct[]): (scanned: int, blocking: int) {
+        findings = []
+        hunksScanned = 0
+        blockingFindings = 0
+        budgetSpent = false
+        for (const [fileIndex, file] of files) {
+            const hunks = analyze::splitHunks(file.patch)
+            for (const hunk of control::forEachWithBreak({ break: budgetSpent, array: hunks })) {
+                const finding = analyze::judgeHunk(file.filename, fileIndex, hunk)
+                const ruleId = struct::get({ struct: finding, field: "rule_id" })
+                const severity = struct::get({ struct: finding, field: "severity" })
+                if (!(analyze::isSuppressed(ruleId, file.filename))) {
+                    findings = array::push({ arrayIn: findings, value: finding })
+                    if (string::equal(severity, "blocking")) {
+                        blockingFindings = blockingFindings + 1
+                    }
+                }
+                hunksScanned = hunksScanned + 1
+                if (hunksScanned >= hunkBudget) {
+                    budgetSpent = true
+                }
+            }
+            info({ message: `scanned ${file.filename} (${hunksScanned}/${hunkBudget} hunks used)`, toast: false })
+        }
+        return hunksScanned, blockingFindings
+    }
+}
+
+module publish {
+    function reviewBody(band: string): (body: string) {
+        reviewLines = []
+        reviewLines = array::push({ arrayIn: reviewLines, value: `**Risk band:** ${band} - ${array::length({ array: findings })} finding(s)` })
+        for (const finding of findings) {
+            reviewLines = array::push({ arrayIn: reviewLines, value: `- \`${finding.rule_id}\` **${finding.title}** (${finding.file_path}) - ${finding.body}` })
+        }
+        return string::join({ strings: reviewLines, separator: "\n" })
+    }
+
+    function postReview(prNumber: int, headSha: string, band: string): (reviewId: int) {
+        const body = publish::reviewBody(band)
+        const posted = createPrReview({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, prNumber: prNumber, body: body, commitId: headSha, comments: findings, event: (band == "blocking") ? "REQUEST_CHANGES" : "COMMENT" })
+        posted {
+            execOut: {
+                info({ message: `posted review ${posted.reviewId} on #${prNumber}`, toast: false })
+            }
+            error: {
+                error({ message: `review post failed on #${prNumber}`, toast: false })
+            }
+        }
+        return posted.reviewId
+    }
+
+    function confirmEscalation(prNumber: int, band: string): (decision: string) {
+        lastDecision = "skip"
+        const asked = chat::askSingleChoice({ name: "Escalate this review?", description: `PR #${prNumber} came back ${band} with ${array::length({ array: findings })} finding(s). Escalate to a Jira ticket?`, allowFreeform: false, ttlSeconds: 600 })
+        asked {
+            execOut: {
+                lastDecision = asked.response
+                chat::pushTextToStep(`reviewer chose: ${asked.response}`)
+            }
+            execTimeout: {
+                warn({ message: `no escalation decision for #${prNumber} within 10 minutes`, toast: false })
+            }
+        }
+        return lastDecision
+    }
+
+    function escalate(prNumber: int, band: string): (issueKey: string, trackerNumber: int) {
+        let summary = `Blocking review on ${reviewOwner}/${reviewRepo}#${prNumber}`
+        const body = publish::reviewBody(band)
+        // BUG: `use jira::{ createIssue as createJiraIssue }` is a parse error - a `use` member
+        // list accepts bare identifiers only and `UseKind` carries no per-member alias, so the
+        // colliding `createIssue` cannot be opened next to github's. Called qualified instead.
+        // See bug-t4-pr-review-bot-use-member-alias.flow
+        let ticket = jira::createIssue({ provider: ingest::jiraClient(), projectKey: jiraProjectKey, issueType: "Bug", summary: summary, description: body, priority: "High", labels: ["pr-review","automated"] }).issueKey
+        jira::addComment({ provider: ingest::jiraClient(), issueKey: ticket, body: `Raised by the review bot from PR #${prNumber}.` })
+        let tracker = createIssue({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, title: summary, body: `${body}
+
+Jira: ${ticket}`, labels: ["review-blocking"], assignees: [], issueFieldValues: [] }).issueNumber
+        return ticket, tracker
+    }
+
+    function dispatch(prNumber: int, headSha: string): (band: string) {
+        let warnings = array::length({ array: findings }) - blockingFindings
+        const band = riskBand(blockingFindings, warnings)
+        activeRun.risk_band = band
+        activeRun.findings_count = array::length({ array: findings })
+        const routed = control::switch({ value: band, cases: "clean,advisory,blocking" })
+        routed {
+            caseClean: {
+                addIssueComment({ provider: ingest::githubClient(), owner: reviewOwner, repo: reviewRepo, issueNumber: prNumber, body: `No review findings on ${headSha}. ${hunksScanned} hunk(s) inspected.` })
+            }
+            caseAdvisory: {
+                publish::postReview(prNumber, headSha, band)
+            }
+            caseBlocking: {
+                activeRun.posted_review_id = publish::postReview(prNumber, headSha, band)
+                publish::escalate(prNumber, band)
+            }
+            default: {
+                info({ message: `risk band ${band} on #${prNumber} (${hunksScanned} hunks)`, toast: false })
+            }
+        }
+        publish::recordRun()
+        return band
+    }
+
+    function renderBandBoard(instanceId: string, band: string): (matched: int) {
+        const database = db::open({ name: "pr_review_runs", userScoped: false, batchSize: 256 })
+        const params = struct::set({ structIn: {}, field: "band", value: band })
+        const rows = database.filter({ filter: "risk_band = $band", params: params, limit: 50, offset: 0 })
+        const board = ui::instantiateWidget({ widgetSelector: "Review Run", instanceId: instanceId })
+        ui::setMarkdownContent({ elementRef: board, content: publish::reviewBody(band) })
+        return array::length({ array: rows })
+    }
+
+    function bandTally(): (counts: any) {
+        const database = db::open({ name: "pr_review_runs", userScoped: false, batchSize: 256 })
+        const recent = database.list({ limit: 25, offset: 0 })
+        dashboardCounts = map::make()
+        dashboardCounts = map::set({ mapIn: dashboardCounts, key: "clean", value: array::filterBy({ arrayIn: recent, key: "risk_band", operator: "Equals", value: "clean", compare: "Text", ignoreCase: true, invert: false }).kept })
+        dashboardCounts = map::set({ mapIn: dashboardCounts, key: "advisory", value: array::filterBy({ arrayIn: recent, key: "risk_band", operator: "Equals", value: "advisory", compare: "Text", ignoreCase: true, invert: false }).kept })
+        dashboardCounts = map::set({ mapIn: dashboardCounts, key: "blocking", value: array::filterBy({ arrayIn: recent, key: "risk_band", operator: "Equals", value: "blocking", compare: "Text", ignoreCase: true, invert: false }).kept })
+        return dashboardCounts
+    }
+
+    function recordRun(): (blockingRuns: int) {
+        const database = db::open({ name: "pr_review_runs", userScoped: false, batchSize: 256 })
+        database.upsert({ idRow: "run_id", value: activeRun })
+        return database.count({ filter: "risk_band = 'blocking'", params: {} })
+    }
+}

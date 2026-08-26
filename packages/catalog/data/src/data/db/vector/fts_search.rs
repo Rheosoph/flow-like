@@ -6,6 +6,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
@@ -30,6 +31,8 @@ impl NodeLogic for FTSLocalDatabaseNode {
             "Searches the Database using Full-Text Search",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "ftsSearch");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 
@@ -93,6 +96,7 @@ impl NodeLogic for FTSLocalDatabaseNode {
         params::sync_param_pins(node, "filter", board, params::SqlFlavor::LanceFilter);
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -129,5 +133,12 @@ impl NodeLogic for FTSLocalDatabaseNode {
         context.set_pin_value("values", json!(results)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

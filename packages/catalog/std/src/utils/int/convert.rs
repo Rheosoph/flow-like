@@ -47,6 +47,8 @@ impl NodeLogic for IntToFloatNode {
             "Converts an integer into a float",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "toFloat");
+        node.set_receiver("integer");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -84,6 +86,8 @@ impl NodeLogic for IntToRadixNode {
             "Formats an integer as binary, octal, decimal or hexadecimal text",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "toRadix");
+        node.set_receiver("integer");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 
@@ -144,6 +148,7 @@ impl NodeLogic for IntFromRadixNode {
             "Parses an integer from binary, octal, decimal or hexadecimal text",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "fromRadix");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 

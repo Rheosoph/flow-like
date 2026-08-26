@@ -30,6 +30,7 @@ impl NodeLogic for GetCurrentUserNode {
             "Get the profile of the currently authenticated user",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getCurrentUser");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -205,6 +206,7 @@ impl NodeLogic for GetChangelogNode {
             "Get the change history for an issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getChangelog");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -343,6 +345,7 @@ impl NodeLogic for BatchGetChangelogsNode {
             "Get changelogs for multiple issues at once",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "batchGetChangelogs");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

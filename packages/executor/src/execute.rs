@@ -10,6 +10,7 @@ use flow_like::credentials::StoreType;
 use flow_like::flow::board::Board;
 use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache};
 use flow_like::flow::event::Event;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
@@ -106,6 +107,45 @@ pub(crate) async fn resolve_run_template(
                 request.board_id, e
             ))
         })
+}
+
+/// A run the API already created but the executor never started leaves the run
+/// row carrying a reason and no logs at all, so opening it in the UI explains
+/// nothing. Write the same per-run log table a real run would have produced.
+pub(crate) async fn record_executor_rejection(
+    state: &Arc<FlowLikeState>,
+    request: &ExecutionRequest,
+    run_id: &str,
+    stage: RejectionStage,
+    reason: String,
+) {
+    let mut rejection = RejectedRun::new(
+        request.app_id.clone(),
+        request.board_id.clone(),
+        stage,
+        reason,
+    )
+    .with_run_id(run_id)
+    .with_node(request.node_id.clone())
+    .with_board_version(request.board_version)
+    .with_payload(request.payload.as_ref());
+
+    if let Some(event) = request
+        .event_json
+        .as_ref()
+        .and_then(|json| serde_json::from_str::<Event>(json).ok())
+    {
+        rejection = rejection.with_event_definition(&event);
+    }
+
+    if let Err(error) = state.record_rejected_run(&rejection).await {
+        tracing::warn!(
+            error = %error,
+            run_id = %run_id,
+            app_id = %request.app_id,
+            "Failed to record a run that never started"
+        );
+    }
 }
 
 /// API-compatible event input format
@@ -381,7 +421,7 @@ pub async fn execute(
     // Template build resolves every node against the registry, so a board
     // whose WASM packages failed to download errors here first — keep the
     // actionable package list in that error.
-    let template = resolve_run_template(&state, &request)
+    let template = match resolve_run_template(&state, &request)
         .await
         .map_err(|e| match e {
             ExecutorError::BoardLoad(msg) if !failed_wasm_package_ids.is_empty() => {
@@ -394,18 +434,40 @@ pub async fn execute(
                 ))
             }
             other => other,
-        })?;
+        }) {
+        Ok(template) => template,
+        Err(error) => {
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Resolution,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
         template.board.as_ref(),
         request.wasm_packages.as_ref(),
         &failed_wasm_package_ids,
     );
     if !unavailable_wasm_packages.is_empty() {
-        return Err(ExecutorError::Execution(format!(
+        let error = ExecutorError::Execution(format!(
             "Missing WASM package artifacts for board {}: {}",
             board_id,
             unavailable_wasm_packages.join(", ")
-        )));
+        ));
+        record_executor_rejection(
+            &state,
+            &request,
+            &claims.run_id,
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .await;
+        return Err(error);
     }
 
     // Send start event to API
@@ -506,7 +568,7 @@ pub async fn execute(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
-    let mut run = InternalRun::from_template(
+    let run = InternalRun::from_template(
         &request.app_id,
         template.clone(),
         event,
@@ -521,7 +583,22 @@ pub async fn execute(
         Some(claims.run_id.clone()),
     )
     .await
-    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+    .map_err(|e| ExecutorError::RunInit(e.to_string()));
+
+    let mut run = match run {
+        Ok(run) => run,
+        Err(error) => {
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Setup,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
 
     run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {

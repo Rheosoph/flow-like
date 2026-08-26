@@ -82,6 +82,7 @@ impl NodeLogic for PushCsvToChart {
             "Push data to a Nivo or Plotly chart. Select JSON for pre-formatted data or CSV for auto-transformation.",
             "UI/Elements/Charts",
         );
+        node.set_flowscript_name("ui", "pushCsvToChart");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_version(2);
 

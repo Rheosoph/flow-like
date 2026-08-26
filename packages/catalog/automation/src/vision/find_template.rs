@@ -27,6 +27,7 @@ impl NodeLogic for FindTemplateNode {
             "Searches the screen for a template image and returns its location",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "findTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(
@@ -182,6 +183,7 @@ impl NodeLogic for FindAllTemplatesNode {
             "Searches the screen for all occurrences of a template image",
             "Automation/Vision",
         );
+        node.set_flowscript_name("automation.vision", "findAllTemplates");
         node.add_icon("/flow/icons/vision.svg");
 
         node.set_scores(

@@ -134,11 +134,14 @@ impl DateStartOfNode {
 #[async_trait]
 impl NodeLogic for DateStartOfNode {
     fn get_node(&self) -> Node {
-        boundary_node(
+        let mut node = boundary_node(
             "utils_datetime_start_of",
             "Start Of",
             "The first instant of the day, week, month, quarter or year",
-        )
+        );
+        node.set_flowscript_name("datetime", "startOf");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -164,11 +167,14 @@ impl DateEndOfNode {
 #[async_trait]
 impl NodeLogic for DateEndOfNode {
     fn get_node(&self) -> Node {
-        boundary_node(
+        let mut node = boundary_node(
             "utils_datetime_end_of",
             "End Of",
             "The last instant of the day, week, month, quarter or year",
-        )
+        );
+        node.set_flowscript_name("datetime", "endOf");
+        node.set_receiver("date");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -200,6 +206,8 @@ impl NodeLogic for DateShiftNode {
             "Calendar-aware shift that keeps the day of month where it exists",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "shiftCalendar");
+        node.set_receiver("date");
         node.add_icon("/flow/icons/calendar.svg");
         node.set_scores(pure_scores());
 

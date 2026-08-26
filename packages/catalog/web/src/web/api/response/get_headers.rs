@@ -26,6 +26,8 @@ impl NodeLogic for GetHeadersNode {
             "Gets all headers from a http request",
             "Web/API/Response",
         );
+        node.set_flowscript_name("http", "headers");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

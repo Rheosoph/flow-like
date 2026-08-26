@@ -25,6 +25,8 @@ impl NodeLogic for ListStructFields {
             "Fetches fields from a struct",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "getFields");
+        node.set_receiver("struct");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct)

@@ -49,6 +49,7 @@ impl NodeLogic for WebSocketServerNode {
             "Binds a WebSocket server. Typed lifecycle events are exposed as pins; incoming messages are delivered to the referenced on-message handler.",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "server");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

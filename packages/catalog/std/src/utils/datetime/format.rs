@@ -25,6 +25,8 @@ impl NodeLogic for DateTimeFormatNode {
             "Converts a DateTime to a formatted string",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "format");
+        node.set_receiver("date");
 
         node.add_input_pin("date", "Date", "Date to format", VariableType::Date);
         node.add_input_pin(

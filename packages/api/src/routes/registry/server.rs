@@ -19,10 +19,10 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_wasm::manifest::{
+use flow_like_wasm_schema::manifest::{
     PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
 };
-use flow_like_wasm::widget_bundle::{WidgetBundleReader, sha256_hex};
+use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use utoipa::ToSchema;
 
-use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
+use flow_like_wasm_schema::runtime::WASMTIME_MAJOR_VERSION;
 
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
@@ -468,12 +468,17 @@ fn db_cat_to_string(cat: &WasmPackageCategory) -> String {
         .unwrap_or_else(|| "OTHER".to_string())
 }
 
-fn db_cat_to_manifest(cat: &WasmPackageCategory) -> flow_like_wasm::manifest::WasmPackageCategory {
+fn db_cat_to_manifest(
+    cat: &WasmPackageCategory,
+) -> flow_like_wasm_schema::manifest::WasmPackageCategory {
     let json = serde_json::to_value(cat).unwrap_or(serde_json::Value::String("OTHER".into()));
-    serde_json::from_value(json).unwrap_or(flow_like_wasm::manifest::WasmPackageCategory::Other)
+    serde_json::from_value(json)
+        .unwrap_or(flow_like_wasm_schema::manifest::WasmPackageCategory::Other)
 }
 
-fn manifest_cat_to_db(cat: &flow_like_wasm::manifest::WasmPackageCategory) -> WasmPackageCategory {
+fn manifest_cat_to_db(
+    cat: &flow_like_wasm_schema::manifest::WasmPackageCategory,
+) -> WasmPackageCategory {
     let json = serde_json::to_value(cat).unwrap_or(serde_json::Value::String("OTHER".into()));
     serde_json::from_value(json).unwrap_or(WasmPackageCategory::Other)
 }
@@ -1132,9 +1137,9 @@ impl ServerRegistry {
 
         // Get authors from junction table
         let author_infos = self.get_package_authors(&pkg.id).await?;
-        let authors: Vec<flow_like_wasm::manifest::PackageAuthor> = author_infos
+        let authors: Vec<flow_like_wasm_schema::manifest::PackageAuthor> = author_infos
             .into_iter()
-            .map(|a| flow_like_wasm::manifest::PackageAuthor {
+            .map(|a| flow_like_wasm_schema::manifest::PackageAuthor {
                 name: a.name.or(a.username).unwrap_or(a.user_id),
                 email: None,
                 url: None,
@@ -1160,7 +1165,7 @@ impl ServerRegistry {
         }
 
         let manifest = PackageManifest {
-            manifest_version: flow_like_wasm::manifest::MANIFEST_VERSION,
+            manifest_version: flow_like_wasm_schema::manifest::MANIFEST_VERSION,
             id: pkg.id.clone(),
             name: pkg.name.clone(),
             description: pkg.description.clone(),
@@ -2716,8 +2721,8 @@ impl PackageWidgetSource for ServerRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_wasm::widget::{ContractInput, ContractInputType, WidgetContract};
-    use flow_like_wasm::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
+    use flow_like_wasm_schema::widget::{ContractInput, ContractInputType, WidgetContract};
+    use flow_like_wasm_schema::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
 
     fn contract_with_input(widget_id: &str) -> WidgetContract {
         let mut contract = WidgetContract::new(widget_id);
@@ -2764,7 +2769,7 @@ mod tests {
         let mut manifest = PackageManifest::new(package_id, "Test", version, "test package");
         manifest
             .widgets
-            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+            .push(flow_like_wasm_schema::manifest::PackageWidgetEntry {
                 id: widget_id.to_string(),
                 name: widget_id.to_string(),
                 description: "test widget".into(),
@@ -2885,7 +2890,7 @@ mod tests {
         );
         manifest
             .widgets
-            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+            .push(flow_like_wasm_schema::manifest::PackageWidgetEntry {
                 id: "extra-widget".into(),
                 name: "Extra".into(),
                 description: "not in bundle".into(),
@@ -2966,7 +2971,7 @@ mod tests {
 
         manifest
             .widgets
-            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+            .push(flow_like_wasm_schema::manifest::PackageWidgetEntry {
                 id: "w".into(),
                 name: "W".into(),
                 description: String::new(),

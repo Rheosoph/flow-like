@@ -1,9 +1,11 @@
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use crate::data::query_params as params;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::ValueType,
     variable::VariableType,
@@ -33,6 +35,8 @@ impl NodeLogic for SqlQueryNode {
             "Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused, as are subqueries and multi-table forms; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "sqlQuery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(3);
 
@@ -109,6 +113,7 @@ impl NodeLogic for SqlQueryNode {
         params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -142,8 +147,16 @@ impl NodeLogic for SqlQueryNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
+#[cfg(feature = "execute")]
 pub fn batches_to_rows(
     batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
 ) -> flow_like_types::Result<Vec<QueryRow>> {
@@ -172,6 +185,7 @@ pub fn batches_to_rows(
     Ok(rows)
 }
 
+#[cfg(feature = "execute")]
 pub fn batches_to_csv_table(
     batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
 ) -> flow_like_types::Result<CSVTable> {
@@ -203,6 +217,7 @@ pub fn batches_to_csv_table(
     Ok(CSVTable::new(headers, rows, None))
 }
 
+#[cfg(feature = "execute")]
 fn array_value_to_json(
     array: &dyn flow_like_storage::datafusion::arrow::array::Array,
     idx: usize,
@@ -369,6 +384,7 @@ fn array_value_to_json(
 /// Read an Arrow column as its concrete array type. The `DataType` match above already selected
 /// the layout, so a mismatch means the schema and the buffers disagree — surface that instead of
 /// panicking inside a running flow.
+#[cfg(feature = "execute")]
 fn typed_column<T: flow_like_storage::datafusion::arrow::array::Array + 'static>(
     array: &dyn flow_like_storage::datafusion::arrow::array::Array,
 ) -> flow_like_types::Result<&T> {
@@ -383,6 +399,7 @@ fn typed_column<T: flow_like_storage::datafusion::arrow::array::Array + 'static>
 
 /// Materialize the child values of one Arrow list cell as a JSON array. The slice handed in is
 /// already narrowed to a single row's values, so every index belongs to that row.
+#[cfg(feature = "execute")]
 fn list_values_to_json(
     values: &dyn flow_like_storage::datafusion::arrow::array::Array,
 ) -> flow_like_types::Result<Value> {
@@ -393,6 +410,7 @@ fn list_values_to_json(
     Ok(Value::Array(items))
 }
 
+#[cfg(feature = "execute")]
 fn decimal_string_to_json(raw: String) -> Value {
     if let Ok(value) = raw.parse::<i64>() {
         return json!(value);
@@ -413,6 +431,7 @@ fn decimal_string_to_json(raw: String) -> Value {
     Value::String(raw)
 }
 
+#[cfg(feature = "execute")]
 fn timestamp_to_json(
     value: i64,
     unit: flow_like_storage::datafusion::arrow::datatypes::TimeUnit,
@@ -457,7 +476,7 @@ fn timestamp_to_json(
         .unwrap_or(Value::Null)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "execute"))]
 #[allow(clippy::approx_constant)]
 mod tests {
     use super::*;

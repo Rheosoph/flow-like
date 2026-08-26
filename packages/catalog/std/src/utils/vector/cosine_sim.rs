@@ -29,6 +29,8 @@ impl NodeLogic for FloatVectorCosineSimilarityNode {
             "Calculates the cosine similarity of two float vectors",
             "Utils/Math/Vector",
         );
+        node.set_flowscript_name("math.vector", "cosineSimilarity");
+        node.set_receiver("vector1");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin(

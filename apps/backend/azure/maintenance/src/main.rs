@@ -4,7 +4,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::{env, process::ExitCode, time::Duration};
 
 use chrono::{DateTime, Utc};
-use flow_like_types::maintenance::{MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse};
+use flow_like_types_contracts::maintenance::{
+    MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse,
+};
 use reqwest::StatusCode;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -107,7 +109,7 @@ fn normalize_api_base_url(value: &str, allow_insecure: bool) -> Result<String, S
 }
 
 /// Routes the value through the shared serde contract so the allowlist lives in
-/// exactly one place (`flow_like_types::maintenance`), the same way the AWS
+/// exactly one place (`flow_like_types_contracts::maintenance`), the same way the AWS
 /// scheduler payload was typed instead of string-matched.
 fn parse_maintenance_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>, String> {
     match value.map(str::trim) {

@@ -3,7 +3,7 @@ use crate::{
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 use flow_like::{
-    a2ui::widget::Page,
+    a2ui::{page_targets::retarget_page_workflow_actions, widget::Page},
     app::App,
     bit::Metadata,
     flow::board::{Board, LoadedPages},
@@ -303,14 +303,31 @@ pub async fn create_page(
     Ok(result_page)
 }
 
+/// Returns the page as it was actually stored. It can differ from what the caller sent —
+/// workflow targets belonging to another app are rewritten below — and a caller that keeps its
+/// own copy would otherwise re-send the foreign ids on every save.
 #[tauri::command(async)]
 pub async fn update_page(
     handler: AppHandle,
     app_id: String,
-    page: Page,
-) -> Result<(), TauriFunctionError> {
+    mut page: Page,
+) -> Result<Page, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let app = App::load(app_id, flow_like_state.clone()).await?;
+
+    // A page copied out of another app keeps that app's `workflow_event` targets, and the runtime
+    // prefers the action's context over the surface it renders on. Same rule as the API, so a page
+    // does not flip depending on which side saved it last.
+    let retargeted = retarget_page_workflow_actions(&mut page, &app.id);
+    if !retargeted.is_empty() {
+        tracing::warn!(
+            app_id = %app.id,
+            page_id = %page.id,
+            retargeted = retargeted.len(),
+            changes = ?retargeted,
+            "page carried workflow targets from another app; rewrote them to the owning app"
+        );
+    }
 
     if flow_like_state.page_registry.contains_key(&page.id) {
         flow_like_state
@@ -345,7 +362,7 @@ pub async fn update_page(
         }
     }
 
-    Ok(())
+    Ok(page)
 }
 
 #[tauri::command(async)]

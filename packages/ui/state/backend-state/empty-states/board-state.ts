@@ -174,6 +174,8 @@ export class EmptyBoardState implements IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions?: boolean,
 		origin?: FlowScriptApplyOrigin,
+		scopeAnchors?: string[],
+		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
 		throw new Error("Method not implemented.");
 	}

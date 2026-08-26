@@ -27,6 +27,8 @@ impl NodeLogic for DeleteCacheNode {
             "Removes a value from the app's cache.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "delete");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

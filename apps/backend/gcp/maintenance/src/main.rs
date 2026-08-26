@@ -12,11 +12,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::{env, process::ExitCode, time::Duration};
 
+use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, SecondsFormat, Timelike, Utc};
 use flow_like_gcp_data::metadata::ensure_no_forbidden_credential_env;
-use flow_like_types::{
-    Result, anyhow, bail,
-    maintenance::{MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse},
+use flow_like_types_contracts::maintenance::{
+    MaintenanceJob, MaintenanceRunRequest, MaintenanceRunResponse,
 };
 use reqwest::StatusCode;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};

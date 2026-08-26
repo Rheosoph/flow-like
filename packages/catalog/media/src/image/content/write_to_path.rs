@@ -47,6 +47,8 @@ impl NodeLogic for WriteImageNode {
             "Write image to path",
             "Image/Content",
         );
+        node.set_flowscript_name("image", "write");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

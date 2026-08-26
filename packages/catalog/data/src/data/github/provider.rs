@@ -97,6 +97,7 @@ impl NodeLogic for GitHubPatProviderNode {
             "Connect to GitHub using a Personal Access Token. Generate one at github.com/settings/tokens",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "providerPat");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin(
@@ -186,6 +187,7 @@ impl NodeLogic for GitHubOAuthProviderNode {
             "Connect to GitHub using OAuth Device Flow.",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "providerOauth");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin(
@@ -273,6 +275,7 @@ impl NodeLogic for GitHubAppProviderNode {
             "Connect to GitHub using a GitHub App installation token. Use this for server-to-server authentication.",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "providerApp");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin(

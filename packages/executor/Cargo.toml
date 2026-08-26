@@ -6,20 +6,28 @@ description = "Environment-agnostic execution runtime for Flow-Like"
 
 [features]
 default = []
+# Compatibility aliases retain their historical all-implementation semantics.
 execute = ["flow-like-catalog/execute"]
 all-execute = ["flow-like-catalog/all-execute"]
 server-execute = ["flow-like-catalog/server-execute"]
 all-server-execute = ["flow-like-catalog/all-server-execute"]
+# Product-oriented bundles make the runtime capability selection obvious.
+server = ["flow-like-catalog/server"]
+server-local-ml = ["flow-like-catalog/server-local-ml"]
+executor = ["flow-like-catalog/executor"]
+executor-local-ml = ["flow-like-catalog/executor-local-ml"]
+local-runtime = ["flow-like-catalog/local-runtime"]
+local-runtime-ml = ["flow-like-catalog/local-runtime-ml"]
 local-ml = ["flow-like-catalog/local-ml"]
 local-ml-cuda = ["local-ml", "flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 tauri = ["flow-like-catalog/tauri"]
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+flow-like-catalog = { workspace = true, features = ["portable-metadata"] }
 flow-like-wasm = { workspace = true, features = ["model"] }
 
 blake3.workspace = true

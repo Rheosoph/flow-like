@@ -96,12 +96,15 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     }
                     | BoardCommand::AddComment { .. }
                     | BoardCommand::RemoveComment { .. } => return None,
-                    BoardCommand::CreateLayer { .. } | BoardCommand::RemoveLayer { .. } => {
+                    BoardCommand::CreateLayer { .. }
+                    | BoardCommand::RemoveLayer { .. }
+                    | BoardCommand::RenameLayer { .. }
+                    | BoardCommand::MoveToLayer { .. } => {
                         return Some(issue(
                             "error",
                             VISUAL_LAYER_MEMBERSHIP_UNSAFE,
                             Some(index),
-                            "Layer creation/removal is not accepted by model-facing emit_commands because it can reassign executable node.layer membership and the compact graph context cannot prove a purely visual change. Author Function membership in FlowScript."
+                            "Layer creation/removal/renaming/moving is not accepted by model-facing emit_commands because it can reassign executable node.layer membership and the compact graph context cannot prove a purely visual change. Author module and Function membership in FlowScript."
                                 .to_string(),
                         ));
                     }
@@ -814,6 +817,50 @@ pub async fn validate_emit_commands(
                         format!("Cannot remove unknown layer '{}'", layer_id),
                     ));
                 }
+            }
+            BoardCommand::RenameLayer { layer_id, name, .. } => {
+                if !known_layer_refs.contains(layer_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-layer",
+                        Some(index),
+                        format!("Cannot rename unknown layer '{}'", layer_id),
+                    ));
+                }
+                if name.trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "missing-layer-name",
+                        Some(index),
+                        format!("RenameLayer '{}' requires a non-empty name", layer_id),
+                    ));
+                } else {
+                    // Later commands in this batch may reference the layer by its new name.
+                    known_layer_refs.insert(name.clone());
+                }
+            }
+            BoardCommand::MoveToLayer {
+                ids, target_layer, ..
+            } => {
+                if ids.is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "empty-move",
+                        Some(index),
+                        "MoveToLayer requires at least one id to move".to_string(),
+                    ));
+                }
+                for id in ids {
+                    if !entities.contains_key(id) && !known_layer_refs.contains(id) {
+                        errors.push(issue(
+                            "error",
+                            "unknown-move-id",
+                            Some(index),
+                            format!("MoveToLayer references unknown node/layer '{}'", id),
+                        ));
+                    }
+                }
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
             }
             BoardCommand::UpdateLayerCache {
                 layer_id, summary, ..

@@ -29,6 +29,7 @@ impl NodeLogic for CreateJiraIssueNode {
             "Create a new Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "createIssue");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -388,6 +389,7 @@ impl NodeLogic for BatchCreateIssuesNode {
             "Create multiple Jira issues in a batch",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "batchCreateIssues");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

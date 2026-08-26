@@ -29,6 +29,7 @@ impl NodeLogic for CreateElement {
             "Creates a new element and adds it to a parent container",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "createElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

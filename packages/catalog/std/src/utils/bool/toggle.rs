@@ -25,6 +25,7 @@ impl NodeLogic for BoolToggleNode {
             "Flips a boolean variable in place",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "toggle");
         node.add_icon("/flow/icons/bool.svg");
         node.set_scores(pure_scores());
 

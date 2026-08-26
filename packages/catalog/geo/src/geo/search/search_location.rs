@@ -39,6 +39,7 @@ impl NodeLogic for SearchLocationNode {
             "Searches for a location by name or address using the Nominatim geocoding service (OpenStreetMap). Returns matching locations with coordinates.",
             "Web/Geo/Search",
         );
+        node.set_flowscript_name("geo", "searchLocation");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(
@@ -203,6 +204,7 @@ impl NodeLogic for SearchLocationNode {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimResult {
     display_name: String,

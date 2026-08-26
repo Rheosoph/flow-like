@@ -26,6 +26,7 @@ impl NodeLogic for GetChildAtIndex {
             "Gets a child element at a specific index from a container",
             "UI/Elements/Containers",
         );
+        node.set_flowscript_name("ui", "getChildAtIndex");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

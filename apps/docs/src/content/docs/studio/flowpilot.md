@@ -26,7 +26,7 @@ FlowPilot can:
 - Use run context and execution logs to investigate failures
 - Run safe verification steps and inspect their logs when runtime tools are available
 
-Board edits are compiled and validated before they are offered for application. The **FlowScript** workspace shows the generated source, status, and compiler diagnostics.
+Board edits are compiled and validated before they are offered for application. The **FlowScript** workspace shows the generated source, status, and compiler diagnostics. FlowPilot writes the same [FlowScript](/studio/flowscript/) you see in the board's text panel — qualified node calls such as `db::open({ name: "reports" })`, method calls such as `s.trim()`, and `use db::*` lines that open a namespace — and looks node signatures up with its `get_declarations` tool before it writes a call.
 
 ### Design pages and widgets
 

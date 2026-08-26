@@ -41,6 +41,8 @@ impl NodeLogic for MqttSubscribeNode {
              Holds execution until the connection closes or timeout, then triggers on_close.",
             "Web/MQTT",
         );
+        node.set_flowscript_name("mqtt", "subscribe");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

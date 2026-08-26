@@ -29,6 +29,7 @@ impl NodeLogic for DocxMergeNode {
             "Concatenate multiple DOCX documents into one, with optional page breaks between them",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "merge");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

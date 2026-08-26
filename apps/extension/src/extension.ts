@@ -9,6 +9,7 @@ import {
 	FlowDocumentSymbolProvider,
 	FlowHoverProvider,
 	FlowMemberCompletionProvider,
+	FlowPathCompletionProvider,
 	FlowQuickFixProvider,
 	FlowReferenceProvider,
 	FlowRenameProvider,
@@ -52,6 +53,11 @@ export async function activate(
 			FLOW,
 			new FlowMemberCompletionProvider(registry),
 			".",
+		),
+		vscode.languages.registerCompletionItemProvider(
+			FLOW,
+			new FlowPathCompletionProvider(registry),
+			":",
 		),
 		vscode.languages.registerHoverProvider(
 			FLOW,
@@ -144,6 +150,16 @@ export async function activate(
 	schemaWatcher.onDidDelete(refreshSchemas);
 	context.subscriptions.push(schemaWatcher);
 
+	const namesWatcher = vscode.workspace.createFileSystemWatcher(NAMES_GLOB);
+	const refreshNames = async () => {
+		await loadNames(registry);
+		lintAll();
+	};
+	namesWatcher.onDidCreate(refreshNames);
+	namesWatcher.onDidChange(refreshNames);
+	namesWatcher.onDidDelete(refreshNames);
+	context.subscriptions.push(namesWatcher);
+
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			"flow-like.reloadDeclarations",
@@ -159,13 +175,29 @@ export async function activate(
 	);
 }
 
+/** The generated `flow.d/names.json` snapshot next to the declarations (optional). */
+const NAMES_GLOB = "**/flow.d/names.json";
+
 async function loadDeclarations(registry: SignatureRegistry): Promise<void> {
+	await loadNames(registry);
 	const files = await vscode.workspace.findFiles(
 		"**/*.flow.d",
 		"**/node_modules/**",
 	);
 	await Promise.all(files.map((uri) => ingestFile(registry, uri)));
 	await loadSchemaSidecars(registry);
+}
+
+async function loadNames(registry: SignatureRegistry): Promise<void> {
+	const files = await vscode.workspace.findFiles(NAMES_GLOB, "**/node_modules/**");
+	for (const uri of files) {
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			registry.ingestNames(new TextDecoder().decode(bytes));
+		} catch {
+			// The snapshot is optional: legacy flat declarations keep working without it.
+		}
+	}
 }
 
 async function loadSchemaSidecars(registry: SignatureRegistry): Promise<void> {

@@ -8,23 +8,29 @@ is present rather than ignoring it.
 
 ## Secure image build
 
-The API embeds reviewed, non-secret identity metadata and JWKS at compile time.
-Pass the GCP configuration through a BuildKit secret and never with a build
-argument. A local `flow-like.gcp.config.json` must be gitignored and
+The API embeds reviewed, non-secret identity and OAuth-provider metadata at
+compile time; JWKS are fetched through the bounded runtime cache. Pass the GCP
+configuration contents through a BuildKit secret, and pass only its non-secret
+SHA-256 digest as a build argument so a metadata change invalidates the cached
+compile layer. A local `flow-like.gcp.config.json` must be gitignored and
 dockerignored so it stays out of version control and the build context. The
 tracked repo-root `flow-like.config.json` is the committed public default that
 builds require; it does enter the context, the builder overwrites it with the
 secret for the duration of the build `RUN`, and the same `RUN` removes the copy
-so the supplied configuration never persists in an image layer:
+as a standalone file. The reviewed non-secret contents are intentionally
+embedded in `/app/api`, so this input must never contain client secrets:
 
 ```sh
+CONFIG_PATH=/secure/path/flow-like.gcp.config.json
+CONFIG_SHA256="$(openssl dgst -sha256 "$CONFIG_PATH" | awk '{print $NF}')"
 docker buildx build \
-  --secret id=flow_like_config,src=/secure/path/flow-like.gcp.config.json \
+  --secret id=flow_like_config,src="$CONFIG_PATH" \
+  --build-arg FLOW_LIKE_CONFIG_SHA256="$CONFIG_SHA256" \
   -f apps/backend/gcp/api/Dockerfile \
   .
 ```
 
-The Dockerfile rejects a config whose provider is not `gcp`. Keep the source
+The Dockerfile verifies the digest and rejects a config whose provider is not `gcp`. Keep the source
 under the protected CI workspace, record its digest in release evidence, and do
 not include client secrets in it.
 

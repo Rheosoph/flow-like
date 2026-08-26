@@ -26,6 +26,8 @@ impl NodeLogic for SetStructFieldNode {
             "Sets a field in a struct (supports dot notation and array access)",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "set");
+        node.set_receiver("struct_in");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_input_pin(

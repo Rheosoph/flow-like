@@ -84,6 +84,7 @@ impl NodeLogic for ListTaskListsNode {
             "List all Microsoft To Do task lists",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "listLists");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -162,6 +163,7 @@ impl NodeLogic for CreateTaskListNode {
             "Create a new Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "createList");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -266,6 +268,7 @@ impl NodeLogic for ListTasksNode {
             "List all tasks in a Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "listTasks");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -355,6 +358,7 @@ impl NodeLogic for CreateTaskNode {
             "Create a new task in a Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "createTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -507,6 +511,7 @@ impl NodeLogic for UpdateTaskNode {
             "Update an existing task in Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "updateTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -662,6 +667,7 @@ impl NodeLogic for CompleteTaskNode {
             "Mark a task as completed in Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "completeTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -768,6 +774,7 @@ impl NodeLogic for DeleteTaskNode {
             "Delete a task from Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_flowscript_name("microsoft.todo", "deleteTask");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 

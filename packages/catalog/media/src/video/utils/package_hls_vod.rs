@@ -19,6 +19,7 @@ impl NodeLogic for PackageHlsVodNode {
             "Write an HLS media playlist plus MPEG-TS or fMP4 segments",
             "Streaming",
         );
+        node.set_flowscript_name("video", "packageHlsVod");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

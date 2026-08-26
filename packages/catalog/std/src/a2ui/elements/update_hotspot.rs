@@ -43,6 +43,7 @@ impl NodeLogic for UpdateHotspot {
             "Add, remove, or manage hotspots on an ImageHotspot element",
             "UI/Elements/Hotspot",
         );
+        node.set_flowscript_name("ui", "updateHotspot");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

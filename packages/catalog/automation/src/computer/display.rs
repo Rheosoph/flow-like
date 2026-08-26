@@ -40,6 +40,7 @@ impl NodeLogic for ComputerListDisplaysNode {
             "Enumerates all connected monitors/displays",
             "Automation/Computer/Display",
         );
+        node.set_flowscript_name("computer", "listDisplays");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -175,6 +176,7 @@ impl NodeLogic for ComputerGetDisplayNode {
             "Gets information about a specific display by index",
             "Automation/Computer/Display",
         );
+        node.set_flowscript_name("computer", "getDisplay");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -310,6 +312,7 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
             "Gets information about the primary display",
             "Automation/Computer/Display",
         );
+        node.set_flowscript_name("computer", "getPrimaryDisplay");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

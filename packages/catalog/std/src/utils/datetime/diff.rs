@@ -32,6 +32,8 @@ impl NodeLogic for DateTimeDiffNode {
             "Calculates the duration between two dates",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "diff");
+        node.set_receiver("start");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
         node.add_input_pin("start", "Start", "Start date", VariableType::Date);

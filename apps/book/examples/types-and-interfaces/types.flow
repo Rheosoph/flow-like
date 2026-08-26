@@ -1,0 +1,23 @@
+interface AffectedSystem {
+    name: string;
+    region?: string | null = null;
+}
+interface IncidentRecord {
+    id: string;
+    severity: "critical" | "high" | "medium" | "low";
+    report: string;
+    source?: string | null = null;
+    affectedSystems?: AffectedSystem[] = [];
+    labels?: Map<string, string> = {};
+    observedAt: Date;
+    "external-ticket-id"?: string | null = null;
+    externalPayload?: any = null;
+}
+
+const openPayload: Struct = {}
+const reviewers: Set<string> = []
+
+eventsGeneric inspectIncident(payload: Struct, incident: IncidentRecord) {
+    let report = incident.report
+    let ticketId = incident["external-ticket-id"]
+}

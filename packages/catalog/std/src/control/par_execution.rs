@@ -31,6 +31,7 @@ impl NodeLogic for ParallelExecutionNode {
             "Parallel Execution",
             "Control",
         );
+        node.set_flowscript_name("control", "parallel");
         node.add_icon("/flow/icons/par_execution.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

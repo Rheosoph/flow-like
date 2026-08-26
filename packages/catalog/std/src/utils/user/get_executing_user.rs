@@ -29,6 +29,7 @@ impl NodeLogic for GetExecutingUserNode {
             "Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and details of the calling principal. Use 'Break Struct' to access individual fields.",
             "Utils/User",
         );
+        node.set_flowscript_name("user", "getExecuting");
         node.add_icon("/flow/icons/user.svg");
 
         node.add_output_pin(

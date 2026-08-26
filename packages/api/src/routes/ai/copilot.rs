@@ -342,6 +342,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         .nth(1)
         .unwrap_or("")
         .to_string();
+    let namespace = node.flowscript_namespace();
+    let alias = node.flowscript_alias();
+    let receiver = node.flowscript_receiver();
 
     enrich_node_metadata(NodeMetadata {
         name: node.name,
@@ -363,6 +366,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(namespace),
+        alias: Some(alias),
+        receiver,
     })
 }
 
@@ -416,14 +422,18 @@ impl CatalogProvider for ServerCatalogProvider {
     }
 
     async fn filter_by_category(&self, category_prefix: &str) -> Vec<NodeMetadata> {
-        let category_prefix = category_prefix.to_lowercase();
+        let category_prefix = category_prefix.to_lowercase().replace("::", "/");
         let mut matches = Vec::new();
 
         for node in self.nodes() {
+            let category = node.category.to_lowercase();
+            let namespace = node.flowscript_namespace().to_lowercase().replace('.', "/");
             let name_lower = node.name.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
 
-            if category.starts_with(&category_prefix) || name_lower.contains(&category_prefix) {
+            if category.contains(&category_prefix)
+                || namespace.contains(&category_prefix)
+                || name_lower.contains(&category_prefix)
+            {
                 matches.push(node_to_metadata(node));
             }
             if matches.len() >= 15 {

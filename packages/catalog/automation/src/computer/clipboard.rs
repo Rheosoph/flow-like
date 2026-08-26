@@ -27,6 +27,7 @@ impl NodeLogic for ClipboardGetTextNode {
             "Gets the current text content from the system clipboard",
             "Automation/Computer/Clipboard",
         );
+        node.set_flowscript_name("computer", "clipboardGetText");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -138,6 +139,7 @@ impl NodeLogic for ClipboardSetTextNode {
             "Sets text content to the system clipboard",
             "Automation/Computer/Clipboard",
         );
+        node.set_flowscript_name("computer", "clipboardSetText");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -247,6 +249,7 @@ impl NodeLogic for ClipboardGetImageNode {
             "Gets an image from the system clipboard if available",
             "Automation/Computer/Clipboard",
         );
+        node.set_flowscript_name("computer", "clipboardGetImage");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -380,6 +383,7 @@ impl NodeLogic for ClipboardSetImageNode {
             "Sets an image to the system clipboard",
             "Automation/Computer/Clipboard",
         );
+        node.set_flowscript_name("computer", "clipboardSetImage");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

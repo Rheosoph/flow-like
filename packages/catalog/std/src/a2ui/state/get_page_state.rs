@@ -29,6 +29,7 @@ impl NodeLogic for GetPageState {
             "Gets a value from page-local state by key",
             "UI/State",
         );
+        node.set_flowscript_name("ui", "getPageState");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

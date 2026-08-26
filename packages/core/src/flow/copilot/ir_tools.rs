@@ -41,7 +41,7 @@ use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
     FlowScriptDiagnosticPhase, ReconcileMode, ReconcileResult, RenderOptions, board_to_flowscript,
-    destructive_flowscript_command_summaries, reconcile_with_catalog_mode,
+    catalog_names, destructive_flowscript_command_summaries, reconcile_with_catalog_mode,
 };
 use crate::flow::board::Board;
 
@@ -1218,7 +1218,7 @@ impl FlowIrDraftStore {
         FlowScriptDraftResponse::for_draft(
             status,
             if stored.evaluation.diagnostics.is_empty() {
-                "FlowScript source is retained. Run check_flowscript at this revision before commit."
+                "FlowScript source is retained with zero diagnostics. Commit this revision directly; check_flowscript is only needed before growing a staged draft further."
             } else {
                 "FlowScript source is retained with structured diagnostics. Patch this exact revision in place."
             },
@@ -1437,7 +1437,7 @@ impl FlowIrDraftStore {
         FlowScriptDraftResponse::for_draft(
             status,
             if retained.evaluation.diagnostics.is_empty() {
-                "Patch retained. Run check_flowscript at this revision before commit."
+                "Patch retained with zero diagnostics. Commit this revision directly; check_flowscript is only needed before growing a staged draft further."
             } else {
                 "Patch retained with structured diagnostics; repair this same source revision."
             },
@@ -4898,16 +4898,11 @@ fn normalize_catalog_symbol(symbol: &str) -> String {
 }
 
 fn compact_catalog_declaration(signature: &flow_like_ast::Signature) -> String {
-    let rendered = signature.render_declaration();
-    let declaration = rendered
-        .lines()
-        .find(|line| line.trim_start().starts_with("declare function "))
-        .map(str::trim)
-        .unwrap_or_default();
+    let declaration = signature.signature_line();
     if signature.impure {
         format!("{declaration} // impure")
     } else {
-        declaration.to_string()
+        declaration
     }
 }
 
@@ -5043,6 +5038,7 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                     self.project_handlers_in_block(body, &format!("{statement_path}/body"), modules)
                 }
                 AstStmt::Let { .. }
+                | AstStmt::Destructure { .. }
                 | AstStmt::Call { .. }
                 | AstStmt::Assign { .. }
                 | AstStmt::FieldAssign { .. }
@@ -5073,6 +5069,33 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                     let step =
                         self.project_call_step(call, id, anchor.clone(), &statement_path, steps);
                     steps.push(step);
+                }
+                // `const { a, b: c } = call(...)` is one call step whose outputs are then bound
+                // by pin name, exactly like `const tmp = call(...)` followed by `c = tmp.b`.
+                AstStmt::Destructure {
+                    fields,
+                    call,
+                    anchor,
+                } => {
+                    let id = self.fresh_id(&call.display);
+                    let step = self.project_call_step(
+                        call,
+                        id.clone(),
+                        anchor.clone(),
+                        &statement_path,
+                        steps,
+                    );
+                    steps.push(step);
+                    for field in fields {
+                        steps.push(FlowIrStep::Assign {
+                            target: field.name.clone(),
+                            value: FlowIrValue::Output {
+                                step: id.clone(),
+                                pin: field.pin.clone(),
+                                occurrence: 0,
+                            },
+                        });
+                    }
                 }
                 AstStmt::Branch {
                     bind,
@@ -5136,26 +5159,39 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                     keyword,
                     bind,
                     call,
+                    iterable,
+                    element,
+                    index,
                     body,
                     anchor,
                 } => {
                     let loop_id = bind
                         .clone()
                         .unwrap_or_else(|| self.fresh_id(keyword.as_str()));
-                    let call_value = self.project_call_value(
-                        call,
-                        format!("{loop_id}_source"),
-                        anchor.clone(),
-                        &format!("{statement_path}/loop_call"),
-                        steps,
-                    );
+                    let array = match iterable {
+                        Some(iterable) => self.project_expr(
+                            iterable,
+                            &format!("{statement_path}/iterable"),
+                            steps,
+                        ),
+                        None => self.project_call_value(
+                            call,
+                            format!("{loop_id}_source"),
+                            anchor.clone(),
+                            &format!("{statement_path}/loop_call"),
+                            steps,
+                        ),
+                    };
                     let mut body_steps = Vec::new();
                     self.project_block(body, &format!("{statement_path}/body"), &mut body_steps);
                     steps.push(FlowIrStep::ForEach {
                         id: loop_id,
-                        array: call_value,
-                        item: bind.clone().unwrap_or_else(|| "item".to_string()),
-                        index: None,
+                        array,
+                        item: element
+                            .clone()
+                            .or_else(|| bind.clone())
+                            .unwrap_or_else(|| "item".to_string()),
+                        index: index.clone(),
                         parallel: keyword.eq_ignore_ascii_case("forEachParallel"),
                         steps: body_steps,
                         anchor: anchor.clone(),
@@ -5241,7 +5277,7 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
         } else {
             FlowIrStep::Node {
                 id,
-                node_type: self.resolve_catalog_node_type(&call.node_type, &call.display),
+                node_type: self.resolve_catalog_call_node_type(call),
                 args,
                 continue_from: None,
                 exec_arms: Vec::new(),
@@ -5403,6 +5439,17 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                     },
                 ],
             },
+            AstExpr::Template { parts } => {
+                match crate::flow::ast::template_format_call(parts, None) {
+                    Ok(call) => {
+                        let id = self.fresh_id(&call.display);
+                        self.project_call_value(&call, id, None, path, steps)
+                    }
+                    Err(_) => FlowIrValue::Literal {
+                        value: FlowIrLiteral::String(flow_like_ast::render_template(parts)),
+                    },
+                }
+            }
             AstExpr::Literal(literal) => FlowIrValue::Literal {
                 value: project_ast_literal(literal),
             },
@@ -5411,13 +5458,51 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
     }
 
     fn resolve_catalog_node_type(&self, declared: &str, display: &str) -> String {
+        self.resolve_catalog_spelling(declared, &[], display, false)
+    }
+
+    /// A call spelled as `ns::alias(…)`, `x.alias(…)` or the legacy flat name resolves to the
+    /// node whose effective names match; the flat / friendly comparison stays as the fallback.
+    fn resolve_catalog_call_node_type(&self, call: &AstCall) -> String {
+        self.resolve_catalog_spelling(
+            &call.node_type,
+            &call.path,
+            &call.display,
+            call.receiver.is_some(),
+        )
+    }
+
+    fn resolve_catalog_spelling(
+        &self,
+        declared: &str,
+        path: &[String],
+        display: &str,
+        method_form: bool,
+    ) -> String {
         if !declared.trim().is_empty() {
             return declared.to_string();
         }
         let display = normalize(display);
-        let mut candidates = self.catalog.iter().filter(|metadata| {
-            normalize(&metadata.name) == display || normalize(&metadata.friendly_name) == display
+        let qualified = (!path.is_empty()).then(|| {
+            path.iter()
+                .map(|segment| normalize(segment))
+                .chain(std::iter::once(display.clone()))
+                .collect::<Vec<_>>()
+                .join("")
         });
+        let matches = |metadata: &NodeMetadata| {
+            let names = catalog_names(metadata);
+            match &qualified {
+                Some(qualified) => normalize(&names.qualified) == *qualified,
+                None => {
+                    normalize(&metadata.name) == display
+                        || normalize(&names.flat) == display
+                        || normalize(&metadata.friendly_name) == display
+                        || (method_form && normalize(&names.alias) == display)
+                }
+            }
+        };
+        let mut candidates = self.catalog.iter().filter(|metadata| matches(metadata));
         let Some(first) = candidates.next() else {
             return display.clone();
         };
@@ -5493,6 +5578,7 @@ fn ast_access_path(expression: &AstExpr) -> Option<(String, Vec<String>)> {
         | AstExpr::Array(_)
         | AstExpr::Ternary { .. }
         | AstExpr::Binary { .. }
+        | AstExpr::Template { .. }
         | AstExpr::Literal(_) => None,
     }
 }
@@ -9848,19 +9934,19 @@ impl FlowScriptDraftResponse {
         response
     }
 
-    /// Render the retained source on every successful write/patch/check so a streaming client can
-    /// preview the same FlowScript document inline. Queued commits reuse the existing command tag.
-    /// Structured envelope for the model, with `source` replaced by its size. The identical text is
-    /// already present once in the `<flowscript_workspace>` tag beside it and, for
-    /// `write_flowscript`, a third time in the model's own retained tool-call arguments. The
-    /// struct's own `Serialize` is deliberately untouched: SDK adapters hand
-    /// `to_string_pretty(&response)` to the model and the desktop workspace panel is built from
-    /// that JSON's `source` field.
+    /// Structured envelope for the model, with `source` replaced by its size. On the rig path the
+    /// identical text is already present once in the `<flowscript_workspace>` tag beside it and,
+    /// for `write_flowscript`, again in the model's own retained tool-call arguments. Desktop SDK
+    /// adapters return this projection for write/check/commit, whose retained source is exactly
+    /// what the model submitted; the host observes that source out-of-band (tool-argument
+    /// workspace frames, the queued-workspace channel, draft snapshots). Patch results keep the
+    /// struct's own `Serialize` because the merged document is host-computed and the desktop
+    /// workflow state and workspace panel read it from that JSON's `source` field.
     ///
     /// The projection is built by explicit insertion rather than by removing a key: `serde_json` is
     /// compiled with `preserve_order` in this workspace (via `schemars`), so `Map::remove` is
     /// `swap_remove` and would reorder the surviving fields.
-    fn model_envelope(&self) -> String {
+    pub fn model_envelope(&self) -> String {
         let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
             return self.message.clone();
         };
@@ -10703,6 +10789,9 @@ function calculatePricing() {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 
@@ -10786,6 +10875,9 @@ function calculatePricing() {
             vec![pin("exec_in", "Execution"), pin("email_ref", "Struct")],
             vec![pin("exec_out", "Execution"), pin("email", "Struct")],
         );
+        imap_fetch.namespace = Some("imap".to_string());
+        imap_fetch.alias = Some("fetchMail".to_string());
+        imap_fetch.receiver = Some("email_ref".to_string());
         imap_fetch.companion_nodes = vec![
             "email_imap_connect".to_string(),
             "mail_imap_inbox".to_string(),
@@ -10939,7 +11031,9 @@ function calculatePricing() {
             assert_eq!(structural_imap_repair.catalog_declarations.len(), 1);
             assert!(
                 structural_imap_repair.catalog_declarations[0]
-                    .contains("emailImapInboxFetchMail({ emailRef: Struct })")
+                    .contains("imap::fetchMail(this: Struct, { emailRef: Struct })"),
+                "{}",
+                structural_imap_repair.catalog_declarations[0]
             );
             assert_eq!(structural_imap_repair.companion_declarations.len(), 8);
             for companion in [

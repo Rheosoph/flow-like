@@ -31,6 +31,7 @@ impl NodeLogic for PptxReplaceImageNode {
             "Replaces images in a PowerPoint (PPTX) file by matching alt text or shape name",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "replaceImage");
         node.add_icon("/flow/icons/image.svg");
 
         node.set_scores(

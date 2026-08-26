@@ -26,6 +26,7 @@ impl NodeLogic for PdfPageCountNode {
             "Count pages in a PDF",
             "Image/PDF",
         );
+        node.set_flowscript_name("pdf", "pageCount");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

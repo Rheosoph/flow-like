@@ -25,6 +25,8 @@ impl NodeLogic for RemoveStructFieldNode {
             "Removes a field from a struct (supports dot notation and array access)",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "remove");
+        node.set_receiver("struct_in");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_input_pin(

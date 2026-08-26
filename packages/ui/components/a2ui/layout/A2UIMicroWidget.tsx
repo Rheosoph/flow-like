@@ -238,6 +238,22 @@ function MicroWidgetFrame({
 		);
 	}, [post, buildThemeState, instanceId, nonce, preview]);
 
+	/**
+	 * A host move — the inline page runtime relocating its portal host between a card slot and
+	 * its parking slot — disconnects this iframe, and a disconnected iframe has its browsing
+	 * context discarded and reloaded. React state survives that, so without resetting here the
+	 * skeleton stays hidden over a blank frame, the ready timeout never re-arms, and every
+	 * query issued before the move hangs until it times out.
+	 */
+	const handleFrameLoad = useCallback(() => {
+		if (initSentRef.current) {
+			readyRef.current = false;
+			setPhase("loading");
+			correlatorRef.current?.dispose();
+		}
+		sendInit();
+	}, [sendInit]);
+
 	const handleContractEvent = useCallback(
 		async (payload: EventPayload) => {
 			if (preview === true) return;
@@ -361,8 +377,10 @@ function MicroWidgetFrame({
 
 	// Ready timeout: once the document URL is known, the widget must complete
 	// the flw/1 handshake within the window or the surface shows an error card.
+	// Keyed on the phase as well as the URL so a reloaded sandbox is held to the
+	// same deadline as the first load.
 	useEffect(() => {
-		if (!src) return;
+		if (!src || phase !== "loading") return;
 		const timer = setTimeout(() => {
 			if (readyRef.current) return;
 			setErrorMessage(
@@ -375,7 +393,7 @@ function MicroWidgetFrame({
 			setPhase("error");
 		}, MICRO_WIDGET_READY_TIMEOUT_MS);
 		return () => clearTimeout(timer);
-	}, [src]);
+	}, [src, phase, t]);
 
 	// Query bridge registration (imperative host access via microWidgetQuery).
 	useEffect(() => {
@@ -451,7 +469,7 @@ function MicroWidgetFrame({
 					title={t("widgetWidgetid", "Widget {{widgetId}}", { widgetId })}
 					sandbox="allow-scripts"
 					referrerPolicy="no-referrer"
-					onLoad={sendInit}
+					onLoad={handleFrameLoad}
 					onError={onIframeError}
 					className={cn(
 						"h-full w-full border-0",

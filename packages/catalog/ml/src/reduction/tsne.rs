@@ -6,8 +6,9 @@
 
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, values_to_array2_f64};
+use flow_like::flow::board::Board;
 #[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -22,7 +23,6 @@ use flow_like_storage::arrow_schema::{DataType, Field, Schema};
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
-#[cfg(feature = "execute")]
 use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
@@ -64,6 +64,7 @@ impl NodeLogic for TsneNode {
             "t-Distributed Stochastic Neighbor Embedding. Projects high-dimensional vectors into 2-3 dimensions for visualization and writes the embedding back into the source table. t-SNE is transductive, so it produces no reusable model.",
             "AI/ML/Reduction",
         );
+        node.set_flowscript_name("ml", "fitTsne");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 
@@ -340,7 +341,6 @@ impl NodeLogic for TsneNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

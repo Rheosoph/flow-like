@@ -25,6 +25,12 @@ export interface INode {
 	only_offline?: boolean;
 	/** WASM metadata for external nodes. Undefined for built-in catalog nodes. */
 	wasm?: INodeWasm | null;
+	/** FlowScript namespace path (`string`, `http`, `utils.markdown`). Presentation only. */
+	namespace?: null | string;
+	/** FlowScript member name inside `namespace` (`trim`, `fetch`). Presentation only. */
+	alias?: null | string;
+	/** Data input pin that receives the value in method form; `""` = static only. */
+	receiver?: null | string;
 	[property: string]: any;
 }
 

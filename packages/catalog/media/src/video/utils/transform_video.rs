@@ -19,6 +19,7 @@ impl NodeLogic for TransformVideoNode {
             "Decode video frames, apply frame transforms, encode, and mux the result",
             "Video/Transcode",
         );
+        node.set_flowscript_name("video", "transform");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

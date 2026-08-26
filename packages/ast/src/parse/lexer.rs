@@ -11,8 +11,12 @@ use crate::parse::error::ParseError;
 pub enum Tok {
     /// Identifier or keyword (`const`, `for`, `onStart`, `aiGenerativeInvoke`, …).
     Ident(String),
-    /// Double-quoted string literal (already unescaped).
+    /// String literal (already unescaped). Double- or single-quoted in source; the renderer
+    /// always emits double quotes.
     Str(String),
+    /// Backtick template literal, split into static text (already unescaped) and the raw source
+    /// of each `${ … }` interpolation. The parser parses every interpolation as an expression.
+    Template(Vec<TemplatePiece>),
     /// Integer literal.
     Int(i64),
     /// Positive integer outside the signed literal range. FlowScript values remain `i64`, but
@@ -31,8 +35,12 @@ pub enum Tok {
     Comma,
     Semi,
     Colon,
+    /// `::` — namespace path separator.
+    PathSep,
     Dot,
     Assign,
+    /// `+=` / `-=` / `*=` / `/=` — carries the arithmetic operator (`+`, `-`, `*`, `/`).
+    CompoundAssign(String),
     /// `?` — ternary then-marker.
     Question,
     /// `!` — logical-not prefix (negated `if`).
@@ -44,6 +52,19 @@ pub enum Tok {
     Comment(String),
     /// End of input.
     Eof,
+}
+
+/// One lexical segment of a [`Tok::Template`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplatePiece {
+    /// Static text between interpolations, escapes resolved.
+    Text(String),
+    /// The source text inside one `${ … }`, with the 1-based position of its first character.
+    Expr {
+        src: String,
+        line: usize,
+        col: usize,
+    },
 }
 
 /// A token with source position.
@@ -97,7 +118,8 @@ impl Lexer {
                     continue;
                 }
                 '/' if self.peek(1) == Some('/') => self.line_comment(),
-                '"' => self.string()?,
+                '"' | '\'' => self.string(c)?,
+                '`' => self.template()?,
                 '@' => self.single(Tok::At),
                 '(' => self.single(Tok::LParen),
                 ')' => self.single(Tok::RParen),
@@ -107,6 +129,12 @@ impl Lexer {
                 ']' => self.single(Tok::RBracket),
                 ',' => self.single(Tok::Comma),
                 ';' => self.single(Tok::Semi),
+                ':' if self.peek(1) == Some(':') => {
+                    let token = self.make(Tok::PathSep);
+                    self.advance();
+                    self.advance();
+                    token
+                }
                 ':' => self.single(Tok::Colon),
                 '?' => self.single(Tok::Question),
                 '.' if !self.peek_is_digit(1) => self.single(Tok::Dot),
@@ -224,7 +252,7 @@ impl Lexer {
         }
     }
 
-    fn string(&mut self) -> Result<Token, ParseError> {
+    fn string(&mut self, quote: char) -> Result<Token, ParseError> {
         let token_line = self.line;
         let token_col = self.col;
         let token_byte = self.byte;
@@ -239,7 +267,7 @@ impl Lexer {
                 ));
             };
             match c {
-                '"' => {
+                c if c == quote => {
                     self.advance();
                     break;
                 }
@@ -290,6 +318,177 @@ impl Lexer {
             col: token_col,
             byte: token_byte,
         })
+    }
+
+    /// Lex a backtick template literal. Static text keeps raw newlines and resolves the string
+    /// escapes plus `` \` `` and `\$`; each `${ … }` is captured as raw source for the parser,
+    /// balancing braces and skipping nested string/template literals so a `}` inside them
+    /// cannot close the interpolation early.
+    fn template(&mut self) -> Result<Token, ParseError> {
+        let token_line = self.line;
+        let token_col = self.col;
+        let token_byte = self.byte;
+        self.advance(); // opening backtick
+        let mut pieces = Vec::new();
+        let mut text = String::new();
+        loop {
+            let Some(&c) = self.chars.get(self.pos) else {
+                return Err(ParseError::new(
+                    "unterminated template literal",
+                    token_line,
+                    token_col,
+                ));
+            };
+            match c {
+                '`' => {
+                    self.advance();
+                    break;
+                }
+                '\\' => {
+                    self.advance();
+                    let Some(&esc) = self.chars.get(self.pos) else {
+                        return Err(ParseError::new(
+                            "unterminated escape in template literal",
+                            self.line,
+                            self.col,
+                        ));
+                    };
+                    match esc {
+                        '`' => text.push('`'),
+                        '$' => text.push('$'),
+                        '"' => text.push('"'),
+                        '\'' => text.push('\''),
+                        '\\' => text.push('\\'),
+                        'n' => text.push('\n'),
+                        'r' => text.push('\r'),
+                        't' => text.push('\t'),
+                        'b' => text.push('\u{8}'),
+                        'f' => text.push('\u{c}'),
+                        '/' => text.push('/'),
+                        'u' => {
+                            let code = self.unicode_escape()?;
+                            text.push(code);
+                            continue;
+                        }
+                        other => return Err(self.err(format!("invalid escape `\\{other}`"))),
+                    }
+                    self.advance();
+                }
+                '$' if self.peek(1) == Some('{') => {
+                    if !text.is_empty() {
+                        pieces.push(TemplatePiece::Text(std::mem::take(&mut text)));
+                    }
+                    self.advance();
+                    self.advance();
+                    pieces.push(self.template_interpolation()?);
+                }
+                _ => {
+                    text.push(c);
+                    self.advance();
+                }
+            }
+        }
+        if !text.is_empty() {
+            pieces.push(TemplatePiece::Text(text));
+        }
+        Ok(Token {
+            tok: Tok::Template(pieces),
+            line: token_line,
+            col: token_col,
+            byte: token_byte,
+        })
+    }
+
+    /// Capture the raw source of one `${ … }` (the `${` already consumed) up to its balancing
+    /// `}`, which is consumed too.
+    fn template_interpolation(&mut self) -> Result<TemplatePiece, ParseError> {
+        let line = self.line;
+        let col = self.col;
+        let start = self.pos;
+        let mut depth = 1usize;
+        loop {
+            let Some(&c) = self.chars.get(self.pos) else {
+                return Err(ParseError::new(
+                    "unterminated `${` in template literal",
+                    line,
+                    col,
+                ));
+            };
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let src: String = self.chars[start..self.pos].iter().collect();
+                        self.advance();
+                        if src.trim().is_empty() {
+                            return Err(ParseError::new(
+                                "empty `${}` in template literal",
+                                line,
+                                col,
+                            ));
+                        }
+                        return Ok(TemplatePiece::Expr { src, line, col });
+                    }
+                }
+                '"' | '\'' => {
+                    self.skip_quoted(c)?;
+                    continue;
+                }
+                '`' => {
+                    self.skip_template()?;
+                    continue;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    /// Skip a quoted string literal inside a template interpolation (escapes respected).
+    fn skip_quoted(&mut self, quote: char) -> Result<(), ParseError> {
+        let line = self.line;
+        let col = self.col;
+        self.advance();
+        loop {
+            let Some(&c) = self.chars.get(self.pos) else {
+                return Err(ParseError::new("unterminated string literal", line, col));
+            };
+            self.advance();
+            if c == '\\' {
+                self.advance();
+            } else if c == quote {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Skip a nested template literal inside an interpolation, including its own `${ … }`.
+    fn skip_template(&mut self) -> Result<(), ParseError> {
+        let line = self.line;
+        let col = self.col;
+        self.advance();
+        loop {
+            let Some(&c) = self.chars.get(self.pos) else {
+                return Err(ParseError::new("unterminated template literal", line, col));
+            };
+            match c {
+                '\\' => {
+                    self.advance();
+                    self.advance();
+                }
+                '`' => {
+                    self.advance();
+                    return Ok(());
+                }
+                '$' if self.peek(1) == Some('{') => {
+                    self.advance();
+                    self.advance();
+                    self.template_interpolation()?;
+                }
+                _ => self.advance(),
+            }
+        }
     }
 
     /// Parse a `\uXXXX` escape (the backslash and `u` already consumed at `pos`).
@@ -383,6 +582,16 @@ impl Lexer {
     }
 
     fn match_operator(&mut self) -> Option<Token> {
+        // `+=` and friends must win over the bare arithmetic operator they start with.
+        if let Some(&c) = self.chars.get(self.pos)
+            && matches!(c, '+' | '-' | '*' | '/')
+            && self.peek(1) == Some('=')
+        {
+            let token = self.make(Tok::CompoundAssign(c.to_string()));
+            self.advance();
+            self.advance();
+            return Some(token);
+        }
         // `!` alone is the negation prefix; `!=`/`!==` are operators (handled below).
         for op in OPERATORS {
             if self.starts_with(op) {
@@ -421,6 +630,7 @@ fn signed_number_can_start_after(previous: Option<&Token>) -> bool {
         None => true,
         Some(
             Tok::Str(_)
+            | Tok::Template(_)
             | Tok::Int(_)
             | Tok::UInt(_)
             | Tok::Float(_)

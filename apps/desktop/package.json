@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"docs:screenshot": "bun ./scripts/doc-screenshot.ts",
+		"workflow:screenshot": "bun ./scripts/workflow-screenshot.ts",
 		"university": "bun ./scripts/university.ts",
 		"e2e:flowpilot": "bun ./scripts/flowpilot-e2e.ts",
 		"dev:xcode": "bun tauri ios dev --open --host",

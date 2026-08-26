@@ -1120,7 +1120,8 @@ impl RegistryClient {
         // Inject precompiled .cwasm into AOT cache if available
         Self::inject_precompiled_if_available(&wasm_bytes, &installed.wasm_path, &engine);
 
-        let manifest_security = installed.manifest.permissions.to_security_config();
+        let manifest_security: crate::WasmSecurityConfig =
+            installed.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
 
@@ -1174,7 +1175,8 @@ impl RegistryClient {
         }
 
         let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
-        let manifest_security = iv.manifest.permissions.to_security_config();
+        let manifest_security: crate::WasmSecurityConfig =
+            iv.manifest.permissions.to_security_config();
 
         // Inject precompiled .cwasm into AOT cache if available
         Self::inject_precompiled_if_available(&wasm_bytes, &iv.wasm_path, &engine);

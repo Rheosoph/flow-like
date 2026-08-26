@@ -1442,6 +1442,21 @@ impl ExecutionContext {
         element_id: &str,
         value: Value,
     ) -> flow_like_types::Result<()> {
+        // A ref pinned to another page's id retargets to the run's own surface here, so
+        // every setter node emits a key the triggering page can apply. Bare ids and exact
+        // keys pass through untouched; an unresolvable ref keeps its original id (it may
+        // address a widget surface or create a new element).
+        let retargeted = if element_id.contains('/') {
+            match self.get_frontend_elements().await {
+                Ok(Some(elements)) if !elements.contains_key(element_id) => {
+                    crate::a2ui::resolve_element_key(&elements, element_id).cloned()
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let element_id = retargeted.as_deref().unwrap_or(element_id);
         tracing::info!(element_id = %element_id, value = ?value, "[A2UI] upsert_element called");
         self.log_message(
             &format!("[A2UI] upsert_element: {} -> {:?}", element_id, value),

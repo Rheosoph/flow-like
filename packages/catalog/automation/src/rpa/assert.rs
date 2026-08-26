@@ -25,6 +25,7 @@ impl NodeLogic for AssertTemplateExistsNode {
             "Asserts that a template image exists on screen",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "assertTemplateExists");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -150,6 +151,7 @@ impl NodeLogic for AssertColorAtPositionNode {
             "Asserts that a specific color exists at a position",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "assertColor");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

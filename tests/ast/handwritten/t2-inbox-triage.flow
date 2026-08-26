@@ -1,0 +1,139 @@
+use array::{ length, push }
+use email::{ addressToFields, attachmentToFields, getAttachments, getContent, getHeaders }
+use log::{ error, info, warn }
+use string::{ containsAny, ellipsis, isEmpty, trim }
+
+interface EscalationNote {
+    subject: string;
+    sender: string;
+    received: string;
+    label: string;
+}
+
+@description("IMAP host of the shared support mailbox")
+@category("Mailbox")
+let imapHost = "imap.northwind.example"
+@description("SMTP relay used for triage auto-replies")
+@category("Mailbox")
+let smtpHost = "smtp.northwind.example"
+@description("Login of the shared support mailbox")
+@category("Mailbox")
+let mailboxUser = "support@northwind.example"
+@description("Password of the shared support mailbox")
+@category("Mailbox")
+@secret
+const mailboxPassword: string
+@description("Address triage auto-replies are sent from")
+@category("Triage")
+let replyFrom = "triage@northwind.example"
+@description("Distribution list paged when a sweep finds an incident")
+@category("Triage")
+let oncallList = "oncall@northwind.example"
+@description("Messages filed by the most recent sweep")
+@category("Triage")
+let filedCount = 0
+
+function classify(subject: string, preview: string, senderEmail: string, attachmentCount: int): (label: string, folder: string, priority: string, reply: string) {
+    let summary = `${subject} ${preview} ${senderEmail}`
+    const haystack = summary.toLower()
+    const { contains: isOutage, matched: outageTerm } = haystack.containsAny({ substrings: ["outage", "cannot log in", "everything is down", "data loss"], ignoreCase: true })
+    const { contains: isBilling } = haystack.containsAny({ substrings: ["invoice", "refund", "billing", "charged twice"], ignoreCase: true })
+    const { contains: isAutomated } = senderEmail.containsAny({ substrings: ["noreply@", "no-reply@", "mailer-daemon@", "bounces@"], ignoreCase: true })
+    let label = "general-support"
+    let folder = "Triage/General"
+    let priority = "normal"
+    let reply = "Thanks for writing in. A support engineer has your ticket and will follow up shortly."
+    if (isAutomated) {
+        label = "automated"
+        folder = "Triage/Automated"
+        priority = "low"
+        reply = ""
+    } else if (isOutage) {
+        label = `incident/${outageTerm}`
+        folder = "Triage/Incidents"
+        priority = "urgent"
+        reply = "We are looking into a possible service disruption on your account and will send an update within 15 minutes."
+    } else if (isBilling) {
+        label = "billing"
+        folder = "Triage/Billing"
+        priority = "normal"
+        reply = "Your billing question is with our finance desk. Expect an answer within one business day."
+    }
+    if (attachmentCount > 0) {
+        label = `${label}+attachments`
+    }
+    return label, folder, priority, reply
+}
+
+function escalationNote(subject: string, sender: string, received: string, label: string): (note: EscalationNote) {
+    const note = struct::make()
+    note.subject = subject
+    note.sender = sender
+    note.received = received
+    note.label = label
+    return note
+}
+
+eventsSimple sweepSupportInbox() {
+    const connection = imap::connect({ host: imapHost, port: 993, username: mailboxUser, password: mailboxPassword, encryption: "Tls" })
+    const inbox = connection.inbox({ inbox: "INBOX" })
+    const pending = inbox.listMails({ filter: "UNSEEN" })
+    const relay = smtp::connect({ host: smtpHost, port: 587, username: mailboxUser, password: mailboxPassword, encryption: "StartTls" })
+    let escalated = []
+    let filed = 0
+    for (const [index, reference] of pending) {
+        const message = reference.fetchMail()
+        const { subject, date, plain } = message.getContent()
+        // BUG: `getHeaders().from` is schema `Option<MailAddress>` and `addressToFields` demands
+        // `MailAddress`, so the catalog's own pairing is refused; the `sender` list carries the
+        // bare schema and connects. See bug-t2-inbox-triage-nullable-from-header.flow.
+        const { sender: senderAddresses } = message.getHeaders()
+        let replyTo = ""
+        let senderName = "an unnamed correspondent"
+        for (const address of senderAddresses) {
+            const { name: addressName, email: addressEmail } = addressToFields(address)
+            if (replyTo.isEmpty({ ignoreWhitespace: true })) {
+                replyTo = addressEmail
+                senderName = addressName
+            }
+        }
+        const preview = plain.trim().ellipsis({ maxLength: 280, ellipsis: "..." })
+        const attachments = message.getAttachments()
+        const attachmentCount = attachments.length()
+        const { label, folder, priority, reply } = classify(subject, preview, replyTo, attachmentCount)
+        info({ message: `[${index}] ${senderName} <${replyTo}> "${subject}" -> ${label}`, toast: false })
+        for (const attachment of attachments) {
+            const { filename, contentType } = attachmentToFields(attachment)
+            if (contentType == "application/pdf") {
+                info({ message: `  archiving ${filename} alongside the ${folder} thread`, toast: false })
+            }
+        }
+        if (reply.isEmpty({ ignoreWhitespace: true })) {
+            warn({ message: `No auto-reply template for ${label}; filing ${replyTo} silently`, toast: false })
+        } else {
+            const receipt = relay.send({ from: replyFrom, to: replyTo, subject: `Re: ${subject}`, bodyText: reply, includeBccHeader: false })
+            receipt {
+                execOut: {
+                    info({ message: `Auto-reply ${receipt} acknowledged ${replyTo}`, toast: false })
+                }
+            }
+        }
+        if (priority == "urgent") {
+            const note = escalationNote(subject, replyTo, date, label)
+            escalated = escalated.push({ value: note })
+            const page = relay.send({ from: replyFrom, to: oncallList, subject: `[URGENT] ${subject}`, bodyText: `${senderName} <${replyTo}> reported: ${preview}`, includeBccHeader: false })
+            page {
+                execOut: {
+                    error({ message: `Paged on-call about "${subject}" (${page})`, toast: true })
+                }
+            }
+        }
+        reference.markSeen({ markAsSeen: true }).moveMessage({ destination: folder, createIfMissing: true, expungeMode: "uid_expunge" })
+        filed = filed + 1
+    }
+    filedCount = filed
+    for (const note of escalated) {
+        warn({ message: `Escalated ${note.label}: "${note.subject}" from ${note.sender} at ${note.received}`, toast: false })
+    }
+    info({ message: `Sweep filed ${filed} message(s), ${escalated.length()} of them escalated`, toast: false })
+}

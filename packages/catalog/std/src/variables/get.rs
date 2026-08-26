@@ -2,6 +2,7 @@ use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
+    pin::schemas_are_compatible,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
@@ -32,6 +33,7 @@ impl NodeLogic for GetVariable {
             "Get Variable Value",
             "Variable",
         );
+        node.set_flowscript_name("variable", "get");
 
         node.add_icon("/flow/icons/variable.svg");
 
@@ -147,11 +149,7 @@ impl NodeLogic for GetVariable {
                 if pin.data_type != mut_value.data_type || pin.value_type != mut_value.value_type {
                     return false;
                 }
-                // If both have schemas, they must match
-                if mut_value.schema.is_some() && pin.schema.is_some() {
-                    return mut_value.schema == pin.schema;
-                }
-                true
+                schemas_are_compatible(mut_value.schema.as_deref(), pin.schema.as_deref())
             })
         });
 

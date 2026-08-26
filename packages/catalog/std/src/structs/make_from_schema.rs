@@ -1,7 +1,7 @@
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic},
+    node::{Node, NodeLogic, remove_unwired_pins},
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
@@ -9,7 +9,7 @@ use flow_like_types::{
     Value, async_trait,
     json::{Map, json},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Unique identifier prefix for make struct pins to enable special connection rules
 pub const MAKE_STRUCT_PIN_PREFIX: &str = "__make_struct_field__";
@@ -251,6 +251,37 @@ fn get_default_value_for_type(var_type: &VariableType, value_type: &ValueType) -
     }
 }
 
+/// Drop the field pins the current schema no longer declares — but never one the user has wired.
+///
+/// A field pin that disappears takes its half of the edge with it, and `fix_pin_connections` then
+/// prunes the surviving half on the producer, so the connection vanishes from both ends with no
+/// error anywhere. `remove_unwired_pins` keeps anything still attached and names it on
+/// `node.error`, turning a schema change into something the user reads instead of loses.
+fn retain_declared_field_pins(node: &mut Node, declared: &HashSet<String>) {
+    let stale: Vec<String> = node
+        .pins
+        .values()
+        .filter(|pin| !declared.contains(&pin.name))
+        .map(|pin| pin.id.clone())
+        .collect();
+
+    remove_unwired_pins(node, &stale);
+}
+
+/// Give up on deriving fields: hand `struct_out` its open marker back and drop the unwired pins.
+///
+/// `on_update` stamps the consumer's schema onto `struct_out` *and* turns on `enforce_schema`.
+/// Leaving that behind once the consumer is gone turns the pin into a contract for a shape nothing
+/// asked for, and `schemas_are_compatible` would then reject the next consumer the user wires up.
+fn reset_to_open(node: &mut Node, error: Option<String>) {
+    node.error = error;
+    retain_declared_field_pins(node, &HashSet::from(["struct_out".to_string()]));
+    if let Some(output_pin) = node.get_pin_mut_by_name("struct_out") {
+        output_pin.set_open_schema();
+        output_pin.options = None;
+    }
+}
+
 #[async_trait]
 impl NodeLogic for MakeStructFromSchemaNode {
     fn get_node(&self) -> Node {
@@ -260,6 +291,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
             "Creates a struct from individual fields based on a connected schema",
             "Structs",
         );
+        node.set_flowscript_name("struct", "makeFromSchema");
         node.add_icon("/flow/icons/struct.svg");
 
         // Output struct pin - will get schema from connected input
@@ -312,18 +344,18 @@ impl NodeLogic for MakeStructFromSchemaNode {
         let connected_pin_id = match struct_pin.connected_to.iter().next() {
             Some(id) => id.clone(),
             None => {
-                // No connection - remove generated pins but keep struct_out
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Output);
+                reset_to_open(node, None);
                 return;
             }
         };
 
+        // A consumer that is not on the board handed to us is not evidence that the wire is gone:
+        // `node_updates` lifts the node being updated out of the board, and on load this runs
+        // before `cleanup` has repaired anything. Dropping the field pins on that incomplete view
+        // would delete every wire the user drew into them, so keep them and wait for a full pass.
         let connected_pin = match board.get_pin_by_id(&connected_pin_id) {
             Some(pin) => pin,
-            None => {
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Output);
-                return;
-            }
+            None => return,
         };
 
         // Get the schema from the connected pin
@@ -331,14 +363,12 @@ impl NodeLogic for MakeStructFromSchemaNode {
             Some(s) => s.clone(),
             None => {
                 // Check if enforce_schema is true - if so, we need a schema
-                if connected_pin
+                let error = connected_pin
                     .options
                     .as_ref()
                     .is_some_and(|o| o.enforce_schema == Some(true))
-                {
-                    node.error = Some("Connected pin enforces schema but has none".to_string());
-                }
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Output);
+                    .then(|| "Connected pin enforces schema but has none".to_string());
+                reset_to_open(node, error);
                 return;
             }
         };
@@ -350,30 +380,45 @@ impl NodeLogic for MakeStructFromSchemaNode {
             .cloned()
             .unwrap_or(schema_ref.clone());
 
+        if flow_like::flow::pin::is_open_object_schema(&schema_str) {
+            reset_to_open(
+                node,
+                Some(
+                    "Connected struct declares no fields. Make Struct needs a consumer with a concrete schema."
+                        .to_string(),
+                ),
+            );
+            return;
+        }
+
         // Parse the JSON schema as a generic Value
         let schema: Value = match flow_like_types::json::from_str(&schema_str) {
             Ok(s) => s,
             Err(e) => {
-                node.error = Some(format!("Failed to parse schema: {}", e));
+                reset_to_open(node, Some(format!("Failed to parse schema: {}", e)));
                 return;
             }
         };
 
-        // Extract properties from the schema
-        let properties = match schema.get("properties").and_then(|p| p.as_object()) {
-            Some(props) => props,
+        // Extract properties from the schema, resolving a top-level `$ref`/`anyOf` wrapper first
+        // so a consumer that declares its shape indirectly reads the same as an inline one.
+        let properties = match resolve_schema(&schema, &schema)
+            .get("properties")
+            .and_then(|p| p.as_object())
+        {
+            Some(props) => props.clone(),
             None => {
-                node.error = Some("Schema has no object properties".to_string());
+                reset_to_open(node, Some("Schema has no object properties".to_string()));
                 return;
             }
         };
 
         // Collect the pin names we need for this schema
-        let mut relevant_pins = std::collections::HashSet::new();
+        let mut relevant_pins = HashSet::new();
         relevant_pins.insert("struct_out".to_string());
 
         // Get required fields
-        let required_fields: std::collections::HashSet<&str> = schema
+        let required_fields: HashSet<&str> = resolve_schema(&schema, &schema)
             .get("required")
             .and_then(|r| r.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
@@ -381,7 +426,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
 
         // Create input pins for each property (or skip if already exists)
         let mut index = 0u16;
-        for (prop_name, prop_schema) in properties {
+        for (prop_name, prop_schema) in &properties {
             let (var_type, value_type) = get_schema_type(prop_schema, &schema);
 
             // Use a unique prefixed name for the pin to enable special connection rules
@@ -448,8 +493,8 @@ impl NodeLogic for MakeStructFromSchemaNode {
             index += 1;
         }
 
-        // Remove pins that are no longer in the schema
-        node.pins.retain(|_, pin| relevant_pins.contains(&pin.name));
+        // Retire the pins this schema no longer declares, keeping any the user still has wired
+        retain_declared_field_pins(node, &relevant_pins);
 
         // Update the output pin to have the schema reference
         if let Some(output_pin) = node.get_pin_mut_by_name("struct_out") {

@@ -30,6 +30,7 @@ impl NodeLogic for GetButtonLabel {
             "Gets the label text of a button element",
             "UI/Elements/Button",
         );
+        node.set_flowscript_name("ui", "getButtonLabel");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

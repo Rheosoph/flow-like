@@ -27,6 +27,8 @@ impl NodeLogic for ReadCacheNode {
             "Reads a value from the app's cache. Reports a miss when the key was never written or its lifetime has elapsed.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "read");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

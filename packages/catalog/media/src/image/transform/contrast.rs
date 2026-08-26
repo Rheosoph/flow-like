@@ -26,6 +26,8 @@ impl NodeLogic for ContrastImageNode {
             "Adjust Image Contrast",
             "Image/Transform",
         );
+        node.set_flowscript_name("image", "contrast");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

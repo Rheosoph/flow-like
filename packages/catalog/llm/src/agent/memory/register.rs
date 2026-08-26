@@ -27,6 +27,8 @@ impl NodeLogic for RegisterMemoryNode {
             "Gives the agent autonomous access to persistent memory tools (_memory_search, _memory_store, _memory_compress)",
             "AI/Agents/Builder",
         );
+        node.set_flowscript_name("agent", "registerMemory");
+        node.set_receiver("agent_in");
         node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
 

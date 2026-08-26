@@ -19,6 +19,7 @@ impl NodeLogic for NormalizePacketTimestampsNode {
             "Rebase packet timestamps so each track starts at zero or later",
             "Video/Packets",
         );
+        node.set_flowscript_name("video", "normalizeTimestamps");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

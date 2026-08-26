@@ -27,6 +27,8 @@ impl NodeLogic for StringLengthNode {
             "Calculates the length of a string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "length");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
         node.set_scores(pure_scores());

@@ -1,0 +1,17 @@
+// `fit_random_forest`'s `on_update` mints `database` / `records` / `targets` input pins by name
+// whenever `source` holds the literal "Database" (packages/catalog/ml/src/classification/
+// random_forest.rs). The FlowScript reconciler only predicts minted pins for the node types
+// listed in `mints_pins_on_update` (packages/core/src/flow/node.rs), and the whole ml fit/predict
+// family is missing from that list -- so the pins the node really grows are rejected as unknown
+// arguments and a trained model's data source cannot be expressed in FlowScript at all.
+eventsSimple trainRiskModel() {
+    const signals = db::open({ name: "revenue_signals", userScoped: false })
+    const model = ml::fitRandomForest({
+        source: "Database",
+        database: signals,
+        records: "embedding",
+        targets: "risk_band",
+        ensembleSize: 240
+    })
+    log::info({ message: ml::info({ model: model }).modelType, toast: false })
+}

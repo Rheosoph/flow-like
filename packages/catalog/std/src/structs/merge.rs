@@ -8,12 +8,11 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait, json::json};
 
-/// These nodes work on whatever struct is handed to them, so "any object" is the
-/// honest shape. A connection overwrites it with the real schema via `match_type`.
-const ANY_STRUCT: &str = r#"{"type":"object","additionalProperties":true}"#;
-
+/// These nodes work on whatever struct is handed to them, so "any object" is the honest shape.
+/// `PickStructNode` narrows its pins to the connected schema in `on_update`; `MergeStructNode` has
+/// no `on_update` and stays open for its whole lifetime.
 fn any_struct_pin(pin: &mut flow_like::flow::pin::Pin) {
-    pin.schema = Some(ANY_STRUCT.to_string());
+    pin.set_open_schema();
 }
 
 /// Later values win. Nested objects are merged field by field when deep is set,
@@ -55,6 +54,8 @@ impl NodeLogic for MergeStructNode {
             "Lays structs over each other, later ones winning. Useful for defaults plus overrides",
             "Structs",
         );
+        node.set_flowscript_name("struct", "merge");
+        node.set_receiver("struct");
         node.add_icon("/flow/icons/struct.svg");
         node.set_scores(pure_scores());
 
@@ -128,6 +129,8 @@ impl NodeLogic for PickStructNode {
             "Keeps only the listed fields, dropping everything else. Use before logging or sending a struct on",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "pick");
+        node.set_receiver("struct");
         node.add_icon("/flow/icons/struct.svg");
         node.set_scores(pure_scores());
 

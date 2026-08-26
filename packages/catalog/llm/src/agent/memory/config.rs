@@ -63,6 +63,7 @@ impl NodeLogic for CreateMemoryConfigNode {
             "Creates a MemoryConfig that bundles database, embedding model, and tuning parameters for all memory nodes",
             "AI/Memory",
         );
+        node.set_flowscript_name("ai.memory", "createConfig");
         node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
 

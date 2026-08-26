@@ -10,9 +10,11 @@ use crate::ml::{
     KnnModel, MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -21,9 +23,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 
@@ -51,6 +54,7 @@ impl NodeLogic for FitKnnClassifierNode {
             "Fit a K-Nearest-Neighbours classifier. Non-parametric and instance based: the fitted model embeds a verbatim copy of the whole training set instead of learned coefficients, so every training row (and any personal data in it) travels with the model, is written into every saved model file and can be reconstructed by anyone holding it. Treat the model with the same care as the source table.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitKnnClassifier");
         node.add_icon("/flow/icons/chart-network.svg");
 
         // Deliberately far below the other classifiers: the model is the raw training data, not a
@@ -283,7 +287,6 @@ impl NodeLogic for FitKnnClassifierNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

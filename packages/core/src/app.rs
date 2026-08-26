@@ -1,4 +1,5 @@
 use crate::{
+    a2ui::widget::Page,
     bit::Metadata,
     flow::{
         board::{Board, VersionType, commands::nodes::copy_paste::CopyPasteCommand},
@@ -118,6 +119,16 @@ pub struct AppSearchQuery {
     pub author: Option<String>,
     pub sort: Option<AppSearchSort>,
     pub tag: Option<String>,
+}
+
+/// What [`App::create_board`] produced.
+///
+/// A board instantiated from a template writes its pages to storage as a side effect, and those
+/// pages are the only ones no page-upload call ever describes. Deployments that keep a page row
+/// per page therefore need them handed back, or the pages exist on disk and nowhere else.
+pub struct CreatedBoard {
+    pub board_id: String,
+    pub pages: Vec<Page>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -373,22 +384,23 @@ impl App {
         &mut self,
         id: Option<String>,
         template: Option<Board>,
-    ) -> flow_like_types::Result<String> {
+    ) -> flow_like_types::Result<CreatedBoard> {
         let storage_root = Path::from("apps").child(self.id.clone());
         let state = self
             .app_state
             .clone()
             .ok_or(flow_like_types::anyhow!("App state not found"))?;
-        let mut board = Board::new(id, storage_root, state.clone());
-        if let Some(template) = template {
-            // API templates are JSON-deserialized and therefore cannot load page payloads directly
-            // (`app_state`/`board_dir` are runtime-only). Keep their page IDs so a caller that
-            // uploads the page payloads separately retains the board-to-page association. Stateful
-            // templates still copy their pages below.
-            let detached_page_ids = template
-                .app_state
-                .is_none()
-                .then(|| template.page_ids.clone());
+        let mut board = Board::new(id, storage_root.clone(), state.clone());
+        let mut pages = Vec::new();
+        if let Some(mut template) = template {
+            // A template that crossed a serialization boundary — an API request body, the desktop
+            // IPC bridge — arrives without `app_state`/`board_dir`, which are runtime-only. Its
+            // page payloads still live on this app's store under the template layout, so rebind it
+            // before trying to read them.
+            if template.app_state.is_none() {
+                template.app_state = Some(state.clone());
+                template.board_dir = storage_root.clone();
+            }
             board.variables = template.variables.clone();
             let mut paste_command = {
                 let nodes = template.nodes.values().cloned().collect::<Vec<_>>();
@@ -410,23 +422,43 @@ impl App {
                 .collect();
             let paste_command =
                 crate::flow::board::commands::GenericCommand::CopyPaste(paste_command);
-            board.execute_command(paste_command, state.clone()).await?;
-            for page_id in &template.page_ids {
-                if let Ok(page) = template.load_page(page_id, None).await {
-                    let mut new_page = page.clone();
-                    new_page.board_id = Some(board.id.clone());
-                    board.save_page(&new_page, None).await?;
+            let executed = board.execute_command(paste_command, state.clone()).await?;
+            // Page payloads point at nodes by id, so they can only follow the copy if they know
+            // what the paste renamed each node to.
+            let node_translation = match executed {
+                crate::flow::board::commands::GenericCommand::CopyPaste(command) => {
+                    command.translated_ids
                 }
-            }
-            if let Some(page_ids) = detached_page_ids {
-                board.page_ids = page_ids;
+                _ => HashMap::new(),
+            };
+
+            let source_app_id = template.board_dir.filename().map(str::to_string);
+            let app_translation = source_app_id
+                .as_deref()
+                .filter(|source_app_id| *source_app_id != self.id.as_str())
+                .map(|source_app_id| (source_app_id, self.id.as_str()));
+
+            pages = board
+                .instantiate_template_pages(&template, &node_translation, app_translation, None)
+                .await?;
+
+            // A board payload replayed under its own id — the offline-to-online migration ships
+            // one per board and uploads that board's pages separately — keeps the page ids it came
+            // with, because those uploads are what materializes them. Ids belonging to a *different*
+            // board are never adopted: `Page.id` is a global primary key, so a second board
+            // claiming them collides with the original the moment either is persisted.
+            if pages.is_empty() && template.id == board.id {
+                board.page_ids = template.page_ids.clone();
                 board.mark_changed();
             }
         }
         board.save(None).await?;
         self.boards.push(board.id.clone());
         self.updated_at = SystemTime::now();
-        Ok(board.id)
+        Ok(CreatedBoard {
+            board_id: board.id,
+            pages,
+        })
     }
 
     pub async fn boards_configured(&self) -> bool {
@@ -669,10 +701,12 @@ impl App {
         data.id = template_id.clone();
         data.board_dir = Path::from("apps").child(self.id.clone());
 
+        // Record-only: this is a template fetched from the hub being cached locally, so its page
+        // ids have no payloads on this store to copy from.
         if let Some(version) = version {
-            data.overwrite_template_version(version, None).await?;
+            data.overwrite_template_version(version, None, None).await?;
         } else {
-            data.save_as_template(None).await?;
+            data.save_as_template(None, None).await?;
         }
 
         Ok(())
@@ -758,6 +792,24 @@ impl App {
             .delete_stream(locations)
             .try_collect::<Vec<Path>>()
             .await?;
+
+        // The template's own page payloads sit next to the board files, outside the version tree
+        // the sweep above walks, so they would otherwise outlive the template forever.
+        let pages_path =
+            Board::template_pages_dir(&Path::from("apps").child(self.id.clone()), template_id);
+        let page_locations = store.list(Some(&pages_path)).map_ok(|m| m.location).boxed();
+        // A template that never had pages has no directory at all, which a
+        // filesystem store reports as an error rather than an empty listing.
+        // Leaving payloads behind is a leak; failing the delete over their
+        // absence would be a bug.
+        if let Err(error) = store
+            .delete_stream(page_locations)
+            .try_collect::<Vec<Path>>()
+            .await
+        {
+            tracing::warn!("sweeping pages of template {}: {}", template_id, error);
+        }
+
         self.updated_at = SystemTime::now();
         self.save().await?;
         Ok(())
@@ -969,6 +1021,47 @@ impl App {
         Ok(())
     }
 
+    /// Publish an immutable snapshot of a widget and advance its working copy.
+    ///
+    /// The snapshot is what `open_widget(id, Some(version))` reads back and what
+    /// `get_widget_versions` lists, so bumping the working copy alone leaves the
+    /// version history permanently empty. It is written before the working copy
+    /// is advanced: an interrupted publish then leaves an unreferenced snapshot
+    /// that the next attempt rewrites, rather than a version number no snapshot
+    /// backs. The dash separator is the one `open_widget` reads and
+    /// `get_widget_versions` parses — boards use underscores.
+    pub async fn create_widget_version(
+        &mut self,
+        widget_id: &str,
+        version_type: crate::a2ui::widget::VersionType,
+    ) -> flow_like_types::Result<(u32, u32, u32)> {
+        let state = self
+            .app_state
+            .clone()
+            .ok_or(flow_like_types::anyhow!("App state not found"))?;
+        let store = FlowLikeState::project_meta_store(&state)
+            .await?
+            .as_generic();
+
+        let mut widget = self.open_widget(widget_id.to_string(), None).await?;
+        widget.bump_version(version_type);
+        let version = widget
+            .version
+            .ok_or(flow_like_types::anyhow!("Widget version missing after bump"))?;
+
+        let version_path = Path::from("apps")
+            .child(self.id.clone())
+            .child("widgets")
+            .child("versions")
+            .child(widget_id.to_string())
+            .child(format!("{}-{}-{}.widget", version.0, version.1, version.2));
+        compress_to_file_json(store, version_path, &widget).await?;
+
+        self.save_widget(&widget).await?;
+
+        Ok(version)
+    }
+
     /// Get all versions of a widget
     pub async fn get_widget_versions(
         &self,
@@ -1007,6 +1100,8 @@ impl App {
                 }
             }
         }
+
+        versions.sort_unstable_by(|a, b| b.cmp(a));
         Ok(versions)
     }
 
@@ -1264,6 +1359,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_widget_version_writes_a_readable_snapshot() {
+        use crate::a2ui::widget::{VersionType, Widget};
+
+        let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = super::App::new(
+            Some("widget-version-test-app".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .expect("test app should be created");
+
+        let mut widget = Widget::new("widget-1", "Widget One", "root");
+        widget.version = Some((0, 0, 1));
+        app.save_widget(&widget).await.expect("widget should save");
+
+        let first = app
+            .create_widget_version("widget-1", VersionType::Patch)
+            .await
+            .expect("first version should publish");
+        let second = app
+            .create_widget_version("widget-1", VersionType::Minor)
+            .await
+            .expect("second version should publish");
+
+        assert_eq!(first, (0, 0, 2));
+        assert_eq!(second, (0, 1, 0));
+
+        let versions = app
+            .get_widget_versions("widget-1")
+            .await
+            .expect("versions should list");
+        assert_eq!(
+            versions,
+            vec![(0, 1, 0), (0, 0, 2)],
+            "published snapshots must be listed newest first"
+        );
+
+        let snapshot = app
+            .open_widget("widget-1".to_string(), Some(first))
+            .await
+            .expect("a published snapshot must be readable back");
+        assert_eq!(snapshot.version, Some(first));
+
+        let working = app
+            .open_widget("widget-1".to_string(), None)
+            .await
+            .expect("the working copy must still exist");
+        assert_eq!(
+            working.version,
+            Some(second),
+            "publishing must advance the working copy"
+        );
+    }
+
+    #[tokio::test]
     async fn create_board_from_template_keeps_schema_refs_resolvable() {
         let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
         let state = Arc::new(crate::state::FlowLikeState::new(
@@ -1294,13 +1450,13 @@ mod tests {
             .schema = Some(schema_ref.to_string());
         template.nodes.insert(node.id.clone(), node);
 
-        let board_id = app
+        let created = app
             .create_board(Some("instantiated-board".to_string()), Some(template))
             .await
             .expect("template should instantiate");
         let board = Board::load(
             Path::from("apps").child(app.id.clone()),
-            &board_id,
+            &created.board_id,
             state,
             None,
         )
@@ -1324,38 +1480,74 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn create_board_from_detached_template_keeps_page_ids() {
+    async fn page_test_app(id: &str) -> (super::App, Arc<crate::state::FlowLikeState>) {
         let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
         let state = Arc::new(crate::state::FlowLikeState::new(
             FlowLikeConfig::with_default_store(store),
             HTTPClient::new_without_refetch(),
         ));
-        let mut app = super::App::new(
-            Some("detached-template-page-test-app".to_string()),
+        let app = super::App::new(
+            Some(id.to_string()),
             Metadata::default(),
             Vec::new(),
             state.clone(),
         )
         .await
         .expect("test app should be created");
-        let mut template =
-            Board::new_detached(Some("detached-template".to_string()), Path::from("unused"));
-        template.page_ids = vec!["page-one".to_string(), "page-two".to_string()];
+        (app, state)
+    }
 
-        let board_id = app
-            .create_board(Some("instantiated-board".to_string()), Some(template))
+    /// The offline-to-online migration re-creates each board from its own payload and uploads that
+    /// board's pages afterwards, so the ids have to survive the round trip for the uploads to land
+    /// on the right board.
+    #[tokio::test]
+    async fn create_board_from_own_payload_keeps_page_ids() {
+        let (mut app, state) = page_test_app("own-payload-page-test-app").await;
+        let mut payload =
+            Board::new_detached(Some("instantiated-board".to_string()), Path::from("unused"));
+        payload.page_ids = vec!["page-one".to_string(), "page-two".to_string()];
+
+        let created = app
+            .create_board(Some("instantiated-board".to_string()), Some(payload))
             .await
-            .expect("detached template should instantiate");
+            .expect("board payload should instantiate");
         let board = Board::load(
             Path::from("apps").child(app.id.clone()),
-            &board_id,
+            &created.board_id,
             state,
             None,
         )
         .await
         .expect("instantiated board should load");
 
+        assert!(created.pages.is_empty());
         assert_eq!(board.page_ids, vec!["page-one", "page-two"]);
+    }
+
+    /// `Page.id` is a global primary key, so page ids that belong to a different board must never
+    /// be adopted — they have no payload and no row behind them, and claiming them collides with
+    /// the board that owns them.
+    #[tokio::test]
+    async fn create_board_from_template_drops_foreign_page_ids() {
+        let (mut app, state) = page_test_app("detached-template-page-test-app").await;
+        let mut template =
+            Board::new_detached(Some("detached-template".to_string()), Path::from("unused"));
+        template.page_ids = vec!["page-one".to_string(), "page-two".to_string()];
+
+        let created = app
+            .create_board(Some("instantiated-board".to_string()), Some(template))
+            .await
+            .expect("detached template should instantiate");
+        let board = Board::load(
+            Path::from("apps").child(app.id.clone()),
+            &created.board_id,
+            state,
+            None,
+        )
+        .await
+        .expect("instantiated board should load");
+
+        assert!(created.pages.is_empty());
+        assert!(board.page_ids.is_empty());
     }
 }

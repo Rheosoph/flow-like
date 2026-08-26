@@ -7,6 +7,9 @@ fn call(node_type: &str, display: &str, args: Vec<Arg>) -> Call {
     Call {
         node_type: node_type.to_string(),
         display: display.to_string(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args,
         anchor: None,
     }
@@ -16,6 +19,7 @@ fn call(node_type: &str, display: &str, args: Vec<Arg>) -> Call {
 fn renders_event_with_let_and_named_args() {
     let ast = BoardAst {
         board_id: "b1".to_string(),
+        uses: vec![],
         interfaces: vec![],
         variables: vec![VarDecl {
             name: "inputText".to_string(),
@@ -74,11 +78,13 @@ fn renders_event_with_let_and_named_args() {
                 ],
             },
         }],
+        detached: vec![],
+        modules: vec![],
     };
 
     let text = render(&ast, &RenderOptions::default());
     let expected = "\
-let inputText: string = \"hi\"
+let inputText = \"hi\"
 
 onStart() {
     const model = aiGenerativeFindModel({ provider: \"openai\", model: \"gpt-4o\" })
@@ -92,6 +98,7 @@ onStart() {
 fn renders_if_else_branch() {
     let ast = BoardAst {
         board_id: "b2".to_string(),
+        uses: vec![],
         interfaces: vec![],
         variables: vec![],
         functions: vec![],
@@ -130,6 +137,8 @@ fn renders_if_else_branch() {
                 }],
             },
         }],
+        detached: vec![],
+        modules: vec![],
     };
 
     let text = render(&ast, &RenderOptions::default());
@@ -151,6 +160,7 @@ onStart() {
 fn expr_text(value: Expr) -> String {
     let ast = BoardAst {
         board_id: "t".to_string(),
+        uses: vec![],
         interfaces: vec![],
         variables: vec![],
         functions: vec![],
@@ -174,6 +184,8 @@ fn expr_text(value: Expr) -> String {
                 }],
             },
         }],
+        detached: vec![],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let line = text
@@ -323,6 +335,7 @@ fn renders_object_literal() {
 fn renders_return_statement() {
     let ast = BoardAst {
         board_id: "t".to_string(),
+        uses: vec![],
         interfaces: vec![],
         variables: vec![],
         functions: vec![],
@@ -342,6 +355,8 @@ fn renders_return_statement() {
                 }],
             },
         }],
+        detached: vec![],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let expected = "\
@@ -356,6 +371,7 @@ writeReport(title: string) {
 fn renders_event_with_multiple_params() {
     let ast = BoardAst {
         board_id: "t".to_string(),
+        uses: vec![],
         interfaces: vec![],
         variables: vec![],
         functions: vec![],
@@ -376,6 +392,8 @@ fn renders_event_with_multiple_params() {
             anchor: None,
             body: Block { stmts: vec![] },
         }],
+        detached: vec![],
+        modules: vec![],
     };
     let text = render(&ast, &RenderOptions::default());
     let expected = "\
@@ -383,4 +401,255 @@ now(date: Date, items: Struct[]) {
 }
 ";
     assert_eq!(text, expected);
+}
+
+// ---- phase 2a: namespaces, method calls, positional args, `use`, destructuring -------------
+
+fn lit_str(value: &str) -> Expr {
+    Expr::Literal(Literal::String(value.to_string()))
+}
+
+#[test]
+fn renders_namespace_path_call() {
+    let mut probe = call("string_trim", "trim", vec![]);
+    probe.path = vec!["string".to_string()];
+    probe.args = vec![Arg {
+        name: "string".to_string(),
+        value: r("s"),
+    }];
+    assert_eq!(expr_text(Expr::Call(probe)), "string::trim({ string: s })");
+}
+
+#[test]
+fn renders_method_call_receivers() {
+    let method = |receiver: Expr, positional: Vec<Expr>, args: Vec<Arg>| {
+        let mut probe = call("string_contains", "contains", args);
+        probe.receiver = Some(Box::new(receiver));
+        probe.positional = positional;
+        Expr::Call(probe)
+    };
+    assert_eq!(expr_text(method(r("s"), vec![], vec![])), "s.contains()");
+    assert_eq!(
+        expr_text(method(r("s"), vec![lit_str("?")], vec![])),
+        "s.contains(\"?\")"
+    );
+    assert_eq!(
+        expr_text(method(
+            r("s"),
+            vec![lit_str("?")],
+            vec![Arg {
+                name: "ignore_case".to_string(),
+                value: Expr::Literal(Literal::Bool(true)),
+            }]
+        )),
+        "s.contains(\"?\", { ignoreCase: true })"
+    );
+    // Binary/ternary receivers are grouped; numeric literals too (`5.` would lex as a float).
+    assert_eq!(
+        expr_text(method(
+            Expr::Binary {
+                op: "+".to_string(),
+                lhs: Box::new(r("a")),
+                rhs: Box::new(r("b")),
+            },
+            vec![],
+            vec![]
+        )),
+        "(a + b).contains()"
+    );
+    assert_eq!(
+        expr_text(method(
+            Expr::Ternary {
+                cond: Box::new(r("c")),
+                then: Box::new(r("a")),
+                otherwise: Box::new(r("b")),
+            },
+            vec![],
+            vec![]
+        )),
+        "(c ? a : b).contains()"
+    );
+    assert_eq!(
+        expr_text(method(Expr::Literal(Literal::Int(5)), vec![], vec![])),
+        "(5).contains()"
+    );
+    assert_eq!(
+        expr_text(method(Expr::Literal(Literal::Float(1.5)), vec![], vec![])),
+        "(1.5).contains()"
+    );
+    assert_eq!(
+        expr_text(method(lit_str("lit"), vec![], vec![])),
+        "\"lit\".contains()"
+    );
+}
+
+#[test]
+fn renders_use_declarations_before_interfaces() {
+    let ast = BoardAst {
+        uses: vec![
+            UseDecl {
+                path: vec!["ai".to_string(), "ml".to_string()],
+                kind: UseKind::Namespace,
+            },
+            UseDecl {
+                path: vec!["string".to_string()],
+                kind: UseKind::Glob,
+            },
+            UseDecl {
+                path: vec!["data".to_string(), "jira".to_string()],
+                kind: UseKind::Alias("jira".to_string()),
+            },
+            UseDecl {
+                path: vec!["ui".to_string()],
+                kind: UseKind::Members(vec![
+                    "setElementText".to_string(),
+                    "navigateTo".to_string(),
+                ]),
+            },
+        ],
+        interfaces: vec![InterfaceDecl {
+            name: "Row".to_string(),
+            fields: vec![InterfaceField {
+                name: "id".to_string(),
+                ty: InterfaceType::Named("string".to_string()),
+                optional: false,
+                default: None,
+            }],
+            schema: None,
+        }],
+        ..BoardAst::default()
+    };
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "use ai::ml\nuse string::*\nuse data::jira as jira\nuse ui::{ setElementText, navigateTo }\n\ninterface Row {\n    id: string;\n}\n"
+    );
+}
+
+#[test]
+fn renders_destructuring_with_camelcased_pins() {
+    let ast = BoardAst {
+        events: vec![EventBlock {
+            name: "onTest".to_string(),
+            node_type: "test".to_string(),
+            event_name: None,
+            params: vec![],
+            anchor: None,
+            body: Block {
+                stmts: vec![Stmt::Destructure {
+                    fields: vec![
+                        DestructureField {
+                            pin: "text".to_string(),
+                            name: "text".to_string(),
+                        },
+                        DestructureField {
+                            pin: "usage_tokens".to_string(),
+                            name: "usageTokens".to_string(),
+                        },
+                        DestructureField {
+                            pin: "usage".to_string(),
+                            name: "u".to_string(),
+                        },
+                    ],
+                    call: {
+                        let mut invoke = call(
+                            "ai_invoke",
+                            "invoke",
+                            vec![Arg {
+                                name: "model".to_string(),
+                                value: r("m"),
+                            }],
+                        );
+                        invoke.path = vec!["ai".to_string()];
+                        invoke
+                    },
+                    anchor: Some("n1".to_string()),
+                }],
+            },
+        }],
+        ..BoardAst::default()
+    };
+    assert_eq!(
+        render(
+            &ast,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            }
+        ),
+        "onTest() {\n    const { text, usageTokens, usage: u } = ai::invoke({ model: m })   //@n:n1\n}\n"
+    );
+}
+
+#[test]
+fn renders_sugared_loops_and_template_literals() {
+    let placeholder = call("", "", Vec::new());
+    let ast = BoardAst {
+        board_id: "b1".to_string(),
+        events: vec![EventBlock {
+            name: "onTest".to_string(),
+            node_type: "events_simple".to_string(),
+            event_name: None,
+            params: vec![],
+            anchor: None,
+            body: Block {
+                stmts: vec![
+                    Stmt::Loop {
+                        keyword: "forEachParallel".to_string(),
+                        bind: None,
+                        call: placeholder.clone(),
+                        iterable: Some(Expr::Member {
+                            base: Box::new(r("user")),
+                            field: "sources".to_string(),
+                        }),
+                        element: Some("item".to_string()),
+                        index: Some("index".to_string()),
+                        body: Block {
+                            stmts: vec![Stmt::LocalAlias {
+                                name: "m".to_string(),
+                                value: Expr::Template {
+                                    parts: vec![
+                                        TemplatePart::Text("#".to_string()),
+                                        TemplatePart::Expr(r("index")),
+                                        TemplatePart::Text(": `".to_string()),
+                                        TemplatePart::Expr(Expr::Member {
+                                            base: Box::new(r("item")),
+                                            field: "label".to_string(),
+                                        }),
+                                        TemplatePart::Text("` ${x}\n\\done".to_string()),
+                                    ],
+                                },
+                                anchor: None,
+                            }],
+                        },
+                        anchor: Some("n1".to_string()),
+                    },
+                    Stmt::Loop {
+                        keyword: "while".to_string(),
+                        bind: None,
+                        call: placeholder,
+                        iterable: Some(Expr::Binary {
+                            op: "<".to_string(),
+                            lhs: Box::new(r("i")),
+                            rhs: Box::new(Expr::Literal(Literal::Int(3))),
+                        }),
+                        element: None,
+                        index: None,
+                        body: Block::default(),
+                        anchor: None,
+                    },
+                ],
+            },
+        }],
+        ..BoardAst::default()
+    };
+    assert_eq!(
+        render(
+            &ast,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            }
+        ),
+        "onTest() {\n    @parallel\n    for (const [index, item] of user.sources) {   //@n:n1\n        let m = `#${index}: \\`${item.label}\\` \\${x}\n\\\\done`\n    }\n    while (i < 3) {\n    }\n}\n"
+    );
 }

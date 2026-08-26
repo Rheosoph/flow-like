@@ -28,6 +28,7 @@ impl NodeLogic for ToBytesNode {
             "Convert Struct to Bytes",
             "Utils/Conversions",
         );
+        node.set_flowscript_name("json", "toBytes");
         node.add_icon("/flow/icons/convert.svg");
 
         node.add_input_pin("value", "Value", "Input Value", VariableType::Generic);

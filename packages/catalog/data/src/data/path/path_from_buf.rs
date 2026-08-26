@@ -27,6 +27,8 @@ impl NodeLogic for PathBufToPathNode {
             "Converts a PathBuf to a Path",
             "Data/Files",
         );
+        node.set_flowscript_name("path", "fromLocal");
+        node.set_receiver("");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

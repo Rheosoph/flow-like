@@ -9,10 +9,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{
-    Value, async_trait,
-    json::{from_str, json},
-};
+#[cfg(feature = "execute")]
+use flow_like_types::{Value, json::from_str};
+use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]

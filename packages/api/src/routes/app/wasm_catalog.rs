@@ -9,7 +9,7 @@ use flow_like::flow::{
     board::{Board, commands::GenericCommand},
     node::{Node, NodeWasm},
 };
-use flow_like_wasm::manifest::PackageNodeEntry;
+use flow_like_wasm_schema::manifest::PackageNodeEntry;
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
@@ -192,6 +192,9 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
             package_id: package_id.to_string(),
             permissions: entry.permissions.clone(),
         }),
+        namespace: None,
+        alias: None,
+        receiver: None,
     }
 }
 

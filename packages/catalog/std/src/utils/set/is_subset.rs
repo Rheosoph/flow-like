@@ -27,6 +27,8 @@ impl NodeLogic for SetIsSubsetNode {
             "Checks if a hash set is a subset from a supposed bigger one",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "isSubset");
+        node.set_receiver("set_in_1");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

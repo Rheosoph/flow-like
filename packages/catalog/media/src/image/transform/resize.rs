@@ -30,6 +30,8 @@ impl NodeLogic for ResizeImageNode {
             "Resize Image",
             "Image/Transform",
         );
+        node.set_flowscript_name("image", "resize");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

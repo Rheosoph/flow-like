@@ -26,6 +26,8 @@ impl NodeLogic for ChildNode {
             "Creates a child path from a parent path",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "child");
+        node.set_receiver("parent_path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

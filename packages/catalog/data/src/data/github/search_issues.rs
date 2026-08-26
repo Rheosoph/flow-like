@@ -29,6 +29,7 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Search for issues across GitHub repositories",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "searchIssues");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

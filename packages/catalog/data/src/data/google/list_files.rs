@@ -54,6 +54,7 @@ impl NodeLogic for ListGoogleDriveFilesNode {
             "Lists files from a Google Drive folder",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "listFiles");
         node.add_icon("/flow/icons/google.svg");
 
         // Execution pins

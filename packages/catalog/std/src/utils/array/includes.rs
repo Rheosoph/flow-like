@@ -26,6 +26,8 @@ impl NodeLogic for ArrayIncludesNode {
             "Checks if an array includes a certain value",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "includes");
+        node.set_receiver("array_in");
 
         node.add_icon("/flow/icons/grip.svg");
 

@@ -29,6 +29,7 @@ impl NodeLogic for GetPageChildrenNode {
             "Get all child pages of a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getPageChildren");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -211,6 +212,7 @@ impl NodeLogic for GetPageAncestorsNode {
             "Get the ancestor pages (parent hierarchy) of a page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getPageAncestors");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

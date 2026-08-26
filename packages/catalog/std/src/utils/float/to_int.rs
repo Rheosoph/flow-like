@@ -26,6 +26,8 @@ impl NodeLogic for FloatToIntNode {
             "Converts a float into an integer using the selected rounding",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "toInt");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/convert.svg");
         node.set_scores(pure_scores());
 

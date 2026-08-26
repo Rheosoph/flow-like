@@ -25,6 +25,7 @@ impl NodeLogic for IntLimitsNode {
             "The smallest and largest representable integer",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "limits");
         node.add_icon("/flow/icons/sigma.svg");
         node.set_scores(pure_scores());
 

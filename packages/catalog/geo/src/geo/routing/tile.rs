@@ -28,6 +28,7 @@ impl NodeLogic for OsrmTileNode {
             "Fetches vector map tiles (MVT) from an OSRM server.",
             "Web/Geo/Routing",
         );
+        node.set_flowscript_name("geo", "osrmTile");
         node.add_icon("/flow/icons/layers.svg");
 
         node.add_input_pin(

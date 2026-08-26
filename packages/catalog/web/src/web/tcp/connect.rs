@@ -48,6 +48,7 @@ impl NodeLogic for TcpConnectNode {
              until the connection closes, then triggers on_close.",
             "Web/TCP",
         );
+        node.set_flowscript_name("tcp", "connect");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

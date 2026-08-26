@@ -26,6 +26,7 @@ impl NodeLogic for PopArrayRefNode {
             "Remove and return the last element directly from a variable array without copying. Much faster for large arrays.",
             "Utils/Array/By Reference",
         );
+        node.set_flowscript_name("array", "popRef");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

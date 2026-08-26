@@ -724,6 +724,7 @@ impl NodeLogic for FormInteraction {
             "Builds a JSON Schema form from a referenced callback function's pins and executes it with typed submitted values.",
             "Events/Chat/Interaction",
         );
+        node.set_flowscript_name("chat", "askForm");
         node.add_icon("/flow/icons/interaction.svg");
         node.set_can_reference_fns(true);
 

@@ -191,6 +191,7 @@ impl NodeLogic for ExtractDocumentNode {
             "Extracts text and content from documents (PDF, DOCX, XLSX, images, etc.) and converts to markdown.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocument");
         node.add_icon("/flow/icons/file-text.svg");
 
         node.set_scores(
@@ -307,6 +308,7 @@ impl NodeLogic for ExtractDocumentAiNode {
             "Extracts text and content from documents using AI for enhanced image descriptions and OCR.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocumentAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 
@@ -502,6 +504,7 @@ impl NodeLogic for ExtractDocumentsNode {
             "Extracts text and content from multiple documents in parallel.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocuments");
         node.add_icon("/flow/icons/files.svg");
 
         node.set_scores(
@@ -629,6 +632,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
             "Extracts text and content from multiple documents using AI in parallel.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractDocumentsAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 
@@ -831,6 +835,7 @@ impl NodeLogic for PagesToMarkdownNode {
             "Combines an array of document pages into a single markdown string.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "pagesToMarkdown");
         node.add_icon("/flow/icons/file-text.svg");
 
         node.set_scores(
@@ -910,6 +915,7 @@ impl SummaryDetailLevel {
         }
     }
 
+    #[cfg(feature = "execute")]
     fn system_prompt(&self, include_toc: bool) -> String {
         let detail_instruction = match self {
             Self::Low => {
@@ -1088,6 +1094,7 @@ impl NodeLogic for SummarizeDocumentNode {
             "Creates an intelligent summary of document pages using AI with configurable strategies and detail levels. Handles long documents via chunked summarization with multiple strategy options.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "summarizeDocument");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 
@@ -1373,6 +1380,7 @@ impl NodeLogic for SummarizeDocumentNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn parse_summary_response(response: &str) -> (String, Vec<String>, Vec<PageReference>) {
     let mut keywords = Vec::new();
     let mut page_refs = Vec::new();
@@ -1405,6 +1413,7 @@ fn parse_summary_response(response: &str) -> (String, Vec<String>, Vec<PageRefer
     )
 }
 
+#[cfg(feature = "execute")]
 fn parse_page_reference_line(line: &str) -> Option<PageReference> {
     if !line.contains("Page") && !line.contains("page") {
         return None;
@@ -1454,6 +1463,7 @@ impl NodeLogic for ExtractContentSectionsNode {
             "Intelligently segments document into thematic sections with summaries, tracking content across non-contiguous pages. Ideal for large document corpora.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractContentSections");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
 
@@ -1666,6 +1676,7 @@ Extract specific, domain-relevant keywords that would help identify this content
     }
 }
 
+#[cfg(feature = "execute")]
 fn parse_sections_response(response: &str) -> Vec<ContentSection> {
     let mut sections = Vec::new();
     let section_pattern = regex::Regex::new(r"===SECTION===(.*?)===END_SECTION===").ok();
@@ -1689,6 +1700,7 @@ fn parse_sections_response(response: &str) -> Vec<ContentSection> {
     sections
 }
 
+#[cfg(feature = "execute")]
 fn parse_single_section(content: &str) -> Option<ContentSection> {
     let mut title = String::new();
     let mut summary = String::new();

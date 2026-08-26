@@ -42,7 +42,7 @@ describe("iOS safe-area contract", () => {
 	});
 
 	it("reads real UIKit insets natively instead of only re-probing env()", () => {
-		const lib = read("../../src-tauri/src/lib.rs");
+		const lib = read("../../src-tauri/src/application.rs");
 
 		expect(lib).toContain("safeAreaInsets");
 		expect(lib).toMatch(/fn probe_ios_native_insets/);

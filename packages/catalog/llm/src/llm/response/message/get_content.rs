@@ -30,6 +30,8 @@ impl NodeLogic for GetContentNode {
             "Extracts the text content field from a response message",
             "AI/Generative/Response/Message",
         );
+        node.set_flowscript_name("ai.response", "getContent");
+        node.set_receiver("message");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(2);
         node.set_scores(

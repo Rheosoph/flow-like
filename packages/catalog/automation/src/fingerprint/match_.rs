@@ -26,6 +26,7 @@ impl NodeLogic for CreateMatchOptionsNode {
             "Creates fingerprint matching options",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "matchOptions");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -136,6 +137,8 @@ impl NodeLogic for CompareFingerprintsNode {
             "Compares two fingerprints and calculates similarity",
             "Automation/Fingerprint",
         );
+        node.set_flowscript_name("automation.fingerprint", "compare");
+        node.set_receiver("fingerprint_a");
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

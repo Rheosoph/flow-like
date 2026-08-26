@@ -30,6 +30,7 @@ impl NodeLogic for GetElementValue {
             "Gets the value of an input element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "getElementValue");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

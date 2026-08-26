@@ -42,6 +42,8 @@ impl NodeLogic for UdpReceiveNode {
              or the timeout expires, then fires on_close.",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "receive");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

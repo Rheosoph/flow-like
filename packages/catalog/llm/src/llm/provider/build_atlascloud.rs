@@ -34,6 +34,7 @@ impl NodeLogic for BuildAtlasCloudNode {
             "Builds a model served by Atlas Cloud, a full-modal AI inference platform exposing a single OpenAI-compatible API (DeepSeek, Qwen, GLM, Kimi, MiniMax and more)",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "atlascloud");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(1);
 

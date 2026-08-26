@@ -26,6 +26,7 @@ impl NodeLogic for LoopNode {
             "Loops over an Array",
             "Control",
         );
+        node.set_flowscript_name("control", "forEach");
         node.add_icon("/flow/icons/for-each.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

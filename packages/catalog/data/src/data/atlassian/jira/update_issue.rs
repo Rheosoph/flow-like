@@ -27,6 +27,7 @@ impl NodeLogic for UpdateJiraIssueNode {
             "Update an existing Jira issue's fields",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "updateIssue");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

@@ -33,6 +33,7 @@ impl NodeLogic for PdfToImagesNode {
             "Render every PDF page as an ordered image array",
             "Image/PDF",
         );
+        node.set_flowscript_name("pdf", "toImages");
         node.set_version(2);
         node.add_icon("/flow/icons/image.svg");
 

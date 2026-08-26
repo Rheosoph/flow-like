@@ -26,6 +26,7 @@ impl NodeLogic for MakeArrayNode {
             "Creates an empty array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "make");
 
         node.add_icon("/flow/icons/grip.svg");
 

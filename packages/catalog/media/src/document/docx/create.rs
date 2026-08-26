@@ -32,6 +32,7 @@ impl NodeLogic for DocxCreateNode {
             "Create an empty DOCX with Flow Like branded theme (styled headings, Calibri font, modern spacing)",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "create");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

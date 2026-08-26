@@ -9,9 +9,11 @@
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array2_f64};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -20,11 +22,12 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -70,6 +73,7 @@ impl NodeLogic for FitGaussianMixtureNode {
             "Fit/Train a Gaussian Mixture Model. Soft clustering with per-component covariances and mixture weights, fitted by Expectation-Maximization.",
             "AI/ML/Clustering",
         );
+        node.set_flowscript_name("ml", "fitGaussianMixture");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -418,7 +422,6 @@ impl NodeLogic for FitGaussianMixtureNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

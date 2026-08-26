@@ -29,6 +29,7 @@ impl NodeLogic for RandomBoolNode {
             "Generates a random boolean value",
             "Utils/Bool",
         );
+        node.set_flowscript_name("bool", "random");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin(

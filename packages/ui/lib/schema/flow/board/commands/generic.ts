@@ -48,6 +48,8 @@ export interface IComment {
 	coordinates: number[];
 	id: string;
 	timestamp: ISystemTime;
+	/** Board node this comment is attached to (presentation only — may dangle if the node is deleted; missing node = unanchored). */
+	node_id?: null | string;
 	[property: string]: any;
 }
 
@@ -82,6 +84,12 @@ export interface INode {
 	version?: number | null;
 	/** WASM metadata for external nodes. Undefined for built-in catalog nodes. */
 	wasm?: INodeWasm | null;
+	/** FlowScript namespace path (`string`, `http`, `utils.markdown`). Presentation only. */
+	namespace?: null | string;
+	/** FlowScript member name inside `namespace` (`trim`, `fetch`). Presentation only. */
+	alias?: null | string;
+	/** Data input pin that receives the value in method form; `""` = static only. */
+	receiver?: null | string;
 	[property: string]: any;
 }
 

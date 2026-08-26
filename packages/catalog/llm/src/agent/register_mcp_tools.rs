@@ -11,7 +11,9 @@ use flow_like::flow::{
     pin::{PinOptions, PinType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json, json::from_slice};
+#[cfg(feature = "execute")]
+use flow_like_types::json::from_slice;
+use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
 use rmcp::{
     ServiceExt,
@@ -105,12 +107,14 @@ impl NodeLogic for RegisterMcpToolsNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn read_pin_string(node: &Node, pin_name: &str) -> Option<String> {
     let pin = node.get_pin_by_name(pin_name)?;
     let raw = pin.default_value.as_ref()?;
     from_slice::<String>(raw).ok()
 }
 
+#[cfg(feature = "execute")]
 fn sanitize_pin_identifier(input: &str) -> String {
     let mut sanitized = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -154,6 +158,8 @@ fn base_node() -> Node {
         "Adds Model Context Protocol (MCP) server tools to an Agent",
         "AI/Agents/Builder",
     );
+    node.set_flowscript_name("agent", "registerMcpTools");
+    node.set_receiver("agent_in");
     node.add_icon("/flow/icons/bot-invoke.svg");
     node.set_scores(
         NodeScores::new()
@@ -215,6 +221,7 @@ fn add_agent_out_pin(node: &mut Node) {
     .set_options(PinOptions::new().set_enforce_schema(true).build());
 }
 
+#[cfg(feature = "execute")]
 fn is_manual_mode(value: &str) -> bool {
     value.eq_ignore_ascii_case("Manual")
 }

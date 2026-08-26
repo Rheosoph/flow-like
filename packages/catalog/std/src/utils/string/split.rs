@@ -27,6 +27,8 @@ impl NodeLogic for StringSplitNode {
             "Splits a string into substrings",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "split");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/split.svg");
         node.set_version(1);
         node.set_scores(pure_scores());

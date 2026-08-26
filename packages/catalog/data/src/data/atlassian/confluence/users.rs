@@ -29,6 +29,7 @@ impl NodeLogic for SearchUsersNode {
             "Search for users in Confluence",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "searchUsers");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -209,6 +210,7 @@ impl NodeLogic for GetCurrentUserNode {
             "Get the profile of the currently authenticated user",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getCurrentUser");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

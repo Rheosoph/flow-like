@@ -26,6 +26,8 @@ impl NodeLogic for PushArrayNode {
             "Push an item into your Array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "push");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

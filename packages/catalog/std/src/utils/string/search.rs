@@ -72,6 +72,8 @@ impl NodeLogic for StringIndexOfNode {
             "Finds the character index of the first occurrence of a substring",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "indexOf");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -138,6 +140,8 @@ impl NodeLogic for StringLastIndexOfNode {
             "Finds the character index of the last occurrence of a substring",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "lastIndexOf");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -204,6 +208,8 @@ impl NodeLogic for StringCountMatchesNode {
             "Counts non-overlapping occurrences of a substring",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "countMatches");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -270,6 +276,8 @@ impl NodeLogic for StringContainsAnyNode {
             "Checks whether a string contains any of the given substrings",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "containsAny");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 
@@ -339,6 +347,8 @@ impl NodeLogic for StringStartsWithAnyNode {
             "Checks whether a string starts with any of the given prefixes",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "startsWithAny");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/text-search.svg");
         node.set_scores(pure_scores());
 

@@ -32,6 +32,8 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
             "Adds a connected app's MCP event as agent tools. Uses a short-lived app-to-app token (valid ~15 minutes) that is refreshed on every run.",
             "AI/Agents/Builder",
         );
+        node.set_flowscript_name("agent", "registerRemoteMcpTools");
+        node.set_receiver("agent_in");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(2);
         node.set_scores(

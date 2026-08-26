@@ -300,6 +300,7 @@ impl NodeLogic for CreateGoogleDriveFolderNode {
             "Create a new folder in Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "createFolder");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -430,6 +431,7 @@ impl NodeLogic for DeleteGoogleDriveFileNode {
             "Delete a file or folder from Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "deleteFile");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -521,6 +523,7 @@ impl NodeLogic for CopyGoogleDriveFileNode {
             "Copy a file in Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "copyFile");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -661,6 +664,7 @@ impl NodeLogic for MoveGoogleDriveFileNode {
             "Move a file to a different folder in Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "moveFile");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -805,6 +809,7 @@ impl NodeLogic for SearchGoogleDriveNode {
             "Search for files in Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "search");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -921,6 +926,7 @@ impl NodeLogic for GetGoogleDriveFileMetadataNode {
             "Get detailed metadata for a Google Drive file",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "getMetadata");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1022,6 +1028,7 @@ impl NodeLogic for UploadGoogleDriveFileNode {
             "Upload a FlowPath file to Google Drive",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "upload");
         node.add_icon("/flow/icons/google.svg");
         node.set_version(1);
 
@@ -1183,6 +1190,7 @@ impl NodeLogic for DownloadGoogleDriveFileNode {
             "Download a Google Drive file into a FlowPath",
             "Data/Google/Drive",
         );
+        node.set_flowscript_name("google.drive", "download");
         node.add_icon("/flow/icons/google.svg");
         node.set_version(2);
 

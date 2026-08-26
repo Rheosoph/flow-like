@@ -19,6 +19,7 @@ impl NodeLogic for AnalyzeAudioNode {
             "Decode audio and report waveform, peak/RMS, and silence ranges",
             "Audio",
         );
+        node.set_flowscript_name("audio", "analyze");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source audio/media FlowPath");

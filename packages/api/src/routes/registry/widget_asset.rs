@@ -16,7 +16,7 @@ use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use flow_like_wasm::widget_bundle::WidgetBundleReader;
+use flow_like_wasm_schema::widget_bundle::WidgetBundleReader;
 use sea_orm::EntityTrait;
 
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";

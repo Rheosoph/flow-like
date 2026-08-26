@@ -24,6 +24,7 @@ impl NodeLogic for ProgressNode {
             "Shows a progress toast to the user that can be updated",
             "Logging",
         );
+        node.set_flowscript_name("log", "progress");
         node.add_icon("/flow/icons/log-progress.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);
@@ -109,6 +110,7 @@ impl NodeLogic for ProgressDoneNode {
             "Completes a progress toast with a success or error state",
             "Logging",
         );
+        node.set_flowscript_name("log", "progressDone");
         node.add_icon("/flow/icons/log-progress-done.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

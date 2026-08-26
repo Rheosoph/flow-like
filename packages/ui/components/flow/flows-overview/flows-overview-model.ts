@@ -152,6 +152,7 @@ export function buildFlowRow(
 			[ILayerType.Collapsed]: metrics?.layerCounts.collapsed ?? 0,
 			[ILayerType.Function]: metrics?.layerCounts.function ?? 0,
 			[ILayerType.Macro]: metrics?.layerCounts.macro ?? 0,
+			[ILayerType.Module]: metrics?.layerCounts.module ?? 0,
 			total: metrics?.layerCounts.total ?? board.layerCount,
 		} as ILayerCounts,
 		nodeTotal: metrics?.totalNodeCount ?? board.nodeCount,

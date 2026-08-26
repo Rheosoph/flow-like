@@ -130,6 +130,7 @@ impl NodeLogic for GenericEventNode {
             "A generic event without input or output",
             "Events",
         );
+        node.set_flowscript_name("events", "generic");
         node.add_icon("/flow/icons/event.svg");
         node.set_start(true);
         node.set_can_be_referenced_by_fns(true);

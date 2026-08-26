@@ -25,6 +25,8 @@ impl NodeLogic for StringReplaceNode {
             "Replaces occurrences of a substring or regex pattern within a string.",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "replace");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
         node.set_version(1);
 

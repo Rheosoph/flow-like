@@ -26,6 +26,8 @@ impl NodeLogic for FindItemInArrayNode {
             "Finds the index of an item in an array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "indexOf");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

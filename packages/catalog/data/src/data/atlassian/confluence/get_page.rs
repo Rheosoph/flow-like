@@ -27,6 +27,7 @@ impl NodeLogic for GetConfluencePageNode {
             "Get a Confluence page by its ID",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getPage");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

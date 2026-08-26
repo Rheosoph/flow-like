@@ -6,7 +6,9 @@ use flow_like::flow::execution::context::ExecutionContext;
 use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, async_trait, json::json, reqwest};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(feature = "execute")]
 use flow_like::credentials::SharedCredentials;
+#[cfg(feature = "execute")]
 use flow_like_storage::lancedb::Connection;
 use flow_like_types::Cacheable;
 
@@ -22,23 +24,27 @@ struct AppConnectionTokenResponse {
     expires_at: i64,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Debug, flow_like_types::json::Deserialize)]
 struct PresignProjectDbResponse {
     shared_credentials: Value,
     expiration: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 struct CachedRemoteProjectConnection {
     connection: Arc<flow_like_types::tokio::sync::Mutex<Option<RemoteProjectConnectionCacheEntry>>>,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 struct RemoteProjectConnectionCacheEntry {
     connection: Connection,
     refresh_at: std::time::Instant,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedRemoteProjectConnection {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -64,11 +70,13 @@ impl Cacheable for CachedRemoteAppSession {
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 #[derive(Clone)]
 struct CachedRemoteOntologyAuthorization {
     authorized: Arc<flow_like_types::tokio::sync::OnceCell<()>>,
 }
 
+#[cfg(any(feature = "execute", test))]
 impl Cacheable for CachedRemoteOntologyAuthorization {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -366,6 +374,7 @@ async fn remote_app_session_cached(
 /// Rechecks the source project's live exposure decision once per ontology and
 /// run. Installed snapshots remain stable contracts, but exposure revocation
 /// takes effect for every new run without adding a request per node.
+#[cfg(any(feature = "execute", test))]
 fn remote_ontology_authorization_cache_key(
     target_app_id: &str,
     ontology_id: &str,
@@ -377,6 +386,7 @@ fn remote_ontology_authorization_cache_key(
     format!("remote::ontology-auth::{target_app_id}::{ontology_id}::{revision_key}")
 }
 
+#[cfg(feature = "execute")]
 pub(crate) async fn ensure_remote_ontology_exposed(
     context: &ExecutionContext,
     target_app_id: &str,
@@ -548,6 +558,7 @@ impl RemoteAppSession {
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 fn remote_connection_refresh_at(
     expiration: Option<chrono::DateTime<chrono::Utc>>,
     requested_at: std::time::Instant,
@@ -577,6 +588,7 @@ fn remote_connection_refresh_at(
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 fn ensure_remote_connection_fresh(refresh_at: std::time::Instant) -> flow_like_types::Result<()> {
     if refresh_at <= std::time::Instant::now() {
         return Err(flow_like_types::anyhow!(
@@ -586,6 +598,7 @@ fn ensure_remote_connection_fresh(refresh_at: std::time::Instant) -> flow_like_t
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 pub(crate) struct RemoteProjectDatabaseLease {
     pub connection: Connection,
@@ -596,6 +609,7 @@ pub(crate) struct RemoteProjectDatabaseLease {
 /// Connections remain cached while their credentials are fresh and are rebuilt
 /// one minute before the API-reported expiration, avoiding both per-node setup
 /// cost and stale credentials in long-running workflows.
+#[cfg(feature = "execute")]
 pub(crate) async fn open_remote_project_database(
     context: &ExecutionContext,
     target_app_id: &str,
@@ -609,6 +623,7 @@ pub(crate) async fn open_remote_project_database(
     )
 }
 
+#[cfg(feature = "execute")]
 pub(crate) async fn open_remote_project_database_lease(
     context: &ExecutionContext,
     target_app_id: &str,

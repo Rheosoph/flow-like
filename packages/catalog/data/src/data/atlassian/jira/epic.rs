@@ -29,6 +29,7 @@ impl NodeLogic for LinkToEpicNode {
             "Link an issue to an epic (adds issue to epic's child issues)",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "linkToEpic");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -189,6 +190,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             "Remove an issue from its epic",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "unlinkFromEpic");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -334,6 +336,7 @@ impl NodeLogic for GetEpicIssuesNode {
             "Get all issues linked to an epic",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getEpicIssues");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

@@ -78,6 +78,7 @@ impl NodeLogic for RocAucNode {
             "Threshold-free evaluation of a binary classifier: area under the ROC curve, log loss and the curve points. This is the payoff for Logistic Regression producing calibrated probabilities instead of bare class labels.",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "rocAuc");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

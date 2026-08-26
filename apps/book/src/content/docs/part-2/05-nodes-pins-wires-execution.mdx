@@ -1,0 +1,317 @@
+---
+title: "5. Nodes, Pins, Wires, and Execution"
+description: Learn how Flow-Like separates typed data flow from execution order, evaluates pure nodes on demand, and represents sequence, parallelism, and layers.
+seo:
+  title: "How Flow-Like FlowScript Executes: Nodes, Pins, Wires & Layers"
+  topics:
+    - workflow execution
+    - "nodes, pins, and wires"
+    - data flow
+    - execution flow
+    - demand-driven evaluation
+sidebar:
+  order: 5
+  badge:
+    text: Draft
+    variant: caution
+---
+
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import triageBranch from '../../../assets/workflows/incident-triage--focus-branch.webp';
+import triageContains from '../../../assets/workflows/incident-triage--focus-contains.webp';
+import workflowParallel from '../../../assets/workflows/workflow-parallel.webp';
+import workflowSequence from '../../../assets/workflows/workflow-sequence.webp';
+import workflowStructure from '../../../assets/workflows/workflow-structure.webp';
+
+The Incident Triage Flow carries data from Trim String through Contains into Branch. A separate
+execution path starts at the event and reaches one logging node. One path supplies the decision;
+the other decides what runs next.
+
+This separation underpins Flow-Like's execution model. FlowScript expressions describe
+value-producing nodes, while statements and control blocks describe execution wiring. When a
+Flow surprises us, trace execution forward and data backward.
+
+> **Release check:** The static contracts in this chapter are verified against the current Board,
+> node, pin, FlowScript reconciliation, and Rust executor implementations. Before publication,
+> capture the exact pin shapes, wire styles, **Handle Errors** gesture, Sequence behavior, and
+> Parallel Execution behavior in the release used for publication. Configured defaults persist;
+> runtime pin values are deliberately transient.
+
+## 5.1 A node is a typed operation
+
+A node is the smallest named operation shared by Flow-Like's authoring tools and runtime.
+
+For an author, a node might trim a string, send a request, write a record, call a model, or choose
+an execution path. In FlowScript, using one often looks like a normal function or method call:
+
+```flow
+const normalized = report.trim()
+```
+
+That spelling still resolves to a catalog node. Open the Flow in Studio and the canvas shows the
+operation, its pins, and its place in the Flow.
+
+Its catalog identity carries a contract. A node can declare:
+
+- a machine-readable type name and a human-readable name, description, category, icon, and
+  documentation;
+- typed input and output pins, including defaults, schemas, and constraints;
+- whether it takes part in execution or only produces values;
+- schema/migration version and environment restrictions;
+- OAuth requirements and, for external WASM nodes, requested capabilities; and
+- optional privacy, security, performance, governance, reliability, and cost signals.
+
+Nodes may omit some metadata, and metadata cannot prove an implementation correct. It still gives
+the platform a surface to inspect before execution and an identity for later run evidence. Custom
+WASM nodes, for example, request specific capabilities such as networking, storage, model access,
+or function calls. Later chapters examine how each execution mode enforces them.
+
+A domain expert can point to a business step by name. Developers see the same identity in its
+contract, and operators see it again in the run log.
+
+Two terms need precise definitions. *Standard* refers to catalog classification, not whether a
+node is built in. A *pure* node has no Execution pins. A node with any Execution pin is impure,
+regardless of its size or source package.
+
+## 5.2 Data pins carry values
+
+Pins are a node's public boundary. An input pin states what the operation accepts. An output pin
+states what it produces. A data wire connects an output to a compatible input and answers one
+question:
+
+> Where will this input get its value?
+
+Direction is part of the contract. Two pins labeled `Message` are incompatible if both accept or
+both produce a value. Studio rejects those connections, along with self-connections.
+
+The graph model also distinguishes strings, integers, floats, booleans, dates, paths, bytes,
+structured values, generic values, and Execution. Value shape separates scalars from arrays,
+maps, and sets. Structured pins can carry a schema with known fields.
+
+Our first Flow already used this system:
+
+<WorkflowFigure
+  src={triageContains}
+  alt="Trim String and Contains nodes with data outputs fanning toward Branch and off-frame consumers."
+  caption="The Studio canvas exposes direction, type, and fan-out at the pins. Pink dotted wires carry strings; the darker Boolean output supplies Branch.Condition."
+/>
+
+Contains can feed Branch because both pins use one Boolean. Wiring that output to a String input
+fails during authoring, exposing the type error before a production run.
+
+Generic pins provide controlled flexibility. A generic formatter may accept several concrete
+types. Once a wire resolves that generic, connected pins must remain compatible with the resolved
+contract. Type inference still enforces the resulting type.
+
+Pins may also define choices, numeric ranges, sensitive literals, or schema rules. Studio uses
+this metadata to build the appropriate editor.
+
+An input can receive its value in two ways:
+
+1. A data wire supplies it from an upstream output.
+2. With no upstream source, the node uses a configured default when its contract provides one.
+
+Execution can therefore reach a node with no wire on one input. The node uses its default if the
+contract provides one; otherwise evaluation may fail there. Data wires do not schedule nodes.
+
+The Board persists definitions, connections, and configured defaults. Values evaluated during a
+run live in memory and are excluded from pin serialization. A node may log selected evidence, but
+persisting every value would be costly and could copy sensitive data into logs. Evidence belongs
+to the node contract and the organization's policy.
+
+For debugging, the practical rule is to work backward. Begin at a surprising input and follow its
+data wire to the producer. Repeat until the first surprising value or missing source appears.
+Looking only at the execution path cannot answer where the value came from.
+
+## 5.3 Execution pins carry order
+
+Execution pins determine when control may proceed. Application data travels on data pins.
+
+An execution input asks what must activate before the node runs. An execution output selects the
+path eligible after completion or an outcome. The Studio canvas currently draws these as diamond
+pins. Color and styling may change; the Execution type defines their behavior.
+
+Return to the Incident Triage Flow:
+
+<WorkflowFigure
+  src={triageBranch}
+  alt="Branch node with its True execution path connected to Log Error and its False path connected to Print Info."
+  caption="The solid execution path reaches exactly one logging node; the dotted data wires only supply values."
+/>
+
+The event starts control. Branch evaluates its Boolean input and activates one execution output.
+The selected logger runs when control reaches it; a populated Message input alone cannot start it.
+
+FlowScript renders this part of the Flow as familiar control flow:
+
+```flow
+if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
+    error({ message: normalized, toast: false })
+} else {
+    info({ message: normalized, toast: false })
+}
+```
+
+The `if` represents the Branch node and its True and False execution outputs. Statements in each
+block are the impure nodes wired to that output.
+
+Ordinary consecutive impure statements similarly represent an execution chain. Their order in
+source is meaningful because their side effects are meaningful. Sending a message before creating
+its recipient, charging a customer before validating an order, or writing a completion record
+before the work finishes are different programs even if every data value is available.
+
+A failed impure node normally stops its forward path. Its ordinary successors are not queued, and
+the run records the failed node. Recoverable failure stays visible on the Board.
+
+Some nodes define outcome paths. The current API Call node exposes Success and Error outputs. A
+completed HTTP exchange selects one based on status and keeps the response as data. A transport
+failure produces a node error instead of a completed response outcome.
+
+For an unexpected error on any executable node, including one with a normal Error outcome, the
+current Studio toolbar can enable **Handle Errors**. It adds an **On Error** execution output and
+an Error string output. A connected handler runs after failure. The original node stays in Error
+state and retains its attributed evidence, even when handling prevents the error from unwinding
+the run.
+
+The Flow author can route expected failures into a retry, fallback, ticket, or human review. The
+organization's policy determines whether the Flow recovers or stops.
+
+## 5.4 Pure work is demand-driven
+
+A pure node has data pins and no Execution pins. It does not occupy a place on the control path.
+Instead, a consumer pulls its output when that output is needed.
+
+In our first Flow, Branch needs its Condition. To obtain it, the executor follows the data
+dependency to Contains. Contains in turn needs the normalized report, so the executor follows the
+next dependency to Trim String. The canvas records that backward chain of demand:
+
+<WorkflowFigure
+  src={triageContains}
+  alt="Focused pure-data chain from Trim String through Contains to the Branch condition."
+  caption="When Branch asks for its condition, the runtime pulls the visible pure-data dependencies backward from Contains to Trim String."
+/>
+
+The result then travels to the consumer without execution wires. An unconsumed pure chain does
+not run merely because an event started. Producers do not fire their consumers; executing nodes
+pull the values they need. A pure node may be evaluated zero, one, or several times depending on
+its consumers and execution contexts. Work that must happen once, costs money, or changes an
+external system belongs on an explicit execution path.
+
+The runtime detects purity structurally: any Execution pin makes a node impure. Node authors must
+declare that boundary honestly. Giving a network call only data pins would conceal cost and
+failure behind demand-driven evaluation. Declared WASM capabilities add enforcement, though pin
+shape alone cannot prove referential transparency.
+
+A useful design test is:
+
+> Would it be harmless if this operation were evaluated zero times or more than once?
+
+Trimming, comparing, selecting a field, and formatting a value usually pass. Sending, charging,
+mutating, calling a paid model, or asking an unreliable external system usually fail. Put the
+latter group on the execution path, where order and failure remain visible.
+
+When debugging, use two passes:
+
+1. Follow execution forward from the event and ask whether control could reach the node.
+2. Follow data backward from the surprising input and ask whether its value could be produced.
+
+Do not change wires until you know which story is broken.
+
+## 5.5 Explicit sequence and explicit parallelism
+
+Canvas position helps readers but cannot schedule work. Execution pins and control nodes define
+order and concurrency.
+
+For ordinary sequential work, draw one unbroken execution chain:
+
+<WorkflowFigure
+  src={workflowSequence}
+  alt="Process Record event connected in sequence to Call validate, Call writeRecord, and Call sendConfirmation."
+  caption="Consecutive impure FlowScript calls reconcile into one explicit execution chain."
+/>
+
+In FlowScript, consecutive impure statements express the same intent. Each operation receives
+control only after the preceding operation's selected continuation is reached.
+
+For several ordered branches, use a Sequence control node. Its outputs own the ordering contract.
+
+For concurrent work, use an operation whose contract says *parallel*. The current Parallel
+Execution node exposes repeatable task outputs and a Done continuation. It starts the connected
+branches as bounded asynchronous tasks by default, waits for them, and activates Done afterward.
+Its optional thread mode uses a multi-thread runtime when available and otherwise logs a warning
+and falls back to task mode. Parallel For Each provides the loop equivalent, including a maximum
+concurrency input; FlowScript can render its supported form with `@parallel`.
+
+Task paths do not wire back into Done. Parallel activates that continuation after its branches
+settle. This example wires one task arm and Done; Studio can add branches through the repeatable
+output control:
+
+<WorkflowFigure
+  src={workflowParallel}
+  alt="Refresh Views event entering Parallel Execution, with one task arm calling updateSearchIndex and Done calling continueAfterTasks."
+  caption="The task tail remains separate from Done. The plus control adds repeatable task outputs on the Board; Done proceeds only after all connected task branches settle."
+/>
+
+Branches may finish in any order. Avoid races on shared mutable state, and ensure external effects
+can tolerate that ordering.
+
+Ordinary topology fan-out isolates ready siblings. One failed branch stops its successors while
+other ready targets continue, bounded by executor capacity. After the siblings settle, an
+unhandled failure makes the run's terminal status **Failed**. A failure that reaches and
+completes an explicit handler remains visible on its node and in attributed logs without failing
+the run.
+
+The dedicated Parallel Execution and Sequence nodes currently differ from that general rule.
+They can record a child error without propagating it to the run's final status, and Parallel
+Execution can still proceed to Done after collecting its children. Inspect child logs instead of
+relying on the outer control node. Test this behavior against the release used by the book.
+
+Sequential paths behave differently, and purpose-built nodes may define their own outcomes. Add
+an explicit join when all work must finish. Model cancellation or compensation explicitly and
+verify the selected nodes in the target release.
+
+During an incident, the pins show what was ordered, what ran concurrently, where branches joined,
+and how failure was routed.
+
+## 5.6 Layers organize; functions are callable
+
+Large Flows need a way to hide detail without hiding behavior.
+
+A layer folds nodes behind a named, typed boundary. Crossing wires become boundary pins. Opening
+the layer reveals the same nodes, dependencies, paths, and comments. Collapsing it changes only
+the view; execution remains the same.
+
+Suppose Incident Triage eventually grows from six nodes to sixty. Normalization might include
+language detection, identifier extraction, enrichment, and validation. We could collapse that
+inline region into a layer named **Prepare Incident**. Before doing so, compare the related function
+form: FlowScript can directly author the same top-level sentence as named callable boundaries.
+
+<WorkflowFigure
+  src={workflowStructure}
+  alt="Receive Incident event passing report data through Call prepareIncident and Call classifyIncident before Call respondToIncident."
+  caption="This is deliberately the function form: three Call nodes carry both the execution chain and typed data across named boundaries."
+/>
+
+Each purple Call node refers to a function layer. Opening `prepareIncident` reveals its maintained
+implementation and signature. Collapsing the same nodes into an ordinary **Prepare Incident**
+layer would organize one inline region without making it reusable. Start and Return boundaries
+show the values and execution paths that cross the edge. Inner failures remain attributed to
+their nodes.
+
+A plain layer organizes one inline Board region. A function layer defines reusable logic. Its
+boundary pins form a signature, and each invocation appears as a Call Function node. FlowScript
+renders that Flow logic with function syntax.
+
+The distinction produces a simple rule:
+
+- Use a layer when one part of the Flow needs a clearer name and a lower level of detail.
+- Use a function when several callers need the same behavior and one maintained contract.
+
+Callable boundaries carry obligations. Pin names must be unique because callers address the
+signature. An impure function needs a single execution entry and a valid continuation so the
+runtime knows where the call begins and how the caller resumes. A genuinely pure function instead
+returns demanded values without pretending to have an execution path.
+
+Name layers and functions after their responsibility, keep boundaries narrow, and review boundary
+changes like API changes. The next chapter shows how FlowScript records these structures in
+one document.
