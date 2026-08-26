@@ -198,6 +198,12 @@ pub async fn apply_flowscript_to_board_file(
         "df_execute_sql",
         "df_write_delta",
         "graph_sql_query",
+        // Case-driven: `control_switch` mints one exec OUTPUT per entry in its `cases` literal.
+        // Without this its arm labels never resolve and no document using a switch can apply.
+        "control_switch",
+        // Schema-driven: one pin per field of the struct schema the call names.
+        "struct_break",
+        "struct_make_from_schema",
         "fit_adaboost",
         "fit_dbscan",
         "fit_decision_tree",

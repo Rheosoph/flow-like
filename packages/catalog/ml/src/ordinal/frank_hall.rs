@@ -11,8 +11,9 @@ use crate::ml::{
     PersistedBoolEnsemble, values_to_array1_ordinal, values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
 #[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -25,7 +26,6 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::{FrankHall, FrankHallParams};
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
@@ -67,11 +67,8 @@ const BASE_LEARNERS: [&str; 3] = [
 /// Every base's pins have distinct names even where the knob is conceptually the same, because
 /// `on_update` only *adds* a missing pin: a shared name would keep the first base's description and
 /// range after the user switches base.
-#[cfg(feature = "execute")]
 const TREE_PINS: [&str; 3] = ["max_depth", "min_samples_split", "split_quality"];
-#[cfg(feature = "execute")]
 const BAYES_PINS: [&str; 1] = ["var_smoothing"];
-#[cfg(feature = "execute")]
 const FOREST_PINS: [&str; 6] = [
     "ensemble_size",
     "bootstrap_proportion",
@@ -211,7 +208,6 @@ fn fit_decomposition(
 }
 
 /// Reads a dropdown pin's selected value during `on_update`, where only default values exist.
-#[cfg(feature = "execute")]
 fn selected_value(node: &Node, name: &str) -> String {
     node.get_pin_by_name(name)
         .and_then(|pin| pin.default_value.clone())
@@ -221,7 +217,6 @@ fn selected_value(node: &Node, name: &str) -> String {
 }
 
 /// Drops the hyperparameter pins of the bases that are not selected.
-#[cfg(feature = "execute")]
 fn remove_pins(node: &mut Node, names: &[&str]) {
     for name in names {
         flow_like::flow::node::remove_pin_by_name(node, name);
@@ -644,7 +639,6 @@ impl NodeLogic for FitOrdinalFrankHallNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

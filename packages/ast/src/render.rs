@@ -136,7 +136,13 @@ impl Writer<'_> {
             }
             UseKind::Members(members) => {
                 self.out.push_str("::{ ");
-                self.out.push_str(&members.join(", "));
+                self.out.push_str(
+                    &members
+                        .iter()
+                        .map(UseMember::render)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
                 self.out.push_str(" }");
             }
         }
@@ -471,12 +477,21 @@ impl Writer<'_> {
             } => {
                 self.indent();
                 self.out.push_str(base);
-                // A bracket-rooted path (`base[0]`) has no separator; a named field (`base.field`)
-                // is dot-joined.
-                if !path.starts_with('[') {
+                // A bracket-rooted path (`base[0]`) has no separator; a plain named field
+                // (`base.field`) is dot-joined. A key that is NOT a plain identifier has to use
+                // the bracket form the READ side already emits (`render_member`) — dot-joining it
+                // produced text like `row.dataset-id = …`, which lexes as `dataset` `-` `id` and
+                // no longer parses, breaking the render -> re-apply round trip.
+                if path.starts_with('[') {
+                    self.out.push_str(path);
+                } else if is_plain_field_path(path) {
                     self.out.push('.');
+                    self.out.push_str(path);
+                } else {
+                    self.out.push('[');
+                    self.out.push_str(&quote_string(path));
+                    self.out.push(']');
                 }
-                self.out.push_str(path);
                 self.out.push_str(" = ");
                 self.out.push_str(&render_expr(value));
                 self.anchor("n", anchor.as_deref());
@@ -798,6 +813,7 @@ pub fn render_interface_type(ty: &InterfaceType) -> String {
             }
         }
         InterfaceType::Map(inner) => format!("Map<string, {}>", render_interface_type(inner)),
+        InterfaceType::Set(inner) => format!("Set<{}>", render_interface_type(inner)),
         InterfaceType::Union(members) => members
             .iter()
             .map(render_interface_type)

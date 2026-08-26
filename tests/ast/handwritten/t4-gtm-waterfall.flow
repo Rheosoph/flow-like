@@ -1,0 +1,463 @@
+use array::{ length, pluck, push, unique }
+use crypto::{ generateKey, xchacha20EncryptValue }
+use data::cache as vault
+use log::{ error, info, warn }
+use string::{ isEmpty, trim }
+
+interface ProspectRow {
+    domain: string;
+    company: string;
+    contact_name: string;
+    title?: string | null = null;
+    industry?: string = "software";
+    employees?: int = 0;
+}
+interface GridPatch {
+    domain: string;
+    email: string;
+    provider: string;
+    confidence: float;
+    fit_score: int;
+    enriched_at: string;
+    notes?: string = "";
+}
+
+@description("Lance table backing the prospect grid")
+@category("GTM/Storage")
+const prospectTable = "gtm_prospects"
+@description("Shared credential the enrichment vendors authenticate with")
+@secret
+const vendorApiKey: string
+@description("CRM contact upsert endpoint the waterfall writes back to")
+@category("GTM/CRM")
+let crmEndpoint = "https://crm.acme.internal/v2/contacts"
+@description("Vendor order the waterfall walks, cheapest provider first")
+@category("GTM/Waterfall")
+let vendorLadder: string[] = ["dropcontact","apollo","clearbit"]
+@description("Socket the grid listens on for live cell updates")
+@category("GTM/Grid")
+let gridSocketUrl = "wss://grid.acme.internal/enrichment"
+
+function normalizeDomain(raw: string): (domain: string) {
+    const lowered = raw.trim().toLower()
+    const { result: bare } = lowered.stripPrefix("www.")
+    return bare
+}
+
+@cache({ namespace: "gtm-icp-segment-v3", ttlSeconds: 21600, scope: "app" })
+function icpSegment(industry: string, employees: int): (segment: string, weight: float) {
+    let segment = "smb"
+    let weight = 0.4
+    if (employees >= 5000) {
+        segment = "enterprise"
+        weight = 1.0
+    } else if (employees >= 250) {
+        segment = "mid-market"
+        weight = 0.7
+    }
+    if (industry == "financial-services") {
+        weight = weight + 0.15
+    }
+    return segment, weight
+}
+
+function qualifiedRows(minEmployees: int, segment: string): (rows: Struct[], rowCount: int) {
+    const session = df::createSession({ sessionName: "gtm-waterfall", targetPartitions: 4 })
+    const grid = db::open({ name: prospectTable, userScoped: false })
+    df::registerLance({ session: session, database: grid, tableName: "prospects" })
+    let bindings = struct::make()
+    bindings.segment = segment
+    bindings.floor = minEmployees
+    const { rows, rowCount } = df::sqlQueryCached({
+        session: session,
+        query: `SELECT domain, company, contact_name, title, industry, employees FROM prospects WHERE email = '' AND segment = $segment AND employees >= $floor ORDER BY employees DESC LIMIT 500`,
+        params: bindings,
+        scope: "app",
+        namespace: "gtm-qualified-rows-v2",
+        ttlSeconds: 900
+    })
+    info({ message: `${rowCount} prospect(s) qualify for the ${segment} waterfall`, toast: false })
+    return rows, rowCount
+}
+
+function scrapeHeadline(domain: string): (headline: string, sourceUrl: string) {
+    const automationSession = automation::startSession({ defaultDelayMs: 250, debugMode: false })
+    const browserSession = browser::open({
+        session: automationSession,
+        browserType: "Chrome",
+        headless: true,
+        viewportWidth: 1440,
+        viewportHeight: 900,
+        pageLoadTimeout: 20
+    })
+    const target = `https://${domain}`
+    const { sessionOut: landed, finalUrl } = browser::goto({ session: browserSession, url: target })
+    const { sessionOut: scraped, text } = browser::getText({ session: landed, selector: "main h1" })
+    browser::close({ session: scraped })
+    automation::stopSession({ session: scraped })
+    const headline = text.trim()
+    return headline, finalUrl
+}
+
+function pushToCrm(patch: Struct): (accepted: bool, statusCode: int) {
+    const request = http::request({ method: "POST", url: crmEndpoint }).setBearerAuth(vendorApiKey).setStructBody(patch)
+    const call = http::fetch({ request: request })
+    call {
+        execSuccess: {
+            info({ message: "CRM accepted the enriched contact", toast: false })
+        }
+        execError: {
+            error({ message: "CRM refused the enriched contact", toast: false })
+        }
+    }
+    const accepted = call.isSuccess()
+    const statusCode = call.status()
+    return accepted, statusCode
+}
+
+function streamGridPatch(patch: Struct) {
+    let socketConfig = struct::make()
+    socketConfig.url = gridSocketUrl
+    socketConfig.timeout_seconds = 30
+    const frame = json::stringify({ value: patch, pretty: false })
+    const socket = websocket::connect({ config: socketConfig })
+    socket {
+        onConnect: {
+            websocket::send({ session: socket, messageType: "text", payload: frame })
+            websocket::close({ session: socket })
+        }
+        onClose: {
+            info({ message: "grid socket closed after the cell update", toast: false })
+        }
+        execError: {
+            warn({ message: "grid socket unavailable; the cell update was dropped", toast: false })
+        }
+    }
+}
+
+function buildScoringAgent(model: Struct, grid: Struct): (scorer: Struct) {
+    const base = agent::fromModel({ model: model, maxIter: 6, contextMode: "summarize", maxContextTokens: 24000 })
+    const briefed = base.setSystemPrompt("Score the B2B prospect for outbound fit and answer with a single integer between 0 and 100.")
+    const scorer = agent::registerFunctionTools({ agentIn: briefed, fnRefs: [accountHistory, similarWins] })
+    eventsGeneric accountHistory(domain: string) {
+        let bindings = struct::make()
+        bindings.domain = domain
+        const rows = db::filter({ database: grid, filter: "domain = $domain", params: bindings, limit: 5 })
+        const stages = array::pluck({ arrayIn: rows, key: "stage", skipMissing: true })
+        const { arrayOut: distinct } = array::unique({ arrayIn: stages })
+        return distinct
+    }
+    eventsGeneric similarWins(segment: string, limit: int) {
+        let bindings = struct::make()
+        bindings.segment = segment
+        const wins = db::filter({
+            database: grid,
+            filter: "segment = $segment AND stage = 'closed-won'",
+            params: bindings,
+            limit: limit
+        })
+        const won = array::length({ array: wins })
+        return won
+    }
+    return scorer
+}
+
+function scoreProspect(scorer: Struct, row: Struct, email: string, headline: string): (fitScore: int, rationale: string) {
+    const company = row.company
+    const contact = row.contact_name
+    const brief = `Company ${company} | contact ${contact} | headline ${headline} | verified address ${email}`
+    const conversation = history::fromString({ modelName: "gpt-5-mini", message: brief })
+    const { response } = agent::invoke({ agent: scorer, history: conversation })
+    const { content } = response.lastContent()
+    const { integer: raw } = content.toInt(0)
+    const fitScore = int::clamp({ integer: raw, min: 0, max: 100 })
+    const rationale = content.ellipsis({ maxLength: 240, ellipsis: "..." })
+    return fitScore, rationale
+}
+
+function operatorIdentity(): (operator: string, mailbox: string) {
+    const provider = linkedin::providerOauth()
+    const { name, email } = linkedin::getMe({ provider: provider })
+    return name, email
+}
+
+module vendors {
+    function creditPrice(vendor: string): (credits: float) {
+        let credits = 1.0
+        if (vendor == "clearbit") {
+            credits = 4.0
+        } else if (vendor == "apollo") {
+            credits = 2.0
+        }
+        return credits
+    }
+
+    function authorized(url: string, apiKey: string): (request: Struct) {
+        const base = http::request({ method: "GET", url: url })
+        const authed = base.setBearerAuth(apiKey).setAccept("application/json")
+        return authed
+    }
+
+    function vendorDomain(row: ProspectRow): (domain: string) {
+        const { value: raw } = struct::get({ struct: row, field: "domain" })
+        const domain = normalizeDomain(raw)
+        return domain
+    }
+
+    module dropcontact {
+        function matchUrl(domain: string, contact: string): (url: string) {
+            const url = `https://api.dropcontact.io/v1/enrich?domain=${domain}&full_name=${contact}`
+            return url
+        }
+
+        function enrich(row: Struct, apiKey: string): (email: string, confidence: float, vendor: string) {
+            const domain = vendors::vendorDomain(row)
+            const contact = row.contact_name
+            const url = matchUrl(domain, contact)
+            const request = vendors::authorized(url, apiKey)
+            const response = http::fetch({ request: request })
+            const body = response.toJson()
+            const email = body.email
+            const confidence = body.qualification
+            return email, confidence, "dropcontact"
+        }
+    }
+
+    module apollo {
+        function matchUrl(domain: string, contact: string): (url: string) {
+            const url = `https://api.apollo.io/v1/people/match?domain=${domain}&name=${contact}`
+            return url
+        }
+
+        function enrich(row: Struct, apiKey: string): (email: string, confidence: float, vendor: string) {
+            const domain = vendors::vendorDomain(row)
+            const contact = row.contact_name
+            const url = matchUrl(domain, contact)
+            const request = vendors::authorized(url, apiKey)
+            const response = http::fetch({ request: request })
+            const body = response.toJson()
+            const email = body.person_email
+            const confidence = body.match_score
+            return email, confidence, "apollo"
+        }
+    }
+
+    module clearbit {
+        function matchUrl(domain: string, contact: string): (url: string) {
+            const url = `https://person.clearbit.com/v2/combined/find?domain=${domain}&given_name=${contact}`
+            return url
+        }
+
+        function enrich(row: Struct, apiKey: string): (email: string, confidence: float, vendor: string) {
+            const domain = vendors::vendorDomain(row)
+            const contact = row.contact_name
+            const url = matchUrl(domain, contact)
+            const request = vendors::authorized(url, apiKey)
+            const response = http::fetch({ request: request })
+            const body = response.toJson()
+            const email = body.person_email
+            const confidence = body.person_confidence
+            return email, confidence, "clearbit"
+        }
+    }
+}
+
+function runWaterfall(row: Struct, apiKey: string): (email: string, vendor: string, confidence: float, attempts: int, credits: float) {
+    const ladderSize = array::length({ array: vendorLadder })
+    let cursor = 0
+    let attempts = 0
+    let stop = false
+    let email = ""
+    let vendor = "none"
+    let confidence = 0.0
+    let credits = 0.0
+    while (!stop) {
+        // BUG: `vendorLadder[cursor]` types as Generic, so `step == "apollo"` is rejected;
+        // `.trim()` re-types the ladder entry as String. See bug-t4-gtm-waterfall-array-index-generic.flow
+        const step = vendorLadder[cursor].trim()
+        let candidate = ""
+        let score = 0.0
+        if (step == "dropcontact") {
+            const { email: dcEmail, confidence: dcScore } = vendors::dropcontact::enrich(row, apiKey)
+            candidate = dcEmail
+            score = dcScore
+        } else if (step == "apollo") {
+            const { email: apEmail, confidence: apScore } = vendors::apollo::enrich(row, apiKey)
+            candidate = apEmail
+            score = apScore
+        } else {
+            const { email: cbEmail, confidence: cbScore } = vendors::clearbit::enrich(row, apiKey)
+            candidate = cbEmail
+            score = cbScore
+        }
+        attempts = attempts + 1
+        credits = credits + vendors::creditPrice(step)
+        control::delay({ time: 0.35 })
+        if (!candidate.isEmpty({ ignoreWhitespace: true })) {
+            email = candidate
+            vendor = step
+            confidence = score
+            stop = true
+        }
+        cursor = cursor + 1
+        if (cursor >= ladderSize) {
+            stop = true
+        }
+    }
+    return email, vendor, confidence, attempts, credits
+}
+
+function enrichRow(scorer: Struct, grid: Struct, sealKey: bytes[], row: Struct, stamp: string): (email: string) {
+    const { email, vendor, confidence, attempts, credits } = runWaterfall(row, vendorApiKey)
+    const industry = row.industry
+    const employees = row.employees
+    const domain = row.domain
+    const { segment, weight } = icpSegment(industry, employees)
+    const { headline } = scrapeHeadline(domain)
+    const { fitScore, rationale } = scoreProspect(scorer, row, email, headline)
+    const budget = math::eval({ expression: `${credits} * ${weight}` })
+    let patch = struct::make()
+    patch.domain = domain
+    patch.email = email
+    patch.provider = vendor
+    patch.confidence = confidence
+    patch.fit_score = fitScore
+    patch.enriched_at = stamp
+    patch.notes = `${segment} | ${attempts} vendor call(s) | ${budget} weighted credit(s) | ${rationale}`
+    db::upsert({ database: grid, idRow: "domain", value: patch })
+    const sealed = xchacha20EncryptValue({ key: sealKey, value: patch })
+    const runCache = vault::open({ scope: "app", namespace: "gtm-waterfall-runs-v1" })
+    runCache.write({ key: domain, value: sealed, ttlSeconds: 604800 })
+    streamGridPatch(patch)
+    const { accepted, statusCode } = pushToCrm(patch)
+    if (!accepted) {
+        warn({ message: `CRM rejected ${domain} with ${statusCode}`, toast: false })
+    }
+    return email
+}
+
+function sweepNightly(segment: string, minEmployees: int): (processed: int, elapsed: string) {
+    const startedAt = datetime::now()
+    const stamp = startedAt.format({ format: "%Y-%m-%dT%H:%M:%SZ" })
+    const { rows, rowCount } = qualifiedRows(minEmployees, segment)
+    const grid = db::open({ name: prospectTable, userScoped: false })
+    const preferences = ai::preferences::make({ multimodal: false })
+    const model = ai::findModel({ preferences: preferences })
+    const scorer = buildScoringAgent(model, grid)
+    const sealKey = generateKey()
+    @parallel
+    for (const row of rows) {
+        const resolved = enrichRow(scorer, grid, sealKey, row, stamp)
+        info({ message: `enriched ${resolved}`, toast: false })
+    }
+    const finishedAt = datetime::now()
+    const { humanReadable } = startedAt.diff({ end: finishedAt })
+    return rowCount, humanReadable
+}
+
+function intakeProspect(domain: string, company: string, contactName: string): (email: string, vendor: string) {
+    const grid = db::open({ name: prospectTable, userScoped: false })
+    const normalized = normalizeDomain(domain)
+    let bindings = struct::make()
+    bindings.domain = normalized
+    const known = db::count({ database: grid, filter: "domain = $domain", params: bindings })
+    const receivedAt = datetime::now()
+    const stamp = receivedAt.format({ format: "%Y-%m-%dT%H:%M:%SZ" })
+    let intake = struct::make()
+    intake.domain = normalized
+    intake.company = company.trim()
+    intake.contact_name = contactName.trim()
+    intake.email = ""
+    intake.source = "inbound-webhook"
+    intake.received_at = stamp
+    if (known > 0) {
+        warn({ message: `${normalized} already sits in the grid; refreshing instead of inserting`, toast: false })
+    } else {
+        db::insertOne({ database: grid, value: intake })
+    }
+    const { email, vendor, attempts } = runWaterfall(intake, vendorApiKey)
+    intake.email = email
+    intake.provider = vendor
+    db::upsert({ database: grid, idRow: "domain", value: intake })
+    info({ message: `${normalized} resolved to ${email} via ${vendor} in ${attempts} call(s)`, toast: false })
+    return email, vendor
+}
+
+function importWorkbookSheet(workbook: Struct, sheet: string): (staged: int, distinctDomains: int) {
+    const { sheetNames, count } = excel::getSheetNames({ file: workbook })
+    const sheetList = sheetNames.join({ separator: ", " })
+    info({ message: `workbook carries ${count} sheet(s): ${sheetList}`, toast: false })
+    const tables = excel::extractTables({ file: workbook, sheet: sheet })
+    const grid = db::open({ name: prospectTable, userScoped: false })
+    let rows = array::make()
+    for (const [index, table] of tables) {
+        const { row: header, actualRowIndex } = excel::getRowByIndex({ table: table, rowIndex: 1 })
+        const { value: owner } = excel::readCell({ file: workbook, sheet: sheet, row: "1", col: "H" })
+        const rawDomain = header.domain
+        let record = struct::make()
+        record.domain = normalizeDomain(rawDomain)
+        record.company = header.company
+        record.contact_name = header.contact_name
+        record.owner = owner
+        record.source = `workbook:${sheet}:${index}:${actualRowIndex}`
+        rows = array::push({ arrayIn: rows, value: record })
+    }
+    const domains = array::pluck({ arrayIn: rows, key: "domain", skipMissing: true })
+    const { arrayOut: distinct } = array::unique({ arrayIn: domains })
+    db::batchUpsert({ database: grid, idRow: "domain", value: rows })
+    const staged = array::length({ array: rows })
+    const distinctDomains = array::length({ array: distinct })
+    info({ message: `staged ${staged} row(s) over ${distinctDomains} distinct domain(s)`, toast: false })
+    return staged, distinctDomains
+}
+
+function rerunCell(domain: string): (summary: string) {
+    const grid = db::open({ name: prospectTable, userScoped: false })
+    let bindings = struct::make()
+    bindings.domain = domain
+    const matches = db::filter({ database: grid, filter: "domain = $domain", params: bindings, limit: 1 })
+    const row = matches[0]
+    const { operator, mailbox } = operatorIdentity()
+    const { email, vendor, confidence, attempts } = runWaterfall(row, vendorApiKey)
+    const summary = `${email} via ${vendor} (${confidence}) after ${attempts} call(s), rerun by ${operator} <${mailbox}>`
+    return summary
+}
+
+detached {
+    const legacyRequest = http::request({ method: "GET", url: "https://api.hunter.io/v2/email-finder" })
+    const legacyAuthed = legacyRequest.setBearerAuth(vendorApiKey).setAccept("application/json")
+    const legacyResponse = http::fetch({ request: legacyAuthed })
+    const legacyBody = legacyResponse.toJson()
+    const legacyPush = http::request({ method: "POST", url: crmEndpoint }).setStructBody(legacyBody)
+    http::fetch({ request: legacyPush })
+    warn({ message: "retired hunter.io single-vendor path", toast: false })
+}
+
+eventsSimple nightlyWaterfallSweep() {
+    const { processed, elapsed } = sweepNightly("mid-market", 25)
+    info({ message: `nightly waterfall enriched ${processed} prospect(s) in ${elapsed}`, toast: false })
+}
+
+eventsGeneric inboundProspectRow(payload: Struct, domain: string, company: string, contactName: string) {
+    const { email, vendor } = intakeProspect(domain, company, contactName)
+    info({ message: `inbound row for ${domain} resolved to ${email} via ${vendor}`, toast: false })
+    return email
+}
+
+eventsGeneric importProspectWorkbook(payload: Struct, workbook: Struct, sheet: string) {
+    const { staged, distinctDomains } = importWorkbookSheet(workbook, sheet)
+    info({ message: `imported ${staged} row(s), ${distinctDomains} distinct domain(s)`, toast: false })
+    return staged
+}
+
+eventsWidgetAction gridCellAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const domain = events::extractInputValue({ inputValues: inputValues, componentId: "prospect-domain" })
+    const forced = events::extractActionContext({ actionContext: actionContext, fieldName: "vendor" })
+    const { element: statusCell } = ui::getElement({ elementRef: "waterfall-status" })
+    ui::setElementLoading({ elementRef: statusCell, loading: true })
+    const summary = rerunCell(domain)
+    ui::setElementText({ elementRef: statusCell, text: summary })
+    ui::dataUpdate({ surfaceId: "prospect-grid", path: "rows.selected.email", value: summary })
+    ui::setElementLoading({ elementRef: statusCell, loading: false })
+    info({ message: `${eventName} on ${widgetInstanceId} forced vendor ${forced}`, toast: true })
+}

@@ -1,0 +1,9 @@
+// Minimal repro: `use ns::{ member as alias }` (documented aliased-member import) fails to parse.
+// Only `use ns::path as alias` (whole-namespace alias) is accepted by the parser.
+use map::{ set as putEntry }
+
+eventsSimple aliasedMemberImport() {
+    const bag = map::make()
+    const filled = putEntry({ mapIn: bag, key: "region", value: "eu-central-1" })
+    log::info({ message: filled.size(), toast: false })
+}

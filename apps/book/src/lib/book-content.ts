@@ -67,7 +67,7 @@ export async function getBookContentStats(): Promise<BookContentStats> {
 					chapterRange:
 						firstChapter.number === lastChapter.number
 							? formatChapterNumber(firstChapter.number)
-							: `${formatChapterNumber(firstChapter.number)}–${formatChapterNumber(lastChapter.number)}`,
+							: `${formatChapterNumber(firstChapter.number)}-${formatChapterNumber(lastChapter.number)}`,
 					firstEntryId: firstChapter.entryId,
 				} satisfies BookContentPart,
 			];

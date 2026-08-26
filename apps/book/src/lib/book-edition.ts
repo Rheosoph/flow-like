@@ -39,8 +39,8 @@ export const CURRENT_BOOK_EDITION = {
 	id: "flowbook-open-2026",
 	language: "en",
 	title: "FlowBook",
-	subtitle: "The FlowScript Book",
-	description: "Build reliable software in code and as a visible workflow.",
+	subtitle: "A Developer's Guide to Flow-Like",
+	description: "Build reliable software as typed text and a visible workflow.",
 	publisher: "Flow-Like",
 	editionLabel: "Open edition · 2026",
 	year: 2026,
@@ -55,7 +55,7 @@ export const CURRENT_BOOK_EDITION = {
 			label: "Part I",
 			title: "Software That Explains Itself",
 			description:
-				"Begin with the founding incident, establish the operating principles, and build the first Flow in two honest views.",
+				"Begin with the founding incident, establish the operating principles, and build the first Flow through both authoring views.",
 			chapters: [
 				{
 					number: 1,

@@ -51,7 +51,7 @@
 	}
 
 	@top-right {
-		content: "THE FLOWSCRIPT BOOK";
+		content: "FLOW-LIKE DEVELOPER GUIDE";
 		font: 600 7pt/1 var(--pdf-sans);
 		letter-spacing: 0.1em;
 		color: var(--pdf-soft);

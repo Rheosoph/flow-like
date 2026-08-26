@@ -1,0 +1,15 @@
+// `ml_predict` and `ml_apply_transform` grow their real data pins in `on_update`:
+// `source: "Vector"` mints the `vector` input and the `prediction` output, `source: "Database"`
+// mints `database` / `records` / `predictions_col` / `database_out`
+// (packages/catalog/ml/src/prediction.rs:290, packages/catalog/ml/src/preprocessing/apply.rs:376).
+// Neither node type is listed in `mints_pins_on_update`
+// (packages/core/src/flow/node.rs:880), so the reconciler never predicts those pins and both
+// spellings below are rejected as unknown arguments -- which leaves ml::predict with no way to
+// receive an input vector and no way to hand back a prediction at all.
+eventsSimple scoreDefectVector() {
+    const scaler = ml::load({ path: files::storageDir(false).child("defect-scaler.json") })
+    ml::applyTransform({ model: scaler, source: "Database", database: db::open({ name: "frames", userScoped: false }), records: "embedding", outputCol: "scaled" })
+    const calibrator = ml::load({ path: files::storageDir(false).child("defect-calibrator.json") })
+    const prediction = ml::predict({ model: calibrator, source: "Vector", vector: [0.11,0.42,0.87] }).prediction
+    log::info({ message: ml::score({ prediction: prediction }), toast: false })
+}

@@ -1,0 +1,27 @@
+// BUG: FLOWSCRIPT.md documents `const x = call(...)` as "bind the default output", but a node
+// with more than one non-Execution output and no pin literally named result/value/output/out/batch
+// has NO default (`default_metadata_output_pin` returns None), so the binding stays unresolved and
+// the choice is deferred to the consumer. `ai::extract` outputs `response` (Generic) and `stats`
+// (Struct); Generic is compatible with everything, so a `Struct` consumer sees TWO candidates and
+// gives up with a diagnostic that names neither the ambiguity nor the fix:
+//   could not choose an output pin for argument `struct` on `get`
+//   node `get` is missing required inputs: struct
+// The two events below are the same program; only `.response` makes it land, and the diagnostic
+// never mentions that the pin selector is what is missing.
+use log::{ info }
+
+eventsSimple defaultOutputBinding() {
+    const preferences = ai::preferences::make({ multimodal: false })
+    const model = ai::findModel({ preferences: preferences })
+    const extracted = ai::extract({ model: model, schema: "{\"npi\":\"string\"}", text: "NPI 1234567893", hint: "" })
+    const { value: npi } = struct::get({ struct: extracted, field: "npi" })
+    info({ message: `npi ${npi}`, toast: false })
+}
+
+eventsSimple explicitOutputPin() {
+    const preferences = ai::preferences::make({ multimodal: false })
+    const model = ai::findModel({ preferences: preferences })
+    const extracted = ai::extract({ model: model, schema: "{\"npi\":\"string\"}", text: "NPI 1234567893", hint: "" }).response
+    const { value: npi } = struct::get({ struct: extracted, field: "npi" })
+    info({ message: `npi ${npi}`, toast: false })
+}

@@ -1,0 +1,10 @@
+use datetime::{ add, format, maxOf, now }
+use log::{ info }
+
+eventsSimple arrayLiteralOfNodeOutputs() {
+    const start = datetime::now()
+    const later = start.add({ hours: 1 })
+    const { result: latest } = maxOf({ dates: [start, later] })
+    const stamp = latest.format({ format: "rfc3339" })
+    info({ message: stamp, toast: false })
+}

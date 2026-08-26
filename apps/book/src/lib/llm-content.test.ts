@@ -11,7 +11,7 @@ import {
 const introduction: LlmBookEntry = {
 	id: "introduction",
 	data: {
-		title: "Introduction — One Program, Two Ways to See It",
+		title: "Introduction: One Program, Two Ways to See It",
 		description: "Learn the FlowScript mental model.",
 		seo: { topics: ["FlowScript", "visual workflows"] },
 	},
@@ -46,7 +46,7 @@ const chapter: LlmBookEntry = {
 const home: LlmBookEntry = {
 	id: "index",
 	data: {
-		title: "FlowBook: The FlowScript Book",
+		title: "FlowBook: A Developer's Guide to Flow-Like",
 		description: "Learn Flow-Like FlowScript.",
 		seo: { topics: ["FlowScript"] },
 	},
@@ -138,7 +138,7 @@ describe("LLM indexes", () => {
 	it("builds the full companion from published reading units only", () => {
 		const full = renderLlmsFullTxt(entries);
 
-		expect(full).toContain("# FlowBook — Complete Markdown Edition");
+		expect(full).toContain("# FlowBook: Complete Markdown Edition");
 		expect(full).toContain(introduction.data.title);
 		expect(full).toContain(chapter.data.title);
 		expect(full).not.toContain(home.data.description ?? "");

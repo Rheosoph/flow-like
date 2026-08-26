@@ -383,7 +383,7 @@ const manifest = JSON.parse(
 	await readFile(path.join(distRoot, "site.webmanifest"), "utf8"),
 );
 check(
-	manifest.name === "FlowBook: The FlowScript Book",
+	manifest.name === "FlowBook: A Developer's Guide to Flow-Like",
 	"manifest: unexpected app name",
 );
 await access(path.join(distRoot, "favicon.svg"));

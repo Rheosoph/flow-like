@@ -485,7 +485,7 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// Rust `use`-tree subset: `a::b`, `a::b::*`, `a::b::{ x, y }`, `a::b as x`.
+    /// Rust `use`-tree subset: `a::b`, `a::b::*`, `a::b::{ x, y as z }`, `a::b as x`.
     fn use_tree(&mut self) -> Result<UseDecl, ParseError> {
         let mut path = vec![self.ident()?];
         while self.eat(&Tok::PathSep) {
@@ -501,7 +501,16 @@ impl Parser<'_> {
                     self.bump();
                     let mut members = Vec::new();
                     while !matches!(self.cur(), Tok::RBrace) {
-                        members.push(self.ident()?);
+                        let name = self.ident()?;
+                        // `use a::b::{ x as y }` — renaming ONE member, as distinct from
+                        // `use a::b as y`, which renames the namespace.
+                        let alias = if self.is_ident("as") {
+                            self.bump();
+                            Some(self.ident()?)
+                        } else {
+                            None
+                        };
+                        members.push(UseMember { name, alias });
                         if !self.eat(&Tok::Comma) {
                             break;
                         }
@@ -537,6 +546,13 @@ impl Parser<'_> {
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
+            // A comment between fields documents the field that follows it. The renderer never
+            // emits one, but hand-written interfaces are unreadable without them, and rejecting
+            // the token made a documented interface a parse error.
+            if matches!(self.cur(), Tok::Comment(_)) {
+                self.bump();
+                continue;
+            }
             // Non-identifier JSON-schema property names render as quoted strings.
             let field_name = match self.cur().clone() {
                 Tok::Str(name) => {
@@ -889,6 +905,13 @@ impl Parser<'_> {
             Tok::Ident(name) if name == "any" => {
                 self.bump();
                 InterfaceType::Any
+            }
+            Tok::Ident(name) if name == "Set" => {
+                self.bump();
+                self.expect(&Tok::Op("<".to_string()))?;
+                let inner = self.interface_type()?;
+                self.expect(&Tok::Op(">".to_string()))?;
+                InterfaceType::Set(Box::new(inner))
             }
             Tok::Ident(name) if name == "Map" => {
                 self.bump();

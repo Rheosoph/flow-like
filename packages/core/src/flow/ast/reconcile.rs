@@ -3070,6 +3070,17 @@ fn is_exec_pin(pin: &Pin) -> bool {
     pin.data_type == VariableType::Execution
 }
 
+/// Names the catalog uses for a node's PRIMARY data output. Consulted wherever a multi-output
+/// node has to be reduced to one pin without the author naming it. Kept in one place because
+/// three call sites had drifted apart — one of them still omitted `batch` and `response`, so
+/// `const x = ai::extract(...)` could not choose between `response` and `stats`.
+fn is_primary_output_name(name: &str) -> bool {
+    matches!(
+        name,
+        "result" | "value" | "output" | "out" | "batch" | "response"
+    )
+}
+
 fn default_node_output_pin(node: &Node) -> Option<String> {
     let mut outputs: Vec<&Pin> = node
         .pins
@@ -3081,11 +3092,19 @@ fn default_node_output_pin(node: &Node) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| {
-                matches!(
-                    p.name.as_str(),
-                    "result" | "value" | "output" | "out" | "batch"
-                )
+            .find(|p| is_primary_output_name(&p.name))
+            .or_else(|| {
+                // A method-form node returns its transformed receiver, and the catalog spells
+                // that consistently: `map_in` -> `map_out`, `array_in` -> `array_out`,
+                // `struct_in` -> `struct_out`, `session` -> `session_out`. Without this a
+                // multi-output node like `map_set` (`map_out` + `replaced`) has NO default
+                // output, so `const filled = registry.set(k, v)` binds a source with no pin,
+                // the receiver's container type never reaches method resolution, and the next
+                // call on it is rejected as ambiguous across every namespace sharing the name.
+                let receiver = node.flowscript_receiver()?;
+                let stem = receiver.strip_suffix("_in").unwrap_or(&receiver);
+                let chained = format!("{stem}_out");
+                many.iter().find(|p| p.name == chained)
             })
             .map(|p| p.name.clone()),
     }
@@ -3663,6 +3682,52 @@ fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -
         .or_else(|| Some(expanded.to_string()))
 }
 
+/// The class identity of the sole non-`null` variant of a nullable union schema
+/// (`anyOf[T, null]`), or `None` when the schema is not one. A `$ref` is resolved through the
+/// root's `$defs`, falling back to the pointer's last segment when the definition carries no
+/// title of its own.
+fn nullable_union_title(schema: &str) -> Option<String> {
+    let root: flow_like_types::Value = flow_like_types::json::from_str(schema).ok()?;
+    let variants = ["anyOf", "oneOf"]
+        .iter()
+        .find_map(|key| root.get(*key).and_then(flow_like_types::Value::as_array))?;
+    let mut non_null = variants.iter().filter(|variant| {
+        variant.get("type").and_then(flow_like_types::Value::as_str) != Some("null")
+    });
+    let only = non_null.next()?;
+    if non_null.next().is_some() {
+        return None;
+    }
+    if let Some(reference) = only.get("$ref").and_then(flow_like_types::Value::as_str) {
+        let pointer = reference.strip_prefix('#')?;
+        let name = reference.rsplit('/').next().map(str::to_string);
+        return root
+            .pointer(pointer)
+            .and_then(|target| {
+                target
+                    .get("title")
+                    .and_then(flow_like_types::Value::as_str)
+                    .map(str::to_string)
+            })
+            .or(name);
+    }
+    only.get("title")
+        .and_then(flow_like_types::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Whether two declared contracts describe the same class once an `anyOf[T, null]` wrapper is
+/// discounted. `email_get_headers.from` is declared `Option<MailAddress>` and is the only pin in
+/// the catalog shaped that way, so without this it could not be connected to ANY consumer of a
+/// `MailAddress` — there is no conversion node to insert either.
+fn nullable_contract_matches(left: &str, right: &str) -> bool {
+    let same_as = |schema: &str, other: &str| {
+        nullable_union_title(schema)
+            .is_some_and(|title| flow_like_ast::schema_title(other).as_deref() == Some(&title))
+    };
+    same_as(left, right) || same_as(right, left)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn schema_constraints_are_compatible(
     input_name: &str,
@@ -3702,7 +3767,9 @@ fn schema_constraints_are_compatible(
             // Two declared contracts: they must be the same one. This is what catches a genuinely
             // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
             // `CachedEmbeddingModel` input without loading the model first.
-            (Some(input), Some(output)) => input == output,
+            (Some(input), Some(output)) => {
+                input == output || nullable_contract_matches(input, output)
+            }
             // Only one side declares a contract, so there is nothing to contradict. An untyped
             // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
             // return — adopts the connected schema, exactly like the struct_make/break/set boundary
@@ -3832,11 +3899,14 @@ fn default_metadata_output_pin(meta: &NodeMetadata) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| {
-                matches!(
-                    p.name.as_str(),
-                    "result" | "value" | "output" | "out" | "batch"
-                )
+            .find(|p| is_primary_output_name(&p.name))
+            .or_else(|| {
+                // Mirrors `default_node_output_pin`: a method-form node's chained output is its
+                // transformed receiver (`map_in` -> `map_out`).
+                let receiver = catalog_names(meta).receiver?;
+                let stem = receiver.strip_suffix("_in").unwrap_or(&receiver);
+                let chained = format!("{stem}_out");
+                many.iter().find(|p| p.name == chained)
             })
             .map(|p| p.name.clone()),
     }
@@ -4948,6 +5018,27 @@ fn schema_property_hint(schema: &str, field: &str) -> Option<ReceiverHint> {
     }
 
     fn type_name(schema: &Value) -> Option<String> {
+        // A string-literal union (`"a" | "b"`) projects to a bare `{ "enum": [...] }` with no
+        // `type` key, so without this every comparison against such a field typed as the
+        // containing `Struct` instead of the field itself. Infer the kind from the members,
+        // ignoring `null`, and only when they agree.
+        if schema.get("type").is_none()
+            && let Some(values) = schema.get("enum").and_then(Value::as_array)
+        {
+            let mut kinds =
+                values
+                    .iter()
+                    .filter(|value| !value.is_null())
+                    .map(|value| match value {
+                        Value::String(_) => "string",
+                        Value::Bool(_) => "boolean",
+                        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+                        Value::Number(_) => "number",
+                        _ => "object",
+                    });
+            let first = kinds.next()?;
+            return kinds.all(|kind| kind == first).then(|| first.to_string());
+        }
         match schema.get("type")? {
             Value::String(kind) => Some(kind.clone()),
             Value::Array(kinds) => {
@@ -5854,10 +5945,12 @@ impl<'a> StructuralPlanner<'a> {
         let ast = &doc.ast;
         self.interface_schemas = interface_schema_map(ast);
         self.interfaces = ast.interfaces.clone();
-        self.prepare_uses(ast);
         // Modules are the outermost context: every later phase (which layer a section plans into,
-        // which functions a bare name can see) is decided relative to them.
+        // which functions a bare name can see) is decided relative to them. They are prepared
+        // BEFORE `use`, because a `use` line may name a module namespace declared in this
+        // document and the validation needs `module_name_paths` populated to accept it.
         self.prepare_modules(modules);
+        self.prepare_uses(ast);
         self.prepare_function_sigs(doc);
         // A call may target a function this document never declares — a global helper called from
         // a module file, or any function outside a selection-scoped render.
@@ -7237,6 +7330,16 @@ impl<'a> StructuralPlanner<'a> {
             // exec chain ahead of the statement that consumes their outputs, innermost first,
             // so they actually execute at runtime.
             for splice in std::mem::take(&mut self.pending_exec_splices) {
+                if previous_execs.is_empty() {
+                    // No execution predecessor yet — the spliced call is the body's FIRST node
+                    // (`return struct::set(...)` as a function's only statement). The statement
+                    // path below exempts that case; without the same exemption here the node was
+                    // reported as "has no incoming execution connection and will not run", which
+                    // made every impure call in return position unusable.
+                    if let NodeEntity::New { ref_id, .. } = &splice {
+                        self.exec_check_exempt.insert(ref_id.clone());
+                    }
+                }
                 for previous in &previous_execs {
                     let connected_edge =
                         self.connect_exec(previous, &splice, insertion_origin.as_ref());
@@ -8651,10 +8754,12 @@ impl<'a> StructuralPlanner<'a> {
         // Materialize this call's dynamic (`on_update`-generated) pins so its args resolve against
         // real pins; a no-op when no enricher is supplied (falls back to `synthesize_dynamic_input_pin`).
         let meta = self.enrich_meta(meta, call);
-        let entity = self.queue_add_node(meta.clone(), target_layer.clone());
+        let mut entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
         let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
         self.check_required_inputs_after_planning(call, &entity, &meta);
+        self.specialize_container_element_output(&mut entity, call);
+        self.synthesize_schema_driven_outputs(&mut entity, call);
 
         Some((entity, input_sources))
     }
@@ -8711,6 +8816,132 @@ impl<'a> StructuralPlanner<'a> {
     /// retained a catalog default or planning actually queued a literal/update or incoming edge.
     /// Pair duplicate pin names positionally so one `value:` argument cannot accidentally satisfy
     /// every same-named required input.
+    /// `struct::break` mints one output per field of the schema its `structIn` peer carries. That
+    /// happens in `on_update` by reading the WIRED peer off the board, so the literal-args
+    /// enricher (which runs against a scratch node with nothing connected) cannot see it and the
+    /// node planned with no outputs at all — every destructure of it failed with "its outputs are
+    /// none". The authored call already names the source, so derive the fields from its schema
+    /// here instead.
+    fn synthesize_schema_driven_outputs(&mut self, entity: &mut NodeEntity, call: &Call) {
+        let node_type = match &entity {
+            NodeEntity::New { meta, .. } => meta.name.clone(),
+            _ => return,
+        };
+        if node_type != "struct_break" {
+            return;
+        }
+        let has_data_output = matches!(
+            &entity,
+            NodeEntity::New { meta, .. } if meta.outputs.iter().any(|pin| pin.data_type != "Execution")
+        );
+        if has_data_output {
+            return;
+        }
+        let Some(arg) = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("struct_in", &arg.name))
+        else {
+            return;
+        };
+        let Some(schema) = self
+            .expr_receiver_hint(&arg.value)
+            .and_then(|hint| hint.schema)
+        else {
+            return;
+        };
+        let normalized = normalized_pin_schema(Some(schema.as_str()), &self.existing.refs);
+        let Some(root) = normalized.as_deref().and_then(|schema| {
+            flow_like_types::json::from_str::<flow_like_types::Value>(schema).ok()
+        }) else {
+            return;
+        };
+        let Some(properties) = root
+            .get("properties")
+            .and_then(flow_like_types::Value::as_object)
+        else {
+            return;
+        };
+        let fields: Vec<PinMetadata> = properties
+            .iter()
+            .map(|(name, property)| {
+                let hint = schema_property_hint(&schema, name);
+                let (data_type, value_type, schema) = hint
+                    .map(|hint| (hint.data_type, hint.value_type, hint.schema))
+                    .unwrap_or_else(|| {
+                        let _ = property;
+                        ("Generic".to_string(), "Normal".to_string(), None)
+                    });
+                let is_generic = data_type == "Generic";
+                PinMetadata {
+                    name: name.clone(),
+                    friendly_name: name.clone(),
+                    description: String::new(),
+                    data_type,
+                    value_type,
+                    default_value: None,
+                    schema,
+                    is_generic,
+                    valid_values: None,
+                    enforce_schema: false,
+                }
+            })
+            .collect();
+        if fields.is_empty() {
+            return;
+        }
+        if let NodeEntity::New { meta, .. } = entity {
+            meta.outputs.extend(fields);
+        }
+    }
+
+    /// Emulate the `harmonize_type(container, element)` these nodes run in their own `on_update`:
+    /// `map::get` and `array::get` declare their element output `Generic` and specialise it from
+    /// the container at runtime. The planner has to do the same, or an element read is `Generic`
+    /// forever — `map::get(...).value == "x"` then reports "ambiguous operand type" even though
+    /// the map is declared `Map<string, string>`.
+    fn specialize_container_element_output(&mut self, entity: &mut NodeEntity, call: &Call) {
+        const CONTAINER_ELEMENT_OUTPUTS: &[(&str, &str, &str)] = &[
+            ("map_get", "map_in", "value"),
+            ("array_get", "array_in", "element"),
+        ];
+        let node_type = match &entity {
+            NodeEntity::New { meta, .. } => meta.name.clone(),
+            _ => return,
+        };
+        let Some((_, container_pin, element_pin)) = CONTAINER_ELEMENT_OUTPUTS
+            .iter()
+            .find(|(candidate, _, _)| *candidate == node_type)
+        else {
+            return;
+        };
+        let Some(arg) = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches(container_pin, &arg.name))
+        else {
+            return;
+        };
+        let Some(hint) = self.expr_receiver_hint(&arg.value) else {
+            return;
+        };
+        if hint.value_type == "Normal" || hint.data_type == "Generic" {
+            return;
+        }
+        if let NodeEntity::New { meta, .. } = entity {
+            for pin in meta
+                .outputs
+                .iter_mut()
+                .filter(|pin| pin.name == *element_pin)
+            {
+                pin.data_type = hint.data_type.clone();
+                pin.value_type = "Normal".to_string();
+                pin.schema = hint.schema.clone();
+                pin.is_generic = false;
+            }
+        }
+    }
+
     fn check_required_inputs_after_planning(
         &mut self,
         call: &Call,
@@ -8774,10 +9005,23 @@ impl<'a> StructuralPlanner<'a> {
         }
 
         let mut claimed_inputs = HashSet::new();
+        // A SQL node exposes TWO ways to bind a `$placeholder`: the minted `param_<name>` pin and
+        // the node's own `params` object (which `missing_input_pin_diagnostic` explicitly tells
+        // authors to use). Supplying `params` must therefore satisfy the minted pins, or the
+        // engine contradicts its own advice.
+        let params_supplied = sql_param_node(&meta.name)
+            && call
+                .args
+                .iter()
+                .any(|arg| pin_name_matches("params", &arg.name));
+
         let mut missing = Vec::new();
         let mut required_seen: HashMap<&str, usize> = HashMap::new();
 
         for required in &meta.required_inputs {
+            if params_supplied && required.starts_with("param_") {
+                continue;
+            }
             let required_occurrence = {
                 let occurrence = required_seen.entry(required.as_str()).or_insert(0);
                 let current = *occurrence;
@@ -9075,10 +9319,25 @@ impl<'a> StructuralPlanner<'a> {
                                 continue;
                             }
                             None => {
-                                self.result
-                                    .diagnostics
-                                    .push(missing_input_pin_diagnostic(meta, call, arg));
-                                continue;
+                                // A NEW node only ever got the placeholder-driven synthesizer,
+                                // so a MODE-driven node — the `ml` family's `source` dropdown,
+                                // `control_switch`'s cases — reported its real pins as unknown
+                                // and the whole revision was refused. The enricher already
+                                // knows how to answer this (it runs the node's own `on_update`
+                                // on a scratch copy); it was simply never asked here, only on
+                                // the anchored path in `arg_targets_predicted_dynamic_pin`.
+                                match self.enriched_input_pin(meta, call, &arg.name) {
+                                    Some(pin) => {
+                                        synthesized_pin = pin;
+                                        (&synthesized_pin, occurrence)
+                                    }
+                                    None => {
+                                        self.result
+                                            .diagnostics
+                                            .push(missing_input_pin_diagnostic(meta, call, arg));
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     }
@@ -10259,6 +10518,29 @@ impl<'a> StructuralPlanner<'a> {
     /// Resolve the catalog/board shape of the exact data output represented by `source`. An
     /// unselected call result uses the same deterministic default-output rule as connection
     /// planning, so validation never guesses among several unrelated outputs.
+    /// The pin `arg_name` names once this node's own `on_update` has run against the literal
+    /// arguments of this call. Mirrors `arg_targets_predicted_dynamic_pin`, which does the same
+    /// for a node that already exists on the board.
+    fn enriched_input_pin(
+        &self,
+        meta: &NodeMetadata,
+        call: &Call,
+        arg_name: &str,
+    ) -> Option<PinMetadata> {
+        let enricher = self.enricher?;
+        let literal_args: Vec<(String, flow_like_types::Value)> = call
+            .args
+            .iter()
+            .filter_map(|arg| literal_expr_to_value(&arg.value).map(|v| (arg.name.clone(), v)))
+            .collect();
+        let enriched = enricher(meta, &literal_args, self.existing)?;
+        enriched
+            .inputs
+            .iter()
+            .find(|pin| metadata_pin_name_matches(pin, arg_name))
+            .cloned()
+    }
+
     fn source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
         match &source.node {
             NodeEntity::Existing(id) => {
@@ -11028,7 +11310,7 @@ impl<'a> StructuralPlanner<'a> {
             // real nodes instead — returning None here is what produced "argument `x` is not a
             // literal or resolvable node output" for every `[a, b]` holding a call result.
             Expr::Array(items) => self.lower_array_literal(items, target_layer),
-            Expr::Object(_) => None,
+            Expr::Object(fields) => self.lower_object_literal(fields, target_layer),
             Expr::Literal(_) => None,
         }
     }
@@ -11085,7 +11367,25 @@ impl<'a> StructuralPlanner<'a> {
                 .collect(),
             anchor: None,
         };
-        let entity = self.add_call_node(&call, target_layer)?;
+        let mut entity = self.add_call_node(&call, target_layer)?;
+        // `types_select`'s `result` is declared Generic because it can carry either arm. When BOTH
+        // arms have the same shape the result HAS that shape, and saying so is what lets a method
+        // call on a ternary dispatch: without it `(a ? b : c).clamp(...)` sees a Generic receiver
+        // and is rejected as "ambiguous between `datetime::clamp`, `int::clamp`, `float::clamp`".
+        if let (Some(then_hint), Some(else_hint)) = (
+            self.expr_receiver_hint(then),
+            self.expr_receiver_hint(otherwise),
+        ) && then_hint.data_type == else_hint.data_type
+            && then_hint.value_type == else_hint.value_type
+            && let NodeEntity::New { meta, .. } = &mut entity
+        {
+            for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "result") {
+                pin.data_type = then_hint.data_type.clone();
+                pin.value_type = then_hint.value_type.clone();
+                pin.schema = then_hint.schema.clone();
+                pin.is_generic = false;
+            }
+        }
         let output = self
             .resolve_entity_output_pin(&entity, Some("result"))
             .or_else(|| self.resolve_entity_output_pin(&entity, None));
@@ -11122,6 +11422,43 @@ impl<'a> StructuralPlanner<'a> {
             node: entity,
             output_pin: Some(output_pin),
         }))
+    }
+
+    /// Lower `{ k: expr, … }` whose values are not all constant into `struct::make()` followed
+    /// by one `struct::set` per field, folded into a nested call expression so the existing
+    /// argument-resolution path wires each step (and splices the exec chain, since `struct_set`
+    /// is impure). This is exactly the chain fixture authors were writing by hand as a
+    /// workaround; there is no reason the literal should not lower to it directly.
+    fn lower_object_literal(
+        &mut self,
+        fields: &[ObjectField],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let mut make = Call::placeholder();
+        make.node_type = "struct_make".to_string();
+        make.display = "make".to_string();
+
+        let built = fields.iter().fold(Expr::Call(make), |current, field| {
+            let mut set = Call::placeholder();
+            set.node_type = "struct_set".to_string();
+            set.display = "set".to_string();
+            set.args = vec![
+                Arg {
+                    name: "struct_in".to_string(),
+                    value: current,
+                },
+                Arg {
+                    name: "field".to_string(),
+                    value: Expr::Literal(Literal::String(field.key.clone())),
+                },
+                Arg {
+                    name: "value".to_string(),
+                    value: field.value.clone(),
+                },
+            ];
+            Expr::Call(set)
+        });
+        self.resolve_expr(&built, target_layer)
     }
 
     /// Lower `[a, b, …]` whose elements are not all constant into a real `construct_array`
@@ -11245,8 +11582,19 @@ impl<'a> StructuralPlanner<'a> {
         // (`planned_output_is_compatible`). Fold it into the unknown case, which already lets
         // the other operand decide.
         let ungeneric = |hint: Option<String>| hint.filter(|ty| ty != "Generic");
-        let lhs_type = ungeneric(self.expr_data_type_hint(lhs));
-        let rhs_type = ungeneric(self.expr_data_type_hint(rhs));
+        // Prefer the receiver oracle: it walks struct schemas, so `verdict.disposition` on an
+        // interface-typed value types as its FIELD (`String`) rather than as the containing
+        // `Struct`. `expr_data_type_hint` stops at the base and made every comparison against a
+        // struct field fail with "incompatible operand types `Struct` and `String`".
+        let operand_type = |expr: &Expr| {
+            ungeneric(
+                self.expr_receiver_hint(expr)
+                    .map(|hint| hint.data_type)
+                    .or_else(|| self.expr_data_type_hint(expr)),
+            )
+        };
+        let lhs_type = operand_type(lhs);
+        let rhs_type = operand_type(rhs);
         let is_int_literal = |expr: &Expr| matches!(expr, Expr::Literal(Literal::Int(_)));
         match (lhs_type.as_deref(), rhs_type.as_deref()) {
             (Some(lhs), Some(rhs)) if lhs == rhs => Ok(Some(lhs.to_string())),
@@ -11644,15 +11992,23 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> String {
         let default_value = literal_expr_to_value(value);
-        let (data_type, value_type) = if default_value.is_some() {
-            infer_variable_types(default_value.as_ref())
+        // A non-literal initializer carries no default, but its output contract still types the
+        // variable so downstream connections are validated against it. Take the FULL shape:
+        // hardcoding `Normal` here flattened every container, so `let lines = string::lines(x)`
+        // became `String/Normal` and the next `array::length({ array: lines })` was refused
+        // against a variable that should have been `String/Array`. The schema was dropped too,
+        // which mis-classed struct aliases for method dispatch.
+        let (data_type, value_type, schema) = if default_value.is_some() {
+            let (data_type, value_type) = infer_variable_types(default_value.as_ref());
+            (data_type, value_type, None)
+        } else if let Some(hint) = self.expr_receiver_hint(value) {
+            (hint.data_type, hint.value_type, hint.schema)
         } else {
-            // A non-literal initializer carries no default, but its output contract still
-            // types the variable so downstream connections are validated against it.
             (
                 self.expr_data_type_hint(value)
                     .unwrap_or_else(|| "Generic".to_string()),
                 "Normal".to_string(),
+                None,
             )
         };
         self.create_typed_local_variable(
@@ -11660,7 +12016,7 @@ impl<'a> StructuralPlanner<'a> {
             default_value,
             data_type,
             value_type,
-            None,
+            schema,
             target_layer,
         )
     }
@@ -11937,9 +12293,7 @@ impl<'a> StructuralPlanner<'a> {
                     [pin] => Some(pin.name.clone()),
                     many => many
                         .iter()
-                        .find(|pin| {
-                            matches!(pin.name.as_str(), "result" | "value" | "output" | "out")
-                        })
+                        .find(|pin| is_primary_output_name(&pin.name))
                         .map(|pin| pin.name.clone()),
                 }
             }
@@ -12194,7 +12548,9 @@ impl<'a> StructuralPlanner<'a> {
             let rendered = render_use_decl(decl);
             scope.rendered.push(rendered.clone());
             let key = path_key(&decl.path);
-            if decl.path.is_empty() || !self.catalog.namespace_known(&key) {
+            if decl.path.is_empty()
+                || !(self.catalog.namespace_known(&key) || self.module_namespace_known(&key))
+            {
                 scope.invalid.insert(idx);
                 let suggestions = self.catalog.closest_namespaces(&key);
                 self.result.diagnostics.push(if suggestions.is_empty() {
@@ -12571,15 +12927,28 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     /// The function an absolute `a::b::name` path names, if any.
+    /// Whether `key` (a lowercased `::`-joined path) names a module declared in this document.
+    fn module_namespace_known(&self, key: &str) -> bool {
+        self.module_name_paths
+            .values()
+            .any(|path| path.join("::") == key)
+    }
+
     fn lookup_qualified_function(&self, path: &[String], name: &str) -> Option<FnKey> {
-        let key = format!(
-            "{}::{}",
-            path.iter()
-                .map(|segment| segment.to_lowercase())
-                .collect::<Vec<_>>()
-                .join("::"),
-            name.to_lowercase()
-        );
+        let mut segments: Vec<String> = path
+            .iter()
+            .map(|segment| segment.to_lowercase())
+            .collect::<Vec<_>>();
+        // `use ingest::pdfs as pdfIngest` puts the alias in the namespace scope; expand it back
+        // to the real module path so `pdfIngest::extract(...)` finds the module's function.
+        if let Some(first) = segments.first().cloned()
+            && let Some((expanded, _)) = self.use_scope.namespaces.get(&first)
+        {
+            let mut rest = segments.split_off(1);
+            segments = expanded.split("::").map(str::to_string).collect();
+            segments.append(&mut rest);
+        }
+        let key = format!("{}::{}", segments.join("::"), name.to_lowercase());
         self.functions_by_qualified.get(&key)?.first().cloned()
     }
 

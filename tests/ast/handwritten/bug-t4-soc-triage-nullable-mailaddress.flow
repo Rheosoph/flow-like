@@ -1,0 +1,19 @@
+// BUG: `email::getHeaders().from` is schema `Nullable_MailAddress` (Option<MailAddress>)
+// while `email::addressToFields`'s `address` pin enforces `MailAddress`, so the catalog's
+// own obvious pairing is refused — and the diagnostic prints the SAME type on both sides,
+// naming neither schema:
+//   argument `address` on `addressToFields` has incompatible pin types or schemas:
+//   source `email_get_headers.from` is `Struct/Normal`, but input `address` requires
+//   `Struct/Normal`; use a catalog-declared conversion before connecting it
+// There is no catalog node that unwraps Nullable_MailAddress, so the advice is unfollowable.
+eventsSimple mailProbe() {
+    const connection = imap::connect({ host: "imap.internal", port: 993, username: "soc", password: "secret", encryption: "tls" })
+    const mailbox = connection.inbox({ inbox: "INBOX" })
+    const messages = mailbox.listMails({ filter: "UNSEEN" })
+    for (const reference of messages) {
+        const mail = reference.fetchMail()
+        const { from } = mail.getHeaders()
+        const { email: sender } = email::addressToFields({ address: from })
+        log::info({ message: sender, toast: false })
+    }
+}

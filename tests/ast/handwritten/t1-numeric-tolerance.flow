@@ -1,0 +1,100 @@
+use log::{ info, warn }
+
+@description("Tolerance band in percent used when a station does not declare its own")
+const defaultBandPercent: float = 1.5
+
+@description("Decimal places kept on every reported deviation")
+const reportPrecision: int = 3
+
+@category("Calibration/Runtime")
+let lastVerdict = "unknown"
+
+function deviation(measured: float, target: float): (absolute: float, percent: float) {
+    const delta = float::subtract({ float1: measured, float2: target })
+    const absolute = delta.abs()
+    const { percent: signedPercent, defined } = float::percentChange({ from: target, to: measured })
+    const percent = defined ? signedPercent.abs() : 100.0
+    return absolute, percent
+}
+
+function readingBudget(readings: int, stations: int): (perStation: int, exact: float) {
+    const { result: quotient, success: divisible } = int::div(readings, stations)
+    const exact = int::divide(readings, stations)
+    const padded = divisible ? quotient : quotient.increment(1)
+    // BUG: `padded.clamp(...)` is reported ambiguous because a ternary-bound local loses its
+    // receiver class, even though both arms are ints -- see bug-t1-numeric-tolerance-ternary-receiver-class.flow
+    const perStation = int::clamp({ integer: padded, min: 1, max: 512 })
+    return perStation, exact
+}
+
+eventsGeneric verifyStation(payload: Struct, stationId: string, measured: float, target: float,
+                            declaredBand: float, readings: int, stations: int,
+                            axes: float[], reference: float[]) {
+    const activeBand = declaredBand.max(defaultBandPercent)
+    const { absolute, percent } = deviation(measured, target)
+    const clamped = percent.clamp(0.0, 100.0)
+    const reported = clamped.round(reportPrecision)
+
+    const absoluteLimit = target.abs().multiply(activeBand).divide(100.0)
+    const withinAbsolute = absolute.lessThanOrEqual(absoluteLimit)
+    const withinPercent = reported.lessThanOrEqual(activeBand)
+    const criticalBand = activeBand.multiply(3.0)
+    const critical = reported.greaterThan(criticalBand)
+
+    const { perStation, exact } = readingBudget(readings, stations)
+    const planned = stations.multiply(perStation)
+    const shortfall = int::subtract(planned, readings).abs()
+    const severity = shortfall.min(9)
+    const weight = int::power(2, severity)
+
+    const drift = math::vector::subtract({ vector1: axes, vector2: reference })
+    const driftMagnitude = math::vector::dot(drift, drift).sqrt()
+    const profileMatch = math::vector::cosineSimilarity({ vector1: axes, vector2: reference })
+
+    const penalty = float::power(reported, 2.0).multiply(weight.toFloat())
+    const headroom = math::eval({ expression: `(${activeBand} - ${reported}) / ${activeBand}` })
+    const score = float::mapRange({
+        value: headroom,
+        inMin: -1.0,
+        inMax: 1.0,
+        outMin: 0.0,
+        outMax: 100.0,
+        clamp: true
+    })
+    const scoreBucket = score.toInt({ rounding: "Floor" })
+
+    // BUG: `bool::all([withinAbsolute, withinPercent, finite])` cannot be wired -- an array
+    // literal holding node outputs never resolves, so the boolean chain is spelled with `&&`
+    // instead -- see bug-t1-numeric-tolerance-array-literal-of-outputs.flow
+    const finite = exact.isFinite()
+    const passed = withinAbsolute && withinPercent && finite
+    const verdict = passed ? "pass" : "fail"
+    lastVerdict = verdict
+
+    const drifting = profileMatch.lessThan(0.98) || driftMagnitude.greaterThan(absoluteLimit)
+    const needsRecalibration = critical || (drifting && !passed)
+    const invariantHolds = bool::implies({ premise: critical, conclusion: needsRecalibration })
+
+    const failedFlag = bool::toInt({ boolean: bool::not({ boolean: passed }) })
+    const driftFlag = bool::toInt({ boolean: drifting })
+    const demerits = int::add(failedFlag, driftFlag).multiply(weight)
+
+    if (needsRecalibration) {
+        warn({
+            message: `${stationId}: recalibrate, ${reported}% off a ${activeBand}% band, penalty ${penalty}, demerits ${demerits}`,
+            toast: true
+        })
+    } else if (drifting || !finite) {
+        warn({
+            message: `${stationId}: profile drift ${driftMagnitude}, match ${profileMatch}, score ${scoreBucket}`,
+            toast: false
+        })
+    } else {
+        info({
+            message: `${stationId}: ${verdict}, ${absolute} absolute over ${perStation} of ${exact} readings, score ${scoreBucket}, invariant ${invariantHolds}`,
+            toast: false
+        })
+    }
+
+    return bool::toString({ boolean: passed, trueText: "PASS", falseText: "FAIL" })
+}

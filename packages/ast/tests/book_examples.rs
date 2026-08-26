@@ -1,6 +1,6 @@
 //! Keeps published FlowBook examples parseable and in canonical FlowScript form.
 
-use flow_like_ast::{parse, render, RenderOptions};
+use flow_like_ast::{RenderOptions, parse, render};
 
 #[test]
 fn incident_triage_is_canonical_flowscript() {

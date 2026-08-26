@@ -338,7 +338,7 @@ function metadataBlock(entry: LlmBookEntry): string {
 		`- **Document type:** ${documentType(entry.id)}`,
 		`- **Canonical HTML:** [${canonical}](${canonical})`,
 		`- **Markdown alternate:** [${bookMarkdownUrl(entry.id)}](${bookMarkdownUrl(entry.id)})`,
-		`- **Book:** ${BOOK_NAME} — ${CURRENT_BOOK_EDITION.subtitle}`,
+		`- **Book:** ${BOOK_NAME}, ${CURRENT_BOOK_EDITION.subtitle}`,
 		`- **Edition:** ${CURRENT_BOOK_EDITION.editionLabel}`,
 		`- **Publisher:** ${CURRENT_BOOK_EDITION.publisher}`,
 		`- **Language:** ${CURRENT_BOOK_EDITION.language}`,
@@ -350,7 +350,7 @@ function metadataBlock(entry: LlmBookEntry): string {
 	}
 	if (seo.location?.part) {
 		lines.push(
-			`- **Part:** ${seo.location.part.label} — ${seo.location.part.title}`,
+			`- **Part:** ${seo.location.part.label}: ${seo.location.part.title}`,
 		);
 	}
 
@@ -427,7 +427,7 @@ export function renderLlmsTxt(entries: readonly LlmBookEntry[]): string {
 		"Important interpretation guidance:",
 		"",
 		"- Treat release-check callouts and current-status caveats as authoritative limitations.",
-		"- Chapters 1–14 and the introduction are published open drafts; Chapters 15–26, the epilogue, and appendices are planned, not published.",
+		"- Chapters 1-14 and the introduction are published open drafts; Chapters 15-26, the epilogue, and appendices are planned, not published.",
 		"- FlowScript is an authoring language. The current Flow-Like runtime executes the persisted Board graph.",
 		"- Do not infer capabilities, compatibility, performance, or security guarantees beyond the evidence stated in a page.",
 		"",
@@ -447,7 +447,7 @@ export function renderLlmsTxt(entries: readonly LlmBookEntry[]): string {
 	}
 
 	for (const part of CURRENT_BOOK_EDITION.parts) {
-		lines.push("", `## ${part.label} — ${part.title}`, "");
+		lines.push("", `## ${part.label}: ${part.title}`, "");
 		const partOverview = byId.get(part.id);
 		if (partOverview) {
 			lines.push(llmsEntry(partOverview, `${part.label} overview`) ?? "");
@@ -487,7 +487,7 @@ export function renderLlmsFullTxt(entries: readonly LlmBookEntry[]): string {
 			: [];
 	});
 	const preamble = [
-		"# FlowBook — Complete Markdown Edition",
+		"# FlowBook: Complete Markdown Edition",
 		"",
 		"> A single-file rendering of the FlowBook introduction and all 14 chapters published in the open 2026 edition.",
 		"",

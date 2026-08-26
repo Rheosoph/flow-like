@@ -191,7 +191,7 @@ export function resolveBookSeo(
 		data.seo?.imageAlt ??
 		(location?.kind === "chapter"
 			? `FlowBook chapter ${location.number}: ${withoutChapterNumber(data.title)}`
-			: `${title} — ${CURRENT_BOOK_EDITION.subtitle}`);
+			: `${title} | ${CURRENT_BOOK_EDITION.subtitle}`);
 
 	return {
 		entryId: normalized,
@@ -314,7 +314,7 @@ export function buildBookStructuredData(
 			"@id": BOOK_WEBSITE_ID,
 			url: `${BOOK_ORIGIN}/`,
 			name: BOOK_NAME,
-			alternateName: "The Flow-Like FlowScript Book",
+			alternateName: "FlowBook: A Developer's Guide to Flow-Like",
 			description: CURRENT_BOOK_EDITION.description,
 			inLanguage: BOOK_LANGUAGE,
 			publisher: { "@id": FLOW_LIKE_ORGANIZATION_ID },

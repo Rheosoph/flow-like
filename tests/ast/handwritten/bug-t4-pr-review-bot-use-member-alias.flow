@@ -1,0 +1,16 @@
+// BUG: `use ns::{ member as alias }` is rejected by the parser.
+// The member-list branch of `use_tree` (packages/ast/src/parse/parser.rs:500-517) reads bare
+// identifiers only and never looks for `as`, and `UseKind` has no per-member alias variant, so
+// the ONLY documented way to disambiguate two namespaces exporting the same member name cannot
+// be spelled at all. Parse fails with:
+//     expected `RBrace`, found `Ident("as")` (line 8, col 25)
+use github::{ createIssue }
+use jira::{ createIssue as createJiraIssue }
+
+eventsSimple collidingMemberImports() {
+    const gh = github::providerPat({ token: "gh" })
+    createIssue({ provider: gh, owner: "flow-like", repo: "flow-like", title: "from github", labels: [], assignees: [], issueFieldValues: [] })
+
+    const atl = atlassian::providerApiToken({ baseUrl: "https://x.atlassian.net", email: "a@b.c", apiToken: "t", isCloud: true })
+    createJiraIssue({ provider: atl, projectKey: "REV", summary: "from jira" })
+}

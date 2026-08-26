@@ -16,7 +16,7 @@ const chapterSpan =
 		? "the available chapters"
 		: contentStats.firstChapterNumber === contentStats.lastChapterNumber
 		? `Chapter ${contentStats.firstChapterNumber}`
-		: `Chapters ${contentStats.firstChapterNumber}–${contentStats.lastChapterNumber}`;
+		: `Chapters ${contentStats.firstChapterNumber}-${contentStats.lastChapterNumber}`;
 const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 
 const readingPath = [
@@ -25,7 +25,7 @@ const readingPath = [
 		label: "BEGIN HERE",
 		title: "One program, two ways to see it",
 		description:
-			"Meet the book’s central question, the graph-and-text contract, and the deterministic-first rule that anchors the chapters ahead.",
+			"Meet the book’s central question, then follow one Flow from existing systems into governed execution.",
 		href: "/introduction/",
 	},
 	...contentStats.parts.map((contentPart) => {
@@ -47,15 +47,16 @@ const readingPath = [
 	<section class="book-home__premise" aria-labelledby="premise-title">
 		<div class="book-home__section-label">
 			<span>01 / ABOUT THE BOOK</span>
-			<b>A NARRATIVE · NOT A MANUAL</b>
+			<b>INCIDENT-LED EXPLANATION</b>
 		</div>
 		<div class="book-home__premise-copy">
-			<h2 id="premise-title">Begin with the incident.<br /><em>Learn by building.</em></h2>
+			<h2 id="premise-title">Learn from a system under pressure</h2>
 			<div>
 				<p>
 					FlowBook begins inside the 3 a.m. outage that raised its central question:
 					why did everyone have to wait for the one person who understood the system?
-					From there, it turns that question into a practical introduction to FlowScript.
+					From there, it builds a Flow, or executable workflow, in FlowScript, Flow-Like’s
+					typed text form, and on the canvas.
 				</p>
 				<a href="/introduction/">Open the introduction <Icon name="right-arrow" /></a>
 			</div>
@@ -64,22 +65,22 @@ const readingPath = [
 		<div class="book-home__principles" aria-label="How FlowBook teaches">
 			<article>
 				<span>01</span>
-				<h3>Start with why</h3>
+				<h3>Begin in an outage</h3>
 				<p>Enter the major incident and the question it left behind before learning syntax.</p>
 			</article>
 			<article>
 				<span>02</span>
-				<h3>Build one real Flow</h3>
+				<h3>Build Incident Triage</h3>
 				<p>Create a deterministic incident classifier with no model, API key, or external service.</p>
 			</article>
 			<article>
 				<span>03</span>
-				<h3>See both faces</h3>
+				<h3>Inspect both authoring views</h3>
 				<p>Read the same typed program as compact FlowScript and as a visible graph.</p>
 			</article>
 			<article>
 				<span>04</span>
-				<h3>Break it on purpose</h3>
+				<h3>Trace a failure</h3>
 				<p>Follow a bad input to the node and runtime evidence that explain the failure.</p>
 			</article>
 		</div>
@@ -89,18 +90,16 @@ const readingPath = [
 		<div class="book-home__evidence-copy">
 			<div class="book-home__section-label book-home__section-label--dark">
 				<span>02 / THE METHOD</span>
-				<b>FOUR QUESTIONS · EVERY CONCEPT</b>
+				<b>FROM PROBLEM TO RUN EVIDENCE</b>
 			</div>
-			<h2 id="evidence-title">Read the language.<br /><em>See what it means.</em></h2>
+			<h2 id="evidence-title">Connect source to the graph it creates</h2>
 			<p>
-				Every construct is tested against four questions: what problem does it solve,
-				how does it read in FlowScript, what graph does it represent, and what evidence
-				does it leave when it runs or fails?
+				Each construct starts with the problem it solves. The chapter then follows its
+				FlowScript form into the canvas and the evidence left by execution or failure.
 			</p>
 			<div class="book-home__evidence-facts">
-				<span><i aria-hidden="true"></i> THE PROBLEM</span>
 				<span><i aria-hidden="true"></i> SOURCE ↔ GRAPH</span>
-				<span><i aria-hidden="true"></i> RUN OR FAILURE</span>
+				<span><i aria-hidden="true"></i> RUNTIME EVIDENCE</span>
 			</div>
 		</div>
 		<figure class="book-home__evidence-visual">
@@ -126,7 +125,7 @@ const readingPath = [
 				<span>03 / CURRENT EDITION</span>
 				<b>{chapterCount} {chapterNoun.toUpperCase()} · {partCount} {partNoun.toUpperCase()}</b>
 			</div>
-			<h2 id="path-title">{partCount} {partNoun}.<br /><em>One progressive path.</em></h2>
+			<h2 id="path-title">Follow the current edition from incident to implementation</h2>
 			<p>
 				The current open edition contains the introduction and {chapterSpan}. Read from
 				the founding incident through a complete application path, or jump directly to
@@ -160,9 +159,9 @@ const readingPath = [
 		<div class="book-home__system-copy">
 			<div class="book-home__section-label">
 				<span>04 / PDF EDITION</span>
-				<b>SAME MANUSCRIPT · BUILT FOR PRINT</b>
+				<b>PRINT EDITION FROM THE WEB SOURCE</b>
 			</div>
-			<h2 id="system-title">Take the book.<br /><em>Read it anywhere.</em></h2>
+			<h2 id="system-title">Download the print edition</h2>
 			<p>
 				The downloadable edition is built from the same source as this website, with a
 				cover, linked contents, page numbers, running heads, chapter bookmarks, and
@@ -192,7 +191,7 @@ const readingPath = [
 					<b>{edition.editionLabel}</b>
 				</div>
 				<div class="book-home__edition-title">
-					<span>ONE PROGRAM · TWO HONEST VIEWS</span>
+					<span>ONE EXECUTABLE FLOW</span>
 					<h3>{edition.title}</h3>
 					<p>{edition.subtitle}</p>
 				</div>
@@ -211,7 +210,7 @@ const readingPath = [
 	<section class="book-home__closing" aria-labelledby="closing-title">
 		<div>
 			<span>READ THE OPEN EDITION</span>
-			<h2 id="closing-title">Start online.<br /><em>Take it with you.</em></h2>
+			<h2 id="closing-title">Choose the edition that fits your reading</h2>
 		</div>
 		<div>
 			<p>
@@ -237,7 +236,7 @@ const readingPath = [
 
 	<footer class="book-home__footer">
 		<a href="https://flow-like.com">FLOW-LIKE</a>
-		<span>FLOWBOOK / THE FLOWSCRIPT BOOK</span>
+		<span>FLOWBOOK / FLOW-LIKE DEVELOPER GUIDE</span>
 		<a href="/flowbook.pdf" download={pdfFileName} type="application/pdf">DOWNLOAD PDF</a>
 	</footer>
 </div>

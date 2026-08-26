@@ -1,0 +1,29 @@
+// BUG: `Set<T>` is a first-class FlowScript type everywhere EXCEPT an interface body.
+// `parser.rs::type_ref` handles both containers for globals and parameters
+//     if base == "Map" ... return Ok(TypeRef::new(inner, Container::Map));
+//     if base == "Set" ... return Ok(TypeRef::new(inner, Container::Set));
+// but `parser.rs::interface_type_primary` only special-cases `Map`; `Set` falls through to the
+// generic `Tok::Ident(name) => InterfaceType::Named(name)` arm, so the following `<` is never
+// consumed and the field dies with
+//     parse: ParseError { message: "expected identifier, found `Op(\"<\")`" }
+// `model.rs::InterfaceType` has Named/Array/Map/Union/StringLiteral/Null/Any and no Set variant at
+// all, so `render.rs::render_interface_type` could not emit one either — an interface can describe
+// a map-of-int but not a set-of-string, while the very same declaration one line lower at file
+// scope (`const seeds: Set<string>`) is accepted and lowers to a real HashSet variable.
+//
+// Both interface fields below are the same kind of container declaration; only `hostBudget` parses.
+// Workaround used in t4-scraper-runtime.flow: spell the interface field `string[]` and keep the
+// real `Set<string>` on the global.
+use log::{ info }
+
+interface CrawlLedger {
+    seenFingerprints?: Set<string> = [];
+    hostBudget?: Map<string, int> = {};
+}
+
+const seeds: Set<string>
+
+eventsSimple ledgerProbe() {
+    const size = set::size({ setIn: seeds })
+    info({ message: `${size}`, toast: false })
+}

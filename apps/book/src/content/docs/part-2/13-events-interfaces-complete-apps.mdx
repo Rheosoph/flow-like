@@ -18,64 +18,54 @@ sidebar:
 ---
 
 import IncidentDeskDemo from '../../../components/IncidentDeskDemo.tsx';
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import eventSurfaceAdapters from '../../../assets/event-surface-adapters.svg';
 
-A Flow can be correct and still be unusable. Until somebody or something has a supported way to
-start it, it is an internal implementation.
+A correct Flow remains internal until someone or something can start it through a supported entry.
 
-This chapter turns the incident logic from the preceding chapters into an **Incident Desk App**.
-The same typed decision becomes available to an App user, a scheduled run, and an authenticated
-REST caller. We will also give the App a real interface—not a screenshot—and keep every boundary
-explicit enough to govern, version, and trace.
+Here, the incident logic from the preceding chapters becomes an **Incident Desk App**. Its typed
+decision serves an App user, a schedule, and an authenticated REST caller. The interface is
+interactive, and each boundary can be governed, versioned, and traced.
 
-The result is not one Event with several decorative labels. Different surfaces have different
-setup contracts. They share the business function while using adapters suited to their callers.
+Each surface gets an adapter suited to its caller while sharing one business function.
 
-> **Release check:** An event node is a triggerable entry inside a Flow. An App Event binds a
-> compatible entry to a surface, configuration, variable overrides, execution location, and Flow
-> version. Quick Action and Cron can target a Simple Event. A remote REST App Event instead targets
-> a Simple setup entry that registers one or more Generic handler entries. Page actions identify a
-> Board event node and execute it with the current interface state. App roles govern ordinary Event
-> execution and editing; there is no separate per-Event ACL. An Event is Local or Remote—never
-> Hybrid—even when its Board is Hybrid. Numbered Flow versions work today; weighted canary dispatch
-> is represented in the data model but is not wired into the audited execution paths. Remote REST
-> OpenAPI, edge type validation, and rejected-run evidence also have current limitations described
-> below.
+> **Release check:** App Events bind compatible Flow entries to caller surfaces, configuration,
+> variable overrides, execution location, and a Flow version. Roles govern Event execution and
+> editing at App level; there is no per-Event ACL. Numbered versions work today. Weighted canary
+> dispatch and some REST validation and evidence paths remain incomplete, as marked below.
 
 ## 13.1 An event node is an entry; an App Event is an exposure
 
-The word *Event* appears at two levels because the platform needs two distinct objects.
+*Event* names two distinct objects.
 
-An **event node** lives on the Board. It begins execution and defines what the Flow receives. A
+An **event node** lives on the Board. It starts execution and defines what the Flow receives. A
 Simple Event has no data contract of its own. A Generic Event carries a payload and can expose
-additional typed output pins. Chat and Mail Events provide contracts specialized for those
-interfaces.
+typed output pins. Chat and Mail Events provide specialized contracts.
 
-An **App Event** lives around the Flow. It selects:
+An **App Event** configures how callers reach that entry. It selects the Flow, event node, and
+either Latest or a numbered Flow version. It also owns the interface, execution location where the
+surface offers a choice, surface settings, variable overrides, protected secret values, and the
+release information for that exposure.
 
-- the Flow, event node, and either Latest or a numbered Flow version;
-- an interface or sink such as Quick Action, REST, Cron, Chat, or Deeplink;
-- Local or Remote execution where that surface offers a choice;
-- activation, route, exposure, and surface-specific settings;
-- variable overrides, including protected secret values; and
-- operational release information belonging to that exposed entry.
+One event node may serve several compatible App Events with different schedules, settings, or
+variable overrides. A route change stays outside the business logic.
 
-That separation is useful. One event node may be exposed by several compatible App Events with
-different schedules, settings, or variable overrides. Conversely, changing a REST route should
-not require inserting route strings into the business logic.
+The event node defines the executable entry. The App Event defines its exposure.
 
-The memorable formulation is:
+An App Event cannot wrap every event node in every surface. Generic Events support Generic Form,
+API, and Deeplink setups. Simple Events support Quick Action, API, Cron, Daemon, Deeplink, REST, and
+MCP. Chat and Mail use specialized interfaces. The setup screen filters incompatible choices.
 
-> The event node says **what can begin**. The App Event says **how this world may begin it**.
+## 13.2 Keep one decision behind surface adapters
 
-Compatibility still matters. An App Event cannot wrap every event node in every surface. The
-current product offers Generic Form, API, and Deeplink setups for a Generic Event; Quick Action,
-API, Cron, Daemon, Deeplink, REST, and MCP setups for a Simple Event; and specialized interfaces
-for Chat and Mail. The setup screen filters the choices rather than pretending incompatible
-contracts can be connected.
+Our shared decision has a deliberately small result. The caller-specific path ends at an Event
+node adapter; the Function itself has no trigger.
 
-## 13.2 Keep one decision and write honest adapters
-
-Our shared decision has a deliberately small result:
+<WorkflowFigure
+  src={eventSurfaceAdapters}
+  alt="Page, Quick Action, Cron, and REST callers pass through surface-specific configuration and Board Event adapters before converging on the decideIncident Function. REST uses a Simple setup Event that registers a Generic handler."
+  caption="Exposure stays outside the shared decision. Quick Action and Cron can reuse a Simple Event; REST setup registers a Generic handler. Every Event adapter calls the same typed Function."
+/>
 
 ```flow
 interface IncidentResult {
@@ -93,8 +83,8 @@ function decideIncident(
 }
 ```
 
-This Function owns the rule. The interfaces do not copy it. They adapt their input into its three
-parameters and carry its structured result back to their caller.
+This Function owns the rule. Each interface adapts its input to the function and returns the same
+structured result.
 
 The Quick Action adapter is a Simple Event. Its fields come from exposed Board variables:
 
@@ -108,9 +98,8 @@ eventsSimple triageQuickAction() {
 }
 ```
 
-A Cron App Event can target that same Simple Event. There is no interactive form during a
-scheduled run, so the scheduled App Event supplies the relevant variable overrides instead. The
-entry shape is identical even though the caller is not.
+A Cron App Event can target the same Simple Event. With no interactive form, the schedule supplies
+variable overrides.
 
 REST needs another adapter:
 
@@ -127,43 +116,32 @@ eventsGeneric triageRest(
 }
 ```
 
-Each named parameter becomes an output pin on the Generic Event entry. The inbound dispatcher
-fills those pins from the request. `return` publishes the Event result, which the REST surface can
-turn into a response.
+Each named parameter becomes an output pin on the Generic Event entry. The dispatcher fills those
+pins from the request; `return` publishes the REST response value.
 
-The `_client` parameter is not a user-supplied business field. It carries trusted metadata produced
-by the selected authentication path, such as verified OAuth claims or a connected-App identity.
-The Flow may inspect that context and make a finer authorization decision of its own.
+`_client` carries trusted metadata from the authentication path, such as verified OAuth claims or a
+connected-App identity. The authentication path supplies this trusted metadata. The Flow may use it for finer
+authorization.
 
-Why not register `decideIncident` directly? A Function is a callable layer, not an independently
-triggerable graph entry. REST registration stores the ID of a concrete event/handler node that the
-runtime can invoke. `triageRest` is the thin, visible adapter between those two contracts.
+REST cannot register `decideIncident` directly because a Function has no trigger. Registration
+stores the ID of a concrete Event handler, so `triageRest` provides that adapter.
 
-| Surface | Board entry | Where input comes from |
-| --- | --- | --- |
-| A2UI button | Selected Simple or Generic Event | Current Page element state and invocation context |
-| Quick Action | Simple Event | Exposed variables shown as a form |
-| Cron | Simple Event | App Event configuration and variable overrides |
-| REST route | Generic handler registered by a Simple setup Event | HTTP body, query, headers, and authenticated client metadata |
+Keep shared logic in the Function and caller-specific behavior in the adapter. The visible adapter
+makes an interactive action, unattended schedule, and public endpoint easy to distinguish.
 
-Shared logic belongs in the Function. Surface behavior belongs in the adapter. That small amount of
-explicit repetition is useful because it keeps a human reviewer from confusing an interactive
-user action with an unattended schedule or a public network boundary.
+## 13.3 Try the interactive Page
 
-## 13.3 A Page should be experienced, not merely described
+The `/triage` Page collects an affected system, report, and business impact. Its button invokes the
+incident Event and renders the result.
 
-The `/triage` experience asks for an affected system, a report, and its business impact. A button
-then invokes the Page's incident Event and renders its structured result.
-
-The interface below is a real, hydrated React component embedded in this book. Change its values
-and press **Triage incident**. Its calculation is an explicitly labelled local mock: no Flow-Like
-runtime or external endpoint is called from the book.
+The embedded React component is interactive. Change its values and press **Triage incident**. Its
+labelled local mock does not call Flow-Like or an external endpoint.
 
 <IncidentDeskDemo client:load />
 
-The production Flow-Like Page uses A2UI rather than this book component. Its component tree would
-contain typed text fields, a select, a button, and result cards. Components whose current values
-matter to execution are marked as event-relevant. The button's action identifies the event node:
+A production Flow-Like Page uses A2UI. Its component tree contains typed fields, a select, a button,
+and result cards. Components used during execution are marked event-relevant. The button action
+identifies the event node:
 
 ```json
 {
@@ -174,16 +152,14 @@ matter to execution are marked as event-relevant. The button's action identifies
 }
 ```
 
-The action context is for routing identity, not an improvised form-data envelope. At invocation,
-the client combines the current Page elements and relevant input values into the execution
-payload. The Flow can read the current element values through the A2UI catalog nodes. This keeps
-the Page model and its behavior connected without hiding a JavaScript callback inside the button.
+The action context carries routing identity. On invocation, the client combines current Page
+elements and relevant values into the payload. The Flow reads them through A2UI catalog nodes, so
+no hidden JavaScript callback controls the button.
 
-A Page does not own its navigation path. A UI App Event points to the Page and receives a route
-such as `/triage`. Today that App interface is an authenticated experience. Anonymous Page hosting
-is a planned surface, not a guarantee this chapter relies on.
+A UI App Event points to the Page and owns its route, such as `/triage`. Today the interface
+requires authentication. Anonymous Page hosting remains planned.
 
-## 13.4 Quick Action and Cron share a shape, not an identity
+## 13.4 Quick Action and Cron reuse one entry
 
 The Quick Action can expose the three ordinary variables declared in the fixture:
 
@@ -193,9 +169,8 @@ let report = "Production is on hold"
 let impact = "production-stopped"
 ```
 
-An App user sees those values as fields, changes them, and invokes `triageQuickAction`. A builder
-can create a second App Event on the same entry for a periodic verification job. That Cron Event
-can overwrite `systemId`, `report`, or `impact` without editing the Board.
+An App user edits those fields and invokes `triageQuickAction`. A second App Event can target the
+same entry for a periodic job, overriding the values without editing the Board.
 
 The effective value order is:
 
@@ -203,9 +178,8 @@ The effective value order is:
 2. the App Event's variable override; and
 3. the Board default.
 
-The people who may write the Flow define which variables participate in that configuration
-contract. A secret variable is handled separately and omitted from ordinary read responses. The
-REST API key in this chapter has no source value:
+Flow authors choose which variables participate in configuration. Secret variables are handled
+separately and omitted from ordinary read responses. The REST API key has no source value:
 
 ```flow
 @description("API key configured on the REST App Event")
@@ -213,15 +187,14 @@ REST API key in this chapter has no source value:
 const incidentApiKey: string
 ```
 
-Its App Event supplies the protected value. The caller's API key proves permission to cross the
-REST boundary; it is not automatically a credential that nodes should forward to another system.
-Those are separate trust decisions.
+Its App Event supplies the protected value. The caller's API key grants entry at the REST boundary;
+forwarding credentials to another system requires a separate decision.
 
 ## 13.5 A REST App Event is a setup program
 
-A single API Event can expose one configured endpoint. The REST surface is more capable and
-therefore more explicit: the Flow builds a server configuration, registers handlers, attaches
-authentication, publishes OpenAPI routes, and reaches the REST Server node.
+A single API Event exposes one configured endpoint. For REST, the Flow builds a server
+configuration, registers handlers and authentication, publishes OpenAPI routes, then reaches the
+REST Server node.
 
 The canonical fixture performs that setup as follows:
 
@@ -259,10 +232,9 @@ eventsSimple configureIncidentRest() {
 }
 ```
 
-`fnRefs: [triageRest]` is reference metadata, not an array passed to an ordinary pin. It tells
-Register REST Function which triggerable handler to publish. For the current remote path, register
-one handler per route; the remote setup persists the first reference, while the local socket
-implementation can invoke several.
+`fnRefs: [triageRest]` is reference metadata. It tells Register REST Function which handler to
+publish. Register one handler per remote route: remote setup persists the first reference, while
+the local socket implementation can invoke several.
 
 Create the App Event with these settings:
 
@@ -273,14 +245,12 @@ Create the App Event with these settings:
 5. Choose a stable alias such as `incident-desk`.
 6. Save and inspect the setup status and registered routes.
 
-In a remote runtime, REST Server does not bind a long-lived socket inside the setup run. It emits
-the composed server configuration to the platform. Saving the App Event runs that setup, validates
-that it reached REST Server, and persists the resulting route and authentication registrations.
+In a remote runtime, REST Server emits its configuration to the platform instead of binding a
+long-lived socket during setup. Saving the App Event runs the setup, checks that it reached REST
+Server, and persists the route and authentication registrations.
 
-That makes setup part of the release. A newly created REST Event is rolled back when its first
-setup fails. When an update fails, inbound traffic continues to use the last successful setup
-version while the error remains visible to the builder. A broken draft does not silently replace a
-working route.
+Setup is part of the release. A new REST Event rolls back when its first setup fails. If an update
+fails, traffic keeps using the last successful setup while the builder sees the error.
 
 After a successful setup, the public paths have this shape:
 
@@ -290,7 +260,7 @@ GET  /r/incident-desk/openapi.json
 GET  /r/incident-desk/docs
 ```
 
-## 13.6 The HTTP boundary is structured—and still evolving
+## 13.6 The HTTP boundary is structured and still evolving
 
 Call the route with an API key and JSON body:
 
@@ -316,48 +286,42 @@ The handler returns one object:
 }
 ```
 
-A plain returned value becomes a `200 application/json` response. Advanced handlers can return a
-response envelope containing status, headers, content type, and body when the HTTP contract needs
-more control.
+A plain value becomes a `200 application/json` response. For more control, return an envelope with
+status, headers, content type, and body.
 
-For named handler parameters, query values are collected first and JSON object fields overwrite a
-same-named query value. The runtime also makes the request, method, path, query, headers, raw body,
-and `_client` metadata available through reserved handler parameters. Keep the public contract
-small; accepting the entire request object by default only makes future compatibility harder.
+For named parameters, JSON object fields overwrite same-named query values. Reserved parameters
+provide the request, method, path, query, headers, raw body, and `_client` metadata. Keep the public
+contract small; accepting the whole request makes later compatibility harder.
 
-Flow-Like can publish OpenAPI JSON and an interactive browser UI for these registrations. The
-current remote document reliably describes routes, methods, and authentication, but its request
-and response bodies remain open objects. The local socket implementation has richer pin-derived
-request schemas. Neither remote document currently proves that the inbound router enforces the
-declared Flow types before execution.
+Flow-Like publishes OpenAPI JSON and an interactive browser UI. The remote document describes
+routes, methods, and authentication, while request and response bodies remain open objects. The
+local socket implementation has richer pin-derived request schemas. The remote router does not yet
+enforce declared Flow types before execution.
 
-That leads to an important separation between design doctrine and the current release:
+The design target is stricter than the current release:
 
 > **Doctrine:** Reject a request at the earliest boundary where its incompatibility is known, and
 > record the rejection as execution evidence.
 
-Today malformed JSON is rejected before dispatch. Authentication failure and unmatched routes are
-also rejected at the edge. But field values are not yet validated against the handler's pin schema
-there; a mismatch may fail later when a node evaluates its typed pin.
+Malformed JSON, authentication failure, and unmatched routes are rejected before dispatch. Field
+values are not yet checked against the handler pin schema at the edge; a mismatch may fail later
+when a node evaluates its typed pin.
 
-Pre-dispatch rejections also do not currently appear as rejected Runs. The persisted Run status
-model has Pending, Running, Completed, Failed, Cancelled, and Timeout, but no Rejected state. Invalid
-JSON, failed authentication, and an unmatched route can therefore return before a Run row exists.
-A type error that reaches execution can appear as a failed Run. The intended design is stronger:
-create attributable rejection evidence without pretending rejected work executed.
+Pre-dispatch rejections do not appear as Runs. The status model has Pending, Running, Completed,
+Failed, Cancelled, and Timeout, with no Rejected state. Invalid JSON, failed authentication, and
+unmatched routes can return before a Run row exists. A type error that reaches execution can appear
+as a failed Run. The intended design records attributable rejection evidence without claiming that
+the request executed.
 
 ## 13.7 Identity, permission, and credentials are different boundaries
 
-An ordinary App member needs the App-level **Execute Events** permission to invoke an Event. A
-builder needs **Write Events** to create, activate, reconfigure, or repoint one. Owners and admins
-inherit these abilities, and a custom role may receive them. There is currently no separate ACL on
-each App Event.
+App members need **Execute Events** to invoke an Event. Builders need **Write Events** to create,
+activate, reconfigure, or repoint one. Owners and admins inherit these permissions; custom roles may
+receive them. App Events have no separate ACL.
 
-The Flow can still make a domain decision after entry. User-context nodes expose the executing
-subject, role, permissions, and role attributes, so the graph can ask questions such as “may this
-caller triage payment incidents?” That check is application logic and remains visually reviewable.
-The core context also models arbitrary custom attributes, although the normal audited API path does
-not yet populate all of them.
+After entry, user-context nodes expose the subject, role, permissions, and role attributes. The
+Flow can then ask whether the caller may triage payment incidents. The context model also supports
+custom attributes, though the normal audited API path does not yet populate all of them.
 
 REST adds another boundary:
 
@@ -369,41 +333,36 @@ REST adds another boundary:
 | May this caller perform the domain action? | Explicit checks inside the Flow |
 | Which credentials may nodes use downstream? | Caller or App Event/sink credentials, chosen for that execution setup |
 
-Public REST supports no authentication, API key, static bearer token, Basic authentication,
-HMAC-SHA256, and OAuth/OIDC bearer validation. This exercise deliberately uses an API key. Leaving
-Register REST Auth disconnected creates an unauthenticated surface and should be an explicit,
-reviewed decision—not an accidental default.
+Public REST supports unauthenticated access, API keys, static bearer tokens, Basic authentication,
+HMAC-SHA256, and OAuth/OIDC bearer validation. This exercise uses an API key. Leaving Register REST
+Auth disconnected creates an unauthenticated surface and requires deliberate review.
 
-API-key possession does not identify a person. Verified OAuth claims can contribute subject,
-issuer, audience, scopes, and related metadata to `_client`. An Internal REST Event is reachable
-through an approved App connection rather than the public router, but that connection does not
-bypass authentication configured on the REST registration.
+An API key does not identify a person. Verified OAuth claims can add subject, issuer, audience,
+scopes, and related metadata to `_client`. An Internal REST Event uses an approved App connection
+instead of the public router, while still enforcing authentication configured on the registration.
 
-Interactive invocations can execute with the signed-in caller's credentials where configured.
-Unattended and public Event sinks normally use credentials deliberately stored with the App Event
-or sink. Platform storage credentials are scoped separately. Treating all three as “the user's
-token” would erase the very boundary the App needs to audit.
+Interactive invocations may use the signed-in caller's credentials. Unattended and public sinks
+normally use credentials stored with the App Event or sink. Platform storage credentials have
+their own scope. Preserve those distinctions in the audit trail.
 
-## 13.8 Hybrid is a Board choice, not an Event location
+## 13.8 Hybrid applies to Boards
 
 Boards support Local, Remote, and Hybrid execution modes. App Events support only Local or Remote.
 
 - A Local Board forces its App Events local.
 - A Remote Board forces them remote.
 - A Hybrid Board preserves the Local or Remote choice made for each App Event.
-- The web client dispatches through the remote backend; Desktop and Studio can execute locally.
+- The web client dispatches through the remote backend; Studio can execute locally.
 - A remote REST App Event is Remote by definition.
 
-The product-level reason for Hybrid is simple: builders should be able to work locally in Studio
-while the web experience runs on governed remote infrastructure. That does not mean half of one
-invocation runs on a laptop and the other half in the cloud. One execution has one location. Nodes
-inside it may call remote systems, but the Flow run itself is not teleported between runtimes.
+Hybrid lets builders work locally in Studio while the web experience runs on governed remote
+infrastructure. Each invocation still has one location. Its nodes may call remote systems, but the
+Flow run does not move between runtimes.
 
 ## 13.9 Pin the contract before other people depend on it
 
-An App Event can follow **Latest** or target a numbered immutable Flow version. Latest is useful
-while authoring because every saved Board change is immediately exercised. It is a poor default
-for a production API whose callers expect stability.
+An App Event can follow **Latest** or target an immutable numbered Flow version. Latest exercises
+every saved Board change during authoring; production APIs should use a stable version.
 
 Use this release sequence:
 
@@ -414,15 +373,14 @@ Use this release sequence:
 5. Promote the change through the organization's admin/builder review.
 6. Keep the prior version available for an explicit rollback.
 
-A caller cannot override the App Event's configured Flow version. REST registrations additionally
-have an App Event setup version and a pointer to the last successful setup. These identifiers solve
-different problems: the Flow version freezes authored logic; the setup version selects the
-published route configuration.
+Callers cannot override the configured Flow version. REST registrations also keep a setup version
+and a pointer to the last successful setup. The Flow version freezes the Board snapshot; the setup
+version selects the published route configuration. Catalog implementations, Event configuration,
+data, credentials, and external systems retain their own lifetimes.
 
-Do not describe weighted canary rollout as a current guarantee. The App Event model can store a
-canary target and weight, but the audited invocation paths select the primary target and do not
-perform weighted routing. Canary configuration is product intent until that selection is executed
-and tested end to end.
+Weighted canary rollout is not yet a runtime guarantee. The model stores a canary target and weight;
+audited invocation paths still select the primary target. Treat canary settings as product
+intent until weighted routing is implemented and tested end to end.
 
 ## 13.10 The complete App checklist
 
@@ -438,14 +396,8 @@ answers:
 - **Release:** Which immutable Flow version and successful setup are live?
 - **Evidence:** Where does a successful run, failed run, or pre-run rejection appear?
 
-The last item intentionally exposes a current gap instead of concealing it. A complete platform
-should preserve the evidence for a rejected request as deliberately as it preserves a failed node.
+The evidence item exposes a current gap: rejected requests should leave an attributable record just
+as failed execution does.
 
-The larger pattern is already in place. The React prototype makes the intended experience
-tangible. A2UI keeps the production interface structured. The Quick Action and Cron adapters reuse
-the same decision without pretending their callers are alike. The REST setup makes routes,
-authentication, documentation, and release behavior visible. And every execution that reaches the
-Flow still returns to the same graph where an operator can identify the responsible block.
-
-That is the step from a callable Flow to an App: not more hidden framework code, but explicit
-boundaries around logic that remains readable from both sides.
+At that point, another team can operate Incident Desk without first learning its internal graph.
+When they inspect a run, its evidence still leads to the responsible block.

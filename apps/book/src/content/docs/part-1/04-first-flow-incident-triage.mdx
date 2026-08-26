@@ -1,11 +1,11 @@
 ---
 title: "4. First Flow: Incident Triage in Two Views"
-description: Build a deterministic incident triage Flow, inspect its node graph, edit it in FlowScript and Studio, trace failures, and save a tested version.
+description: Build a deterministic incident triage Flow, edit its Board through FlowScript and the canvas, inspect failures, and save a tested version.
 seo:
-  title: "Flow-Like FlowScript Tutorial: Build an Incident Triage Workflow"
+  title: "Flow-Like FlowScript Tutorial: Build an Incident Triage Flow"
   topics:
     - FlowScript tutorial
-    - incident triage workflow
+    - incident triage Flow
     - dual-view editing
     - deterministic automation
     - Flow versioning
@@ -20,26 +20,18 @@ import WorkflowFigure from '../../../components/WorkflowFigure.astro';
 import triageContains from '../../../assets/workflows/incident-triage--focus-contains.webp';
 import triageFull from '../../../assets/workflows/incident-triage.webp';
 
-It is time to build something.
+Our first Flow accepts an incident report, normalizes the text, classifies it with a deterministic
+rule, and records the decision at the appropriate log level. It uses no external services, so any
+change in behavior can be traced to the input or one of six visible nodes.
 
-Our first Flow will not call an API, open a database, or ask an AI model to make a judgment. It
-will accept one incident report, normalize the text, classify it with a deterministic rule,
-and record the decision at the appropriate log level.
-
-That narrow scope is intentional. We want to see the relationship between FlowScript and the
-Board without credentials, network failures, or probabilistic behavior getting in the way.
-When the Flow behaves differently, we should be able to explain the difference from its input
-and six visible nodes.
-
-By the end of the chapter, we will have changed the same program from both authoring surfaces,
-inspected its run evidence, and saved a known-good version.
+We will edit the same Flow on the canvas and in FlowScript, inspect a run, and save a known-good
+version.
 
 > **Release check:** The source follows the current renderer's canonical event-parameter and
-> import conventions and round-trips through the parser and renderer. Its six mappings have
-> been checked against generated node declarations and direct tests of the constituent
-> reconciliation behavior. Exact canvas gestures, a combined end-to-end run, screenshots, and
-> the malformed-input trace must be captured against one named Flow-Like release before
-> publication. This draft does not invent release-specific interface behavior.
+> import conventions and round-trips through the parser and renderer. Its six mappings match the
+> generated node declarations and reconciliation tests. Exact canvas gestures, an end-to-end run,
+> screenshots, and the malformed-input trace still need verification against the release used for
+> publication.
 
 ## 4.1 The contract: accept, classify, respond
 
@@ -60,14 +52,11 @@ The Flow applies one rule:
 3. If the phrase occurs, write the normalized report as an Error log.
 4. Otherwise, write it as an Info log.
 
-“Respond” means writing evidence to the run log in this first example. The Flow does not yet
-return a value to an API caller, send a notification, or create an incident record in Data
-Studio. Those would be reasonable next steps, but each would add concepts that are not needed
-to understand the dual-view loop.
+Here, “respond” means writing to the run log. API responses, notifications, and incident storage
+can wait until we understand the two authoring views.
 
-The rule is deliberately literal. It is not a complete severity model, and it does not pretend
-to understand language. Given the same string, it produces the same branch decision every
-time. That makes it a good first program and a useful test fixture.
+The literal phrase check is only a teaching rule. Given the same string, it always takes the same
+branch, which makes the Flow useful as a test fixture.
 
 Three inputs will matter later:
 
@@ -77,21 +66,16 @@ Three inputs will matter later:
 | Urgent | `  PRODUCTION IS ON HOLD after an interface timeout.  ` |
 | Malformed | A payload in which `report` is not a string, such as `{"report": 42}` |
 
-We can already predict the domain behavior of the first two cases. The normal report does not
-contain the phrase and follows the Info path. The urgent report loses its surrounding spaces,
-matches despite its capitalization, and follows the Error path.
+The normal report follows the Info path. The urgent report loses its surrounding spaces, matches
+despite its capitalization, and follows the Error path.
 
-The malformed case is different. Its correct boundary depends on the release and invocation
-surface. A typed form may prevent the value from being submitted. An API adapter may reject
-the payload before the Board starts. If the value reaches the graph, the string operation may
-reject it there. We will observe that boundary rather than writing the desired outcome as if
-it had already happened.
+The malformed case depends on the release and invocation surface. A typed form may block the
+submission, an API adapter may reject it before the Board starts, or a string node may reject it
+during the run. We will record the observed boundary.
 
-One more distinction matters: the `log::error` operation records an Error-level message. Its
-node completes successfully; it does not throw an exception by itself. Some run lists may
-still classify or color the run from its highest log severity. The urgent path is a successful
-classification whose result happens to be serious. A true node failure is a different event,
-and its evidence should be read differently.
+The `log::error` operation records an Error-level message and completes successfully. Some run
+lists may still color or classify the run from its highest log severity. Check the node evidence
+before treating an urgent classification as a runtime failure.
 
 ## 4.2 Build it visually
 
@@ -107,8 +91,8 @@ contains six operations:
 | Log Error | `log_error` | Records an urgent report |
 | Print Info | `log_info` | Records a normal report |
 
-The displayed names can evolve. The catalog identities are the version-matched implementation
-references used to verify the source mappings.
+Displayed names may change. Catalog identities are the version-matched references used to verify
+the source mappings.
 
 Begin with the Generic Event. Rename it **Triage Incident**, which gives the entry its
 `triageIncident` source alias, and add a string output named `report`. A Generic Event already
@@ -119,7 +103,7 @@ Connect the `report` value to the String input of Trim String. Connect Trimmed S
 String input of Contains. Configure Contains with the substring
 `production is on hold`, and enable its case-insensitive comparison.
 
-The data side of the graph is now visible in Studio:
+The data path is now visible on the canvas:
 
 <WorkflowFigure
   src={triageContains}
@@ -130,36 +114,29 @@ The data side of the graph is now visible in Studio:
 The execution side is shorter. Connect the Generic Event execution output to the Branch input.
 Connect the Branch’s True output to Log Error and its False output to the Info log node.
 
-Finally, connect the normalized string from Trim String to the Message input of both log nodes.
+Connect the normalized string from Trim String to the Message input of both log nodes.
 Set the on-screen notification option to false for each. We want recorded run evidence, not a
 temporary toast.
 
-The completed graph therefore has two kinds of wires:
+The completed Flow has two kinds of wires:
 
 <WorkflowFigure
   src={triageFull}
-  alt="Six-node Incident Triage workflow with Branch routing to Log Error and Print Info while normalized report data feeds the condition and both messages."
-  caption="The complete six-node FlowScript rendered in Studio. Solid dark wires carry execution; colored dotted wires carry typed data."
+  alt="Six-node Incident Triage Flow with Branch routing to Log Error and Print Info while normalized report data feeds the condition and both messages."
+  caption="The complete six-node Flow on the Studio canvas. Solid dark wires carry execution; colored dotted wires carry typed data."
 />
 
-Notice what is absent: Trim String and Contains do not need execution wires. They are pure
-operations. When Branch needs its condition, the runtime evaluates the data dependencies that
-produce it. The Branch and log nodes are impure because their position in the execution path
-matters.
+Trim String and Contains need no execution wires. They are pure operations, evaluated when Branch
+needs its condition. Branch and the log nodes are impure because their place in the execution
+path matters. Data wires answer “Where does this value come from?” Execution wires answer “When
+does this work happen?”
 
-This separation answers two different questions. Data wires answer, “Where does this value
-come from?” Execution wires answer, “When does this work happen?” A graph that mixes those
-questions into one kind of connection becomes difficult to reason about as soon as side
-effects appear.
-
-At this point, pause before opening the text view. Read the graph from left to right and say
-the rule aloud:
+Before opening the text view, read the Flow from left to right:
 
 > When an incident arrives, trim its report. If the normalized report contains “production is
 > on hold,” log an error. Otherwise, log information.
 
-If the visible graph does not communicate that sentence, improve its placement before moving
-on. Correct wiring is necessary; readable organization is part of the result.
+If the canvas does not communicate that sentence, improve the layout before moving on.
 
 ## 4.3 Read the same Flow as source
 
@@ -179,8 +156,8 @@ eventsGeneric triageIncident(payload: Struct, report: string) {
 }
 ```
 
-This is not a handwritten reimplementation of the graph. It is the textual representation of
-that Board.
+FlowScript is the typed text form of the Flow logic shown on the Board. This source and the canvas
+describe the same six nodes.
 
 The import at the top tells FlowScript that unqualified logging calls come from the `log`
 namespace:
@@ -189,9 +166,8 @@ namespace:
 use log::*
 ```
 
-The renderer derives this glob import because the Flow uses multiple static calls from the
-same namespace. Fully qualified calls such as `log::error(...)` remain valid source, but the
-Board's canonical rendering uses the import and the shorter aliases here.
+The renderer derives this glob import because the Flow uses several static calls from `log`.
+Fully qualified calls such as `log::error(...)` remain valid.
 
 The event declaration describes the entry node:
 
@@ -199,9 +175,8 @@ The event declaration describes the entry node:
 eventsGeneric triageIncident(payload: Struct, report: string) {
 ```
 
-`eventsGeneric` identifies the Generic Event kind. `triageIncident` is the name we give this
-entry. `payload: Struct` is the event node's built-in payload output. The additional parameter
-`report: string` is the typed output we defined for this Flow.
+`eventsGeneric` identifies the event kind. `triageIncident` names this entry. `payload: Struct`
+is built in; `report: string` is the typed output we added.
 
 The next line contains one binding and one method-shaped node call:
 
@@ -209,12 +184,8 @@ The next line contains one binding and one method-shaped node call:
 const normalized = report.trim()
 ```
 
-`report.trim()` represents the Trim String node. FlowScript lets nodes with a receiver pin use
-method syntax, so the value on the left of the dot supplies the node’s String input. The
-default output becomes `normalized`.
-
-This does not create a hidden JavaScript string operation. It still names a catalog node, and
-that node remains visible on the Board.
+`report.trim()` represents the visible Trim String node. For nodes with a receiver pin, the value
+left of the dot supplies that input. The default output becomes `normalized`.
 
 The condition contains two more operations:
 
@@ -222,32 +193,26 @@ The condition contains two more operations:
 if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
 ```
 
-`normalized.contains(...)` is the Contains node. The receiver supplies its String input. The
-object supplies the remaining pins: the substring and the case-comparison option. Its boolean
-output supplies the Branch condition.
+`normalized.contains(...)` is the Contains node. The receiver supplies its String input; the
+object supplies the substring and comparison option. Its Boolean output feeds Branch.
 
-The `if` block is the Branch node rendered as familiar control flow. The first block corresponds
-to its True execution output; the `else` block corresponds to False.
+The `if` block renders the Branch node as control flow. Its first block is the True output and
+`else` is False.
 
-Finally, each statement inside those blocks is an impure logging node:
+Each statement inside those blocks is an impure logging node:
 
 ```flow
 error({ message: normalized, toast: false })
 info({ message: normalized, toast: false })
 ```
 
-The preceding `use log::*` makes these aliases available without a prefix. In the fully
-qualified spelling, `::` separates the `log` namespace from the node alias. A dot means field
-or method access on a value; `::` addresses an operation through its namespace. The object
-keys are the node’s input pins.
+The import makes these aliases available without a prefix. In a fully qualified call, `::`
+separates the namespace from the node alias. A dot accesses a field or receiver operation. The
+object keys are input pins.
 
-Count the graph behind the source: one event, one trim, one contains check, one branch, and two
-logs. Six nodes.
-
-The editable view may include trailing comments such as `//@n:...`. Those are identity anchors.
-They let reconciliation associate a statement with the node already on the Board. The book
-omits them for readability, but an author should preserve them while editing unless a deletion
-is intentional.
+The editable view may include identity anchors such as `//@n:...`. They associate a statement
+with an existing Board node. The book hides them for readability; preserve them while editing
+unless deletion is intentional.
 
 FlowScript accepts semicolons but does not require them. Canonical rendering omits them. That
 formatting choice does not change the Board.
@@ -260,26 +225,21 @@ Change the urgent phrase in the Contains call:
 substring: "customer orders are blocked"
 ```
 
-Do not apply the edit immediately. First inspect the pending reconciliation preview. The editor
-checks the source against the current Board and produces a command plan without mutating the
-persisted graph.
+Before applying, inspect the reconciliation preview. It checks the source against the current
+Board and plans the change without mutating the saved Flow.
 
-For this change, the important question is not the exact number of internal commands. That can
-vary as reconciliation and formatting evolve. The important shape is that an existing node is
-updated. The preview should not propose deleting the Flow or replacing all six nodes. If it
-does, stop and inspect the source and its anchors.
+The exact number of internal commands may change between releases. Check that the preview updates
+the existing node instead of replacing the Flow or all six nodes. If it does more, inspect the
+source and its anchors.
 
 Apply the edit to the Board. Then locate the Contains node and inspect its configured substring.
-The graph should now express the new rule while its structure and node identities remain
+The Flow should now express the new rule while its structure and node identities remain
 intact.
 
-This is a small edit, but it demonstrates the essential contract. You changed code, yet the
-result was not a separate textual program. FlowScript was parsed and reconciled into a Board
-change.
+The edit is parsed and reconciled into the existing Board.
 
-Use the editor’s source-to-node navigation affordance where it is available in your release.
-The release verification pass for this chapter should capture both the pending command plan
-and the changed node on the canvas.
+Use source-to-node navigation if the release provides it. Publication verification should capture
+the pending plan and changed node.
 
 Once you have seen the round trip, restore the original phrase and apply it again. The
 remaining examples use `production is on hold`.
@@ -307,18 +267,13 @@ if (normalized.contains({ substring: "production is on hold", ignoreCase: true }
 The final rendered text may include anchors and release-specific canonical formatting. Verify
 the actual output rather than copying those details from this draft.
 
-This direction of the loop is just as important as the first. The visual edit did not create
-an annotation beside the source. It changed the Board, and the source now describes that
-change.
+The canvas edit changed the Board; newly rendered FlowScript now describes that change.
 
-Avoid editing stale text while changing the canvas. The current editor guards against applying
-a draft when the Board has changed behind it; nevertheless, the simplest working habit is to
-finish or reset a text edit before switching surfaces, then re-render from the Board after a
-visual change.
+When the Board changes under a dirty FlowScript buffer, Studio blocks Apply until you refresh or
+merge the stale buffer and resolve every three-way merge conflict. Render fresh FlowScript after
+a canvas change.
 
-For the chapter fixture, remove the temporary warning again and confirm that the source has
-returned to the six-node baseline. The warning was useful for proving the reverse trip. It is
-not part of our classification contract.
+Remove the temporary warning and confirm that the source has returned to the six-node baseline.
 
 ## 4.6 Break it on purpose
 
@@ -345,11 +300,9 @@ The rule predicts that Trim String removes the surrounding spaces, Contains retu
 despite the capitalization, and the Branch follows its True output. The resulting message
 should be recorded at Error level without an on-screen toast.
 
-Again, this is not a thrown failure. The Log Error node completed the action we asked it to
-perform. Some run lists classify or color a run from its highest log level, while remote
-execution keeps completion status and log severity as separate fields. An intentional Error
-log can therefore look similar to a failed run at a glance. Read the node-attributed evidence
-before deciding what happened.
+The Log Error node still completed successfully. Some run lists use the highest log level for
+color or classification, while remote execution stores completion status and log severity
+separately. Read the node-attributed evidence before deciding whether the run failed.
 
 Now try the malformed payload:
 
@@ -359,7 +312,7 @@ Now try the malformed payload:
 }
 ```
 
-This is where the chapter must follow evidence instead of aspiration.
+Record what the chosen release actually does.
 
 Before final publication, run this case through the same invocation surface used in the
 screenshots and record the actual boundary:
@@ -370,22 +323,13 @@ screenshots and record the actual boundary:
 - If the value is coerced or defaulted, document that behavior and decide whether the fixture
   needs a different deliberately failing input.
 
-Do not claim that Trim String failed merely because it is the first string node. A platform
-boundary that rejects the wrong type earlier may be the safer and more accurate result.
+Do not assume Trim String failed because it is the first string node. The platform may reject the
+wrong type earlier.
 
-When a true node failure is available, open its run, find the relevant log entry, and use the
-node-navigation action to return to the responsible block. Capture the input, Flow version,
-run identifier, log level, message, and focused node. Those details turn “it failed somewhere”
-into reproducible evidence.
-
-This is the flight-recorder role of the run log. A useful trace preserves more than a sentence
-saying that execution stopped. It relates the evidence to a run, a version, and a node identity.
-An unfamiliar responder can start at the operation involved and trace its incoming values and
-surrounding execution path.
-
-Our six-node Flow is too small to make that navigation feel necessary. That is precisely why
-it is worth learning here. In a Board with hundreds of nodes, beginning at the responsible
-operation rather than at the application boundary can save the first hour of an investigation.
+When a true node failure is available, open its run and navigate from the relevant log entry to
+the responsible node. Capture the input, Flow version, run identifier, log level, message, and
+focused node. That record gives the next responder a concrete place to start, which matters far
+more on a Board with hundreds of nodes.
 
 ## 4.7 Save the first known-good version
 
@@ -398,7 +342,7 @@ policy; for a compatible correction to an existing Flow, that would normally be 
 version. The current draft remains editable, while the numbered version becomes a read-only
 snapshot.
 
-Record four things with the snapshot:
+Record with the snapshot:
 
 - the canonical FlowScript rendered from the Board;
 - the test inputs and their expected log levels;
@@ -409,12 +353,5 @@ A production-facing App Event can later target that numbered version instead of 
 work can continue on the draft without silently changing the entry point used by callers. When
 the next version is ready, test it and deliberately move the Event.
 
-We have now completed the full loop.
-
-We built a graph and read it as source. We changed the source and updated an existing node. We
-changed the graph and recovered the corresponding source. We ran deterministic cases, kept
-application-level severity distinct from runtime failure, and preserved a tested snapshot.
-
-Most importantly, there was never a visual workflow and a separate codebase to keep in sync.
-
-There was one Flow, seen from two sides.
+The saved version now contains one tested Flow whose canvas and FlowScript views describe the same
+logic. Chapter 5 explains how its data and execution wires behave at runtime.

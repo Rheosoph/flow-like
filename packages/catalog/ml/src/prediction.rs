@@ -6,15 +6,14 @@
 //! Supports batch processing for large datasets.
 //! Adds / upserts predictions back into the Database.
 
-#[cfg(feature = "execute")]
 use crate::ml::MLPrediction;
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::make_new_field;
 #[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::pin::ValueType;
-#[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel, node::remove_pin_by_name};
+use flow_like::flow::{board::Board, node::remove_pin_by_name};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -29,7 +28,6 @@ use flow_like_storage::arrow_schema::Schema;
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
-#[cfg(feature = "execute")]
 use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
@@ -292,7 +290,6 @@ impl NodeLogic for MLPredictNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

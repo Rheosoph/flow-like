@@ -12,7 +12,6 @@
 //! It is the exhaustive counterpart to Auto Ordinal. Auto Ordinal compares the *families* at
 //! sensible defaults; this node takes one family and searches its hyperparameters properly.
 
-#[cfg(feature = "execute")]
 use crate::ml::ParameterSpec;
 use crate::ml::{GridSearchEntry, NodeMLModel, OrdinalLevels};
 #[cfg(feature = "execute")]
@@ -20,15 +19,15 @@ use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, OrdinalOrdering, values_to_array1_ordinal,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
 #[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_ordinal::{
@@ -40,7 +39,6 @@ use flow_like_ordinal::{
 };
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -237,7 +235,6 @@ fn score_predictions(
 }
 
 /// The ordinal family being tuned.
-#[cfg(feature = "execute")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrdinalFamily {
     Logistic,
@@ -247,7 +244,6 @@ enum OrdinalFamily {
     Neural,
 }
 
-#[cfg(feature = "execute")]
 impl OrdinalFamily {
     fn parse(model_type: &str) -> Result<Self> {
         match model_type {
@@ -300,7 +296,6 @@ impl OrdinalFamily {
 ///
 /// Kept small on purpose: every entry multiplies into the cartesian product, and each resulting
 /// configuration is refitted once per fold.
-#[cfg(feature = "execute")]
 fn default_param_grid(model_type: &str) -> Value {
     match OrdinalFamily::parse(model_type) {
         // Deliberately NOT sweeping `link` here: Auto Ordinal already decides Logit vs Probit when
@@ -1386,7 +1381,6 @@ impl NodeLogic for OrdinalGridSearchNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let model_type: String = node
             .get_pin_by_name("model_type")

@@ -17,8 +17,8 @@ sidebar:
     variant: caution
 ---
 
-A FlowScript document is not arranged like a transcript of everything an author happened to do.
-It is a stable reading of one Board.
+A FlowScript document is the typed text form of one Board, arranged for stable reading rather
+than authoring history.
 
 Imports establish names. Interfaces describe structured values. Top-level variables describe the
 Board's per-run and configurable state. Functions define callable layers. Events provide the
@@ -37,19 +37,17 @@ event entries
 detached blocks
 ```
 
-A `detached` block is what lowering writes when a chain has no reachable entry; nothing inside one
-runs, so reading it is a finding about the Board rather than a construct to author.
+A `detached` block is emitted for a chain with no reachable entry. Its contents never run, so it
+usually signals a Board problem rather than something to author deliberately.
 
-By the end of this chapter, we will be able to look at a complete document and know what kind of
-graph entity each section represents. We will also know which familiar-looking words have
-Flow-specific meanings.
+This chapter maps each document section to its Board entity and clarifies Flow-specific meanings
+behind familiar syntax.
 
 > **Release check:** The complete Incident source is a parser-tested canonical fixture at
-> `examples/document-anatomy/anatomy.flow`. A catalog-aware Board reconciliation, an executed
-> run, and the editor's diagnostic presentation must still be captured against the release used
-> for publication. Prose comments are a known parity edge: free-standing `//` comments inside
-> bodies survive parse-and-format, but the current Board reconciler does not persist them as
-> canvas comments, and top-level comments have no durable AST slot.
+> `examples/document-anatomy/anatomy.flow`. Catalog-aware reconciliation, execution, and editor
+> diagnostics still need verification in the publication release. Free-standing `//` comments in
+> bodies survive parse-and-format, but the Board reconciler does not persist them as canvas
+> comments. Top-level comments have no durable AST slot.
 
 ## 6.1 Canonical source, not stylistic trivia
 
@@ -58,10 +56,9 @@ arguments, interfaces, and control blocks give it a TypeScript-familiar surface.
 `use` declarations and `::` paths solve namespace imports. Decorator-shaped annotations add
 Flow-specific metadata.
 
-Calling it “mostly TypeScript with a little Rust” is tempting and incomplete. Familiar syntax
-helps us read; the Board model supplies the semantics. The language is not TypeScript executed by
-a hidden JavaScript engine, and its decorators are not arbitrary functions evaluated at load
-time.
+The resemblance to TypeScript and Rust helps with reading, but the Board model supplies the
+semantics. FlowScript runs no hidden JavaScript engine, and decorators are fixed Flow metadata
+rather than functions evaluated at load time.
 
 The parser accepts more than one spelling for some constructs. The renderer emits one canonical
 spelling:
@@ -94,21 +91,16 @@ eventsGeneric triageIncident(payload: Struct, report: string) {
 }
 ```
 
-Canonicalization is not a beauty contest. If the same Board always renders to the same broad
-shape, then diffs contain more meaning, generated edits have fewer equivalent spellings to
-choose among, and parse–render–parse can converge instead of churning whitespace.
+Stable rendering keeps diffs meaningful, reduces equivalent spellings for generated edits, and
+lets repeated parsing and rendering converge without whitespace churn.
 
-It also explains why section order may change after formatting. The parser collects top-level
-declarations by role, and the renderer writes them in the fixed order shown above even if an
-event appeared before a function in the input. Within Board lowering, variables are sorted by
-name and stable identity, while function layers and event entries use deterministic identity and
-entry ordering. Do not encode runtime order by moving top-level declarations around; execution
-order lives inside their bodies.
+Section order may therefore change after formatting. The renderer groups top-level declarations
+by role even if the input places an event before a function. Board lowering sorts variables by
+name and stable identity; function layers and event entries use deterministic identity and entry
+ordering. Runtime order lives inside bodies, never in top-level placement.
 
-The formatter is deliberately narrower than the reconciler. Formatting parses text and renders
-its syntax without consulting a node catalog. It can format a well-formed call whose name does
-not exist. Applying the document is the later step that resolves catalog declarations, checks
-pins and types, plans graph changes, and reports whether the program can be represented.
+Formatting parses and renders syntax without consulting the node catalog, so it can format an
+unknown call. Apply resolves declarations, checks pins and types, and plans the Board changes.
 
 FlowScript also carries comments with two very different jobs.
 
@@ -121,10 +113,9 @@ eventsGeneric triageIncident(payload: Struct, report: string) {
 }
 ```
 
-The text parser and formatter preserve such a free-standing comment. A trailing prose comment may
-be normalized onto its own line. Today, however, these comments are not reconciled into durable
-Board comments, and top-level comments are skipped by the text AST. Treat this as a current
-round-trip gap, not as a documentation guarantee.
+The parser and formatter preserve a free-standing body comment and may move a trailing comment to
+its own line. The reconciler currently drops these comments when writing to the Board, while the
+text AST skips top-level comments. This remains a round-trip gap.
 
 An anchor comment is identity metadata:
 
@@ -141,14 +132,12 @@ eventsGeneric triageIncident(payload: Struct, report: string) {   //@n:event-nod
 ```
 
 `//@v:` identifies a Board variable, `//@l:` a Function layer, and `//@n:` a node. Anchors let an
-edit update the existing graph entity rather than guessing from a display name. They are emitted
-only when the authoring surface requests anchored text; clean examples in this book normally hide
-them.
+edit update an existing entity by identity. The authoring surface emits them when requested; book
+examples normally hide them.
 
-Do not hand-edit an anchor casually. Duplicate anchors and stale anchors that cannot be rebound to
-one unique compatible entity are diagnostics; a safe unique rebind is reported as a correction.
-Removing anchored sections can produce a deletion plan that requires explicit approval. The
-comments may look small, but they are part of safe identity-preserving reconciliation.
+Edit anchors carefully. Duplicate anchors and stale anchors without one compatible target produce
+diagnostics; a safe unique rebind appears as a correction. Removing anchored sections can trigger
+a deletion plan that requires explicit approval.
 
 ## 6.2 `use` declarations
 
@@ -159,8 +148,8 @@ least ambiguous:
 log::error({ message: report, toast: false })
 ```
 
-`::` separates a namespace path from a member. It is not field access on an object. A dot has a
-different role in expressions such as `report.trim()` and `incident.report`.
+`::` separates a namespace path from a member. A dot handles field or receiver access in
+expressions such as `report.trim()` and `incident.report`.
 
 Top-level `use` declarations can open that namespace in four supported ways:
 
@@ -180,21 +169,16 @@ audit::error({ message: "qualified through alias", toast: false })
 error({ message: "bare selected member", toast: false })
 ```
 
-The renderer does not add imports merely to make a file look busy. When a Board has at least two
-static call sites in one namespace and opening them will not collide with another name, current
-lowering can derive a glob import and render those calls bare. That is why the Chapter 4 Flow uses
-`use log::*` above `error(...)` and `info(...)`. Otherwise, keeping a qualified call can be the
-clearer canonical result.
+Current lowering can derive a glob import when a Board has at least two static calls in one
+namespace and no name collision. That is why Chapter 4 renders `use log::*` above `error(...)`
+and `info(...)`. A single or ambiguous call usually stays qualified.
 
-Import resolution fails closed. An unknown namespace, a member that does not exist, a reserved
-alias, or two imports that expose the same name can produce a reconciliation diagnostic. If two
-globs expose the same member, argument shape may disambiguate a call; when it cannot, the
-diagnostic asks for a qualified spelling. An unused valid import is currently a non-blocking
-correction rather than a graph error.
+Unknown namespaces, missing members, reserved aliases, and name collisions produce reconciliation
+diagnostics. Argument shape may disambiguate the same member exposed by two globs; otherwise the
+call needs a qualified spelling. An unused valid import is a non-blocking correction.
 
-`use` is top-level only. It changes how calls are resolved in this document; it does not install a
-package, grant a capability, or bypass App package approval. Namespaces and package governance are
-separate concerns.
+`use` is top-level only and changes name resolution in this document. Package installation,
+capabilities, and App approval remain separate.
 
 ## 6.3 Interfaces
 
@@ -210,14 +194,13 @@ interface Incident {
 }
 ```
 
-`report` is required. `source` is optional and may be either a string or `null`; its default is
-`null`. `tags` is an optional array of strings with an empty default. The current interface
-surface also supports named types, maps, unions, literal string alternatives, `any`, and quoted
-field names when a schema property is not a valid identifier. Chapter 7 will treat those forms as
-a type system rather than a checklist.
+`report` is required. `source` is optional, accepts a string or `null`, and defaults to `null`.
+`tags` is an optional string array with an empty default. Interfaces also support named types,
+maps, unions, literal string alternatives, `any`, and quoted field names for invalid identifiers.
+Chapter 7 covers their type behavior.
 
-Interfaces matter because “Struct” by itself says very little. A named interface can give a
-top-level variable, Function boundary, or Generic Event output an exact field contract:
+A bare `Struct` says little about its fields. A named interface gives a top-level variable,
+Function boundary, or Generic Event output an exact contract:
 
 ```flow
 let incident: Incident
@@ -232,23 +215,20 @@ schema onto the relevant variable or boundary pins and enforces it where the con
 When the Board already carries an equivalent schema, lowering can recover a readable nominal
 interface name instead of printing an opaque schema string beside every use.
 
-This does not make `interface Incident` a runtime class. It has no constructor, prototype, or
-methods. It describes the shape moving through pins. A method-shaped call on an interface value
-still resolves to a catalog node or declared FlowScript function whose receiver contract matches
-that schema.
+`interface Incident` describes a pin shape. It creates no runtime class, constructor, prototype,
+or methods. Method-shaped calls still resolve to a catalog node or declared FlowScript function
+with a compatible receiver contract.
 
-`@schema("…")` remains a legacy escape for object schema metadata that cannot be represented by a
-named interface. Prefer the interface form when it can preserve the schema. Do not manually copy a
-large JSON Schema into source merely because the syntax exists; the readable surface should earn
-its name.
+`@schema("…")` remains a legacy escape for metadata a named interface cannot represent. Prefer an
+interface when it preserves the schema; avoid pasting large JSON Schema into ordinary source.
 
-One current boundary is worth recording: decorators on interfaces are not supported. An unused
-interface is also not an independent Board asset; interfaces are derived from schema-bearing text
-surfaces. Give the declaration a real variable, function, or event boundary to describe.
+Interfaces do not support decorators. They are derived from schema-bearing text surfaces rather
+than stored as independent Board assets, so a declaration needs a variable, function, or event
+boundary to describe.
 
 ## 6.4 Top-level variables
 
-Top-level variables are where JavaScript intuition becomes actively misleading.
+Top-level variable keywords have Flow-specific meanings.
 
 Consider two declarations:
 
@@ -264,11 +244,9 @@ At the top level, the keywords map to Board exposure:
 | `const` | A non-exposed Board variable |
 | `let` | An exposed Board variable that may participate in App or Event configuration |
 
-They do **not** define runtime mutability. Both variables receive a fresh in-memory value for a
-run, initialized from a permitted runtime or Event override when the declaration enables that
-channel, and otherwise from the persisted Board default. Flow logic may assign either value during
-that run. The mutation is not durable across runs; persistent application state belongs in
-storage or Data Studio.
+Both keywords allow assignment during a run. Each run receives a fresh in-memory value from a
+permitted runtime or Event override, or from the persisted Board default. Changes disappear after
+the run; durable application state belongs in storage or Data Studio.
 
 The distinction is easiest to remember this way:
 
@@ -290,12 +268,10 @@ Their canonical order is description, category, legacy schema, secret, readonly,
 Each annotation applies to the declaration immediately below it; placing a comment between a
 decorator and its variable is currently a parse error.
 
-The names can also invite the wrong conclusions. `@readonly` does not yet create a runtime write
-guard; it locks ordinary edits to that Board variable's definition and configuration. `@runtime`
-does not make a value global to the platform; it selects a runtime-configuration channel. Current
-Web and Desktop storage is local to the client profile and device, while an Event can carry its own
-trusted override. `@secret` does not permit credentials to be pasted into source. Chapter 11
-examines those boundaries and the remaining enforcement gaps.
+`@readonly` locks ordinary edits to the variable definition and configuration; it does not yet
+guard runtime writes. `@runtime` selects a runtime-configuration channel. Current Web and Desktop
+storage is local to the client profile and device, while an Event can carry a trusted override.
+`@secret` still forbids credentials in source. Chapter 11 covers the enforcement boundaries.
 
 A secret declaration is intentionally value-free when rendered:
 
@@ -306,15 +282,12 @@ A secret declaration is intentionally value-free when rendered:
 const ticketToken: string
 ```
 
-FlowScript accepts an empty placeholder when creating such a declaration, but reconciliation
-rejects a non-empty secret initializer and does not echo that attempted value in its diagnostic.
-The real credential must enter through a trusted secret-setting surface. Existing secret defaults
-are omitted when the Board becomes text so viewing, copying, or sending FlowScript to an AI does
-not become a credential read channel.
+FlowScript accepts an empty placeholder when creating the declaration. Reconciliation rejects a
+non-empty secret initializer without echoing it in the diagnostic. Credentials enter through a
+trusted secret-setting surface, and existing defaults are omitted when the Board becomes text.
 
-This is separate from local bindings. Inside a body, `const normalized = report.trim()` names a
-node call result. A mutable `let` alias or a typed function-local variable belongs to that local
-scope. Those forms do not change whether a Board variable is exposed.
+Local bindings are separate. Inside a body, `const normalized = report.trim()` names a node output.
+A local `let` alias or typed variable does not affect Board-variable exposure.
 
 ## 6.5 Functions
 
@@ -328,9 +301,9 @@ function normalizeReport(report: string): (normalized: string) {
 }
 ```
 
-The parameter becomes a typed input pin on the Function layer. The named return becomes a typed
-output pin. The body remains a graph inside the layer, and a call elsewhere becomes a Call
-Function node targeting that layer:
+The parameter becomes an input pin on the Function layer and the named return becomes an output
+pin. The body remains visible graph logic inside that layer; each call becomes a Call Function
+node targeting the layer:
 
 ```flow
 const normalized = normalizeReport({ report: report })
@@ -342,14 +315,13 @@ The declaration's return syntax is deliberately explicit:
 : (normalized: string)
 ```
 
-Parentheses hold a named output list, not a TypeScript tuple value. With several outputs, each
-name is part of the callable pin contract, and the `return` values must match the declared count
-and types. The reconciler reports unresolved or mismatched returns rather than inventing a wire.
+Parentheses hold a named output list rather than a tuple. Each output name belongs to the pin
+contract, and returned values must match the declared count and types. Mismatches produce a
+diagnostic.
 
-Purity determines the execution boundary. The function above contains only demanded data work,
-so its layer does not need Execution pins. A function containing an impure call gains one
-execution entry and continuation, and every call joins the caller's execution path. This follows
-the same model as Chapter 5; `function` does not create a second runtime.
+Purity determines the execution boundary. The function above contains demanded data work and
+needs no Execution pins. A function with an impure call gains one execution entry and continuation;
+each call joins the caller's path. It uses the Chapter 5 runtime model.
 
 Within a body, a call-result binding normally renders with `const`:
 
@@ -357,23 +329,20 @@ Within a body, a call-result binding normally renders with `const`:
 const normalized = report.trim()
 ```
 
-That is an SSA-like name for a node output, not the top-level non-exposed-variable rule. When a
-local `const name = expression` is merely aliasing a non-call expression, canonical rendering
-uses `let` instead. Scope matters more than the keyword's visual familiarity.
+This `const` is an SSA-like name for a node output. When a local binding merely aliases a non-call
+expression, canonical rendering uses `let`. Top-level exposure rules do not apply here.
 
-Functions may carry `@cache` metadata. The bare form uses the current default namespace,
-five-minute lifetime, and App scope; a structured form can set namespace, TTL, and App or user
-scope. A cache hit skips the function body, including any side effects, so caching belongs on
-logic whose output is truly determined by its input. We will treat that as an operational design
-choice rather than a formatting trick.
+Functions may carry `@cache` metadata. The bare form uses the default namespace, a five-minute
+lifetime, and App scope. A structured form sets namespace, TTL, and App or user scope. A cache hit
+skips the body, including side effects, so use it only when inputs determine the output.
 
-Function anchors use `//@l:` because the durable identity is the layer. The node statements inside
-still use `//@n:`. Renaming a function while preserving its layer anchor updates one callable
-entity; copying the body without its identity asks the reconciler to plan something new.
+Function anchors use `//@l:` because the layer holds the durable identity. Inner nodes use
+`//@n:`. Preserving the layer anchor during a rename updates one callable entity; copying without
+it creates a new plan.
 
 ## 6.6 Events
 
-Events come last because they are where declarations become runnable programs.
+Events turn the preceding declarations into runnable entries.
 
 An event header has two names with different jobs:
 
@@ -383,19 +352,15 @@ eventsGeneric triageIncident(payload: Struct, report: string) {
 }
 ```
 
-`eventsGeneric` selects the catalog event type. `triageIncident` is the optional given name of
-this particular entry and becomes its readable identity. Without the second name,
-`eventsGeneric(...)` keeps the catalog's default naming.
+`eventsGeneric` selects the catalog event type. The optional `triageIncident` names this entry.
+Without it, `eventsGeneric(...)` keeps the catalog default.
 
-The parameters are not ordinary function inputs. They are the event node's data output pins: the
-values made available when that entry starts. Generic Event can declare custom data outputs;
-fixed event kinds must use the outputs their catalog contracts provide. On an anchored existing
-event, changing parameter name, order, type, container, or schema is treated as a boundary-contract
-change and is rejected rather than rewiring callers silently.
+Parameters become the event node's data output pins. Generic Event can declare custom outputs;
+fixed event kinds use their catalog contract. On an anchored event, changes to parameter name,
+order, type, container, or schema are rejected as boundary-contract changes.
 
-An event block is also distinct from an App Event. This block is the entry node inside the Flow.
-An App Event is the platform-level surface that may expose it as a form, API, schedule, quick
-action, or another supported trigger.
+An event block is the entry node inside a Flow. An App Event is the platform surface that exposes
+it as a form, API, schedule, quick action, or another trigger.
 
 On a fresh Board, the Incident example can now use every document section we have learned:
 
@@ -429,29 +394,22 @@ eventsGeneric triageIncident(payload: Struct, incident: Incident) {
 }
 ```
 
-Read it from top to bottom. The glob import makes members of the `log` namespace available as bare
-calls; this example uses two of them. The interface gives the event a visible schema. The first
-Board variable is internal configuration; the second is exposed. The function names a reusable
-pure layer. The Generic Event supplies the payload and typed incident, calls the function,
-evaluates the rule, and selects one execution path.
+Read from top to bottom: the import opens `log`, the interface defines the event schema, and the
+two Board variables hold internal and exposed configuration. The function creates a reusable pure
+layer. The event supplies its outputs, calls the function, and selects an execution path.
 
-Before the Board changes, the whole document is checked in phases. Syntax errors carry a
-one-based line and column. Reconciliation then resolves catalog and function declarations,
-validates argument and output pins, checks types and schemas, plans execution wiring, validates
-function returns and event boundaries, and enforces structural limits.
+Before the Board changes, the document passes phased checks. Syntax errors carry a one-based line
+and column. Reconciliation resolves declarations, validates pins, types, schemas, returns, event
+boundaries, and execution wiring, then enforces structural limits.
 
-The current backend can classify those findings with stable `FS_*` codes and phases such as
-parse, catalog resolution, type checking, execution wiring, lowering, and validation. Source spans
-for reconciliation findings are best effort because the structured diagnostic sidecar is derived
-from the existing string diagnostic channel; repeated call sites may be reported as a bounded set
-of candidate spans. Read the code, message, expected and actual values, declaration or pin, and
-safe repair guidance together instead of assuming every finding points to one perfect character.
+The backend classifies findings with stable `FS_*` codes and phases such as parse, catalog
+resolution, type checking, execution wiring, lowering, and validation. Reconciliation source
+spans are best effort because the structured sidecar derives from a string diagnostic channel;
+repeated calls may yield several candidate spans. Read the code, message, expected and actual
+values, declaration or pin, and repair guidance together.
 
-Diagnostics are not permission to apply the parts that happened to work. The server treats a
-FlowScript document as one program: if reconciliation reports any diagnostic, no planned Board
-commands execute. Non-blocking normalizations, such as an unused import notice, are returned
-separately as corrections. A clean plan that removes existing Board entities still meets a
-separate deletion-approval gate.
+The server applies a FlowScript document as one program. Any reconciliation diagnostic blocks all
+planned Board commands. Non-blocking normalizations, such as an unused import, return separately
+as corrections. Deleting existing Board entities still requires approval, even with a clean plan.
 
-That is the real anatomy of the file. Its order makes it readable; its anchors preserve identity;
-and its diagnostics protect the graph behind the text.
+Chapter 7 follows the types and schemas carried by these declarations onto visible pins.

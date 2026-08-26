@@ -20,31 +20,22 @@ import WorkflowFigure from '../../../components/WorkflowFigure.astro';
 import breakStruct from '../../../assets/workflows/break-struct--focus-fields.webp';
 import typedCollections from '../../../assets/workflows/typed-collections.webp';
 
-FlowScript types are not annotations added to make source code look disciplined. They describe
-what may cross a visible connection.
-
-That changes how we should learn them. A `string` is not only a compiler category; it is a string
-pin that can connect to another compatible pin. An `Incident` is not a hidden class; it is a
-structured contract whose fields can become visible on the Board. An array is not merely a value
-that happens to contain several things; its collection shape is part of the wire's contract.
+FlowScript types describe what may cross a visible connection. A `string` maps to a compatible
+string pin. An `Incident` gives a Struct pin a visible field contract. An array carries its
+collection shape as part of the wire.
 
 The governing rule is simple:
 
-> If Flow-Like knows that two values are incompatible, it should reject the connection as early as
-> possible. If an external system changes in a way the Flow could not know beforehand, execution
-> should fail transparently at the node that first discovers the bad value and make the repair easy
-> to find.
+> Reject known incompatibilities during authoring. When reality violates an unknown assumption,
+> fail at the first node that discovers it and make that node easy to find.
 
-APIs drift, models return unexpected content, and remote systems sometimes lie about their own
-schemas. Reliability means using every fact we have, then making the remaining uncertainty
-observable.
+External contracts drift. Flow-Like uses the facts it has and makes the remaining uncertainty
+visible at runtime.
 
 > **Release check:** The scalar and container spellings, interface grammar, schema projection,
-> connection diagnostics, and Make/Break behavior in this chapter are grounded in the current
-> parser, renderer, reconciler, pin-matching code, and catalog tests. A publication release must
-> still verify the complete examples in Studio and capture the exact diagnostic and jump-to-node
-> experience. Schema support is evolving; the final section distinguishes today's readable
-> surface from richer metadata that may remain behind it.
+> connection diagnostics, and Make/Break behavior match the current parser, renderer, reconciler,
+> pin-matching code, and catalog tests. Verify the complete examples and diagnostic navigation in
+> the publication release. The final section records current schema-projection limits.
 
 ## 7.1 Scalars and `any`
 
@@ -63,8 +54,8 @@ canonical spellings:
 | `Struct` | Structured JSON-like value | API responses, records, configuration objects |
 | `any` | Generic data value | a boundary whose concrete data type is not yet known |
 
-Execution pins are also typed internally, but they are control connections rather than values we
-store in variables. They answer “what runs next?” instead of “what data is this?”
+Execution pins are typed control connections. They answer “what runs next?” rather than “what
+data is this?”
 
 The first four types have direct literal forms:
 
@@ -75,36 +66,28 @@ const confidence = 0.95
 const productionStopped = true
 ```
 
-`Date`, `Path`, and `bytes` often arrive from catalog nodes or explicitly typed boundaries. A
-quoted timestamp is still a `string` merely because it resembles a date. The distinction matters:
-a Date node can offer date operations, while a string can offer text operations. Conversion should
-be explicit when those contracts meet.
+`Date`, `Path`, and `bytes` often come from catalog nodes or typed boundaries. A quoted timestamp
+remains a `string`; use an explicit conversion before date operations.
 
 `bytes` represents one raw byte buffer on a Normal pin. `bytes[]` would be an array of buffers, not
 the usual representation of one file's contents.
 
-`Struct` means “an object-shaped value,” but it does not necessarily say which fields exist. That
-is useful at genuinely open boundaries, such as a webhook payload whose keys are selected by
-another system. It gives Flow-Like less information than a named interface, however.
+`Struct` means an object-shaped value and may omit field information. That suits open boundaries
+such as webhook payloads, but gives Flow-Like less information than a named interface.
 
-`any` goes one step further. It is the textual spelling of a Generic pin: a value whose base type
-may specialize when it connects to something concrete. FlowScript permits this because some nodes
-really are generic. Array utilities, selectors, and external boundaries cannot always name a
-single element type in advance.
+`any` is the textual spelling of a Generic pin. Its base type may specialize when connected to a
+concrete type. Generic array utilities, selectors, and external boundaries sometimes need this.
 
-Permitted does not mean preferred. Flow-Like does not need an arbitrary style penalty for `any`;
-the workflow already makes the cost felt. With a typed value, compatible operations can be found
-by type, incompatible wires can be rejected, and fields can be exposed visibly. With `any`, the
-author often has to inspect, convert, or defer a decision until runtime.
+Use `any` where uncertainty is real. A concrete type improves catalog search, rejects incompatible
+wires, and exposes fields. An `any` value often needs inspection or conversion at runtime.
 
-The same is true for an untyped `Struct`. A schema-aware structure can use
-**Make Struct (Schema)** and **Break Struct** with visible field pins. An open structure pushes the
-author toward generic Get Field and Set Field operations with string keys. Both are possible. One
-is easier to build, read, and govern.
+A schema-aware Struct can use **Make Struct (Schema)** and **Break Struct** with visible field
+pins. An open Struct relies on generic Get Field and Set Field operations with string keys, which
+are harder to inspect and govern.
 
 ## 7.2 Value shapes
 
-The base type is only half of a pin contract. Flow-Like also records the value's shape:
+Flow-Like records both the base type and value shape:
 
 - **Normal** means one value.
 - **Array** means an ordered collection.
@@ -121,18 +104,15 @@ const incidentsById: Map<string, Struct>
 const affectedServices: Set<string>
 ```
 
-The canonical FlowScript map form uses `string` keys. The inner type names the values. A set has
-one element type. For ordinary declaration and function-boundary types, the current grammar wraps
-one base type in one collection shape; it is not an unrestricted TypeScript generic system.
+Maps use `string` keys and one value type. Sets have one element type. Ordinary declaration and
+function-boundary types currently wrap one base type in one collection shape.
 
-Shape participates in compatibility. A `string` is not a `string[]`, and a `Struct` is not a
-`Struct[]`. Even Generic pins do not make that distinction meaningless: once a generic input or
-output declares a collection shape, current connection planning protects the scalar-versus-
-collection boundary rather than silently guessing.
+Shape affects compatibility. `string`, `string[]`, `Struct`, and `Struct[]` are distinct contracts.
+A Generic pin may specialize its base type, but connection planning still protects its declared
+scalar or collection shape.
 
-This matters visually. Imagine a node that produces `Incident[]` and a node that accepts one
-`Incident`. The correct graph needs an operation that selects or iterates an element. This example
-makes the choice explicit with For Each:
+A node producing `Incident[]` needs a selector or iterator before a consumer expecting one
+`Incident`. This example uses For Each:
 
 <WorkflowFigure
   src={typedCollections}
@@ -140,8 +120,8 @@ makes the choice explicit with For Each:
   caption="The collection wire ends at For Each; only its per-item Value output crosses into the scalar Incident path."
 />
 
-Connecting the collection directly would hide which incident the consumer should receive.
-Rejecting the wire makes that decision explicit.
+Studio rejects a direct connection because `Incident[]` and `Incident` have different shapes. A
+selector or iterator must choose an element first.
 
 Array literals exist, but top-level defaults use compact canonical JSON, and an unannotated array
 default only establishes `any[]` today:
@@ -151,23 +131,18 @@ const names: any[] = ["api","billing"]
 const typedNames: string[] = ["api","billing"]
 ```
 
-The first declaration says “this is an array” without promising one element type. The second
-keeps the intended element contract visible. Empty arrays are even less informative, so an
-annotation is the honest choice when the type matters.
+The first declaration promises only an array. The second keeps the element type visible. Empty
+arrays also need an annotation when their element type matters.
 
-An object literal is a `Struct`, not automatically a `Map`. A struct has named fields that may
-each have different types. A map has arbitrary string keys whose values share one type. That
-difference decides whether we want named field pins or key-based lookup.
+An object literal creates a `Struct`. Struct fields may have different types; Map values share one
+type under arbitrary string keys. The distinction decides between named field pins and key lookup.
 
-The current source surface has array and JSON object literals. Maps and sets are normally created
-and transformed through their catalog nodes rather than with JavaScript-style `new Map()` or
-`new Set()` expressions. That is consistent with the rest of FlowScript: construction remains a
-visible, declared node operation instead of arbitrary code hidden inside the source view.
+FlowScript has array and JSON object literals. Maps and sets are normally built through catalog
+nodes, so construction remains visible on the Board.
 
 ## 7.3 Inference and its boundaries
 
-FlowScript infers top-level variable types only where a literal provides an unambiguous answer.
-The present rules are deliberately small:
+FlowScript infers a top-level variable type only from an unambiguous literal:
 
 | Literal | Inferred declaration type |
 | --- | --- |
@@ -179,7 +154,7 @@ The present rules are deliberately small:
 | `[1,2]` | `any[]` |
 | `null` | none; add an annotation |
 
-The renderer removes a redundant scalar annotation when the literal infers exactly the same type:
+The renderer removes a scalar annotation when the literal already proves the same type:
 
 ```flow
 const retries: int = 3
@@ -191,20 +166,17 @@ becomes the canonical form:
 const retries = 3
 ```
 
-It retains an annotation when it carries information the literal does not. These declarations are
-not equivalent:
+It keeps an annotation that adds information. These declarations have different types:
 
 ```flow
 const threshold = 1
 const thresholdAsFloat: float = 1
 ```
 
-The first is an integer. The second deliberately declares a float despite using a whole-number
-default. Likewise, structured and array defaults keep their annotations in canonical source so
-their intended shape remains readable.
+The first is an integer; the second is a float with a whole-number default. Structured and array
+defaults keep annotations so their intended shapes remain visible.
 
-`null` cannot tell us whether the missing value will later be text, a date, an incident, or
-something else. FlowScript therefore rejects this:
+`null` carries no future value type, so FlowScript rejects this declaration:
 
 ```flow
 const owner = null
@@ -216,39 +188,28 @@ and requires an explicit type. A top-level Board variable may omit its persisted
 const owner: string
 ```
 
-That is an unset default, not a declaration that every string pin accepts `null` as ordinary data.
-At interface-field level, nullability has a richer spelling—`string | null`—which we will use in
-the next section. Ordinary variable and boundary type references currently remain the simpler
-base-plus-container form.
+This declares an unset default. It does not make `null` valid on every string pin. Interface fields
+can spell nullability as `string | null`; ordinary variable and boundary types currently use the
+simpler base-plus-container form.
 
-Top-level inference is also limited to literals. FlowScript does not treat this as a hidden
-compile-time program:
+Top-level inference stops at literals. This call cannot initialize persisted configuration:
 
 ```flow
 const normalized = normalizeReport()
 ```
 
-A top-level Board variable is persisted configuration, not the result of executing a node while
-the document loads. Node calls belong inside functions and events, where their output types come
-from catalog declarations and connected pins.
+A top-level Board variable stores configuration. Node calls belong inside functions and events,
+where catalog declarations and pins supply output types.
 
-That separation gives Flow-Like two moments to catch a problem.
+Studio checks candidate wires, and FlowScript reconciliation resolves calls against the live
+catalog. A known `int` to `string` mismatch, collection-shape conflict, or enforced-schema conflict
+blocks the new edge with a conversion diagnostic. Apply does not yet prove every direct literal
+against its target contract.
 
-First, Studio checks candidate wires, and FlowScript reconciliation resolves calls against the live
-catalog. If a wired or anchored source contract says `int` and the target requires `string`, the
-new edge is rejected with a conversion diagnostic. Known shape and enforced-schema mismatches get
-the same treatment. Current Apply does not prove every direct literal against its target contract,
-so “known” must not be read as universal compile-time validation.
-
-Second, execution validates reality. Suppose an external service used to return a customer ID as
-text and begins returning a number without updating any contract Flow-Like can see. No static
-checker can reject an unknown change. The first node whose typed operation cannot consume the
-value fails during the run. That may be a conversion or a later consumer if an open field lookup
-first produced `null`. Error and log evidence remain attributed to the discovering node, so the
-responder can jump to the operation that needs repair.
-
-Early rejection and transparent runtime failure are not competing promises. Together they mean:
-catch everything knowable, and localize everything else.
+Execution catches unknown changes. If an external service starts returning a numeric customer ID
+without updating its contract, the first typed node unable to consume it fails. That may be a
+conversion or a later consumer after an open field lookup produced `null`. Logs remain attributed
+to the node that discovered the problem.
 
 ## 7.4 Interfaces as visible schemas
 
@@ -277,27 +238,25 @@ eventsGeneric inspectIncident(payload: Struct, incident: IncidentRecord) {
 }
 ```
 
-This one declaration carries several independent facts:
+The declaration records each field's contract:
 
 - `id`, `severity`, `report`, and `observedAt` are required fields.
 - `source` may be absent, and when present may contain a string or `null`.
 - `affectedSystems` is an array of another named structured type.
 - `labels` is a string-keyed map whose values are strings.
 - `severity` declares four literal alternatives in its schema rather than an unrestricted string.
-- the external ticket key is quoted because its hyphens cannot be written as an identifier; and
+- the external ticket key is quoted because its hyphens prevent identifier syntax;
 - `externalPayload` admits uncertainty exactly where it enters, without weakening the rest of the
   record.
 
-Optionality, nullability, and a default are different statements:
+Optionality, nullability, and defaults remain separate:
 
 ```flow
 source?: string | null = null;
 ```
 
-The `?` says the property is not required. `| null` says `null` is an allowed value when the
-property exists. `= null` records a default in the generated schema. A field can be required and
-nullable, or optional but non-null when supplied. FlowScript does not collapse those choices into
-one vague idea of “maybe.”
+The `?` makes the property optional. `| null` allows `null` when it exists. `= null` records a
+schema default. A field may be required and nullable, or optional and non-null when supplied.
 
 Inside interfaces, the current surface supports named types, nested arrays, string-keyed maps,
 unions, string-literal alternatives, `null`, and `any`. Parentheses disambiguate an array whose
@@ -309,26 +268,21 @@ interface Evidence {
 }
 ```
 
-Without the parentheses, `string | null[]` would mean a string or an array of nulls, not an array
-whose individual elements can be either.
+Without parentheses, `string | null[]` means either one string or an array of nulls.
 
-The parser turns an interface into JSON Schema metadata. When one interface references another,
-the generated schema carries the referenced definition. A variable, function boundary, or event
-boundary using `IncidentRecord` therefore still becomes a Struct pin at runtime, but one with a
-specific schema attached.
+The parser turns interfaces into JSON Schema metadata and carries referenced definitions. An
+`IncidentRecord` boundary becomes a Struct pin with that specific schema attached.
 
-This is structural information, not object-oriented behavior. `IncidentRecord` has no
-constructor, prototype, or arbitrary methods. It describes fields on a wire. Method-shaped syntax
-still resolves to a catalog node or a FlowScript function with a compatible receiver.
+`IncidentRecord` describes fields on a wire. It creates no constructor, prototype, or arbitrary
+methods. Method syntax still resolves to a catalog node or FlowScript function with a compatible
+receiver.
 
 ## 7.5 Struct fields and schema propagation
 
-The practical reward for typing a Struct appears on the canvas.
+Typing a Struct changes what the canvas can show.
 
-Given an open `Struct`, Flow-Like knows that the value is object-shaped but not which keys it
-contains. A generic Get Field node therefore needs both the Struct and a string such as
-`"report"`. A generic Set Field node needs the same kind of key. Rename the remote field and that
-string may remain plausible until a run reaches it.
+An open `Struct` reveals no keys. Generic Get Field and Set Field nodes therefore need a string
+such as `"report"`, which may remain plausible after the remote field is renamed.
 
 Given `IncidentRecord`, the schema can drive field-shaped nodes instead:
 
@@ -338,45 +292,36 @@ Given `IncidentRecord`, the schema can drive field-shaped nodes instead:
   caption="Break Struct adopts the IncidentRecord schema and turns its three fields into visible, typed outputs."
 />
 
-**Break Struct** adopts the concrete schema from its producer and creates a field output pin with
-the most specific type it can currently derive for each property. **Make Struct (Schema)** does the
-inverse: it exposes field inputs derived from the consumer's schema and produces the structured
-value. Field selection becomes part of the visible graph rather than a bag of unverified string
-keys.
+**Break Struct** adopts the producer schema and creates the most specific output pin it can derive
+for each property. **Make Struct (Schema)** exposes field inputs from the consumer schema and
+produces the Struct. Field selection stays visible instead of relying on unchecked string keys.
 
-FlowScript can render that graph compactly:
+FlowScript can render that Board logic compactly:
 
 ```flow
 let report = incident.report
 let ticketId = incident["external-ticket-id"]
 ```
 
-Plain identifier-like fields use dot syntax. Property names containing spaces, hyphens, or other
-characters that cannot form an identifier use bracketed string syntax. A numeric or dynamic
-bracket remains a collection index, so `incidents[0]` and
-`incident["external-ticket-id"]` keep different meanings.
+Identifier-like fields use dot syntax. Other property names use bracketed strings. Numeric or
+dynamic brackets remain collection indexes, so `incidents[0]` and
+`incident["external-ticket-id"]` have different meanings.
 
-The compact expression does not hide arbitrary reflection. Depending on the live graph, the
-renderer can be describing a Break Struct field output or a catalog field-access node. Applying
-the text must resolve that expression back to a compatible graph operation. Chapter 9 will follow
-that lowering in detail.
+Depending on the live Board, the renderer may describe a Break Struct output or a catalog
+field-access node. Apply must resolve the expression to a compatible Board operation. Chapter 9
+follows that lowering.
 
-Schema propagation is what keeps the field information useful after the first wire. Current
-catalog behavior carries a typed array's item schema through common operations such as Get Element
-and For Each, so a downstream Break Struct can still expose the element's fields. Nested Struct
-fields receive standalone sub-schemas where the catalog can derive them. A generic passthrough
-must not overwrite a concrete schema with an “open object” marker.
+Schema propagation keeps field information after the first wire. Get Element and For Each carry a
+typed array's item schema, allowing downstream Break Struct nodes to expose fields. Nested Structs
+receive sub-schemas where derivation is possible. A generic passthrough preserves any concrete
+schema.
 
-Schema evolution should preserve the author's intent, too. The current Make/Break implementation
-does not silently delete a field pin while it still has a wire. If a new producer schema removes
-the wired `name` field, the stale pin and its connection remain, the new fields are added, and the
-node receives an error naming what is still connected but no longer declared. The author can jump
-to that node, insert a conversion or select the renamed field, and repair the Flow without first
-reconstructing a vanished wire.
+The current Make/Break implementation preserves a wired field pin when a new schema removes that
+field. The stale pin and connection remain, new fields appear, and the node reports the undeclared
+connection. The author can then insert a conversion or choose the renamed field without rebuilding
+a vanished wire.
 
-That is the concrete answer to “what happens when an interface changes?” There is no single rule
-based only on whether a field was added, removed, or renamed. Flow-Like uses the information
-available at each boundary:
+Interface changes are handled according to the information available at each boundary:
 
 - a new optional field may require no repair at an open or schema-adopting boundary, although two
   enforced whole-schema contracts can still compare unequal;
@@ -385,14 +330,11 @@ available at each boundary:
 - an unannounced external change can only be discovered at runtime, where the first node unable to
   consume the changed value exposes it.
 
-The principle matters more than pretending every provider follows perfect versioning: catch the
-change wherever it becomes knowable, and take the responder directly to the place that must
-convert or adapt it.
+The repair should appear where the change first becomes knowable.
 
 ## 7.6 Edges and preserved metadata
 
-Types protect edges, but the protection is intentionally based on facts—not wishful inference.
-The following matrix is a useful working model:
+Type checks use known facts. The current behavior is:
 
 | What Flow-Like knows | Current behavior |
 | --- | --- |
@@ -404,48 +346,38 @@ The following matrix is a useful working model:
 | A typed Make/Break field disappears while still wired | Preserve the wire and report the stale field on the node |
 | An external value violates a fact the Board did not know | Fail at runtime with node-attributed error evidence |
 
-`any` is therefore an escape from a fact we do not possess, not an escape from every collection
-rule. An open Struct schema similarly says “these fields are not fixed”; it must not be mistaken
-for a different concrete object schema. Make and Break boundary pins are special because they
-adopt the connected Struct schema dynamically.
+`any` marks a missing base-type fact while preserving collection rules. An open Struct says its
+fields are unfixed; it does not match an unrelated concrete schema. Make and Break boundary pins
+are special because they adopt a connected Struct schema.
 
-Schema compatibility is not currently a full structural-subtyping theorem. Where two pins enforce
-concrete schemas, the safe comparison is generally canonical contract equality, with explicit
-schema-adopting boundaries as exceptions. Authors should not assume that a record with three
-fields can always flow into a two-field input merely because it looks like a TypeScript subtype.
-The node declaration decides whether its schema is descriptive, enforced, or open.
+Schema compatibility does not provide full structural subtyping. Two enforced concrete schemas
+generally require canonical equality, except at schema-adopting boundaries. A three-field record
+cannot be assumed compatible with a two-field input. The node declares whether its schema is
+descriptive, enforced, or open.
 
-The Board stores schema metadata as JSON Schema text or as a reference to it. FlowScript interfaces
-project the most readable portion of that metadata into source. Today that readable surface
-handles object properties, requiredness, supported defaults, named definitions, arrays,
-string-keyed maps, supported unions and literal strings, `null`, `any`, and date/date-time formats.
+The Board stores JSON Schema text or a reference to it. FlowScript projects the readable portion:
+object properties, requiredness, supported defaults, named definitions, arrays, string-keyed maps,
+supported unions and literals, `null`, `any`, and date or date-time formats.
 
-Some JSON Schema carries more than this grammar can say: validation bounds, titles and
-descriptions at every level, pattern properties, or compositions such as `oneOf` and `allOf` may
-exceed the readable interface projection. The legacy `@schema("…")` decorator remains an escape
-hatch for an object schema that cannot be represented as a named interface. It is exact, but it is
-not pleasant prose and should not be the first choice for an ordinary record.
+Validation bounds, nested descriptions, pattern properties, and compositions such as `oneOf` or
+`allOf` may exceed that projection. The legacy `@schema("…")` decorator preserves an object schema
+that no named interface can represent, though it is hard to read.
 
-There is an important preservation nuance. When a Board already contains a richer live schema,
-the renderer can show its representable interface projection while the reconciler retains the
-exact schema on an unchanged Board-to-source-to-Board round trip. The visible interface does not
-necessarily prove that every hidden constraint could be recreated from a new standalone text file.
-Preserving known Board metadata and authoring every possible JSON Schema feature are different
-capabilities.
+When a Board contains a richer live schema, the renderer can show its interface projection while
+the reconciler retains the exact schema through an unchanged Board-to-source-to-Board round trip.
+A new standalone text file may not recreate hidden constraints omitted from that projection.
 
-Collection surfaces have release boundaries as well. Top-level and function/event type references
-currently support Normal, array, `Map<string, T>`, and `Set<T>` shapes around a single base type.
-Interface fields support richer nested arrays, maps, and unions, but `Set<T>` is not yet part of
-the interface-field grammar. Current Make/Break field inference is narrower still: an enum-only
-literal field can materialize as Generic, while a map-shaped property can materialize as an
-object-shaped Struct. The root interface contract remains available, but those derived field-pin
-types are not yet as precise as the source. Treat these facts as release observations, not as a
-manifesto against future type-system growth.
+Top-level and function or event references currently support Normal, array, `Map<string, T>`, and
+`Set<T>` shapes around one base type. Interface fields also allow nested arrays, maps, sets, and
+unions. A Set projects to a JSON Schema array with `uniqueItems: true`.
 
-Named-type lookup has another current edge: a top-level, function, or event type name that does
-not resolve to a declared interface can fall back to a schema-less Struct. A misspelled interface
-name is therefore not guaranteed to be rejected today. Keep publication examples under
-catalog-aware reconciliation tests instead of treating parser acceptance as nominal type safety.
+Make/Break inference is narrower: an enum-only literal field may become Generic, and a map-shaped
+property may become an object-shaped Struct. The root interface remains intact, though derived
+field pins can be less precise. These are release observations.
+
+An unresolved top-level, function, or event type name can currently fall back to a schema-less
+Struct, so a misspelled interface is not guaranteed to fail. Run publication examples through
+catalog-aware reconciliation; parser acceptance does not prove nominal type safety.
 
 For publication, any example near these edges should pass three checks against the named release:
 
@@ -453,12 +385,8 @@ For publication, any example near these edges should pass three checks against t
 2. apply it with the release's catalog and inspect the resulting Board pins and schemas; and
 3. render that Board back to FlowScript and compare the meaningful contract.
 
-If a shape fails one of those checks, report the smallest reproducible source, the release, the
-expected field or container metadata, and the actual result. Do not turn one unsupported round
-trip into folklore that “FlowScript can never support this.” The language is evolving, and honest
-release notes are more useful than permanent-sounding limitations.
+If a shape fails, report the smallest source, release, expected metadata, and actual result. Keep
+the limitation tied to that release.
 
-Types in FlowScript serve one purpose across both views: make the workflow easier to construct,
-harder to connect incorrectly, and faster to repair when reality changes. The next chapter uses
-those contracts to navigate the catalog—the large, typed node library that gives FlowScript its
-real capabilities.
+These contracts guide authoring and repair on both the canvas and in FlowScript. Chapter 8 uses
+them to search and call the node catalog.

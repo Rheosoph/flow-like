@@ -1,0 +1,16 @@
+// Minimal repro: `//` comments are skipped at top level, inside module bodies, inside function
+// bodies and inside event bodies, but NOT inside an interface body:
+//     ParseError { message: "expected identifier, found `Comment(\"the display name\")`" }
+// Nothing else in the language rejects a comment, so an interface is the one block a hand-written
+// document cannot annotate.
+use log::{ info }
+
+interface Row {
+    // the display name
+    name: string;
+}
+
+eventsSimple describeRow() {
+    // this comment is fine
+    info({ message: "row", toast: false })
+}

@@ -1,0 +1,226 @@
+use datetime::{ now }
+use log::{ error, info, warn }
+
+interface MirrorRecord {
+    issue_key: string;
+    page_id: string;
+    revision: int;
+    synced_at: string;
+}
+
+@description("Atlassian cloud site both products live on")
+@category("Atlassian")
+let atlassianSite = "https://northwind.atlassian.net"
+@description("Account the sync bot authenticates as")
+@category("Atlassian")
+let atlassianEmail = "jira-sync@northwind.example"
+@description("API token for the sync bot")
+@category("Atlassian")
+@secret
+const atlassianApiToken: string
+@description("Confluence space that mirrors the Jira project")
+@category("Sync")
+let confluenceSpace = "ENG"
+@description("Jira project whose issues are mirrored")
+@category("Sync")
+let jiraProject = "PLATFORM"
+@description("Page every mirrored issue page is filed under")
+@category("Sync")
+let mirrorRootPageId = "884736"
+@description("Issue key -> Confluence page id, rebuilt at the start of every run")
+@category("Sync")
+let pageIndex: Map<string, string> = {}
+@description("Issue key -> the exact storage body this sync last wrote for it")
+@category("Sync")
+let bodyIndex: Map<string, string> = {}
+@description("Issue keys whose Confluence page was edited outside of this sync")
+@category("Sync")
+let conflictedKeys: string[] = []
+@description("Pages created by the running sweep")
+@category("Sync")
+let createdCount = 0
+@description("Pages rewritten by the running sweep")
+@category("Sync")
+let refreshedCount = 0
+@description("Pages the running sweep left alone")
+@category("Sync")
+let untouchedCount = 0
+@description("Counters from the most recent sweep")
+@category("Sync")
+let lastSweep: Struct = {}
+
+function connect(): (provider: Struct) {
+    const provider = atlassian::providerApiToken({ baseUrl: atlassianSite, email: atlassianEmail, apiToken: atlassianApiToken, isCloud: true })
+    return provider
+}
+
+function mirrorTitle(issueKey: string, summary: string): (title: string) {
+    return `${issueKey} - ${summary}`
+}
+
+function issueKeyOfTitle(title: string): (issueKey: string) {
+    const parts = string::split({ string: title, separator: " ", limit: 2, skipEmpty: true })
+    return parts[0]
+}
+
+function renderPageBody(issue: Struct, syncedAt: string): (body: string) {
+    const labelCount = array::length({ array: issue.labels })
+    const labelList = string::join({ strings: issue.labels, separator: ", " })
+    let header = `<h1>${issue.key} ${issue.summary}</h1>`
+    let facts = `<p>Status: ${issue.status.name} | Assignee: ${issue.assignee.display_name} | Labels (${labelCount}): ${labelList}</p>`
+    let link = `<p><a href="${issue.url}">Open in Jira</a></p>`
+    let footer = `<p><em>Mirrored automatically at ${syncedAt}. Edits made here are overwritten.</em></p>`
+    return `${header}${facts}${link}${footer}`
+}
+
+function reindexMirroredPages(provider: Struct, spaceKey: string): (indexed: int) {
+    pageIndex = map::clear({ mapIn: pageIndex }).mapOut
+    conflictedKeys = array::clear({ arrayIn: conflictedKeys }).arrayOut
+    const mirrored = confluence::search({ provider: provider, cql: `space = "${spaceKey}" AND type = page AND label = "jira-sync"`, contentType: "page", limit: 100 })
+    for (const hit of mirrored) {
+        const knownKey = issueKeyOfTitle(hit.title)
+        pageIndex = map::set({ mapIn: pageIndex, key: knownKey, value: hit.id }).mapOut
+    }
+    return map::size({ mapIn: pageIndex })
+}
+
+function syncIssue(provider: Struct, issue: Struct, runStamp: string, staleCutoff: Date): (verdict: string) {
+    let key = issue.key
+    const title = mirrorTitle(key, issue.summary)
+    const body = renderPageBody(issue, runStamp)
+    const { value: knownPageId, found: isMirrored } = map::get({ mapIn: pageIndex, key: key })
+    let verdict = "created"
+
+    if (!isMirrored) {
+        const { pageId: newPageId } = confluence::createPage({ provider: provider, spaceKey: confluenceSpace, title: title, body: body, parentId: mirrorRootPageId })
+        confluence::addLabel({ provider: provider, pageId: newPageId, label: "jira-sync" })
+        pageIndex = map::set({ mapIn: pageIndex, key: key, value: newPageId }).mapOut
+        bodyIndex = map::set({ mapIn: bodyIndex, key: key, value: body }).mapOut
+        createdCount = createdCount + 1
+    } else {
+        const { page: livePage, bodyContent: liveBody } = confluence::getPage({ provider: provider, pageId: knownPageId, includeBody: true, bodyFormat: "storage" })
+        const { value: lastWritten } = map::get({ mapIn: bodyIndex, key: key })
+        // BUG: `liveBody == lastWritten` is refused because a Map value reads back as `Generic`;
+        // hand-lowering the same comparison to string::equal is the only spelling that reconciles.
+        // See bug-t3-jira-confluence-generic-operand.flow.
+        const weWroteItLast = liveBody.equal(lastWritten, false)
+
+        if (weWroteItLast && liveBody == body) {
+            untouchedCount = untouchedCount + 1
+            verdict = "unchanged"
+        } else if (weWroteItLast) {
+            confluence::updatePage({ provider: provider, pageId: knownPageId, title: title, body: body, versionMessage: `Jira sync ${runStamp}` })
+            bodyIndex = map::set({ mapIn: bodyIndex, key: key, value: body }).mapOut
+            refreshedCount = refreshedCount + 1
+            verdict = "refreshed"
+        } else {
+            const editedAt = datetime::parse({ input: livePage.updated_at })
+            const stale = editedAt.isBefore({ other: staleCutoff })
+            const alreadyFlagged = array::includes({ arrayIn: conflictedKeys, value: key })
+            if (stale) {
+                confluence::updatePage({ provider: provider, pageId: knownPageId, title: title, body: body, versionMessage: `Jira sync ${runStamp}, stale manual edit discarded` })
+                confluence::removeLabel({ provider: provider, pageId: knownPageId, label: "jira-sync-conflict" })
+                bodyIndex = map::set({ mapIn: bodyIndex, key: key, value: body }).mapOut
+                refreshedCount = refreshedCount + 1
+                verdict = "reclaimed"
+            } else if (alreadyFlagged) {
+                verdict = "still-conflicted"
+            } else {
+                conflictedKeys = array::push({ arrayIn: conflictedKeys, value: key }).arrayOut
+                confluence::addLabel({ provider: provider, pageId: knownPageId, label: "jira-sync-conflict" })
+                jira::addComment({ provider: provider, issueKey: key, body: `The mirrored Confluence page was edited by hand after this sync last wrote it. Mirroring is paused for ${key} until the page is reconciled.` })
+                verdict = "conflicted"
+            }
+        }
+    }
+    return verdict
+}
+
+function flagOrphans(provider: Struct, liveKeys: string[]): (flagged: int) {
+    let flagged = 0
+    const trackedKeys = map::keys({ mapIn: pageIndex })
+    for (const trackedKey of trackedKeys) {
+        const stillInScope = array::includes({ arrayIn: liveKeys, value: trackedKey })
+        if (!stillInScope) {
+            const { value: orphanPageId } = map::get({ mapIn: pageIndex, key: trackedKey })
+            confluence::addLabel({ provider: provider, pageId: orphanPageId, label: "jira-sync-orphan" })
+            bodyIndex = map::remove({ mapIn: bodyIndex, key: trackedKey }).mapOut
+            warn({ message: `${trackedKey} dropped out of the sync query; page ${orphanPageId} flagged as an orphan`, toast: false })
+            flagged = flagged + 1
+        }
+    }
+    return flagged
+}
+
+function repairPage(provider: Struct, record: MirrorRecord, stamp: string): (pageId: string) {
+    const { issue: issue } = jira::getIssue({ provider: provider, issueKey: record.issue_key, includeComments: false })
+    const body = renderPageBody(issue, stamp)
+    const title = mirrorTitle(record.issue_key, issue.summary)
+    const tracked = map::has({ mapIn: pageIndex, key: record.issue_key })
+
+    if (tracked) {
+        confluence::updatePage({ provider: provider, pageId: record.page_id, title: title, body: body, versionMessage: `Manual repair from version ${record.revision} at ${stamp}` })
+        confluence::removeLabel({ provider: provider, pageId: record.page_id, label: "jira-sync-conflict" })
+    } else {
+        confluence::updatePage({ provider: provider, pageId: record.page_id, title: title, body: body, versionMessage: `Adopted ${record.issue_key} into the sync at ${stamp}` })
+        confluence::addLabel({ provider: provider, pageId: record.page_id, label: "jira-sync" })
+        pageIndex = map::set({ mapIn: pageIndex, key: record.issue_key, value: record.page_id }).mapOut
+    }
+    bodyIndex = map::set({ mapIn: bodyIndex, key: record.issue_key, value: body }).mapOut
+    confluence::addComment({ provider: provider, pageId: record.page_id, body: `Re-synced from ${record.issue_key} at ${stamp}.` })
+    return record.page_id
+}
+
+eventsSimple syncJiraToConfluence() {
+    const provider = connect()
+    const { name: botName } = atlassian::getMe({ provider: provider })
+    const startedAt = now()
+    const runStamp = startedAt.format({ format: "%Y-%m-%d %H:%M" })
+    const staleCutoff = startedAt.add({ days: -14 })
+
+    createdCount = 0
+    refreshedCount = 0
+    untouchedCount = 0
+    const alreadyMirrored = reindexMirroredPages(provider, confluenceSpace)
+    info({ message: `${botName}: ${alreadyMirrored} page(s) already mirrored in ${confluenceSpace}`, toast: false })
+
+    const scope = jira::searchIssues({ provider: provider, jql: `project = ${jiraProject} AND updated >= -14d ORDER BY updated DESC`, maxResults: 100 })
+    scope {
+        execOut: {
+            for (const [position, issue] of scope.issues) {
+                const verdict = syncIssue(provider, issue, runStamp, staleCutoff)
+                info({ message: `[${position}] ${issue.key} -> ${verdict}`, toast: false })
+            }
+
+            const liveKeys = array::pluck({ arrayIn: scope.issues, key: "key", skipMissing: true })
+            const orphaned = flagOrphans(provider, liveKeys)
+            const { humanReadable: elapsed } = datetime::diff({ start: startedAt, end: now() })
+            const conflictCount = array::length({ array: conflictedKeys })
+
+            const counted = struct::set({ structIn: {}, field: "created", value: createdCount }).set({ field: "refreshed", value: refreshedCount }).set({ field: "untouched", value: untouchedCount })
+            const sweep = counted.set({ field: "orphaned", value: orphaned }).set({ field: "conflicted", value: conflictedKeys }).set({ field: "finished_at", value: runStamp })
+            lastSweep = sweep
+            const headline = struct::pick({ struct: sweep, fields: ["created", "refreshed", "untouched", "orphaned"] })
+
+            confluence::addComment({ provider: provider, pageId: mirrorRootPageId, body: `<p>Sync ${runStamp} finished in ${elapsed}: ${createdCount} created, ${refreshedCount} refreshed, ${untouchedCount} unchanged, ${orphaned} orphaned, ${conflictCount} conflict(s) out of ${scope.total} issue(s).</p>` })
+            info({ message: headline, toast: false })
+            if (conflictCount > 0) {
+                error({ message: `${conflictCount} mirrored page(s) need manual reconciliation`, toast: true })
+            }
+        }
+        error: {
+            error({ message: `Jira search failed for project ${jiraProject}; nothing was mirrored`, toast: true })
+        }
+    }
+}
+
+eventsGeneric repairMirroredPage(payload: Struct, record: MirrorRecord) {
+    const provider = connect()
+    const stamp = now().format({ format: "%Y-%m-%d %H:%M" })
+    const { value: reason, found: hasReason } = struct::get({ struct: payload, field: "reason" })
+    const pageId = repairPage(provider, record, stamp)
+    if (hasReason) {
+        jira::addComment({ provider: provider, issueKey: record.issue_key, body: `Confluence mirror repaired at ${stamp}: ${reason}. The page was last known good at ${record.synced_at}.` })
+    }
+    return pageId
+}

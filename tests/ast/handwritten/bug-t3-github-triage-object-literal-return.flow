@@ -1,0 +1,43 @@
+// BUG: `return { field: <expr> }` from a function is rejected as soon as ONE member value is not
+// a literal, so an interface-shaped return value cannot be assembled from the function's own
+// parameters or locals — the single most natural way to give a helper a typed result.
+//
+//   diag: return value 1 (`{...}`) in function `computed` is not a resolvable FlowScript value;
+//         return a literal, a call output bound earlier in the body (`const x = call(...)`),
+//         or a variable
+//   diag: new function `computed` contains no materialized body nodes in its Function layer;
+//         refusing to create a runtime-empty helper
+//
+// `literalOnly` below is the SAME statement with constant members and it reconciles cleanly, so
+// the object-literal return path exists; it just refuses any computed member. Note the advice in
+// the diagnostic is unusable here: there is nothing to bind with `const x = call(...)` because
+// the value being returned IS the literal.
+//
+// Related but distinct site: bug-t4-pr-review-bot-computed-object-literal.flow reports the same
+// root cause for assignments and `const` bindings. This one is the RETURN position, which has
+// its own diagnostic and its own second-order failure (the whole function layer is discarded as
+// "runtime-empty", so the helper vanishes rather than degrading).
+//
+// Workaround used in t3-github-triage.flow: return the fields as separate scalars and rebuild the
+// struct with `struct::make()` plus one field assignment per member.
+use log::{ info }
+
+interface Decision {
+    label: string;
+    priority: string;
+}
+
+function literalOnly(): (decision: Decision) {
+    return { label: "needs-triage", priority: "P3" }
+}
+
+function computed(seed: string): (decision: Decision) {
+    let label = seed
+    return { label: label, priority: "P3" }
+}
+
+eventsGeneric probe(payload: Struct, seed: string) {
+    const a = literalOnly()
+    const b = computed(seed)
+    info({ message: `${a.label} ${b.label}`, toast: false })
+}

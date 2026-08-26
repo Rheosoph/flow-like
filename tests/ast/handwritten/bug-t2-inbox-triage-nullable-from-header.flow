@@ -1,0 +1,35 @@
+// BUG: `email::getHeaders()` declares `from` with schema `Option<MailAddress>` while every other
+// address pin on the same node (`sender`, `to`, `cc`, `bcc`) is a bare `MailAddress`. Feeding the
+// `from` pin into `email::addressToFields`, whose `address` pin is `MailAddress`, is refused:
+//   argument `address` on `addressToFields` has incompatible pin types or schemas:
+//   source `email_get_headers.from` is `Struct/Normal`, but input `address` requires
+//   `Struct/Normal`; use a catalog-declared conversion before connecting it
+// The diagnostic prints the SAME type on both sides and names neither schema, and no catalog node
+// unwraps `Nullable_MailAddress`, so the advice cannot be followed.
+//
+// `readSender` below is the identical program against the `sender` pin and reconciles clean, which
+// pins the fault on the Option wrapper rather than on the node pairing.
+use email::{ addressToFields, getHeaders }
+use log::{ info }
+
+eventsSimple readFrom() {
+    const connection = imap::connect({ host: "imap.internal", port: 993, username: "support", password: "secret", encryption: "Tls" })
+    const messages = connection.inbox({ inbox: "INBOX" }).listMails({ filter: "UNSEEN" })
+    for (const reference of messages) {
+        const { from } = reference.fetchMail().getHeaders()
+        const { email: address } = addressToFields(from)
+        info({ message: address, toast: false })
+    }
+}
+
+eventsSimple readSender() {
+    const connection = imap::connect({ host: "imap.internal", port: 993, username: "support", password: "secret", encryption: "Tls" })
+    const messages = connection.inbox({ inbox: "INBOX" }).listMails({ filter: "UNSEEN" })
+    for (const reference of messages) {
+        const { sender } = reference.fetchMail().getHeaders()
+        for (const one of sender) {
+            const { email: address } = addressToFields(one)
+            info({ message: address, toast: false })
+        }
+    }
+}

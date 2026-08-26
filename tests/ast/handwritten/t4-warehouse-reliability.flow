@@ -1,0 +1,581 @@
+use log::{ info, warn, error }
+use datetime::{ now }
+
+interface ColumnProfile {
+    column_name: string;
+    null_rate: float;
+    distinct_ratio: float;
+    max_length?: int | null;
+}
+interface TableBaseline {
+    table_fqn: string;
+    engine: "delta" | "databricks" | "postgres";
+    row_count: int;
+    freshness_seconds: int;
+    mean_null_rate: float;
+    column_null_rates?: Map<string, float> = {};
+    columns: ColumnProfile[];
+    captured_at?: string;
+}
+interface IncidentDraft {
+    incident_key: string;
+    table_fqn: string;
+    severity: "sev1" | "sev2" | "sev3" | "info";
+    drift_score: float;
+    freshness_seconds: int;
+    reach: int;
+    blast_radius: string[];
+    summary: string;
+    evidence?: any;
+}
+interface ReviewWindow {
+    period_label: string;
+    started_at: string;
+    ended_at: string;
+    incident_count: int;
+    mttr_seconds: float;
+}
+
+@description("Databricks workspace the reliability desk profiles against")
+@category("Warehouse/Connection")
+let databricksWorkspace = "https://acme-prod.cloud.databricks.com"
+@description("Personal access token of the reliability service principal")
+@category("Warehouse/Connection")
+@secret
+const databricksToken: string
+@description("SQL warehouse every profiling statement runs on")
+@category("Warehouse/Connection")
+let sqlWarehouseId = "9c1f0ab77d2e4410"
+@description("Unity Catalog catalogue holding the production datasets")
+@category("Warehouse/Connection")
+let metastoreCatalog = "prod_analytics"
+@description("Read replica the freshness probes attach to")
+@category("Warehouse/Connection")
+let replicaHost = "replica.warehouse.internal"
+@category("Warehouse/Connection")
+@secret
+const replicaPassword: string
+@description("Atlassian site the incident desk files against")
+@category("Incident Desk")
+let atlassianSite = "https://acme.atlassian.net"
+@category("Incident Desk")
+let atlassianAccount = "reliability-bot@acme.io"
+@category("Incident Desk")
+@secret
+const atlassianApiToken: string
+@category("Incident Desk")
+let incidentProjectKey = "REL"
+@category("Incident Desk")
+let reviewSpaceKey = "DATA"
+@description("Notion integration token backing the public reliability log")
+@category("Incident Desk")
+@secret
+const notionToken: string
+@category("Incident Desk")
+let notionIncidentDatabase = "b41f27c8d5e04c9b8f1a6d2e3c4b5a69"
+@description("Fully qualified tables the last catalogue sweep discovered")
+@category("Warehouse/State")
+let watchedTables: string[] = []
+@description("Incident drafts raised by the sweep that is currently running")
+@category("Warehouse/State")
+let sweepIncidents: any[] = []
+@description("Highest drift score observed during the current sweep")
+@category("Warehouse/State")
+let sweepPeakDrift = 0.0
+@description("Period label of the most recent monthly reliability review")
+@category("Warehouse/State")
+let lastReviewLabel = ""
+@description("Incidents counted by the most recent monthly reliability review")
+@category("Warehouse/State")
+let lastReviewIncidents = 0
+@description("Mean time to recovery of the most recent monthly review, in seconds")
+@category("Warehouse/State")
+let lastReviewMttr = 0.0
+
+function sqlParam(key: string, value: string): (params: Struct) {
+    const empty = struct::make()
+    const params = struct::set({ structIn: empty, field: key, value: value })
+    return params
+}
+
+function classifyDrift(score: float, freshnessSeconds: int, reach: int): (severity: string, priority: string) {
+    let stale = freshnessSeconds > 10800
+    const critical = score > 0.85 || (stale && reach > 20)
+    // BUG(bug-t4-warehouse-reliability-generic-compare): `severity == "sev1"` would be refused
+    // because a ternary result types as `Generic`, so the priority ladder re-reads the score
+    // instead of branching on the severity it just derived.
+    const severity = critical ? "sev1" : (score > 0.6 ? "sev2" : (score > 0.35 ? "sev3" : "info"))
+    const priority = critical ? "Highest" : (score > 0.6 ? "High" : (score > 0.35 ? "Medium" : "Low"))
+    return severity, priority
+}
+
+@cache({ namespace: "warehouse-baseline-v2", ttlSeconds: 3600, scope: "app" })
+function loadBaseline(tableFqn: string): (meanNullRate: float, found: bool) {
+    const store = db::open({ name: "warehouse_baselines", userScoped: false })
+    const params = sqlParam("fqn", tableFqn)
+    const rows = store.filter({ filter: "table_fqn = $fqn", params: params, limit: 1 })
+    const found = array::length({ array: rows }) > 0
+    const newest = array::get({ arrayIn: rows, index: 0 })
+    const stored = struct::get({ struct: newest, field: "mean_null_rate" })
+    const meanNullRate = found ? stored : 0.0
+    return meanNullRate, found
+}
+
+function atlassianProvider(): (provider: Struct) {
+    const provider = atlassian::providerApiToken({ baseUrl: atlassianSite, email: atlassianAccount, apiToken: atlassianApiToken, isCloud: true })
+    return provider
+}
+
+module discovery {
+    function openCatalog(): (catalog: Struct) {
+        const catalog = db::open({ name: "warehouse_catalog", userScoped: false })
+        return catalog
+    }
+
+    function pageTables(catalog: Struct, offset: int, pageSize: int): (rows: Struct[], fetched: int) {
+        const rows = catalog.filter({ filter: "watched = true", limit: pageSize, offset: offset })
+        const fetched = array::length({ array: rows })
+        return rows, fetched
+    }
+
+    function sweepCatalog(pageSize: int): (tables: string[], scanned: int) {
+        const catalog = discovery::openCatalog()
+        let cursor = 0
+        let scanned = 0
+        let morePages = true
+        let discovered = []
+        while (morePages) {
+            const { rows, fetched } = discovery::pageTables(catalog, cursor, pageSize)
+            for (const row of rows) {
+                discovered = array::push({ arrayIn: discovered, value: `${row.catalog}.${row.schema_name}.${row.name}` })
+            }
+            cursor = cursor + pageSize
+            scanned = scanned + fetched
+            morePages = fetched == pageSize
+        }
+        const { arrayOut: tables } = array::unique({ arrayIn: discovered })
+        info({ message: `catalogue sweep read ${scanned} rows in pages of ${pageSize}`, toast: false })
+        return tables, scanned
+    }
+}
+
+module profiling {
+    function profileWithDatafusion(tableFqn: string, sinceIso: string): (rows: Struct[], sql: string) {
+        const { results, sql } = df::createSession({ sessionName: "warehouse-profile", collectStatistics: true, parquetPruning: true }).registerPostgres({ host: replicaHost, port: 5432, database: "warehouse", username: "reliability", password: replicaPassword, schema: "public", sourceTable: tableFqn, tableName: "probe", sslMode: "require", readonly: true }).timeBinAggregation({ sourceTable: "probe", timestampColumn: "ingested_at", interval: "hour", valueColumns: "null_rate", aggregations: "avg", groupBy: "column_name", filter: `ingested_at >= '${sinceIso}'`, outputTable: "probe_hourly" })
+        return results, sql
+    }
+
+    function profileWithDatabricks(tableFqn: string): (rows: Struct[], rowCount: int) {
+        const provider = databricks::providerPat({ token: databricksToken, workspaceUrl: databricksWorkspace })
+        const { count: warehouseCount } = databricks::listSqlWarehouses({ provider: provider })
+        databricks::startSqlWarehouse({ provider: provider, warehouseId: sqlWarehouseId })
+        const { count: tableCount } = databricks::listTables({ provider: provider, catalogName: metastoreCatalog, schemaName: "reliability" })
+        const { rows, rowCount } = databricks::executeSql({ provider: provider, warehouseId: sqlWarehouseId, statement: `SELECT column_name, null_rate, distinct_ratio FROM reliability.column_profile WHERE table_fqn = '${tableFqn}'`, catalog: metastoreCatalog, schema: "reliability", rowLimit: 500, waitTimeout: "50s" })
+        info({ message: `databricks profile: ${warehouseCount} warehouses, ${tableCount} profile tables, ${rowCount} column rows`, toast: false })
+        return rows, rowCount
+    }
+
+    function driftScore(observed: Struct[], baselineNullRate: float): (score: float, worstColumn: string) {
+        const nullRates = array::pluck({ arrayIn: observed, key: "null_rate", skipMissing: true })
+        const { result: meanNull } = float::average({ floats: nullRates })
+        const { result: spread } = float::stdDev({ floats: nullRates })
+        const gap = float::subtract({ float1: meanNull, float2: baselineNullRate })
+        const delta = float::abs({ float: gap })
+        const spreadFloor = float::max({ float1: spread, float2: 0.01 })
+        const score = float::divide({ dividend: delta, divisor: spreadFloor }).clamp(0.0, 1.0)
+        const { index: worstIndex, found: haveWorst } = array::maxBy({ arrayIn: nullRates, compare: "Number", nulls: "Last" })
+        const worstRow = array::get({ arrayIn: observed, index: worstIndex })
+        const named = struct::get({ struct: worstRow, field: "column_name" })
+        const worstColumn = haveWorst ? named : "unknown"
+        return score, worstColumn
+    }
+
+    function freshnessSeconds(tableFqn: string): (seconds: int) {
+        const catalog = discovery::openCatalog()
+        const params = sqlParam("fqn", tableFqn)
+        const rows = catalog.filter({ filter: "table_fqn = $fqn", params: params, limit: 1 })
+        const row = array::get({ arrayIn: rows, index: 0 })
+        const stamp = struct::get({ struct: row, field: "last_loaded_at" })
+        const lastLoad = datetime::parse({ input: stamp, format: "%Y-%m-%dT%H:%M:%SZ" })
+        const { totalSeconds } = lastLoad.diff(now())
+        return totalSeconds
+    }
+
+    function scanWindow(windowStart: string): (raised: int, peak: float) {
+        sweepIncidents = array::make()
+        sweepPeakDrift = 0.0
+        @parallel
+        for (const tableFqn of watchedTables) {
+            const { rows: observed } = profiling::profileWithDatafusion(tableFqn, windowStart)
+            const { meanNullRate } = loadBaseline(tableFqn)
+            const { score, worstColumn } = profiling::driftScore(observed, meanNullRate)
+            const freshness = profiling::freshnessSeconds(tableFqn)
+            const { downstream, reach } = lineage::blastRadius(tableFqn, 3)
+            let breached = false
+            for (const profile of observed) {
+                const samples = struct::get({ struct: profile, field: "hourly_null_rates" })
+                for (const sample of control::forEachWithBreak({ break: breached, array: samples })) {
+                    const swing = float::percentChange({ from: meanNullRate, to: sample }).percent
+                    const movement = float::abs({ float: swing })
+                    if (movement > 45.0) {
+                        breached = true
+                        warn({ message: `${tableFqn}: ${profile.column_name} moved ${fmt::number({ value: movement, decimals: 1, suffix: "%" })} against its baseline`, toast: false })
+                    }
+                }
+            }
+            const { severity } = classifyDrift(score, freshness, reach)
+            const rawKey = `${tableFqn}-${windowStart}`
+            let draft = {}
+            draft.incident_key = rawKey.slugify()
+            draft.table_fqn = tableFqn
+            draft.severity = severity
+            draft.drift_score = score
+            draft.freshness_seconds = freshness
+            draft.reach = reach
+            draft.blast_radius = downstream
+            draft.summary = `${tableFqn} drifted on ${worstColumn} (score ${fmt::number({ value: score, decimals: 3 })}); ${reach} downstream assets affected.`
+            if (breached || severity != "info") {
+                sweepIncidents = array::push({ arrayIn: sweepIncidents, value: draft })
+                sweepPeakDrift = score > sweepPeakDrift ? score : sweepPeakDrift
+            }
+        }
+        const raised = array::length({ array: sweepIncidents })
+        return raised, sweepPeakDrift
+    }
+
+    function learnAnomalyModel(): (modelType: string, supportVectors: int) {
+        const profiles = db::open({ name: "warehouse_column_profiles", userScoped: false })
+        const { model, supportVectors } = ml::fitOneClassSvm({ source: "Database", database: profiles, records: "feature_vector", nu: 0.05, kernel: "Gaussian", kernelParam: 0.5, tolerance: 0.0001 })
+        const { modelType } = model.info()
+        const modelPath = files::userDir({ nodeScope: false }).child("reliability").child("column-anomaly").setExtension("json")
+        model.save(modelPath)
+        info({ message: `fitted ${modelType} on ${supportVectors} support vectors`, toast: false })
+        return modelType, supportVectors
+    }
+
+    function anomalyQuality(): (rmse: float) {
+        const profileDb = db::open({ name: "warehouse_column_profiles", userScoped: false })
+        const metrics = ml::evalRegression({ database: profileDb, predictionsCol: "predicted_null_rate", actualsCol: "null_rate" })
+        const rmse = struct::get({ struct: metrics, field: "rmse" })
+        return rmse
+    }
+}
+
+module lineage {
+    function openGraph(): (graph: Struct) {
+        const { graph } = db::graph::openOverlay({ overlayId: "warehouse-lineage", userScoped: false })
+        return graph
+    }
+
+    function blastRadius(tableFqn: string, depth: int): (downstream: string[], reach: int) {
+        const graph = lineage::openGraph()
+        const { resultNodes } = graph.neighbors({ label: "Dataset", nodeId: tableFqn, depth: depth, direction: "outgoing", limit: 250 })
+        const downstream = array::pluck({ arrayIn: resultNodes, key: "name", skipMissing: true })
+        const reach = array::length({ array: downstream })
+        return downstream, reach
+    }
+
+    function criticalPath(tableFqn: string, dashboard: string): (found: bool, hops: Struct) {
+        const graph = lineage::openGraph()
+        const { payload, found } = graph.paths({ fromLabel: "Dataset", fromId: tableFqn, toLabel: "Dashboard", toId: dashboard, maxDepth: 6, limit: 5 })
+        return found, payload
+    }
+
+    function recordConsumer(tableFqn: string, consumer: string) {
+        const graph = lineage::openGraph()
+        let dataset = {}
+        dataset.id = tableFqn
+        dataset.name = tableFqn
+        dataset.kind = "table"
+        graph.upsertNode({ label: "Dataset", value: dataset })
+        let edge = {}
+        edge.from = tableFqn
+        edge.to = consumer
+        edge.discovered_at = now().format("%Y-%m-%d")
+        graph.upsertEdge({ label: "FEEDS", value: edge })
+    }
+
+    function ownerOf(tableFqn: string): (owner: string, oncall: string) {
+        const { objects } = ontology::queryObjects({ ontologyId: "warehouse", objectType: "DatasetOwner", limit: 500 })
+        const { arrayOut: matches, kept } = array::filterBy({ arrayIn: objects, key: "table_fqn", operator: "Equals", value: tableFqn, compare: "Auto", ignoreCase: false, invert: false })
+        const row = array::get({ arrayIn: matches, index: 0 })
+        const team = struct::get({ struct: row, field: "team" })
+        const handle = struct::get({ struct: row, field: "oncall_handle" })
+        const owner = kept > 0 ? team : "data-platform"
+        const oncall = kept > 0 ? handle : "@data-oncall"
+        return owner, oncall
+    }
+
+    function requestQuarantine(tableFqn: string, severity: string): (accepted: bool) {
+        let target = {}
+        target.id = tableFqn
+        target.type = "Dataset"
+        const targets = array::push({ arrayIn: array::make(), value: target })
+        let parameters = {}
+        parameters.severity = severity
+        parameters.requested_by = "reliability-desk"
+        const { actionRequest } = ontology::prepareAction({ ontologyId: "warehouse", actionId: "quarantine_dataset", objects: targets, parameters: parameters })
+        const status = struct::get({ struct: actionRequest, field: "status" })
+        // BUG(bug-t4-warehouse-reliability-generic-compare): `status == "prepared"` is refused
+        // because `struct::get` hands back `Generic`; `string::equal` types correctly.
+        const accepted = string::equal(status, "prepared")
+        return accepted
+    }
+}
+
+module publishing {
+    function fileIncident(tableFqn: string, severity: string, priority: string, summary: string, blastRadius: string[]): (issueKey: string) {
+        const provider = atlassianProvider()
+        const { owner, oncall } = lineage::ownerOf(tableFqn)
+        const labels = array::push({ arrayIn: array::push({ arrayIn: array::make(), value: "warehouse-reliability" }), value: severity })
+        const { issueKey } = jira::createIssue({ provider: provider, projectKey: incidentProjectKey, issueType: "Bug", summary: `[${severity}] ${tableFqn} failed its reliability checks`, description: summary, priority: priority, labels: labels })
+        const radius = string::join({ strings: blastRadius, separator: ", " })
+        jira::addComment({ provider: provider, issueKey: issueKey, body: `Owner ${owner}. Blast radius: ${radius}. Paging ${oncall}.` })
+        return issueKey
+    }
+
+    function publishRunbookPage(tableFqn: string, summary: string, drift: float, issueKey: string): (pageId: string) {
+        const provider = atlassianProvider()
+        const { pageId } = confluence::createPage({ provider: provider, spaceKey: reviewSpaceKey, title: `Incident ${issueKey} — ${tableFqn}`, body: `<h2>Summary</h2><p>${summary}</p><h2>Drift</h2><p>${fmt::number({ value: drift, decimals: 3 })}</p>` })
+        confluence::addLabel({ provider: provider, pageId: pageId, label: "warehouse-reliability" })
+        return pageId
+    }
+
+    function mirrorToNotion(incidentKey: string, tableFqn: string, severity: string, issueKey: string): (pageUrl: string) {
+        const provider = notion::providerApiKey({ integrationToken: notionToken })
+        let properties = {}
+        properties.Name = incidentKey
+        properties.Table = tableFqn
+        properties.Severity = severity
+        properties.Jira = issueKey
+        const { pageUrl } = notion::createPage({ provider: provider, databaseId: notionIncidentDatabase, parentType: "database", properties: properties, iconEmoji: "warning" })
+        return pageUrl
+    }
+
+    function broadcast(severity: string, summary: string) {
+        const session = mqtt::connect({ config: { host: "mqtt.warehouse.internal", port: 1883, client_id: "reliability-desk", keep_alive_seconds: 30, use_tls: false } })
+        session.publish({ topic: `warehouse/incidents/${severity}`, payload: summary, qos: "AtLeastOnce", retain: true })
+        session.disconnect()
+    }
+
+    function releaseSweep(): (published: int) {
+        let published = 0
+        for (const raised of sweepIncidents) {
+            const { rowCount: columnCount } = profiling::profileWithDatabricks(raised.table_fqn)
+            const { found: feedsExecDash } = lineage::criticalPath(raised.table_fqn, "exec-revenue")
+            const { severity, priority } = classifyDrift(raised.drift_score, raised.freshness_seconds, raised.reach)
+            const issueKey = publishing::fileIncident(raised.table_fqn, severity, priority, raised.summary, raised.blast_radius)
+            publishing::publishRunbookPage(raised.table_fqn, raised.summary, raised.drift_score, issueKey)
+            publishing::mirrorToNotion(raised.incident_key, raised.table_fqn, severity, issueKey)
+            publishing::broadcast(severity, raised.summary)
+            if (feedsExecDash) {
+                lineage::requestQuarantine(raised.table_fqn, severity)
+                error({ message: `${raised.table_fqn} feeds the executive revenue dashboard; ${columnCount} column profiles attached to ${issueKey}`, toast: true })
+            }
+            published = published + 1
+        }
+        return published
+    }
+
+    function buildReviewDoc(periodLabel: string, incidentCount: int, mttrSeconds: float, narrative: string): (document: Struct) {
+        const target = files::userDir({ nodeScope: false }).child("reliability").child(`review-${periodLabel}`).setExtension("docx")
+        const created = docx::create({ fontFamily: "Inter", fontSize: 11.0, themeColor: "1F3B57", output: target })
+        const titled = docx::addParagraph({ template: created, text: `Warehouse Reliability Review — ${periodLabel}`, style: "Heading1", bold: true, alignment: "Left", output: target })
+        const withToc = docx::addToc({ template: titled, title: "Contents", maxLevel: 2, output: target })
+        const spent = fmt::duration({ seconds: mttrSeconds, style: "Long", maxParts: 2 })
+        const withIntro = docx::addParagraph({ template: withToc, text: `${incidentCount} incidents, mean time to recovery ${spent}.`, output: target })
+        const withTable = docx::addTable({ template: withIntro, data: narrative, headerRow: true, alternateRows: true, fontSize: 9.0, output: target })
+        const document = docx::addHeaderFooter({ template: withTable, headerText: "Acme Data Platform", footerText: periodLabel, includePageNumber: true, output: target })
+        return document
+    }
+
+    function buildReviewDeck(periodLabel: string, severityLabels: string[], severityCounts: float[]): (deck: Struct) {
+        const target = files::userDir({ nodeScope: false }).child("reliability").child(`review-${periodLabel}`).setExtension("pptx")
+        const created = pptx::create({ output: target })
+        const { result: withSlide, slideNumber } = pptx::addSlide({ template: created, output: target })
+        const titled = pptx::addTextBox({ template: withSlide, slideNumber: slideNumber, text: `Reliability Review — ${periodLabel}`, x: 1.0, y: 0.6, width: 8.0, height: 1.2, fontSize: 28.0, bold: true, output: target })
+        const charted = pptx::addChart({ template: titled, slideNumber: slideNumber, chartType: "bar", categories: severityLabels, values: severityCounts, seriesName: "Incidents", x: 1.0, y: 2.0, width: 8.0, height: 4.0, output: target })
+        const peak = fmt::number({ value: sweepPeakDrift, decimals: 3 })
+        const deck = pptx::addNotes({ template: charted, slideIndex: slideNumber, notes: `Peak drift score this period: ${peak}`, output: target })
+        return deck
+    }
+
+    function compileMonthlyReview(): (periodLabel: string, pageId: string) {
+        const periodEnd = now().startOf("Month")
+        const periodStart = periodEnd.shiftCalendar({ months: -1 })
+        const fromDay = periodStart.format("%Y-%m-%d")
+        const toDay = periodEnd.format("%Y-%m-%d")
+        const periodLabel = periodStart.format("%Y-%m")
+        const store = db::open({ name: "warehouse_incidents", userScoped: false })
+        const incidents = store.filter({ filter: `opened_at >= '${fromDay}' AND opened_at < '${toDay}'`, limit: 2000 })
+        const { sum: recoverySeconds, counted } = array::sumField({ arrayIn: incidents, field: "recovery_seconds" })
+        const perIncident = float::divide({ dividend: recoverySeconds, divisor: int::toFloat({ integer: counted }) })
+        const mttr = counted > 0 ? perIncident : 0.0
+        lastReviewLabel = periodLabel
+        lastReviewIncidents = array::length({ array: incidents })
+        lastReviewMttr = mttr
+
+        let severityLabels = []
+        let severityCounts = []
+        for (const band of ["sev1", "sev2", "sev3"]) {
+            const { kept } = array::filterBy({ arrayIn: incidents, key: "severity", operator: "Equals", value: band })
+            const asFloat = int::toFloat({ integer: kept })
+            severityLabels = array::push({ arrayIn: severityLabels, value: band })
+            severityCounts = array::push({ arrayIn: severityCounts, value: asFloat })
+        }
+
+        const { modelType, supportVectors } = profiling::learnAnomalyModel()
+        const rmse = profiling::anomalyQuality()
+        const summaries = array::pluck({ arrayIn: incidents, key: "summary", skipMissing: true })
+        const narrative = string::join({ strings: summaries, separator: "\n" })
+        const document = publishing::buildReviewDoc(periodLabel, lastReviewIncidents, mttr, narrative)
+        const deck = publishing::buildReviewDeck(periodLabel, severityLabels, severityCounts)
+
+        const provider = atlassianProvider()
+        const spent = fmt::duration({ seconds: mttr, style: "Short" })
+        const accuracy = fmt::number({ value: rmse, decimals: 4 })
+        const { pageId } = confluence::createPage({ provider: provider, spaceKey: reviewSpaceKey, title: `Warehouse Reliability Review ${periodLabel}`, body: `<p>${lastReviewIncidents} incidents, MTTR ${spent}. ${modelType} retrained on ${supportVectors} support vectors, RMSE ${accuracy}.</p>` })
+        confluence::addLabel({ provider: provider, pageId: pageId, label: "monthly-review" })
+        const narrativeLength = string::length({ string: docx::extractText({ template: document }).text })
+        const { count: slides } = pptx::slideCount({ template: deck })
+        info({ message: `review ${periodLabel}: ${narrativeLength} chars of narrative, a ${slides}-slide deck, published to ${pageId}`, toast: true })
+        return periodLabel, pageId
+    }
+}
+
+module desk {
+    function openQueue(): (rows: Struct[], rowCount: int) {
+        const { rows, rowCount } = df::createSession({ sessionName: "reliability-desk" }).registerPostgres({ host: replicaHost, port: 5432, database: "warehouse", username: "reliability", password: replicaPassword, schema: "reliability", sourceTable: "incidents", tableName: "incidents", sslMode: "require", readonly: true }).sqlQueryCached({ query: "SELECT incident_key, table_fqn, severity, drift_score FROM incidents WHERE state <> 'Done' ORDER BY drift_score DESC LIMIT 50", scope: "App", namespace: "reliability-desk-v1", ttlSeconds: 120 })
+        return rows, rowCount
+    }
+
+    function renderQueue(): (shown: int) {
+        const { rows: openIncidents, rowCount } = desk::openQueue()
+        const { element: openKpi } = ui::getElement({ elementRef: "reliability_kpi_open" })
+        ui::setElementText({ elementRef: openKpi, text: `${rowCount} open incidents` })
+        const { element: peakKpi } = ui::getElement({ elementRef: "reliability_kpi_peak" })
+        const peak = fmt::number({ value: sweepPeakDrift, decimals: 3 })
+        ui::setElementText({ elementRef: peakKpi, text: peak })
+        const { element: gauge } = ui::getElement({ elementRef: "reliability_drift_gauge" })
+        ui::setProgress({ elementRef: gauge, value: sweepPeakDrift })
+
+        const { element: list } = ui::getElement({ elementRef: "reliability_incident_list" })
+        ui::clearChildren({ containerRef: list })
+        for (const [index, incident] of openIncidents) {
+            const rank = index + 1
+            const ordinal = fmt::ordinal({ value: rank }).text
+            const row = ui::instantiateWidget({ widgetSelector: "Incident Row", instanceId: incident.incident_key, fnRefs: [incidentDeskAction] })
+            ui::setElementText({ elementRef: row, text: `${ordinal} · ${incident.table_fqn}` })
+            ui::setBadgeContent({ elementRef: row, content: incident.severity })
+            ui::pushChild({ containerRef: list, childRef: row })
+        }
+
+        const { element: note } = ui::getElement({ elementRef: "reliability_review_note" })
+        const mttr = fmt::duration({ seconds: lastReviewMttr, style: "Short" })
+        ui::setMarkdownContent({ elementRef: note, content: `Last review: **${lastReviewLabel}** · ${lastReviewIncidents} incidents · MTTR ${mttr}` })
+        ui::setPageState({ key: "reliability_peak_drift", value: sweepPeakDrift })
+        return rowCount
+    }
+
+    function lookupIncident(incidentKey: string): (incident: Struct, known: bool) {
+        const store = db::open({ name: "warehouse_incidents", userScoped: false })
+        const params = sqlParam("key", incidentKey)
+        const rows = store.filter({ filter: "incident_key = $key", params: params, limit: 1 })
+        const known = array::length({ array: rows }) > 0
+        const incident = array::get({ arrayIn: rows, index: 0 })
+        return incident, known
+    }
+
+    function applyCallback(incidentKey: string, action: string, actor: string): (state: string, known: bool) {
+        const { incident, known } = desk::lookupIncident(incidentKey)
+        const issueKey = struct::get({ struct: incident, field: "issue_key" })
+        const tableFqn = struct::get({ struct: incident, field: "table_fqn" })
+        const state = action == "ack" ? "Acknowledge" : (action == "resolve" ? "Done" : "Investigate")
+        if (known) {
+            const provider = atlassianProvider()
+            jira::transitionIssue({ provider: provider, issueKey: issueKey, transitionName: state, comment: `${actor} sent ${action} from the incident desk.` })
+            const store = db::open({ name: "warehouse_incidents", userScoped: false })
+            let update = {}
+            update.incident_key = incidentKey
+            update.state = state
+            update.updated_at = now().format("%Y-%m-%dT%H:%M:%SZ")
+            update.updated_by = actor
+            store.upsert({ idRow: "incident_key", value: update })
+            lineage::recordConsumer(tableFqn, `jira:${issueKey}`)
+        } else {
+            error({ message: `callback for unknown incident ${incidentKey}`, toast: false })
+        }
+        return state, known
+    }
+
+    function quarantineFromWidget(incidentKey: string): (message: string) {
+        const { incident } = desk::lookupIncident(incidentKey)
+        const tableFqn = struct::get({ struct: incident, field: "table_fqn" })
+        const severity = struct::get({ struct: incident, field: "severity" })
+        const accepted = lineage::requestQuarantine(tableFqn, severity)
+        const message = accepted ? "Quarantine requested" : "Quarantine refused"
+        return message
+    }
+
+    function commentFromWidget(incidentKey: string, note: string): (message: string) {
+        const { incident } = desk::lookupIncident(incidentKey)
+        const issueKey = struct::get({ struct: incident, field: "issue_key" })
+        const provider = atlassianProvider()
+        jira::addComment({ provider: provider, issueKey: issueKey, body: note })
+        return `Comment posted on ${issueKey}`
+    }
+}
+
+eventsSimple hourlyReliabilitySweep() {
+    const startedAt = now()
+    const windowStart = startedAt.add({ hours: -1 }).format("%Y-%m-%dT%H:%M:%SZ")
+    const { tables, scanned } = discovery::sweepCatalog(200)
+    watchedTables = tables
+    const { raised, peak } = profiling::scanWindow(windowStart)
+    const published = publishing::releaseSweep()
+    const { humanReadable } = startedAt.diff(now())
+    const peakText = fmt::number({ value: peak, decimals: 3 })
+    info({ message: `sweep read ${scanned} catalogue rows, raised ${raised} incidents (peak drift ${peakText}), published ${published} in ${humanReadable}`, toast: false })
+}
+
+eventsSimple monthlyReliabilityReview() {
+    const { periodLabel, pageId } = publishing::compileMonthlyReview()
+    info({ message: `monthly reliability review ${periodLabel} is live at ${pageId}`, toast: true })
+}
+
+eventsGeneric incidentCallback(incidentKey: string, action: string, actor: string, payload: Struct) {
+    const { state, known } = desk::applyCallback(incidentKey, action, actor)
+    let response = {}
+    response.incident_key = incidentKey
+    response.state = state
+    if (known) {
+        response.ok = true
+        events::returnResult({ response: response })
+    } else {
+        response.ok = false
+        response.reason = "unknown incident"
+        events::returnResult({ response: response })
+    }
+}
+
+eventsSimple reliabilityDeskLoad() {
+    const shown = desk::renderQueue()
+    ui::showScreen()
+    info({ message: `reliability desk rendered ${shown} open incidents`, toast: false })
+}
+
+eventsWidgetAction incidentDeskAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const incidentKey = events::extractActionContext({ actionContext: actionContext, fieldName: "incidentKey" })
+    const note = events::extractInputValue({ inputValues: inputValues, componentId: "incident_note" })
+    const { element: status } = ui::getElement({ elementRef: "reliability_action_status" })
+    if (eventName == "quarantine") {
+        const quarantined = desk::quarantineFromWidget(incidentKey)
+        ui::setElementText({ elementRef: status, text: quarantined })
+    } else if (eventName == "comment") {
+        const commented = desk::commentFromWidget(incidentKey, note)
+        ui::setElementText({ elementRef: status, text: commented })
+    } else {
+        const query = sqlParam("key", incidentKey)
+        ui::navigateTo({ route: "/reliability/incident", queryParams: query, replace: false })
+    }
+}

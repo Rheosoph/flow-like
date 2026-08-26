@@ -20,19 +20,13 @@ import WorkflowFigure from '../../../components/WorkflowFigure.astro';
 import cacheInvalidation from '../../../assets/workflows/cache-invalidation.webp';
 import triageFull from '../../../assets/workflows/incident-triage.webp';
 
-The first copy of a useful node network feels harmless. The second creates a maintenance question:
-are these two blocks allowed to evolve independently, or are they supposed to remain the same?
+Copying a useful node network creates a maintenance question: may the copies diverge, or must they
+stay identical? If they must stay identical, make them a function.
 
-If the answer is “they should stay the same,” they should not be copies. They should be a function.
+An explicit cache policy can also reuse a function's previous result. An ordinary visual group has
+no such call contract.
 
-That is the founder's practical boundary between visual organization and reusable logic:
-
-> When you copy a layer because you intend to reuse the same logic, turn it into a function.
-
-There is a second signal. Flow-Like can automatically reuse a function's previous result through
-an explicit cache policy. Ordinary visual grouping cannot carry that callable result contract.
-
-This chapter separates four ideas that can look similar on a canvas:
+These constructs may look similar on a canvas, but serve different jobs:
 
 | Construct | What it gives the Flow |
 | --- | --- |
@@ -41,16 +35,14 @@ This chapter separates four ideas that can look similar on a canvas:
 | Handler/Event | A triggerable boundary that a caller or agent can invoke |
 | Function cache | An authored promise that a previous output may replace the entire call |
 
-> **Release check:** FlowScript functions currently become Function layers with typed boundary
-> pins. Function purity is inferred structurally from their contents; node purity itself is a
-> promise made by each node designer through the presence or absence of Execution pins. Every user
-> function with at least one parameter can be called as a method on its first argument. `@cache` is
-> explicit and may currently be attached even to an impure function; a hit skips its whole body.
-> Cache keys do not include the function body, package versions, global/runtime variables, model
-> choice, or external state unless the author turns those dependencies into inputs. A plain
-> Function layer cannot currently be registered directly as an agent tool: the author must provide
-> a referenceable Event handler. The planned thin automatic Function-to-Event shim is not yet
-> implemented.
+> **Release check:** FlowScript functions become Function layers with typed boundary pins. Their
+> purity follows the structure of their contents; each node designer declares node purity through
+> the presence or absence of Execution pins. Any user function with a parameter can be called as a
+> method on its first argument. `@cache` is explicit and may be attached to an impure function; a
+> hit skips the whole body. Cache keys omit the function body, package versions, global and runtime
+> variables, model choice, and external state unless those dependencies become inputs. A Function
+> layer cannot yet be registered directly as an agent tool. It needs a referenceable Event handler;
+> the planned automatic shim is not implemented.
 
 ## 12.1 A function is a reusable layer contract
 
@@ -62,34 +54,30 @@ function normalizeSystemId(systemId: string): (normalized: string) {
 }
 ```
 
-On the Board, this is not a hidden text routine. It becomes a Function layer. `systemId` is an
-input boundary pin, `normalized` is an output boundary pin, and every call becomes a Call Function
-node wired to that layer.
+On the Board, this becomes a Function layer. `systemId` is an input boundary pin, `normalized` is
+an output boundary pin, and every call becomes a Call Function node wired to that layer.
 
-The signature is therefore part of the visible graph contract. Renaming, reordering, or changing
-the type of a parameter changes a pin. Changing a return changes what callers can consume. That is
-why a function is more than a tidier rectangle: it establishes one implementation behind all of
-its callers.
+The signature is part of the visible graph contract. Renaming, reordering, or retyping a parameter
+changes a pin. Changing a return changes what callers can consume. All callers share the same
+implementation.
 
-Use a function when at least one of these is true:
+Use a function when:
 
-- two places need logic that must remain identical;
-- the operation deserves a stable typed contract and a meaningful name;
-- callers should not depend on the internal node arrangement;
-- the result should be testable as a unit; or
-- the author wants to apply an explicit cache policy.
+- several callers need logic that must remain identical;
+- the operation needs a named, typed contract whose internals may change;
+- the result should be tested as a unit; or
+- the call needs an explicit cache policy.
 
-Do not extract every cluster reflexively. Five nodes used once may be easier to understand inline,
-especially when their connections tell the story better than a generic helper name. A function is
-valuable when its boundary says something more useful than its hidden implementation.
+Do not extract every cluster. A one-off group of nodes may read better inline, especially when its
+wires explain more than a generic helper name would. Extract it when the boundary clarifies the
+logic.
 
-Functions are reusable within their Flow. They are not automatically public APIs, scheduled
-entries, agent tools, or cross-Flow packages. Those require a triggerable Event boundary or a
-packaged node, depending on the intended reach.
+Functions are reusable within their Flow. Public APIs, schedules, and agent tools need a
+triggerable Event boundary; cross-Flow reuse needs a packaged node.
 
 ## 12.2 Execution moves forward; pure data is pulled backward
 
-Flow-Like has two complementary directions of evaluation:
+Flow-Like evaluates in two directions:
 
 <WorkflowFigure
   src={triageFull}
@@ -97,51 +85,47 @@ Flow-Like has two complementary directions of evaluation:
   caption="Execution moves forward on the dark wire; required pure data is pulled through the colored dependency wires before the impure consumer runs."
 />
 
-Execution travels forward through Execution pins. Before an impure node runs, the runtime examines
-its data inputs. If a required value is produced by pure nodes, it walks backward through those
-dependencies, evaluates them in dependency order, and then runs the impure consumer.
+Execution travels forward through Execution pins. Before an impure node runs, the runtime walks
+backward through any pure data dependencies, evaluates them in dependency order, then runs the
+consumer.
 
 This gives an apparently small rule a large consequence:
 
 > An unused pure value performs no work.
 
-If the output of `systemId.trim()` reaches no return pin and no executing consumer, the runtime has
-no reason to evaluate it. By contrast, an impure call on the execution chain runs even when nobody
-uses its data output. Its position on that chain is the reason it exists.
+If `systemId.trim()` reaches no return pin or executing consumer, it does not run. An impure call on
+the execution chain does run even when nobody uses its data output.
 
 ### Who decides purity?
 
-The node designer does. At runtime, the structural test is simple:
+The node designer does. The runtime uses this structural test:
 
 | Node shape | Runtime classification |
 | --- | --- |
 | No Execution pins | Pure, evaluated when data is demanded |
 | One or more Execution pins | Impure, scheduled through execution flow |
 
-That structure is a promise, not a proof. The engine does not inspect a node's Rust or WASM
-implementation and mathematically establish that it is deterministic or side-effect-free. A node
-author who hides a network request or mutation behind a pure data pin breaks the execution model.
+That structure is a promise. The engine does not inspect Rust or WASM code to prove determinism or
+the absence of side effects. Hiding a network request or mutation behind a pure data pin breaks the
+execution model.
 
-The design rule is stricter than the shortest academic definition:
+For node authors:
 
-- deterministic, inexpensive transformations are good pure nodes;
-- operations that may change state are impure; and
-- expensive work should usually be impure even when it is deterministic, so its cost and schedule
-  remain visible.
+- make inexpensive deterministic transformations pure;
+- make state-changing operations impure;
+- usually make expensive work impure so its cost and schedule stay visible.
 
-FlowScript derives a Function layer's execution shape from its body. An impure node call, a Board
-variable write, another impure function, a branch, or a loop gives the Function execution boundary
-pins. A function made only from pure data dependencies and declared returns can remain pull
-evaluated.
+FlowScript derives a Function layer's execution shape from its body. An impure call, Board variable
+write, branch, or loop gives the Function execution boundary pins. A function containing only pure
+data dependencies and declared returns can remain pull evaluated.
 
-This means “deterministic” and “structurally pure” are related but not identical. The cached
-`resolveSystem` example later in this chapter contains an `if`. Its result is deterministic and it
-has no side effects, but the current planner represents the branch with execution flow, so the
-Function is structurally impure.
+“Deterministic” and “structurally pure” differ. The cached `resolveSystem` example contains an `if`.
+Its result is deterministic and side-effect-free, yet the planner represents its branch with
+execution flow, making the Function structurally impure.
 
 ### The Unreal Engine comparison
 
-The model is intentionally familiar to Blueprint authors. Epic's official
+Blueprint authors will recognize the model. Epic's official
 [Functions documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/functions-in-unreal-engine)
 defines a Blueprint Pure function by its promise not to modify state. Impure functions are placed
 on explicit execution wires; pure functions are evaluated when a connected consumer needs their
@@ -149,13 +133,12 @@ data. Epic also warns in its
 [UFunctions documentation](https://dev.epicgames.com/documentation/unreal-engine/ufunctions-in-unreal-engine)
 that pure functions do not cache their results, making non-trivial work a performance concern.
 
-Flow-Like shares the split between explicit execution and demand-driven data. Its recommended node
-design adds an operational concern: if a calculation is expensive enough that operators should see
-when and where it runs, making it impure can be the honest choice even when it does not mutate
+Flow-Like uses the same split between explicit execution and demand-driven data. If operators need
+to see when and where an expensive calculation runs, mark it impure even when it does not mutate
 state.
 
-Pure is therefore not a synonym for cached. Pure answers **when is this data needed?** Caching
-answers **may an older result replace this call?** They are separate decisions.
+Purity answers **when is this data needed?** Caching answers **may an older result replace this
+call?**
 
 ## 12.3 Every user function has a receiver
 
@@ -167,34 +150,31 @@ const normalized = normalizeSystemId(systemId)
 const sameValue = systemId.normalizeSystemId()
 ```
 
-Both forms call the same Function layer. In the method form, `systemId` fills the first parameter.
-The remaining arguments follow after it:
+Both forms call the same Function layer. In method form, `systemId` fills the first parameter and
+the remaining arguments follow:
 
 ```flow
 const { team, runbook } = normalized.resolveSystem(directoryRevision)
 ```
 
-This is universal for user functions because the first parameter already supplies an unambiguous
-receiver contract. The editor can offer compatible functions after `receiver.` by checking that
-parameter's type.
+This works for every user function with a first parameter. Its type gives the editor an unambiguous
+receiver contract for suggestions after `receiver.`.
 
-Method syntax does not mean that the function belongs to an object, mutates the receiver, or uses a
-different runtime mechanism. It is readable call sugar over the same pins. Current Board-to-source
-projection may normalize an authored method call back to a flat function call, so the spelling is
-not yet a round-trip identity guarantee.
+Method syntax is call sugar over the same pins. It does not imply object ownership, receiver
+mutation, or a different runtime. Board-to-source projection may normalize it back to a flat call,
+so the spelling is not yet preserved across a round trip.
 
-Catalog nodes have a related but distinct rule. Their node designer selects a receiver pin in the
-catalog metadata, with a limited first-data-input fallback for compatible namespaces. Not every
-catalog node automatically becomes a method merely because it has an input.
+For catalog nodes, the designer selects a receiver pin in catalog metadata, with a limited
+first-data-input fallback for compatible namespaces. Having an input alone does not make a catalog
+node a method.
 
 ## 12.4 Functions are reusable; Events are triggerable
 
-A function has a typed call boundary, but it has no independent runtime entry. An agent cannot
-trigger a Function layer merely by knowing its name. It needs an Event entry.
+A function has a typed call boundary and no independent runtime entry. An agent needs an Event to
+trigger it.
 
-The design rule is straightforward: any suitable Event should be explicitly registerable as a
-tool. When reusable logic already lives in a function, a thin Event shim adapts the function to
-that trigger boundary:
+Any suitable Event can be registered explicitly as a tool. When the reusable logic lives in a
+function, a thin Event shim supplies the trigger boundary:
 
 ```flow
 eventsGeneric configureIncidentAgent(payload: Struct, agent: Struct, directoryRevision: string) {
@@ -211,30 +191,24 @@ eventsGeneric configureIncidentAgent(payload: Struct, agent: Struct, directoryRe
 }
 ```
 
-`tools: [resolveSystemTool]` is explicit reference metadata. It records the concrete handler entry
-the agent may invoke; it is not an ordinary array passed through a data pin. The nested handler is
-an independent Event entry even though the source places it beside the registration that owns it.
-Its parameters become the tool's inferred input properties, and its `return` becomes the tool
-result.
+`tools: [resolveSystemTool]` is reference metadata rather than an array passed through a data pin.
+It records the concrete handler the agent may invoke. The nested handler remains an independent
+Event entry. Its parameters become inferred tool input properties; its `return` becomes the result.
 
-That inference is not yet a complete external contract. The current model-facing schema describes
-the properties but does not mark them as required, and it does not advertise a declared output
-schema. The handler remains responsible for validating the values it receives.
+The model-facing schema describes those properties, but does not mark them required or advertise a
+declared output schema. The handler must validate its inputs.
 
-The current implementation requires this handler to be written. Registering `resolveSystem`
-directly is rejected because a Function layer has no trigger node. A future convenience can create
-the slim shim automatically, but it must still leave the Event and its registration visible.
+Today, the author must write this handler. Registering `resolveSystem` directly fails because a
+Function layer has no trigger node. A future convenience may generate the shim while leaving the
+Event and registration visible.
 
-“Any Event” also needs one release-specific qualification. Current tool registration accepts Event
-entries marked as referenceable—such as the supported Simple, Generic, Chat, and Widget Action
-entries—not every arbitrary start node. Registering an Event for one agent does not expose a public
-API; Chapter 13 covers external App Event registration separately.
+Tool registration accepts referenceable Event entries, including the supported Simple, Generic,
+Chat, and Widget Action entries. It does not accept every start node. Registering an Event for an
+agent does not expose a public API; Chapter 13 covers that boundary.
 
-Tool schemas are inferred, but policy is still authored. Current function references do not carry
-their own confirmation, allowed-caller, cost-limit, or permission object. If an operation needs
-human confirmation or a domain authorization check, put that logic inside or immediately around
-the handler. Package capabilities and the enclosing runtime permissions still apply, but the Event
-shim does not invent additional approval on its own.
+Tool schemas are inferred; policy remains authored. Function references carry no confirmation,
+allowed-caller, cost-limit, or permission object. Put required confirmation or domain authorization
+inside or next to the handler. Package capabilities and runtime permissions still apply.
 
 ## 12.5 `@cache` is an authored promise
 
@@ -253,19 +227,17 @@ function resolveSystem(systemId: string, directoryRevision: string): (team: stri
 }
 ```
 
-A cache hit replaces the complete call. The runtime restores the named data outputs, activates the
-continuation, and runs none of the nodes inside the function. No log, write, API call, ticket, or
-other side effect in that body happens on a hit.
+A cache hit replaces the complete call. The runtime restores the named outputs, activates the
+continuation, and skips every node in the function. Side effects in the body do not happen.
 
 That leads to the safe contract:
 
 > Cache a function only when the same declared inputs may legitimately reuse the same outputs for
-> the chosen freshness window—and skipping the entire body is correct.
+> the chosen freshness window, and skipping the entire body is correct.
 
-The engine currently trusts the author. It permits caching a structurally impure function and the
-UI can warn about the risk, but Apply does not reject it. This can be valid for an expensive,
-execution-driven read or deterministic branch. It is not valid for ticket creation, writes,
-notifications, auditing, or any other behavior that must occur for every call.
+The engine trusts the author. Apply permits caching a structurally impure function, though the UI
+can warn. This may suit an expensive read or deterministic branch. Do not cache behavior that must
+occur on every call, such as a write, notification, or audit entry.
 
 ### What forms the key today
 
@@ -276,8 +248,8 @@ App + scope + user when user-scoped + namespace
     + hash(Function layer ID + successfully evaluated input names and values)
 ```
 
-Object keys are canonicalized and arrays retain their order. The stable Function layer ID prevents
-two functions in the same namespace from reading each other's entries.
+Object keys are canonicalized; array order is preserved. The stable Function layer ID prevents
+functions in one namespace from sharing entries.
 
 The following are **not** included automatically:
 
@@ -289,20 +261,17 @@ The following are **not** included automatically:
 - deployment configuration; and
 - database, file, or external API state.
 
-If one of those changes the legitimate result, make its identity or revision a declared input, or
-invalidate/version the namespace when it changes. The `directoryRevision` parameter in the example
-exists for exactly this reason.
+If one changes the legitimate result, expose its identity or revision as an input, or invalidate or
+version the namespace. That is why the example accepts `directoryRevision`.
 
-FlowScript's bare `@cache` currently means namespace `global`, a five-minute lifetime, and App
-scope. The visual Function editor starts from different defaults today, including no expiry. Until
-those surfaces converge, this book writes the settings-object form with an explicit namespace and
-TTL. App scope is the canonical FlowScript default and is therefore omitted here. `ttlSeconds: 0`
-means no expiry and should be reserved for entries with an explicit invalidation and cleanup plan.
+Bare `@cache` currently means namespace `global`, a five-minute lifetime, and App scope. The visual
+Function editor has different defaults, including no expiry. Until the editors converge, the book
+uses a settings object with an explicit namespace and TTL. App scope is omitted because it is the
+FlowScript default. Reserve `ttlSeconds: 0` for entries with an invalidation and cleanup plan.
 
-Cache failure is designed to degrade into ordinary execution: an unavailable backend or unusable
-entry produces a warning and the function runs. A write is best-effort and does not turn a
-successful Flow into a failure. Concurrent identical misses are not combined into one call, so a
-cache is neither a distributed lock nor an exactly-once mechanism.
+When the cache backend or entry is unavailable, the runtime warns and executes the function. Cache
+writes are best-effort. Concurrent identical misses are not combined, so the cache provides
+neither distributed locking nor exactly-once behavior.
 
 ## 12.6 Invalidate after the source of truth changes
 
@@ -324,8 +293,8 @@ eventsGeneric invalidateSystemDirectory(payload: Struct, directoryRevision: stri
 }
 ```
 
-This Event belongs at the successful end of the authoritative system-directory update—not at the
-end of every read. The safe order is:
+Run this Event after a successful authoritative directory update, never after each read. The order
+is:
 
 <WorkflowFigure
   src={cacheInvalidation}
@@ -334,21 +303,17 @@ end of every read. The safe order is:
   wide
 />
 
-There is still a concurrency edge. A lookup that missed before invalidation can finish afterward
-and write an old result back into the namespace. Passing `directoryRevision` into the cached
-function prevents new callers from using that old key. A versioned namespace can provide another
-clean boundary, although changing a namespace makes old entries unreachable rather than deleting
-them; TTL or explicit cleanup must eventually remove them.
+A lookup that missed before invalidation can finish afterward and write an old result back. Passing
+`directoryRevision` prevents new callers from using that key. Versioning the namespace also
+isolates it, though old entries remain until TTL or cleanup removes them.
 
-Changing function code, return names, package versions, model choice, or configuration does not
-automatically clear old results. That responsibility belongs to the author because only the author
-knows whether the change alters the meaning of a cached answer.
+Code, return names, package versions, model choice, and configuration do not clear cached results.
+Invalidate them when such a change alters the answer.
 
 ## 12.7 Use layers for readability, functions for sameness
 
-An ordinary layer collapses part of one graph into a named nested view. It is valuable when the
-canvas is crowded, when a section deserves a high-level label, or when a placeholder should define
-the intended shape before its implementation exists.
+An ordinary layer collapses part of one graph into a named nested view. Use one to reduce canvas
+clutter, label a section, or sketch a placeholder.
 
 A Function layer changes the relationship:
 
@@ -361,14 +326,11 @@ A Function layer changes the relationship:
 | Results should use automatic function caching | Function |
 | A caller or agent must trigger the logic independently | Event, usually wrapping a function |
 
-Studio can convert a suitable collapsed layer into a Function while preserving its inner nodes and
-typed boundary pins, replacing the inline occurrence with a Call Function node. Execution-bearing
-Functions need one execution entry; pure Functions need none.
+Studio can convert a suitable collapsed layer into a Function. It preserves the inner nodes and
+typed boundary pins, then replaces the inline occurrence with a Call Function node.
 
-The key smell is not visual duplication by itself. Two similar blocks can represent intentionally
-different domain policies. The smell is copy-and-paste performed with the expectation that future
-changes must be repeated. That expectation is already a function contract, whether or not the
-author has named it yet.
+Similar blocks may encode intentionally different policies. Extract them only when a change to one
+must be repeated in the others.
 
 ## 12.8 Read the complete function and cache example
 
@@ -391,16 +353,12 @@ function resolveSystem(systemId: string, directoryRevision: string): (team: stri
 }
 ```
 
-`normalizeSystemId` is pure and runs only when a consumer needs `normalized`. `resolveSystem` is
-structurally impure in the fixture because it uses a visible `if`, but it is safe to cache: its body
-has no side effects, its output is determined by declared inputs, and the revision expresses the
-freshness dependency.
+`normalizeSystemId` is pure and runs when a consumer needs `normalized`. The visible `if` makes
+`resolveSystem` structurally impure, but caching is safe because its inputs fully determine the
+side-effect-free result, including the directory revision.
 
-The small in-source mapping stands in for the governed system-directory lookup a production App
-would perform. The complete fixture also calls the Functions directly, adapts them through an
-explicit agent Event, and supplies a separate namespace-invalidation Event for the end of the
-directory's durable update path.
+The in-source mapping stands in for a governed production directory lookup. The fixture calls both
+Functions, adapts them through an agent Event, and invalidates the namespace after a durable update.
 
-This is the larger pattern: name logic when sameness matters, expose it through an Event when an
-independent caller needs it, and cache it only when replacing the entire call is an honest thing to
-do.
+A function can unify shared logic, and an Event can expose it to independent callers. Add caching
+only when the runtime may safely skip the whole call.

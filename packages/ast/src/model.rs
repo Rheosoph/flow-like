@@ -79,8 +79,32 @@ pub enum UseKind {
     Glob,
     /// `use a::b as x` — the namespace is reachable as `x`.
     Alias(String),
-    /// `use a::b::{ x, y }` — only the listed members become bare names.
-    Members(Vec<String>),
+    /// `use a::b::{ x, y as z }` — only the listed members become bare names.
+    Members(Vec<UseMember>),
+}
+
+/// One member of a `use a::b::{ … }` list, optionally renamed with `as`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UseMember {
+    /// The member's real name inside the namespace.
+    pub name: String,
+    /// Local name it is callable by; `None` when it keeps `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+}
+
+impl UseMember {
+    /// The bare name a call site writes for this member.
+    pub fn local(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.name)
+    }
+
+    pub fn render(&self) -> String {
+        match &self.alias {
+            Some(alias) => format!("{} as {alias}", self.name),
+            None => self.name.clone(),
+        }
+    }
 }
 
 /// A TypeScript-like interface declaration used as the readable surface for struct schemas.
@@ -110,6 +134,10 @@ pub enum InterfaceType {
     Named(String),
     Array(Box<InterfaceType>),
     Map(Box<InterfaceType>),
+    /// `Set<T>` — accepted in an interface field for symmetry with `type_ref`, which has always
+    /// taken it on globals, parameters and locals. Its JSON-schema projection is an array with
+    /// `uniqueItems`.
+    Set(Box<InterfaceType>),
     Union(Vec<InterfaceType>),
     StringLiteral(String),
     Null,

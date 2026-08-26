@@ -1,0 +1,18 @@
+// RECLASSIFIED 2026-08-26: not an engine defect. In FlowScript `bytes` is a SINGLE byte
+// (`Byte/Normal`); a byte buffer is `bytes[]` (`Byte/Array`), which is what every `bytes::` node
+// takes and what `type_ref` round-trips (packages/core/src/flow/ast/types.rs). The original
+// declaration `const sentinel: bytes` therefore asked for a scalar and `sentinel.toHex()`
+// correctly refused it.
+//
+// Kept as a POSITIVE regression test for the buffer spelling. Residual engine nit, filed but not
+// fixed here: `receiver_class` maps BOTH `Byte/Array` and `Byte/Normal` to the `bytes` class, so a
+// scalar receiver still dispatches to a buffer method and only fails later at connection
+// validation, instead of reporting "no method `toHex` on `bytes`" up front.
+use log::{ info }
+
+const sentinel: bytes[]
+
+eventsSimple scalarBytesReceiver() {
+    const hex = sentinel.toHex()
+    info({ message: hex, toast: false })
+}

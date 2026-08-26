@@ -1,0 +1,13 @@
+use log::{ info }
+use string::*
+
+// BUG: an array literal whose elements are node outputs / event params cannot be lowered.
+// It parses and renders fine, but reconcile reports:
+//   argument `strings` on `join` is not a literal or resolvable node output; skipped connection
+//   node `join` is missing required inputs: strings
+// A literal-only array (["alpha", "beta"]) lowers correctly, so the gap is specifically an
+// array literal that has to be materialised from other nodes' outputs.
+eventsGeneric probeArrayLiteralReceiver(payload: Struct, first: string, second: string) {
+    const joined = [first, second].join({ separator: "\n" })
+    info({ message: joined, toast: false })
+}

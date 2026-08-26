@@ -1,10 +1,10 @@
-# FlowBook: The FlowScript Book
+# FlowBook: A Developer's Guide to Flow-Like
 
 > Software that explains itself.
 
 **Status:** Astro/Starlight manuscript app; first edition in drafting
-**Working title:** *FlowBook: The FlowScript Book*
-**Working subtitle:** *Build reliable software in code and as a visible workflow*
+**Working title:** *FlowBook: A Developer's Guide to Flow-Like*
+**Working subtitle:** *Build reliable software as typed text and a visible workflow*
 
 ## Run the book locally
 
@@ -54,10 +54,10 @@ When a run fails, its evidence leads back to the building block that failed.
 
 The technically precise formulation used by this book is:
 
-> Studio and FlowScript are equal authoring surfaces over one underlying Flow model.
+> The canvas editor and FlowScript editor inside Studio are equal authoring views over one Flow model.
 
-FlowScript is an authoring language, not a second execution engine. Text is parsed and
-reconciled into the persisted Board behind a Flow; the Flow-Like runtime executes that
+FlowScript is an authoring language. Text is parsed and reconciled into the persisted Board
+behind a Flow; the Flow-Like runtime executes that
 graph. Immutable Flow versions can also be prepared as compact, versioned compiled-board
 artifacts for the Rust executor.
 
@@ -77,8 +77,7 @@ By the end of the main path, a reader will be able to:
 
 ## Who the book is for
 
-FlowBook has one progressive core rather than separate books for each audience. Optional
-deep dives let readers leave and rejoin that path.
+FlowBook has one progressive core. Optional deep dives let readers leave and rejoin that path.
 
 | Reader | Primary route |
 | --- | --- |
@@ -91,10 +90,10 @@ deep dives let readers leave and rejoin that path.
 The prose assumes basic programming familiarity but not professional software-engineering
 experience. TypeScript knowledge makes the syntax familiar; it is not required.
 
-## What this book is—and is not
+## What this book covers
 
-FlowBook teaches durable mental models through a narrative and worked applications. It is
-not a copy of the product manual, the generated node catalog, or every cloud runbook.
+FlowBook teaches durable mental models through a narrative and worked applications. The product
+manual, generated node catalog, and cloud runbooks remain the detailed reference.
 
 - The book explains why a construct exists, how it reads, what graph it becomes, and how
   it behaves during a run.
@@ -163,9 +162,9 @@ art belongs under `apps/book/src/assets/workflows`.
 
 ## Editorial files
 
-- [STRUCTURE.md](STRUCTURE.md) — parts, chapters, subchapters, summaries, evidence, and
+- [STRUCTURE.md](STRUCTURE.md): parts, chapters, subchapters, summaries, evidence, and
   interview dependencies
-- [INTERVIEWS.md](INTERVIEWS.md) — completed source interviews, future sessions, and the
+- [INTERVIEWS.md](INTERVIEWS.md): completed source interviews, future sessions, and the
   open fact-check queue
-- [SOURCE_MAP.md](SOURCE_MAP.md) — repository evidence and implementation caveats to use
+- [SOURCE_MAP.md](SOURCE_MAP.md): repository evidence and implementation caveats to use
   while drafting

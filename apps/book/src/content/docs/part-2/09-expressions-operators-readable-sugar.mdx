@@ -23,7 +23,7 @@ import sugarFull from '../../../assets/workflows/readable-sugar.webp';
 import sugarSelect from '../../../assets/workflows/readable-sugar--focus-select.webp';
 import sugarStruct from '../../../assets/workflows/readable-sugar--focus-struct-update.webp';
 
-FlowScript is at its most familiar when the nodes seem to disappear:
+FlowScript can describe several nodes in a few familiar lines:
 
 ```flow
 let urgent = production && (attempts >= 3)
@@ -32,40 +32,33 @@ let summary = `${status}: ${report}`
 incident.status = status
 ```
 
-This looks like ordinary code. It is also a compact description of a graph containing an Integer
-Greater Than or Equal node, Boolean And, Select, String Format, and Set Field. Apply does not pass
-these expressions to a hidden JavaScript engine. It resolves each one against the catalog and
-creates or updates the corresponding nodes, pins, values, and wires.
+This describes a graph containing Integer Greater Than or Equal, Boolean And, Select, String
+Format, and Set Field nodes. Apply resolves each expression against the catalog and creates or
+updates the corresponding nodes, pins, values, and wires. No JavaScript engine evaluates it.
 
-That distinction gives us the rule for every convenience in this chapter:
+FlowScript may shorten a Flow only when it preserves the exact node contract. The renderer uses a
+short form only when it can reproduce that contract. Otherwise, the explicit call keeps every
+meaningful setting visible.
 
-> FlowScript may make a Flow shorter to read, but it may not make the Flow less exact.
-
-If a short form can reproduce the complete node contract, the renderer may use it. If meaningful
-configuration would disappear, the explicit call remains. Readability is valuable because it
-helps people reason about the system; it is not permission to conceal a decision.
-
-> **Release check:** Arithmetic, comparison and Boolean lowering, unary `!` and `-`, the four
-> compound assignments, value-selecting ternaries, template literals, and Struct field writes are
-> implemented in the current repository. Mixed known operand types are rejected. The current
-> diagnostic does not yet offer the two intent-specific conversion repairs proposed in Section
-> 9.1. Operator and template rendering already preserve configured extra pins in the cases
-> described below, but three current asymmetries remain: Float equality and inequality can render
-> as operators that text cannot reconcile, Integer division's declared operator result disagrees
-> with its live node output, and a Struct Get `found` output can be mistaken for field-value sugar.
-> Those are implementation gaps, not part of the language contract.
+> **Release check:** The current repository implements arithmetic, comparison and Boolean
+> lowering, unary `!` and `-`, four compound assignments, value-selecting ternaries, template
+> literals, and Struct field writes. It rejects mixed known operand types, although the diagnostic
+> does not yet offer the intent-specific repairs proposed in Section 9.1. Operator and template
+> rendering preserve configured extra pins in the cases below. Known asymmetries remain: Float
+> equality and inequality may render as operators that text cannot reconcile; Integer division's
+> declared result conflicts with its live node output; and a Struct Get `found` output may be
+> mistaken for field-value sugar. These are implementation gaps.
 
 ## 9.1 Arithmetic, comparison, and Boolean expressions
 
-An operator is a catalog lookup with two extra clues: the symbol and the operand type. Given:
+An operator lookup uses its symbol and operand type. Given:
 
 ```flow
 let urgent = attempts >= 3
 ```
 
-FlowScript knows that `attempts` is an Integer input and `3` is an Integer literal. It can
-therefore select the Integer Greater Than or Equal node and connect its Boolean output to the next
-consumer. The source spelling is compact; the Board still shows the operation that made `urgent`.
+Because both operands are Integers, FlowScript selects Integer Greater Than or Equal and connects
+its Boolean output to the next consumer. The Board still shows the operation that made `urgent`.
 
 The current operator families are intentionally specific:
 
@@ -76,20 +69,19 @@ The current operator families are intentionally specific:
 | String | `==`, `!=`, `+` |
 | Boolean | `==`, `&&`, `\|\|`, `^` |
 
-The table is narrower than the parser's vocabulary. A token being syntactically recognizable does
-not prove that the active catalog contains an unambiguous node contract for it. Apply is where the
-symbol, types, and live catalog meet.
+The parser recognizes more tokens than this table lists. Apply still needs an unambiguous contract
+for the symbol and operand types in the active catalog. This is where syntax meets the catalog
+installed for the current Flow.
 
-The parser also recognizes `|`, but current reconciliation has no operator node mapping for it.
+The parser recognizes `|`, though current reconciliation has no operator node mapping for it.
 `===` and `!==` are accepted compatibility spellings and normalize semantically to `==` and `!=`;
 FlowScript does not define a separate JavaScript-style identity comparison. Integer `/` is omitted
-from the table because the current operator registry expects an Integer result while the live
-Integer Divide node returns a Float. Until those declarations agree, use the explicit catalog
-operation and inspect its Float output rather than relying on `int / int` sugar.
+because the operator registry expects an Integer result while the live Integer Divide node returns
+a Float. Until those declarations agree, use the explicit catalog operation and inspect its Float
+output.
 
-Float equality and inequality demonstrate why that matters. Comparing floating-point values
-usually needs a tolerance. Flow-Like's Float Equal node exposes that tolerance as an input, so `a
-== b` cannot honestly express its full decision. Use the explicit call and choose the tolerance:
+Float equality usually needs a tolerance. The Float Equal node exposes that input, so `a == b`
+cannot carry the full decision. Choose it in an explicit call:
 
 ```flow
 const closeEnough = float::equal({
@@ -99,8 +91,8 @@ const closeEnough = float::equal({
 })
 ```
 
-The longer form is better here. It puts an operationally meaningful assumption in the source and
-on the node instead of inheriting an invisible global default.
+This keeps an operational assumption visible in both source and node. No global tolerance is
+silently inherited.
 
 ### Precedence is familiar; canonical source is explicit
 
@@ -121,17 +113,15 @@ The canonical renderer adds parentheses around nested binary expressions:
 let urgent = (production && (attempts >= 3)) || manuallyEscalated
 ```
 
-That is not a semantic change. It makes the tree—and consequently the chain of operator
-nodes—obvious in a review. Parentheses cost very little compared with an incident caused by two
-readers remembering precedence differently.
+The meaning stays the same. The parentheses expose the expression tree and its operator nodes,
+without asking reviewers to recall precedence.
 
 ### Types decide; FlowScript does not guess intent
 
-The same `+` symbol can identify Integer Add, Float Add, or String Concat. FlowScript chooses only
-when the operand evidence gives it one meaning. Two strings concatenate. Two integers add. Two
-floats add. An Integer literal may adopt the Float family when the other operand is known to be a
-Float, which makes `ratio * 2` natural. Two separately typed Integer and Float values remain
-different contracts and require an explicit conversion.
+The `+` symbol may identify Integer Add, Float Add, or String Concat. FlowScript chooses only when
+the operands determine one meaning. Matching String, Integer, and Float pairs use their respective
+families. An Integer literal may adopt the Float family when its other operand is a known Float,
+as in `ratio * 2`. Separately typed Integer and Float values require an explicit conversion.
 
 Consider the deceptively small expression:
 
@@ -139,16 +129,14 @@ Consider the deceptively small expression:
 let result = "5" + 1
 ```
 
-There are at least two plausible results:
+Two results are plausible:
 
 - numeric addition after parsing the left side: `6`; or
 - text concatenation after formatting the right side: `"51"`.
 
-Silently inserting a conversion would make the program compile by choosing a business decision
-the author never made. Current reconciliation instead reports incompatible `String` and `Integer`
-operands and creates no String Concat node. Apply is atomic: a reconciliation diagnostic prevents
-the edit commands from being applied, so the failed expression cannot leave half of a repair on
-the Board.
+An implicit conversion would choose a business decision for the author. Reconciliation reports
+incompatible `String` and `Integer` operands and creates no String Concat node. Apply is atomic, so
+the failed expression leaves no partial repair on the Board.
 
 The right repair depends on intent. Numeric intent can be made explicit with a typed parser and
 its success output:
@@ -167,18 +155,15 @@ Text intent can be made explicit with formatting:
 let text = `5${1}`
 ```
 
-The desired editor experience is: reject the ambiguous Apply, offer both repairs, preview the node
-each would insert, and let the author submit a second Apply for the chosen repair. Canonical source
-then rewrites to that visible choice. The editor should not choose one automatically. A conversion
-can fail, truncate, select a fallback, or alter representation; its policy belongs in the Flow.
+The intended editor experience rejects the ambiguous Apply, offers both repairs with node
+previews, and lets the author apply one. Canonical source then shows that choice. Conversion policy,
+including failure, truncation, fallback, or representation, belongs in the Flow.
 
-The same principle applies to `any`. An `any + 1` expression has no reliable operator family.
-Narrow it through a typed interface, use a typed parser such as `string::toInt`, or place
-`types::tryTransform` and consume its `success` result. Try Transform is a real catalog node whose
-Generic output adapts to its typed consumer; it is not an invisible coercion rule attached to
-every operator. An untyped or unconnected Try Transform output produces `null` and `success =
-false`; a failed conversion is an ordinary result rather than a node error. Ignoring `success`
-merely moves the eventual failure to a later typed consumer.
+The same applies to `any + 1`, which has no reliable operator family. Narrow it through a typed
+interface, use a parser such as `string::toInt`, or place `types::tryTransform` and consume its
+`success` result. Try Transform is a catalog node whose Generic output adapts to its typed
+consumer. An untyped or unconnected output produces `null` and `success = false`; failed
+conversion is an ordinary result. Ignoring `success` moves failure to a later typed consumer.
 
 ## 9.2 Unary and compound assignment
 
@@ -189,17 +174,15 @@ let unavailable = !healthy
 let debt = -balance
 ```
 
-Boolean negation becomes the Boolean Not node. Unlike binary operators, canonical source will
-generally show that catalog call rather than preserve `!healthy`. Numeric negation canonicalizes
-to subtraction from zero:
+Boolean negation becomes Boolean Not, which canonical source generally shows as a catalog call.
+Numeric negation canonicalizes to subtraction from zero:
 
 ```flow
 let debt = 0 - balance
 ```
 
-The reconciler then chooses Integer Subtract or Float Subtract from `balance`'s type. A negative
-literal such as `-3` remains a literal; an expression such as `-balance` becomes an operation. This
-small difference is visible on the Board because one needs a node and the other does not.
+The reconciler chooses Integer Subtract or Float Subtract from `balance`'s type. A negative literal
+such as `-3` stays a literal; `-balance` becomes an operation visible on the Board.
 
 Four compound assignments are accepted while writing:
 
@@ -219,10 +202,8 @@ scale = scale * 2.0
 scale = scale / 4.0
 ```
 
-This expansion exposes the actual model. The right side reads the current producer, the operator
-creates the next value, and the name is rebound for later statements. There is no opaque CPU-style
-`+=` instruction inside the graph. The compact input is accepted for convenience; the durable
-text makes the read, operation, and rebind explicit.
+The expanded form reads the current producer, creates the next value, and rebinds the name for
+later statements. The graph contains no opaque CPU-style `+=` instruction.
 
 Field compound assignment follows the same rule:
 
@@ -236,9 +217,8 @@ becomes:
 incident.attempts = incident.attempts + 1
 ```
 
-That form needs a typed numeric field. An open Struct field is Generic until the Flow proves more,
-so an author may have to read and convert it explicitly. `any` does not become safe merely because
-the uncertainty sits behind a dot.
+That form needs a typed numeric field. An open Struct field remains Generic until the Flow proves
+more, so the author may need an explicit read and conversion.
 
 ## 9.3 Conditional expressions select values
 
@@ -256,23 +236,18 @@ It lowers to the Types Select node:
   caption="The ternary becomes one Select data node. Its result can feed several consumers without creating execution branches."
 />
 
-This is not an execution branch. At runtime the Select node evaluates its condition and reads only
-the selected data input, but it exposes no alternative Execution arms. An impure operation placed
-inside an expression can also need its own place in the surrounding execution chain, so a ternary
-must not be used as a substitute for conditional side effects. Use a ternary for value-level
-selection. Use `if` or a named execution-arm block when only one side should call an external
-system, write data, or handle a failure. Chapter 10 develops that distinction through execution
-paths.
+Select evaluates its condition and reads only the chosen data input. It exposes no alternative
+Execution arms. Use a ternary for value selection; use `if` or a named execution-arm block when
+only one side should call an external system, write data, or handle a failure. Chapter 10 covers
+those paths. An impure expression still needs a place in the surrounding execution chain.
 
-The condition must resolve to a Boolean input, and the two alternatives must be usable by the
-same selected output contract. With ordinary literals that is straightforward. With distinct
-schemas or container shapes, an explicit common boundary is safer than erasing the disagreement
-through Generic.
+The condition must be Boolean, and both alternatives must fit the selected output contract. When
+schemas or container shapes differ, define an explicit common boundary instead of erasing the
+difference through Generic.
 
-The renderer recognizes the current `utils_types_select` node specifically. That node presently
-has only `condition`, `a`, and `b`, so the ternary reproduces its full data contract. Unlike binary
-operator lowering, this path does not yet guard against future extra configured inputs. If the
-Select node grows another meaningful pin, the lossless-sugar test must grow with it.
+The renderer recognizes `utils_types_select` specifically. Its current `condition`, `a`, and `b`
+inputs fit the ternary exactly. Unlike binary operator lowering, this path does not yet guard
+against future configured inputs; the lossless-sugar test must grow if Select gains one.
 
 ## 9.4 Template literals are String Format nodes
 
@@ -288,24 +263,20 @@ Apply converts that expression into one String Format node. Static text becomes 
 <WorkflowFigure
   src={sugarFormat}
   alt="Format String node with dynamic status, normalized, and attempts input pins wired from Select, Trim String, and the event."
-  caption="Template interpolation names survive as dynamic Studio pins, so every placeholder has an inspectable producer."
+  caption="Template interpolation names survive as dynamic node pins, so every placeholder has an inspectable producer."
 />
 
-Simple references keep their names. A member or output access normally uses its final segment.
-More complex expressions receive stable positional names such as `arg1`. If two different
-expressions want the same placeholder name, the later one receives a suffix. Repeating the same
-bare reference reuses one placeholder pin, just as one graph output may fan out to several places
-in a format string.
+Simple references keep their names. Member or output access normally uses its final segment.
+Complex expressions receive stable names such as `arg1`; collisions gain a suffix. Repeating the
+same bare reference reuses one placeholder pin.
 
-This naming is not cosmetic. Dynamic pins are part of the node. The Board needs to know which wire
-supplies `{status}`, and text reconstructed from the Board must be able to produce the same set of
-pins again.
+Dynamic pins are part of the node. The Board must know which wire supplies `{status}`, and rebuilt
+text must produce the same pin set.
 
-Template text therefore has one deliberate edge. Literal text shaped exactly like a format
-placeholder, such as `{status}`, cannot be treated as inert braces, because the underlying String
-Format node would interpret it as a pin. FlowScript rejects that ambiguous template. If a
-placeholder was intended, write the explicit format call and supply it; if literal braces were
-intended, change the text rather than relying on an escape the node itself cannot preserve.
+Literal text shaped like a placeholder, such as `{status}`, is ambiguous because String Format
+would interpret it as a pin. FlowScript rejects that template. Use an explicit format call for a
+placeholder; change the text when the braces should be literal, since the node cannot preserve an
+escape.
 
 The renderer returns to template syntax only when the round trip is exact. It requires:
 
@@ -323,8 +294,8 @@ string::format({
 })
 ```
 
-That is the correct fallback. A slightly longer line is preferable to a pretty template that
-silently renames a dynamic pin or drops a configured value.
+The explicit call prevents a dynamic pin from being renamed or a configured value from being
+dropped.
 
 ## 9.5 Field reads and writes are value flow
 
@@ -335,17 +306,15 @@ let found = split.found
 let status = incident.status
 ```
 
-The first expression may name an output pin on the node bound to `split`. The second reads a field
-from a Struct. Reconciliation tries the declared node output first. If no such output exists and
-the base is Struct-shaped, it lowers the expression to the appropriate Struct field-access node.
-A named interface lets that access retain the field's declared type; an open Struct produces a
-more generic boundary.
+The first expression may name an output pin on `split`; the second reads a Struct field.
+Reconciliation checks declared node outputs first, then uses a Struct field-access node when the
+base is Struct-shaped. A named interface retains the field's declared type, while an open Struct
+produces a Generic boundary.
 
-There is a current read-side round-trip bug to keep separate from that intended rule. Generic Get
-Field exposes both `value` and `found`. Board-to-text lowering currently recognizes the node as a
-member access without first checking which output is wired. A wire from `found` can therefore
-render as `incident.status`, which ordinarily means the value. The safe authoring form when the
-presence flag matters is an explicit call and named output until lowering checks the selected pin.
+A current round-trip bug affects Generic Get Field, which exposes `value` and `found`. Board-to-text
+lowering recognizes member access before checking the wired output, so `found` may render as
+`incident.status`, which normally means the value. Until lowering checks the pin, use an explicit
+call and named output when the presence flag matters.
 
 ```flow
 const { value: status, found } = incident.get({ field: "status" })
@@ -357,9 +326,8 @@ A field write is equally concrete:
 incident.status = "closed"
 ```
 
-It lowers to Set Field with three data inputs—`struct_in`, the literal path `"status"`, and the new
-value—and a `struct_out` output. FlowScript then rebinds `incident` so later uses resolve to that
-output.
+It lowers to Set Field with `struct_in`, the literal path `"status"`, and the new value as inputs,
+plus a `struct_out` output. FlowScript rebinds `incident` so later uses resolve to that output.
 
 It helps to see the successive values on the Board:
 
@@ -369,15 +337,13 @@ It helps to see the successive values on the Board:
   caption="Each Set Field produces a new Struct wire for the next update; existing consumers remain connected to the earlier producer."
 />
 
-This is the precise sense in which the source appears to mutate a Struct. A consumer wired before
-the assignment keeps `incident@0`. A reference after the first write receives `incident@1`; after
-the second, it receives `incident@2`. The pins on each operation carry that operation's current
-runtime value. The source name is the readable binding that selects which producer subsequent
-expressions use.
+This is how source-level Struct mutation works. A consumer wired before the assignment keeps
+`incident@0`. References after successive writes receive `incident@1` and `incident@2`. The source
+name selects the producer used by later expressions. Each operation's pins carry the runtime value
+for that version.
 
-If the name is never used after a field write, the updated Struct is simply an unused copy. If it
-is used, it is the new version. Nothing travels backward through an existing wire to change a
-consumer that already received the earlier producer.
+An unused updated Struct is simply an unused copy. Existing wires still point to their earlier
+producer.
 
 Nested literal paths follow the same model:
 
@@ -386,11 +352,9 @@ incident.owner.name = "Ada"
 incident.affectedSystems[0].status = "degraded"
 ```
 
-When the field itself is computed rather than a literal path, the compact dot assignment cannot
-name it honestly. The graph keeps an explicit Set Field call instead. The renderer also uses dot
-assignment only for an accumulator-shaped chain where the Set Field output becomes the next value
-of the same binding. A seed operation, a cross-source update, or a wired dynamic field remains an
-explicit call.
+A computed field requires an explicit Set Field call. The renderer uses dot assignment only for
+an accumulator chain whose output becomes the next value of the same binding. Seed operations,
+cross-source updates, and wired dynamic fields remain explicit.
 
 ## 9.6 Sugar must round-trip honestly
 
@@ -411,9 +375,8 @@ eventsGeneric explainIncident(payload: Struct, incident: Struct, report: string,
 }
 ```
 
-Read it once as code. It trims a report, classifies repeated production trouble, remembers the old
-status, produces two successive Incident values, and logs the transition. Then read the same logic
-as a graph:
+The Flow trims a report, classifies repeated production trouble, remembers the old status,
+produces successive Incident values, and logs the transition. The graph shows the same logic:
 
 <WorkflowFigure
   src={sugarFinal}
@@ -423,18 +386,16 @@ as a graph:
 
 <WorkflowFigure
   src={sugarFull}
-  alt="Complete Explain Incident workflow containing comparison, Boolean And, Select, Trim String, two Set Field nodes, three Get Field nodes, two Format String nodes, and Print Info."
+  alt="Complete Explain Incident Flow containing comparison, Boolean And, Select, Trim String, two Set Field nodes, three Get Field nodes, two Format String nodes, and Print Info."
   caption="The complete readable-sugar example is an overview at page width; the focused renders expose its details. Open this image for the full-size graph."
   wide
 />
 
-The exact layout is Studio's concern, but every meaningful operation in the source has a node or
-a pin value behind it. Conversely, every meaningful configured input on those nodes is intended to
-survive when the Board becomes text. The release gaps above identify where current lowering still
-falls short of that contract.
+Board layout may change. Every meaningful source operation still has a node or pin value, and every
+meaningful configured input should survive when the Board becomes text. The release gaps above
+mark current exceptions.
 
-That second direction is where lossless sugar earns its name. Current lowering checks more than a
-node type:
+Board-to-text lowering checks more than node type:
 
 | Short form | It is rendered only when… | Otherwise… |
 | --- | --- | --- |
@@ -456,32 +417,25 @@ the renderer preserves the setting:
 const same = left.equal({ string: right, ignoreCase: true })
 ```
 
-Applying or switching views may therefore make source longer. That is not a round-trip defect.
-It is the language refusing to lie about the graph.
+Applying or switching views may make source longer when that is required to preserve the graph.
 
-Current Struct accumulator rendering makes that concrete in the chapter example. The first Set
-Field may read back as an explicit seed alias—possibly with a generated name such as `record`—and
-only the following same-accumulator update may return to `record.summary = …`. The parser fixture
-above is in canonical source form, but it is not a promise of byte-identical Board readback. The
-contract is the preserved graph and its configuration.
+In the chapter example, the first Set Field may read back as an explicit seed alias, possibly named
+`record`, while only the next same-accumulator update returns to `record.summary = …`. The fixture
+shows canonical source, not guaranteed byte-identical Board readback. The graph and configuration
+are the contract.
 
-The complementary failure is equally useful. Change the example to:
+An invalid variant makes the boundary clear:
 
 ```flow
 let urgent = report + attempts
 ```
 
-The parser can recognize the expression, but Apply cannot select one correct node family. It
-reports the String/Integer contradiction at that expression and does not manufacture a conversion.
-The repair is local and visible: choose formatting if this is a label, or choose a typed parse and
-handle its success if this is arithmetic.
+The parser recognizes the expression, but Apply cannot choose a node family. It reports the
+String/Integer conflict without inventing a conversion. Use formatting for a label, or parse the
+String and handle success for arithmetic.
 
-These constraints are what make familiar syntax safe in a dual-view language. Operators are
-typed catalog operations. Ternaries select values rather than disguising execution branches.
-Templates retain their dynamic pins. Field assignment advances a visible Struct value instead of
-mutating the past. Whenever the compact notation cannot carry the entire decision, FlowScript
-shows the node call.
+Compact notation stays only when it carries the entire node contract. Otherwise, FlowScript shows
+the explicit node call.
 
-The next chapter adds visible execution structure: `if`, named outcome arms, sequential and
-parallel loops, `while`, and `return`. The same standard will apply there—short syntax is welcome
-only when every path still has an honest place on the Board.
+The next chapter applies the same standard to `if`, named outcome arms, loops, `while`, and
+`return`: every execution path must have a place on the Board.

@@ -42,6 +42,9 @@ fn enrich_allowlist() -> Vec<&'static str> {
         "df_execute_sql",
         "df_write_delta",
         "graph_sql_query",
+        "control_switch",
+        "struct_break",
+        "struct_make_from_schema",
         "ml_apply_transform",
         "ml_predict",
     ];

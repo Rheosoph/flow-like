@@ -69,7 +69,7 @@ const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*
 		/>
 		<meta name="robots" content="noindex, follow" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<title>{edition.title}: {edition.subtitle} — Print edition</title>
+		<title>{edition.title}: {edition.subtitle} | Print edition</title>
 	</head>
 	<body class="flowbook-print">
 		<a class="print-skip-link" href="#print-main">Skip to book content</a>
@@ -86,7 +86,7 @@ const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*
 				</div>
 
 				<div class="print-cover__title-block print-cover__content">
-					<p class="print-cover__eyebrow">One program · two honest views</p>
+					<p class="print-cover__eyebrow">One executable Flow</p>
 					<h1 id="print-book-title">{edition.title}</h1>
 					<p class="print-cover__subtitle">{edition.subtitle}</p>
 					<p class="print-cover__description print-cover__thesis">
@@ -122,7 +122,7 @@ const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*
 							<span
 								class="print-toc__page toc-page"
 								data-toc-page={introduction.anchor}
-								aria-hidden="true">—</span
+								aria-hidden="true">…</span
 							>
 						</a>
 					</li>
@@ -138,7 +138,7 @@ const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*
 										data-toc-page={part.anchor}
 										aria-hidden="true"
 									>
-										—
+										…
 									</span>
 								</a>
 
@@ -157,7 +157,7 @@ const introductionTitle = introduction.title.replace(/^Introduction\s*[—:-]\s*
 													data-toc-page={chapter.anchor}
 													aria-hidden="true"
 												>
-													—
+													…
 												</span>
 											</a>
 										</li>

@@ -1,6 +1,6 @@
 # FlowBook source map
 
-This file is the drafting evidence index for *FlowBook: The FlowScript Book*. It records
+This file is the drafting evidence index for *FlowBook: A Developer's Guide to Flow-Like*. It records
 where a chapter author should look before stating how the current product behaves. It is not
 a replacement for reading the relevant source, tests, generated declarations, and release
 notes at the version targeted by the book.
@@ -57,7 +57,7 @@ which claims were checked.
 
 The defensible formulation for the first edition is:
 
-> Studio and FlowScript are equal authoring surfaces over one underlying Flow model.
+> The canvas editor and FlowScript editor inside Studio are equal authoring views over one Flow model.
 
 The current implementation persists a Board. FlowScript is parsed and reconciled into Board
 commands; the Rust executor runs the resulting graph. Do not describe the text and graph as

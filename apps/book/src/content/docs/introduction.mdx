@@ -1,6 +1,6 @@
 ---
-title: Introduction — One Program, Two Ways to See It
-description: Learn why Flow-Like FlowScript unifies typed code and a visual node graph, how the same workflow executes, and where AI-assisted software fits.
+title: "Introduction: One Program, Two Ways to See It"
+description: Learn how Flow-Like connects typed FlowScript, a visual workflow, existing systems, and governed execution in one application model.
 seo:
   title: "What Is Flow-Like FlowScript? Code and Visual Workflows"
   topics:
@@ -14,312 +14,167 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowFigure from '../../components/WorkflowFigure.astro';
+import platformMap from '../../assets/platform-map.svg';
 
-Most software has two lives.
+**FlowBook** is the book you are reading. **FlowScript** is Flow-Like's typed text form for
+workflow logic. A **Flow** is that executable logic, whether you inspect it as text or as a
+visual graph.
 
-There is the life its authors see: source files, services, packages, deployment definitions,
-dashboards, tickets, and the history of decisions that made the system what it is. Then there
-is the life everybody else sees: an interface that works—until it does not.
+The distinction matters because most companies are extending an estate that already exists.
+Customer data lives in current databases. Core processes cross older services, SaaS products,
+files, queues, and devices. New software has to join that estate without making it harder to
+operate.
 
-The distance between those lives is where expensive mysteries accumulate.
+AI raises the rate of change. A useful prototype can now arrive in days, sometimes hours. The
+hard question comes later: can the company operate it safely after the original author has moved
+on? Faster generation increases the value of a shared application model.
 
-A process can be obvious to the person who built it and opaque to the person responsible for
-it at two in the morning. A deployment can be considered routine by the platform team and
-impossible to reproduce by the domain expert who needs one small change. An AI system can
-produce thousands of lines of plausible code in an afternoon while leaving nobody able to
-explain which operation failed, what it was allowed to access, or whether it will survive its
-first real workload.
-
-FlowScript begins with a different expectation:
+Flow-Like begins with a practical expectation:
 
 > Running software should carry enough structure and evidence to explain itself.
 
-That does not mean every system can narrate its own correctness. It does not remove the need
-for engineers, operators, security reviewers, or careful design. It means the logic should
-not disappear when it leaves its author's editor. Its building blocks, boundaries, execution
-order, permissions, versions, and failures should remain inspectable in the environment where
-the software is built and run.
+The program should retain visible operations, typed boundaries, execution order, permissions,
+versions, and failure evidence after it leaves its author's editor. That expectation guides the
+language, the visual workflow, and the platform around them.
 
-## The graph and the sentence
+## The map
 
-Visual programming is often presented as a beginner's substitute for “real code.” Textual
-programming is often presented as the inevitable destination once a project becomes serious.
-Both descriptions miss something important.
+The following picture is enough to place the terms used throughout the book.
 
-A graph can make relationships visible that source code asks us to reconstruct mentally. It
-can show where data comes from, which operation follows which, where execution branches, and
-which building block failed. That is valuable to a beginner, but it is not merely beginner
-friendly. During an incident, a good map is useful even to the most experienced engineer in
-the room.
+<WorkflowFigure
+  src={platformMap}
+  alt="Studio edits an App and its Flow Boards. A local or remote Rust runtime executes a selected Board version, calls existing systems through typed nodes and packages, and returns run evidence to Studio."
+  caption="Studio is the complete desktop application. It edits Apps and Flows; a local or remote runtime executes the selected Board version. Typed nodes and packages reach systems of record that remain in place."
+/>
 
-Text has a different strength. It is dense, searchable, reviewable, and fast to manipulate.
-It scales better when a Flow contains many operations or when a developer needs to make a
-precise change across a large system. It works naturally with language tools and with the
-coding agents that increasingly participate in software development.
+| Term | Meaning in this book |
+| --- | --- |
+| **Flow-Like** | The platform that supplies authoring, execution, data, interfaces, packages, permissions, and operational evidence. |
+| **Studio** | The complete desktop application. It includes Flow editing, Data Studio, packages, run inspection, and other App tooling. |
+| **App** | The project and governance boundary for related Flows, data, Events, members, and release settings. |
+| **Flow** | One executable workflow inside an App. |
+| **Canvas / Board** | The visual graph of a Flow. *Canvas* names the editor; *Board* is the precise name for the persisted graph model. |
+| **FlowScript** | The typed text view used to author the same Flow logic. |
+| **Runtime** | The Rust execution system that runs the Board and records evidence about the run. |
 
-FlowScript refuses the choice between them.
+When this book says “open it in Studio,” it means the desktop application. When it refers to a
+node on the canvas or a change to the Board, it means the visual representation of the logic.
+FlowScript always refers to the textual representation.
 
-FlowScript is Flow-Like's typed textual language for authoring Flows. It gives the same
-program a compact code view and an editable visual workflow while keeping execution inside
-the platform's governed node model.
+## Why the company should care
 
-In Flow-Like, Studio and FlowScript are equal authoring surfaces over one underlying Flow
-model. You can change the graph and read the resulting source. You can change the source,
-preview the resulting graph operations, and apply them. Neither view is decorative. Neither
-is an exported diagram that begins drifting away the moment it is created.
+An AI-first company will encode more decisions and routine work in software. If every team
+builds that logic with its own prompt scripts, credentials, deployment conventions, and logs,
+the operating model fragments while the amount of software grows. Prototype speed then creates
+more systems that only their authors can safely change.
 
-<Aside type="note" title="The precise technical contract">
-FlowScript is an authoring language, not a second execution engine. Today, its text is parsed
-and reconciled into the persisted Board behind a Flow. The Rust runtime executes that graph.
-The two views have equal authoring authority; they are not two independently stored programs.
+Flow-Like puts Apps, deterministic logic, model calls, data access, permissions, versions, and
+run evidence inside one inspectable model. Teams still choose architectures and operating
+policy. The platform gives those choices a common place to live and a consistent path to
+execution.
+
+Adoption can begin with one process. A company might place a fragile integration, a new AI
+classification step, or an internal tool in a Flow while the current database and services stay
+in place. The Flow calls those systems through typed nodes or packages, and existing callers can
+reach it through an Event or API. Over time, more logic can move into visible Flows where that
+improves ownership and operation. A rewrite is not the entry fee.
+
+For a technical decision-maker, that is the reason to keep reading: the platform offers a way to
+increase software output without multiplying private execution models. The rest of this book
+tests that claim at developer depth.
+
+## Two views of one program
+
+On the canvas, a developer can see where data comes from, how execution branches, and which node
+produced a result or failure. That map is valuable during design, review, and incident response.
+
+Text supports a different kind of work. It is dense, searchable, easy to compare, and efficient
+when a Flow contains many operations. It also works well with language tooling and coding agents.
+
+Inside Studio, the canvas and the FlowScript editor act on one Flow model. Change the graph and
+the source changes. Apply a FlowScript edit and Studio reconciles it into Board operations.
+Neither view is a separately maintained diagram.
+
+<Aside type="note" title="The current technical contract">
+FlowScript is an authoring language. Its text is parsed and reconciled into the persisted Board
+behind a Flow, and the Rust runtime executes that graph. The text and canvas have authoring
+authority over one program; they are not independent execution engines.
 </Aside>
 
-## Why invent a language?
+This contract avoids a familiar source of drift. A diagram can be correct on the day it is drawn
+and wrong after the next release. Here, the visual structure is part of the program that runs.
+Runtime evidence can point back to the node responsible for it.
 
-A visual platform that can solve only simple problems eventually forces its users to leave.
-To keep real application logic inside the platform, it must offer low-level operations as
-well as convenient high-level ones. That flexibility has a cost: honest graphs become large.
-A configuration format may preserve such a graph, but it does not necessarily make the graph
-pleasant to author or review.
+## Why FlowScript exists
 
-Many workflow products answer this pressure by placing an arbitrary JavaScript or Python
-editor inside a node. It is an effective escape hatch. It is also where the visual model can
-stop telling the truth.
+A useful workflow platform needs more than a few high-level boxes. Real applications transform
+values, branch, iterate, manage state, call services, and compose reusable operations. Exposing
+those details keeps the graph honest, although a large graph takes time to navigate and edit.
 
-The node may appear as one tidy rectangle while containing a small application of its own.
-Its dependencies, network behavior, side effects, error paths, and assumptions are hidden
-behind the label on the box. Repeat this pattern across a workflow and the result combines
-the maintenance problems of conventional software with the weaker navigation of a visual
-configuration. The graph looks simple because the complexity has been concealed, not
-removed.
+Some workflow tools deal with scale by placing a JavaScript or Python editor inside one node. The
+node stays small while a second application grows behind its label. Dependencies, side effects,
+and error paths become harder to inspect from the graph.
 
-FlowScript exists to provide textual scale without creating that hidden channel. Its familiar
-syntax still resolves to typed nodes, pins, execution paths, variables, functions, Events,
-and other concepts the graph can represent. When the existing catalog cannot express a
-reusable capability, the extension boundary is a package containing scoped WebAssembly nodes,
-not an invisible script pasted into the middle of an application.
+FlowScript provides the density of text while preserving Flow-Like's typed building blocks. Its
+calls, expressions, branches, loops, functions, and Events reconcile to nodes and connections the
+canvas can show. A developer can move to text for a precise change and return to the graph for
+locality or run evidence.
 
-This is constrained freedom. The outcome can be broad; the way we reach it is deliberately
-more opinionated.
+When the catalog lacks a reusable capability, a package can add scoped WebAssembly nodes with
+declared contracts. The new capability then becomes a visible building block for later authors.
+This extension model gives developers room to solve specialized problems without placing an
+uninspectable program inside a generic code box.
 
-## The system around the language
+## Where AI fits
 
-FlowScript is part of Flow-Like, not a language floating apart from its runtime.
+Once the application model is clear, AI has two natural places in it.
 
-An App supplies the project and governance boundary. Flows contain its executable logic.
-Boards are the persisted graphs behind those Flows. Events expose typed entry points to an
-API, schedule, page, chat, quick action, or another supported surface. Data Studio keeps
-files, tables, queries, and ontologies close to the application. Packages add reviewed and
-versioned capabilities. The runtime executes the resulting graph and records evidence about
-the run.
+FlowPilot or another coding agent can author a change. It may propose FlowScript, assemble nodes,
+or adapt an existing App. The proposal passes through the same declarations, type checks,
+reconciliation, and review path as a human edit. An agent receives useful constraints instead of
+privileged access to a hidden shortcut.
 
-This wider boundary matters because a language alone cannot make software reliable. Types do
-not configure production storage. A readable function does not establish who may invoke it.
-A clean graph does not create versioning, logging, auditing, deployment, or rollback. If every
-team must reconstruct those disciplines around every new application, the domain problem
-again becomes the smallest part of the work.
+A model can also perform one operation during a run. Classification, extraction, summarization,
+and response generation are reasonable examples because they involve semantic uncertainty. The
+model call should appear as an explicit node with narrow inputs, a typed result, an error path,
+and usage evidence. Deterministic nodes prepare and validate the data around it.
 
-Flow-Like's thesis is that much of this surrounding discipline can be supplied once, through
-the platform, and reused by every App. Throughout this book we will distinguish that thesis
-from the exact guarantees of a particular release. Security, performance, scale, cost, and
-deployment claims will be tied to implementation evidence or measurements rather than
-treated as adjectives.
+Exact work stays deterministic. A probabilistic call adds no value when the outcome is already
+defined, as with arithmetic, schema validation, identifier handling, or a known routing rule.
+Keeping the uncertain boundary small lowers cost and latency and gives failures a specific place
+in the Flow.
 
-## AI changes what is cheap
+Later chapters return to model selection, usage controls, and AI-authored changes after the core
+Flow model is familiar. That sequence keeps AI inside the architecture instead of turning it into
+a separate topic with its own vocabulary and runtime assumptions.
 
-Flow-Like was not conceived as a response to generative AI. The major-incident call that
-supplied its founding question came earlier. So did the influence of visual programming and
-the conviction that domain experts should be able to work directly with application logic.
-The role of AI crystallized later.
+## Who this book serves
 
-AI did not replace the original argument. It made the fault line wider.
+FlowBook is written primarily for developers. It assumes basic programming familiarity and
+explains the Flow model before opening parser, runtime, and deployment internals. TypeScript
+experience will make parts of the syntax familiar, but it is not required.
 
-> AI made scaling development cheap. Maintenance and architecture skill remain scarce.
+Domain experts, operators, and technical leaders can follow the same path through the worked
+applications. The canvas gives them a way to inspect the process without requiring a second,
+manually maintained explanation. Chapters that focus on language internals can be skipped and
+rejoined later.
 
-Here, *scaling development* means multiplying the amount of software we can produce. It does
-not mean that the resulting software scales.
+## What we will build
 
-AI-assisted development is a real advance. Vibe coding shows how dramatically it can lower
-the cost of a first prototype. An experienced developer can explore an unfamiliar library,
-remove repetitive work, test several approaches, and turn a clear design into a working
-implementation much faster than before. A founder or domain expert can reach a prototype
-without waiting for a complete delivery team. Those gains are worth keeping.
+The first application is **Incident Triage**, a deterministic Flow that receives a report,
+normalizes it, classifies severity, branches, and records the result. It needs no model, account,
+API key, or external service. You will edit it from both views and break it on purpose so the run
+evidence has something useful to show.
 
-But generation compresses the time required to emit code. It does not automatically supply a
-sound architecture, discover an unstated operational requirement, or recognize that a
-plausible local decision will become disastrous at production scale. An experienced engineer
-often notices the model's false assumption because it conflicts with a mental model built over
-years. To somebody without that context, the same answer may simply look finished.
+Each language feature then stays tied to a concrete problem, its FlowScript form, the graph it
+represents, and the evidence left by execution. The later **Incident Room** application combines
+those ideas in a private document assistant and introduces model calls only where the task needs
+semantic judgment.
 
-The result can be a prototype that technically exists but is expensive to run, difficult to
-deploy, and almost impossible to maintain. More code was produced. The scarce work merely
-moved downstream.
+The book names release boundaries when they matter. A construct that does not round-trip safely
+will be identified. Deployment policy will not be presented as a language guarantee. Performance
+claims will stay attached to the workload that produced them.
 
-This is not an argument that only expert programmers should use AI. It is an argument for
-putting more of their hard-won knowledge into the environment in which AI works: typed
-contracts, approved operations, bounded changes, visible structure, shared runtime services,
-and evidence from actual executions.
-
-### Do not ask a model to add one
-
-In August 2025, an experimental Python package called
-[`vibeincrement`](https://pypi.org/project/vibeincrement/) appeared with one job: increment a
-positive integer. Instead of evaluating `n + 1`, its
-[implementation](https://github.com/tahayparker/vibeincrement/blob/main/src/vibeincrement/ai.py)
-serializes the number and the requested operation, sends them to `gpt-4o-mini`, asks for a
-structured integer response, and returns the model's answer. The project explicitly warns that
-it is not for production.
-
-The package reads as satire, but it is an experiment—not evidence that production teams
-routinely add one this way. The example works because it exaggerates a genuine temptation:
-once a model is available, every problem starts to look like a prompt.
-
-That is the wrong default.
-
-If an operation can be expressed deterministically, express it deterministically. Arithmetic,
-parsing, exact filtering, known routing rules, identifiers, schema validation, and ordinary
-data transformations do not become better merely because a model performs them. In
-FlowScript, an increment should remain exactly what it says:
-
-```flow
-let nextRevision = revision + 1
-```
-
-Every unnecessary model call adds a probabilistic boundary. It may also add network latency,
-variable cost, provider dependence, new data exposure, and another failure mode. Even a local
-model consumes compute and makes an exact operation less exact.
-
-Flow-Like's AI authoring assistant, FlowPilot, encodes this rule directly in its current
-guidance: model calls are for semantic work, not arithmetic, counting, number parsing, or
-revision increments. The larger doctrine is just as blunt:
-
-> If we can solve it deterministically, we should. Use a model only where uncertainty is useful.
-
-### Two very different roles for AI
-
-The phrase *AI software* hides an important distinction.
-
-First, AI can be an **author**. It can propose FlowScript, assemble a Flow, connect existing
-nodes, or adapt a known App. In that role, its output should be treated as an untrusted change,
-not as a privileged command. The catalog limits what it can call. Declarations tell it the
-real signatures. Types and reconciliation reject invalid connections. A preview can expose
-the graph operations before they are applied. The current reconciler also rejects an edit that
-would leave any one layer with more than one hundred nodes, pushing large logic into named,
-reviewable functions.
-
-Second, AI can be an **operation inside the running application**. A model may classify an
-ambiguous request, extract meaning from prose, summarize a document, or formulate a response.
-That operation is intentionally probabilistic. It therefore belongs at an explicit node with
-typed inputs and outputs, a narrow permission surface, recorded usage, an error path, and
-deterministic logic around it.
-
-These roles need different controls, but they share one principle: the model does not get to
-erase the structure of the application.
-
-For critical work, “correct 99 percent of the time” can still be unusable. It means roughly one
-miss in every hundred opportunities before we account for the way failures accumulate across
-steps and repeated executions. The right response is not to pretend a model has become
-deterministic. It is to make the uncertain boundary small, evaluate it for the actual task,
-handle its failure explicitly, and keep the rest of the Flow exact.
-
-### Spend intelligence where it matters
-
-The most capable model is not the correct default for every call. The target is the smallest
-model that satisfies the measured requirements of one focused task.
-
-Deterministic nodes should prepare the input before the call: retrieve only the relevant
-material, remove fields the model does not need, and compute exact values outside the prompt.
-The model should receive a narrow question and return a narrow, typed result. Deterministic
-nodes should then validate, route, store, or reject that result. This reduces cost and latency,
-but it also reduces the number of places in which a plausible mistake can enter the system.
-
-Cost control follows the same hierarchy. We should be able to attribute model use to an App
-and a user, see which provider and model were invoked, set limits, and select models under
-explicit cost and capability preferences. Over time, each App should carry task-specific
-evaluations so a model earns its place through observed quality rather than reputation or
-size.
-
-<Aside type="note" title="What exists today">
-Flow-Like's hosted-call accounting can record App, user, model, provider, token, latency, and
-cost context for model and embedding usage. It exposes App-wide and technical-user usage
-limits, and user-owned profiles can select hosted or local models using configured weights
-such as cost, speed, reasoning, safety, and coding. A feature-gated governance inventory can
-reconcile models declared in an App with models observed in use.
-
-That is not yet the whole doctrine. Editing a separate budget for every human user, evaluating
-model quality automatically for each task in an App, and guaranteeing selection of the
-smallest adequate model remain incomplete. Provider-reported cost can also arrive only after a
-hosted call, so a hard limit is not a universal pre-call spending guarantee. Later chapters
-will keep those boundaries visible.
-</Aside>
-
-Reuse is another form of efficiency. Many applications are not blank-page inventions; they
-are variations of a shape that already works. A governed document assistant, for example,
-should be forked, configured with the new App's data and permissions, and adapted where the
-domain genuinely differs. Starting from a visible, parameterized App gives a human or an AI a
-smaller solution space and the organization a lineage it can inspect.
-
-This is Flow-Like's AI bet: use AI to expand who can build software without expanding the
-software's blast radius. Let it accelerate experienced developers. Let it help domain experts
-express what they know. Let it perform the semantic work for which uncertainty is actually
-valuable. But keep the application's spine typed, visible, deterministic, and cheap.
-
-The useful question is therefore not, “Where can we insert AI?” It is:
-
-> Where is uncertainty necessary, and how small can we make that boundary?
-
-## Who belongs here
-
-This book is for people who arrive with different kinds of expertise.
-
-You may be an enterprise developer who wants a faster path from a domain requirement to a
-maintainable service. You may be a founder or technical business user who understands the
-problem deeply but does not want to become an expert in ten adjacent infrastructure
-disciplines. You may be a student learning how data and execution move through a system. You
-may be an experienced Rust developer building WASM nodes for everybody else. You may be
-working with an AI coding agent and need the result to remain understandable after the chat
-window closes.
-
-The shared requirement is not the same programming background. It is the need to collaborate
-around logic that remains visible.
-
-The early chapters keep the graph and source side by side. Later sections open the machinery
-for readers who want to understand parsing, reconciliation, execution, packages, governance,
-and deployment. You can skip those internals and return to the main application path without
-losing the thread.
-
-## How we will build
-
-We will not learn FlowScript as a disconnected sequence of syntax features.
-
-First, we will enter the incident that supplied the founding question. Then we will state the
-design principles clearly enough that you can challenge them. In Chapter 4 we will build
-Incident Triage: a small Flow with no account, model, API key, or external dependency. You
-will see the result before learning every construct. You will edit it from both views and
-break it on purpose.
-
-From there, each language feature will answer four questions:
-
-1. What problem does it solve?
-2. How does it read in FlowScript?
-3. What graph does it represent?
-4. What evidence does it leave when it runs or fails?
-
-The capstone, Incident Room, will then assemble those ideas into a complete private document
-assistant. It will ingest runbooks, retrieve relevant material, expose narrow tools, answer
-through an application interface, and let us inspect the path of a real execution. Later we
-will extend the catalog with a WASM node and follow the App into packaging, governance,
-compiled artifacts, and deployment.
-
-We will take constraints seriously enough to show their edges. If a language construct does
-not round-trip yet, the book will say so. If an execution boundary depends on deployment
-policy, the book will name that dependency. If a benchmark describes one narrow workload, it
-will not be inflated into a universal performance claim.
-
-That candor is part of the premise. Software cannot explain itself if its documentation hides
-the parts that are still being built.
-
-The first question, then, is not about syntax. It is the question from a major-incident call
-in the middle of the night:
-
-**Why did everybody have to wait for the one person who understood the system?**
+Chapter 1 begins with the incident that made this level of visibility feel necessary: a room full
+of capable people waiting for the only person who understood the failing system.

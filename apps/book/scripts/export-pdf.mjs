@@ -550,7 +550,7 @@ async function normalizePrintDocument(page) {
 				const heading = part.querySelector("h1");
 				const label = part.querySelector(".part-kicker, .part-divider__label")?.textContent?.trim();
 				const headingText = heading?.textContent?.trim() || `Part ${partIndex + 1}`;
-				const title = label ? `${label} — ${headingText}` : headingText;
+				const title = label ? `${label}: ${headingText}` : headingText;
 				const idSource = part.id || part.dataset.pdfPart || title;
 				let partId = slugify(idSource);
 				let suffix = 2;
@@ -1052,12 +1052,12 @@ async function mergePdfSections({
 	const sourceDate = process.env.SOURCE_DATE_EPOCH
 		? new Date(Number(process.env.SOURCE_DATE_EPOCH) * 1000)
 		: new Date();
-	mergedDocument.setTitle("FlowBook: The FlowScript Book", {
+	mergedDocument.setTitle("FlowBook: A Developer's Guide to Flow-Like", {
 		showInWindowTitleBar: true,
 	});
 	mergedDocument.setAuthor("Flow-Like");
 	mergedDocument.setSubject(
-		"Build reliable software in code and as a visible workflow.",
+		"Build reliable software as typed text and a visible workflow.",
 	);
 	mergedDocument.setKeywords([
 		"FlowBook",

@@ -1,14 +1,14 @@
 # FlowBook structure
 
-This is the editorial architecture for the first edition of *FlowBook: The FlowScript
-Book*. It is a teaching sequence, not a mirror of the documentation sidebar.
+This is the editorial architecture for the first edition of *FlowBook: A Developer's Guide to
+Flow-Like*. It is a teaching sequence, not a mirror of the documentation sidebar.
 
 ## Front matter
 
 ### Title page
 
-**FlowBook: The FlowScript Book**
-*Build reliable software in code and as a visible workflow*
+**FlowBook: A Developer's Guide to Flow-Like**
+*Build reliable software as typed text and a visible workflow*
 *Software that explains itself.*
 
 ### Foreword — The domain expert belongs in the room
@@ -34,26 +34,23 @@ transcripts, intentionally failing examples, and version badges. Establish that 
 node signatures are versioned reference material and that examples target a named Flow-Like
 release.
 
-### Introduction — One Program, Two Ways to See It
+### Introduction: One Program, Two Ways to See It
 
-Establish the self-explaining-software premise, define the graph/text contract, and explain
-why FlowScript adds textual scale without hiding arbitrary code inside workflow blocks.
+Define FlowBook, Flow-Like, Studio, App, Flow, Board, canvas, FlowScript, and runtime before the
+terms carry explanatory weight. Use one conceptual diagram to show the whole model and its
+connection to existing systems.
 
-#### AI changes what is cheap
+Give technical decision-makers the business case on one page: an AI-first company needs shared
+application and execution contracts as software output rises. Make incremental adoption explicit;
+the existing estate remains connected through typed nodes, packages, Events, and APIs.
 
-Add the AI-era thesis near the beginning rather than waiting for the dedicated authoring
-chapter: AI multiplied development output, but architecture and maintenance skill remain
-scarce. Preserve the real speed gain of vibe coding while showing how plausible hidden
-decisions create expensive prototypes.
-
-Separate AI as an author from AI as a probabilistic runtime operation. State the
-deterministic-first rule, use the experimental `vibeincrement` package as an example that
-reads as satire without asserting its author's intent, argue for the smallest adequate model
-at the narrowest semantic boundary, and distinguish current usage controls from task-level
-evaluation and routing ambitions.
+Establish the canvas and FlowScript editor as two authoring views inside Studio. Explain why text
+scales and why generic code boxes weaken the graph. Introduce AI only after this model is clear.
+Separate authoring agents from model calls during a run, state the deterministic-first rule, and
+defer model selection and usage-control details to the later AI chapters.
 
 **Evidence:** SRC-AI-AUTHORING, SRC-AI-DETERMINISTIC-FIRST, SRC-AI-USAGE-CONTROLS,
-SRC-AI-MODEL-SELECTION, SRC-AI-MODEL-INVENTORY, and SRC-VIBEINCREMENT.
+SRC-AI-MODEL-SELECTION, and SRC-AI-MODEL-INVENTORY.
 **Interview source:** INT-02 AI-era opening follow-up is complete.
 
 ---
@@ -64,79 +61,75 @@ Part I earns the premise before teaching syntax. The reader experiences the prob
 design conviction, the platform vocabulary, and the complete dual-view loop in a small,
 deterministic application.
 
-## Chapter 1 — The 3 A.M. Call
+## Chapter 1: The 3 A.M. Call
 
 **Summary:** Open inside the major-incident call that inspired Flow-Like: a costly outage,
 an unfamiliar system, and a room waiting for the one person who understood it. Turn that
 moment into the central question of the book: why does critical software not explain itself?
 
-### 1.1 Waiting for the one person
+### 1.1 Waiting for context
 
 Reconstruct the incident as a scene: what was known, what was invisible, who was missing,
 and why every passing hour mattered.
 
-### 1.2 The documentation was somewhere else
+### 1.2 The explanation had drifted away
 
 Show why diagrams, tickets, runbooks, and tribal knowledge drift away from the executing
 system even in well-intentioned organizations.
 
-### 1.3 What the failing block should have told us
+### 1.3 Start at the failed operation
 
 Reimagine the same incident with a visible graph, typed boundaries, per-node logs, and a
 runtime that can lead an unfamiliar responder to the responsible operation.
 
-### 1.4 Domain knowledge is not the lesser skill
+### 1.4 Domain knowledge belongs in the program
 
-Introduce the enterprise reality: the person who understands the process may not be a
-specialist in infrastructure, yet their knowledge is the scarce ingredient in the solution.
-
-### 1.5 The question that became Flow-Like
-
-End with the founding question, not a product pitch: can software remain powerful while its
-structure, operation, and failure are visible to more than its original author?
+Connect the domain expert's knowledge, a developer's need for text, and an operator's need for
+run evidence. Show how those requirements led to one Flow with two authoring views and a platform
+around it.
 
 **Interview source:** INT-01 is complete. The non-confidential scene detail is that no technical
 failure was visible; domain experts could report only that production was on hold.
 
-## Chapter 2 — The Manifesto: Constrained Freedom
+## Chapter 2: The Manifesto: Constrained Freedom
 
 **Summary:** State the principles that govern FlowScript and Flow-Like. The manifesto makes
 the trade explicit: give up some unconstrained implementation freedom to gain reliability,
 legibility, portability, and safe reuse.
 
-### 2.1 Software should be reliable and efficient
+### 2.1 Reliability begins during authoring
 
-Define reliability as a design property spanning authoring, execution, evidence, and
-recovery—not a final deployment checklist.
+Define reliability as a design property that starts before deployment and includes useful run
+evidence and reviewable changes.
 
-### 2.2 A Flow should be organized and readable
+### 2.2 Readability is operational
 
 Argue that structure is part of correctness when software is maintained by teams, domain
 experts, operators, and AI systems.
 
-### 2.3 Hard things should be fast to realize
+### 2.3 Hard work should move quickly
 
 Explain how a large, typed node library and built-in platform services remove repetitive
 infrastructure work without removing the ability to solve real problems.
 
-### 2.4 Why a language, not only a graph
+### 2.4 Why text belongs beside the graph
 
 Follow the design chain explicitly: useful platforms need low-level building blocks; honest
 low-level graphs grow large; arbitrary inline code makes them opaque; FlowScript keeps the
 same typed blocks manageable in text without creating a hidden escape hatch.
 
-### 2.5 Dangerous things should be hard to do accidentally
+### 2.5 Constraints must state their boundary
 
 Introduce typed connections, capability-scoped extensions, deletion guards, secrets kept
 out of source, versioning, and reviewed publication as examples of constraints that carry
 their weight.
 
-### 2.6 Freedom of outcome, opinions about implementation
+### 2.6 Broad outcomes, opinionated implementation
 
 Develop the central trade: broad application scope, but fewer arbitrary ways to smuggle in
 unreviewed code, credentials, deployment patterns, or invisible side effects.
 
-### 2.7 Never take the shortcut that worsens the product
+### 2.7 The product has to live by the manifesto
 
 Close with the standard for future design decisions and with the tension it creates: the
 platform must make the robust path practical enough that users do not need the shortcut.
@@ -144,47 +137,43 @@ platform must make the robust path practical enough that users do not need the s
 **Interview source:** INT-01 and INT-02 are complete. INT-09 will test the manifesto against
 decisions where the team rejected a faster implementation.
 
-## Chapter 3 — One Platform, One Flow Model
+## Chapter 3: One Platform, One Flow Model
 
 **Summary:** Give readers the minimum complete map of Flow-Like before they write code.
 FlowScript defines logic; Flow-Like supplies the authoring surfaces, runtime, data layer,
 interfaces, collaboration, governance, and deployment environments around it.
 
-### 3.1 Flow-Like, App, Flow, and Board
+### 3.1 App, Flow, and Board
 
 Fix the vocabulary: an App is the project and governance boundary, a Flow is executable
 logic, and a Board is that Flow's persisted graph representation.
 
-### 3.2 Studio and FlowScript
+### 3.2 Studio and the two authoring views
 
-Present the visual Studio and the textual language as equal authoring surfaces over the
-same model, while being precise that the Board is what the current system persists and runs.
+Present Studio as the complete desktop application. Its canvas editor and FlowScript editor are
+equal authoring views over the same model, while the Board is what the current system persists and
+runs.
 
 ### 3.3 Nodes, pins, wires, and layers
 
 Introduce typed operations, data connections, execution connections, pure and impure work,
 and layers as the vocabulary shared by the code and graph views.
 
-### 3.4 Events and application surfaces
+### 3.4 Existing systems stay in the picture
+
+Show how catalog nodes and packages connect APIs, services, files, structured data, and device
+capabilities. Make incremental adoption and continued systems of record explicit.
+
+### 3.5 Events connect a Flow to callers
 
 Separate an event node inside a Flow from an App Event that exposes it to a schedule, API,
 chat, page, quick action, or another supported trigger.
 
-### 3.5 Apps, people, permissions, and collaboration
+### 3.6 Data, people, and execution share the App boundary
 
-Introduce the App as the project boundary for members, roles, authentication, comments,
-versions, publication, and ownership rather than treating collaboration as an external
-project-management layer.
-
-### 3.6 Data Studio and app-owned state
-
-Place files, tables, queries, ontologies, and governed actions inside the application model
-instead of treating data as unrelated external plumbing.
-
-### 3.7 One runtime contract, several places to run
-
-Preview local, remote, and hybrid execution across desktop and hosted environments without
-turning this chapter into a deployment guide.
+Place files, structured data, members, roles, Event authentication, runtime credentials, and run
+evidence around the same App. Preview local, remote, and hybrid execution without turning this
+chapter into a deployment guide.
 
 **Implementation evidence:** SRC-PLATFORM, SRC-APP-MODEL, SRC-IDENTITY-PERMISSIONS, and
 SRC-EXECUTION.
@@ -194,7 +183,7 @@ preview, and roadmap surfaces.
 ## Chapter 4 — First Flow: Incident Triage in Two Views
 
 **Summary:** Build and run a useful Flow before teaching the language systematically. The
-reader changes the same program from Studio and FlowScript, then diagnoses a failing input
+reader changes the same program from the canvas and FlowScript editor, then diagnoses a failing input
 from its run evidence.
 
 ### 4.1 The contract: accept, classify, respond

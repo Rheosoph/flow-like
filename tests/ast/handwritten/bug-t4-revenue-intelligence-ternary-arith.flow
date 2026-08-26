@@ -1,0 +1,19 @@
+// BUG: a ternary lowers to `utilsTypesSelect`, whose output pin is Generic, so the RESULT of a
+// ternary can never be fed into another arithmetic operator even when both arms are Floats:
+//     binary operator `-` has incompatible operand types `Float` and `Generic`
+// The two arms below are the float literal `0.0` and a Float/Float division, so the value is a
+// Float by construction; only the select node's declared pin type is unknown. Every `a ? b : c`
+// used as a sub-expression of arithmetic is therefore unwritable, and the workaround is to give
+// up on the operators and call `float::divide` / `float::subtract` explicitly, which is what
+// `rollupRow` in t4-revenue-intelligence.flow does.
+use log::{ info }
+
+function winRate(open: float, atRisk: float): (rate: float) {
+    const share = open <= 0.0 ? 0.0 : atRisk / open
+    const rate = 1.0 - share
+    return rate
+}
+
+eventsSimple scoreOnePeriod() {
+    info({ message: winRate(120000.0, 38000.0), toast: false })
+}

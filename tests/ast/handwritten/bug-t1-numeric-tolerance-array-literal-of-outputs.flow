@@ -1,0 +1,9 @@
+use log::{ info }
+
+eventsSimple arrayLiteralOfOutputs() {
+    const literalOnly = int::sum([1, 2, 3])
+    const first = int::add(1, 2)
+    const second = int::add(3, 4)
+    const combined = int::sum([first, second])
+    info({ message: `${literalOnly} ${combined}`, toast: false })
+}

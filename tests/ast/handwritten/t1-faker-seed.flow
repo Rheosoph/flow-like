@@ -1,0 +1,79 @@
+use log::{ info, warn }
+
+interface SeedContact {
+    name: string;
+    email: string;
+    phone: string;
+}
+interface SeedCompany {
+    name: string;
+    industry: string;
+    tagline: string;
+    headcount: int;
+}
+interface SeedAddress {
+    street: string;
+    city: string;
+    post_code: string;
+    country_code: string;
+}
+interface SeedAccount {
+    rank: int;
+    segment: string;
+    contact: SeedContact;
+    company: SeedCompany;
+    address: SeedAddress;
+    notes: string;
+    tag: string;
+}
+
+@description("Stamped onto every generated row so demo data can be purged in one query")
+@category("Seeding/Directory")
+let seedTag = "faker-seed-v4"
+
+function accountLabel(contact: string, company: string, segment: string): (label: string) {
+    return `${contact} @ ${company} (${segment})`
+}
+
+eventsSimple seedDemoDirectory() {
+    let segments = ["enterprise", "midmarket", "startup", "public-sector"]
+    let runMeta = { generator: "faker", schema_version: "v4", locale: "en" }
+    let roster = array::make()
+    for (const [rank, segment] of segments) {
+        const person = faker::name::fullName()
+        const email = faker::internet::email()
+        const phone = faker::phone::cellNumber()
+        const company = faker::company::name()
+        const industry = faker::company::industry()
+        const tagline = faker::company::catchPhrase()
+        const headcount = faker::number::integer({ min: 25, max: 5000 })
+        const street = faker::address::streetAddress()
+        const city = faker::address::cityName()
+        const postCode = faker::address::postCode()
+        const countryCode = faker::address::countryCode()
+        const notes = faker::lorem::sentence({ minWords: 8, maxWords: 16 })
+        // BUG: `{ name: person, email: email, ... }` — an object literal whose fields are node
+        // outputs never lowers to struct_make on an empty board, so every record below is
+        // assembled with an explicit struct::set chain instead.
+        // See bug-t1-faker-seed-object-literal-dynamic-field.flow.
+        const contact = struct::make().set("name", person).set("email", email).set("phone", phone)
+        const org = struct::make().set("name", company).set("industry", industry).set("tagline", tagline).set("headcount", headcount)
+        const address = struct::make().set("street", street).set("city", city).set("post_code", postCode).set("country_code", countryCode)
+        const account = struct::make().set("rank", rank).set("segment", segment).set("contact", contact).set("company", org).set("address", address).set("notes", notes).set("tag", seedTag)
+        roster = roster.push(account)
+        info({ message: accountLabel(person, company, segment), toast: false })
+    }
+    const accountCount = array::length(roster)
+    const mailingList = array::pluck({ arrayIn: roster, key: "contact.email", skipMissing: true })
+    const { element: lead } = array::get({ arrayIn: roster, index: 0 })
+    const { value: leadOrg, found: hasLead } = struct::get({ struct: lead, field: "company" })
+    if (hasLead) {
+        const { value: leadName } = struct::get({ struct: leadOrg, field: "name" })
+        info({ message: `seeded ${accountCount} accounts, lead account ${leadName}`, toast: false })
+    } else {
+        warn({ message: "seed produced no accounts", toast: true })
+    }
+    const envelope = struct::make().set("meta", runMeta).set("tag", seedTag).set("segments", segments).set("accounts", roster).set("account_count", accountCount).set("mailing_list", mailingList)
+    const payload = json::stringify({ value: envelope, pretty: true })
+    info({ message: payload, toast: false })
+}

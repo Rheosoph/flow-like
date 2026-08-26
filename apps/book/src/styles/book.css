@@ -18,6 +18,9 @@
 	--flowbook-card: #fff;
 	--flowbook-orange: oklch(0.6724 0.208 34.7886);
 	--flowbook-orange-dark: oklch(0.51 0.18 31.5);
+	--flowbook-callout-ink: oklch(0.43 0.065 45);
+	--flowbook-callout-border: oklch(0.72 0.075 45);
+	--flowbook-callout-bg: oklch(0.965 0.012 52);
 	--flowbook-muted: oklch(0.5137 0.0156 285.8367);
 	--flowbook-rule: oklch(0.8933 0.0111 54.4825);
 	--flowbook-grid: color-mix(in oklab, var(--flowbook-ink) 7%, transparent);
@@ -62,6 +65,9 @@
 	--flowbook-card: oklch(0.1993 0.0111 260.661);
 	--flowbook-orange: oklch(0.71 0.19 34.8);
 	--flowbook-orange-dark: oklch(0.78 0.15 36);
+	--flowbook-callout-ink: oklch(0.84 0.07 50);
+	--flowbook-callout-border: oklch(0.54 0.085 43);
+	--flowbook-callout-bg: oklch(0.22 0.018 38);
 	--flowbook-muted: oklch(0.6984 0.0157 264.467);
 	--flowbook-rule: oklch(0.2921 0.014 261.7008);
 	--flowbook-grid: color-mix(in oklab, var(--flowbook-ink) 5%, transparent);
@@ -711,10 +717,16 @@ body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :not(pre) 
 }
 
 .starlight-aside {
-	border-color: color-mix(in srgb, var(--flowbook-orange) 38%, var(--flowbook-rule));
+	border-color: var(--flowbook-callout-border);
 	border-radius: 0.75rem;
-	background: color-mix(in srgb, var(--flowbook-paper-deep) 66%, transparent);
+	background: var(--flowbook-callout-bg);
 	box-shadow: none;
+}
+
+.starlight-aside--note {
+	--sl-color-asides-text-accent: var(--flowbook-callout-ink);
+	--sl-color-asides-border: var(--flowbook-callout-border);
+	background: var(--flowbook-callout-bg);
 }
 
 .starlight-aside__title {

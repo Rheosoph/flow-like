@@ -1,0 +1,134 @@
+use log::{ info, warn }
+
+interface FleetFilter {
+    depot: string;
+    status: "all" | "active" | "maintenance" | "offline";
+    min_battery: int;
+}
+
+@description("Telemetry snapshot pushed by the depot ingest workflow, kept as raw JSON")
+const fleetSnapshot = "{\"vehicles\":[]}"
+@category("Fleet/Dashboard")
+const fleetFilter: FleetFilter = {"depot":"all","status":"all","min_battery":25}
+@category("Fleet/Dashboard")
+const visibleVehicles: Struct[] = []
+
+function paintFleet(rows: Struct[], caption: string): (shown: int) {
+    const rowCount = array::length({ array: rows })
+    // BUG: ui::updateTable retypes `data` to Struct/Array inside on_update when the operation is
+    // "Set Data", but reconcile checks the static Struct/Normal declaration, so the row array has
+    // to be laundered through a generic pin before the table will take it.
+    const tableRows = types::fallback({ value: rows, default: [] })
+    ui::updateTable({ elementRef: ui::getElement({ elementRef: "fleet-ops/vehicle-table" }).element, operation: "Set Data", data: tableRows })
+    ui::setElementText({ elementRef: ui::getElement({ elementRef: "fleet-ops/table-caption" }).element, text: caption })
+    ui::setBadgeContent({ elementRef: ui::getElement({ elementRef: "fleet-ops/row-badge" }).element, content: `${rowCount} rows` })
+    ui::setElementVisibility({ elementRef: ui::getElement({ elementRef: "fleet-ops/empty-state" }).element, visible: rowCount == 0 })
+    return rowCount
+}
+
+function paintDepotChart(rows: Struct[]): (depots: int) {
+    const { groups, groupCount } = array::groupBy({ arrayIn: rows, key: "depot" })
+    // BUG: an object literal carrying a node output in one of its fields does not resolve, so the
+    // nivo config is assembled by grafting `groups` onto a constant literal instead.
+    const chartConfig = struct::set({ structIn: { indexBy: "key", keys: ["count"] }, field: "data", value: groups }).structOut
+    ui::setNivoConfig({ elementRef: ui::getElement({ elementRef: "fleet-ops/depot-chart" }).element, config: chartConfig, chartType: "bar", colors: "nivo", height: "320px" })
+    for (const group of groups) {
+        ui::dataUpdate({ surfaceId: "fleet-ops", path: `depots.${group.key}.vehicles`, value: group.count })
+    }
+    return groupCount
+}
+
+function lowBatteryDigest(rows: Struct[], floor: int): (digest: string) {
+    const { arrayOut: weak, kept: weakCount } = array::filterBy({ arrayIn: rows, key: "battery_percent", operator: "Less Than", value: `${floor}`, compare: "Number", ignoreCase: false, invert: false })
+    if (weakCount == 0) {
+        return "All vehicles are above the charge floor."
+    }
+    // BUG: `let lines: string[] = []` renders the local unreadable — a type annotation on a
+    // literal initializer breaks every later read of it. The untyped form resolves.
+    let lines = []
+    for (const vehicle of weak) {
+        lines = array::push({ arrayIn: lines, value: `- ${vehicle.plate} at ${vehicle.depot}, ${vehicle.battery_percent}% left` }).arrayOut
+    }
+    return string::join({ strings: lines, separator: "\n" })
+}
+
+function renderFleetSummary(vehicles: Struct[]): (total: int) {
+    const depots = array::pluck({ arrayIn: vehicles, key: "depot", skipMissing: true })
+    const knownDepots = array::unique({ arrayIn: depots }).arrayOut
+    ui::setSelectOptions({ elementRef: ui::getElement({ elementRef: "fleet-ops/depot-select" }).element, options: knownDepots })
+    ui::setSelectValue({ elementRef: ui::getElement({ elementRef: "fleet-ops/depot-select" }).element, value: fleetFilter.depot })
+    const { kept: activeCount } = array::filterBy({ arrayIn: vehicles, key: "status", operator: "Equals", value: "active", compare: "Text", ignoreCase: true, invert: false })
+    const { sum: batterySum, counted: batteryReadings } = array::sumField({ arrayIn: vehicles, field: "battery_percent" })
+    const fleetSize = array::length({ array: vehicles })
+    ui::setElementText({ elementRef: ui::getElement({ elementRef: "fleet-ops/headline" }).element, text: `${activeCount} of ${fleetSize} vehicles on the road` })
+    ui::setProgress({ elementRef: ui::getElement({ elementRef: "fleet-ops/battery-gauge" }).element, value: batterySum / int::toFloat(batteryReadings) })
+    ui::setMarkdownContent({ elementRef: ui::getElement({ elementRef: "fleet-ops/battery-digest" }).element, content: lowBatteryDigest(vehicles, fleetFilter.min_battery) })
+    ui::dataUpdate({ surfaceId: "fleet-ops", path: "fleet.activeCount", value: activeCount })
+    ui::setGlobalState({ key: "fleet.snapshotSize", value: fleetSize })
+    return fleetSize
+}
+
+function exportFleet(archived: bool) {
+    const payload = json::stringify({ value: visibleVehicles, pretty: true })
+    ui::setElementValue({ elementRef: ui::getElement({ elementRef: "fleet-ops/export-buffer" }).element, value: payload })
+    ui::setGlobalState({ key: "fleet.lastExport", value: payload })
+    ui::setElementVisibility({ elementRef: ui::getElement({ elementRef: "fleet-ops/export-panel" }).element, visible: true })
+    info({ message: `export ready, archived rows included: ${archived}`, toast: true })
+}
+
+function flagVehicle(widgetInstanceId: string, actionContext: Struct, inputValues: Struct) {
+    const vehicleId = events::extractActionContext({ actionContext: actionContext, fieldName: "vehicle_id" })
+    const reason = events::extractInputValue({ inputValues: inputValues, componentId: "flag-reason" })
+    const draft = struct::set({ structIn: struct::make(), field: "vehicle", value: vehicleId }).structOut
+    const report = struct::set({ structIn: draft, field: "reason", value: reason }).structOut
+    ui::setElementText({ elementRef: ui::getElement({ elementRef: "fleet-ops/flag-summary" }).element, text: json::stringify({ value: report, pretty: false }) })
+    ui::setSelectValue({ elementRef: ui::getElement({ elementRef: "fleet-ops/status-select" }).element, value: "maintenance" })
+    ui::dataUpdate({ surfaceId: "fleet-ops", path: "fleet.pendingFlag", value: report })
+    warn({ message: `${widgetInstanceId} flagged ${vehicleId} for maintenance`, toast: true })
+}
+
+eventsSimple loadFleetBoard() {
+    ui::setElementLoading({ elementRef: ui::getElement({ elementRef: "fleet-ops/refresh-button" }).element, loading: true })
+    const snapshot = json::parse({ string: fleetSnapshot })
+    const { value: vehicles, found: hasFleet } = struct::get({ struct: snapshot, field: "vehicles" })
+    if (hasFleet) {
+        visibleVehicles = vehicles
+        const total = renderFleetSummary(vehicles)
+        const shown = paintFleet(vehicles, `All depots · ${total} vehicles`)
+        const depotCount = paintDepotChart(vehicles)
+        info({ message: `fleet board rendered: ${shown} vehicles across ${depotCount} depots`, toast: false })
+    } else {
+        warn({ message: "telemetry snapshot carries no vehicles array", toast: true })
+        ui::setElementText({ elementRef: ui::getElement({ elementRef: "fleet-ops/headline" }).element, text: "No telemetry yet" })
+        ui::setMarkdownContent({ elementRef: ui::getElement({ elementRef: "fleet-ops/empty-state" }).element, content: "### No telemetry\nThe depot ingest workflow has not published a snapshot yet." })
+    }
+    ui::setElementLoading({ elementRef: ui::getElement({ elementRef: "fleet-ops/refresh-button" }).element, loading: false })
+    ui::showScreen()
+}
+
+eventsWidgetAction onFleetControl(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const { value: depot, found: hasDepot } = struct::get({ struct: actionContext, field: "depot" })
+    const wantsArchived = struct::has({ struct: actionContext, field: "include_archived" })
+    if (eventName == "applyFilter") {
+        if (hasDepot) {
+            fleetFilter = struct::set({ structIn: fleetFilter, field: "depot", value: depot }).structOut
+            const { arrayOut: matching, kept: keptCount, removed: hiddenCount } = array::filterBy({ arrayIn: visibleVehicles, key: "depot", operator: "Equals", value: depot, compare: "Text", ignoreCase: true, invert: false })
+            paintFleet(matching, `${depot} · ${keptCount} vehicles`)
+            paintDepotChart(matching)
+            ui::dataUpdate({ surfaceId: "fleet-ops", path: "fleet.hiddenCount", value: hiddenCount })
+            ui::setElementDisabled({ elementRef: ui::getElement({ elementRef: "fleet-ops/clear-filter" }).element, disabled: false })
+            info({ message: `${hiddenCount} vehicles hidden by the ${depot} filter`, toast: false })
+        } else {
+            paintFleet(visibleVehicles, "All depots")
+            ui::setElementDisabled({ elementRef: ui::getElement({ elementRef: "fleet-ops/clear-filter" }).element, disabled: true })
+            warn({ message: `widget ${widgetInstanceId} raised applyFilter without a depot`, toast: false })
+        }
+    } else if (eventName == "exportRows") {
+        exportFleet(wantsArchived)
+    } else if (eventName == "flagVehicle") {
+        flagVehicle(widgetInstanceId, actionContext, inputValues)
+    } else {
+        ui::setTextfieldError({ elementRef: ui::getElement({ elementRef: "fleet-ops/flag-reason" }).element, error: `unhandled action ${eventName}` })
+        warn({ message: `unhandled fleet widget event ${eventName}`, toast: false })
+    }
+}

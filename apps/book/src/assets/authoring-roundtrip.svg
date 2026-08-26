@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Guarded FlowScript round trip</title>
+  <desc id="desc">The canvas changes a Board with Board commands. Board lowering and rendering produce canonical FlowScript. Edited text parses to BoardAst, reconciles against the live Board and catalog, passes diagnostic and approval gates, and applies an atomic Board command plan. The Rust runtime executes a selected Board version.</desc>
+  <defs>
+    <marker id="arrow-roundtrip" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 z" fill="#9d311f"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, Arial, sans-serif; }
+      .eyebrow { font-size: 25px; font-weight: 760; letter-spacing: 2.5px; }
+      .title { font-size: 36px; font-weight: 740; letter-spacing: -0.7px; }
+      .body { font-size: 28px; font-weight: 610; }
+      .small { font-size: 23px; font-weight: 500; }
+      .edge { font-size: 18px; font-weight: 660; letter-spacing: 0.5px; }
+      .code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 26px; font-weight: 650; }
+      .arrow { fill: none; stroke: #9d311f; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-roundtrip); }
+      .muted-arrow { fill: none; stroke: #817a78; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-roundtrip); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1120" rx="30" fill="#fbfaf8"/>
+  <rect x="40" y="36" width="1520" height="1048" rx="28" fill="#ffffff" stroke="#cfc7c0" stroke-width="3"/>
+  <rect x="72" y="36" width="230" height="9" rx="4.5" fill="#e95335"/>
+
+  <rect x="66" y="104" width="276" height="214" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="204" y="162" text-anchor="middle" class="sans eyebrow" fill="#625e66">CANVAS EDITOR</text>
+  <text x="204" y="222" text-anchor="middle" class="sans title" fill="#18171b">Visual authoring</text>
+  <text x="204" y="263" text-anchor="middle" class="sans small" fill="#625e66">Board commands</text>
+  <text x="204" y="292" text-anchor="middle" class="sans small" fill="#625e66">Nodes, wires, layout</text>
+
+  <rect x="426" y="104" width="326" height="214" rx="22" fill="#f7f3ef" stroke="#9d311f" stroke-width="3"/>
+  <text x="589" y="162" text-anchor="middle" class="sans eyebrow" fill="#9d311f">BOARD</text>
+  <text x="589" y="222" text-anchor="middle" class="sans title" fill="#18171b">Executable graph</text>
+  <text x="589" y="268" text-anchor="middle" class="sans small" fill="#625e66">Identity and presentation</text>
+
+  <rect x="838" y="104" width="292" height="214" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="984" y="162" text-anchor="middle" class="sans eyebrow" fill="#625e66">BOARD AST</text>
+  <text x="984" y="222" text-anchor="middle" class="sans title" fill="#18171b">Typed meaning</text>
+  <text x="984" y="268" text-anchor="middle" class="sans small" fill="#625e66">Temporary semantic model</text>
+
+  <rect x="1216" y="104" width="318" height="214" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="1375" y="162" text-anchor="middle" class="sans eyebrow" fill="#625e66">FLOWSCRIPT</text>
+  <text x="1375" y="222" text-anchor="middle" class="sans title" fill="#18171b">Editable source</text>
+  <text x="1375" y="268" text-anchor="middle" class="sans small" fill="#625e66">Canonical after reload</text>
+
+  <path d="M 342 176 L 412 176" class="arrow"/>
+  <path d="M 426 254 L 356 254" class="arrow"/>
+  <text x="391" y="286" text-anchor="middle" class="sans edge" fill="#9d311f">RELOAD</text>
+
+  <path d="M 752 176 L 824 176" class="arrow"/>
+  <text x="788" y="151" text-anchor="middle" class="sans edge" fill="#9d311f">LOWER</text>
+  <path d="M 1130 176 L 1202 176" class="arrow"/>
+  <text x="1166" y="151" text-anchor="middle" class="sans edge" fill="#9d311f">RENDER</text>
+  <path d="M 1216 270 L 1144 270" class="arrow"/>
+  <text x="1180" y="302" text-anchor="middle" class="sans edge" fill="#9d311f">PARSE</text>
+
+  <rect x="958" y="430" width="486" height="238" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="1201" y="486" text-anchor="middle" class="sans eyebrow" fill="#625e66">RECONCILE</text>
+  <text x="1201" y="535" text-anchor="middle" class="sans body" fill="#18171b">Edited BoardAst against</text>
+  <rect x="1000" y="566" width="190" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1095" y="603" text-anchor="middle" class="sans small" fill="#3f3b40">LIVE BOARD</text>
+  <rect x="1210" y="566" width="192" height="56" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1306" y="603" text-anchor="middle" class="sans small" fill="#3f3b40">CATALOG</text>
+  <text x="1201" y="650" text-anchor="middle" class="sans small" fill="#625e66">Produces the smallest command plan</text>
+
+  <rect x="490" y="430" width="374" height="338" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="677" y="486" text-anchor="middle" class="sans eyebrow" fill="#625e66">PLAN GATES</text>
+  <rect x="526" y="520" width="302" height="62" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="677" y="548" text-anchor="middle" class="sans small" fill="#3f3b40">DIAGNOSTIC</text>
+  <text x="677" y="575" text-anchor="middle" class="sans small" fill="#9d311f">stop with zero commands</text>
+  <rect x="526" y="600" width="302" height="72" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="677" y="628" text-anchor="middle" class="sans small" fill="#3f3b40">DESTRUCTIVE CHANGE</text>
+  <text x="677" y="657" text-anchor="middle" class="sans small" fill="#9d311f">approval required</text>
+  <rect x="526" y="690" width="302" height="54" rx="14" fill="#f8eee8" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="677" y="726" text-anchor="middle" class="sans small" fill="#9d311f">VALID AND APPROVED</text>
+
+  <rect x="66" y="494" width="322" height="214" rx="22" fill="#f8eee8" stroke="#9d311f" stroke-width="3"/>
+  <text x="227" y="552" text-anchor="middle" class="sans eyebrow" fill="#9d311f">ATOMIC APPLY</text>
+  <text x="227" y="604" text-anchor="middle" class="sans small" fill="#3f3b40">Stage, validate, then commit</text>
+  <text x="227" y="646" text-anchor="middle" class="sans small" fill="#3f3b40">Failure attempts rollback</text>
+  <text x="227" y="680" text-anchor="middle" class="sans small" fill="#3f3b40">and leaves a visible error</text>
+
+  <path d="M 984 318 L 984 370 L 1280 370 L 1280 416" class="arrow"/>
+  <text x="1132" y="358" text-anchor="middle" class="sans small" fill="#9d311f">EDITED AST</text>
+  <path d="M 958 550 L 878 550" class="arrow"/>
+  <text x="918" y="524" text-anchor="middle" class="sans small" fill="#9d311f">PLAN</text>
+  <path d="M 490 718 L 402 718 L 402 602 L 388 602" class="arrow"/>
+  <path d="M 227 494 L 227 374 L 589 374 L 589 332" class="arrow"/>
+  <text x="406" y="359" text-anchor="middle" class="sans small" fill="#9d311f">UPDATED BOARD</text>
+  <path d="M 690 318 L 690 400 L 1088 400 L 1088 416" class="muted-arrow"/>
+  <rect x="752" y="373" width="232" height="36" rx="18" fill="#ffffff"/>
+  <text x="868" y="391" text-anchor="middle" class="sans small" fill="#625e66">LIVE BOARD INPUT</text>
+
+  <rect x="66" y="858" width="1468" height="166" rx="22" fill="#f4f0ec" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="100" y="916" class="sans eyebrow" fill="#625e66">EXECUTION PATH</text>
+  <text x="100" y="970" class="sans title" fill="#18171b">Rust runtime executes a selected Board version</text>
+  <text x="1488" y="918" text-anchor="end" class="sans small" fill="#625e66">live Board or numbered snapshot</text>
+  <text x="1488" y="965" text-anchor="end" class="sans small" fill="#625e66">catalog plus run context</text>
+</svg>

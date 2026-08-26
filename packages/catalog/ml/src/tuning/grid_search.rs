@@ -3,26 +3,26 @@
 //! Exhaustive search over parameter grid with cross-validation.
 
 #[cfg(feature = "execute")]
-use crate::ml::{GridSearchEntry, ParameterSpec};
+use crate::ml::GridSearchEntry;
+use crate::ml::ParameterSpec;
 use crate::ml::{GridSearchResult, NodeMLModel};
 #[cfg(feature = "execute")]
 use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
 #[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, seq::SliceRandom};
@@ -96,7 +96,6 @@ fn known_params(model_type: &str) -> &'static [&'static str] {
 }
 
 /// Default parameter grid for a model family, used to seed the Parameter Grid pin.
-#[cfg(feature = "execute")]
 fn default_param_grid(model_type: &str) -> Value {
     match model_type {
         "DecisionTree" => json!([
@@ -507,7 +506,6 @@ impl NodeLogic for GridSearchNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let model_type: String = node
             .get_pin_by_name("model_type")

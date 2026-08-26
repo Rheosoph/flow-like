@@ -55,7 +55,7 @@ function wrapTitle(value: string): readonly string[] {
 
 function cardEyebrow(entryId: string): string {
 	const normalized = normalizeBookEntryId(entryId);
-	if (!normalized) return "THE FLOWSCRIPT BOOK";
+	if (!normalized) return "FLOW-LIKE DEVELOPER GUIDE";
 	if (normalized === "contents") return "OPEN EDITION / CONTENTS";
 	if (normalized === CURRENT_BOOK_EDITION.introduction.entryId) {
 		return "OPEN EDITION / INTRODUCTION";
@@ -72,7 +72,7 @@ function cardEyebrow(entryId: string): string {
 		}
 	}
 
-	return "FLOWBOOK / THE FLOWSCRIPT BOOK";
+	return "FLOWBOOK / FLOW-LIKE DEVELOPER GUIDE";
 }
 
 function renderCardSvg(props: SocialCardProps): string {

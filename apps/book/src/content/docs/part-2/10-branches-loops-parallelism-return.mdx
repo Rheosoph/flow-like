@@ -20,7 +20,7 @@ import WorkflowFigure from '../../../components/WorkflowFigure.astro';
 import controlApi from '../../../assets/workflows/control-flow--focus-api-call.webp';
 import controlForEach from '../../../assets/workflows/control-flow--focus-for-each.webp';
 
-Control flow in FlowScript looks familiar:
+FlowScript maps familiar control syntax to visible execution paths:
 
 ```flow
 if (critical) {
@@ -34,34 +34,24 @@ for (const report of reports) {
 }
 ```
 
-But it does not disappear into an invisible instruction pointer. An `if` is a node with visible
-execution outputs. A collection loop owns an iterable, exposes the current value and index, and
-repeatedly triggers its body path. While owns a condition and maximum iteration count. The
-statement after either loop is connected to **Done**. A `return` either wires data to a function
-boundary or terminates one Event execution branch.
+An `if` is a node with execution outputs. A collection loop owns an iterable, exposes value and
+index, and triggers its body path for each item. While owns a condition and iteration limit. The
+statement after either loop connects to **Done**. A `return` wires data to a function boundary or
+terminates one Event branch.
 
-This leads to the central rule of the chapter:
+The canvas therefore carries runtime meaning. Node position has no effect on execution. A changed
+wire can change which work runs and what follows it.
 
-> Control flow is topology. Every path that can run, fail, repeat, or finish should remain visible
-> in both source and the workflow.
+Every path that can run, fail, repeat, or finish must remain visible in source and on the Board.
 
-That visibility matters most when something goes wrong. During the 3 a.m. incident from Chapter
-1, the only initial fact was a domain report: production was on hold. A Flow-Like implementation
-could not guarantee that the underlying dependency would never fail. It could make the decision,
-the attempted call, its expected Error route, any unexpected failure, and the recovery work
-inspectable at the responsible nodes.
+During the Chapter 1 incident, the visible Flow shows the decision, attempted call, expected Error
+route, unexpected failures, and recovery work at the responsible nodes.
 
-> **Release check:** The current language supports Boolean branches, named execution arms,
-> sequential and parallel collection loops, bounded `while`, and return expressions. Several
-> details deliberately differ from TypeScript. `@parallel` currently implies a concurrency limit
-> of 30. Plain `while` implies at most 15 iterations. FlowScript has no `break` or `continue`
-> statement. Function `return` does not yet perform function-wide early termination. The current
-> sequential, parallel, while, and break-capable loop nodes also log and absorb errors returned by
-> their child paths. They do not fail fast solely because a child returned an error: collection
-> loops continue remaining items, While reevaluates its condition, and the break-capable node then
-> samples Break. The enclosing run can still finish with a Success status despite Error evidence.
-> That conflicts with Flow-Like's intended aggregate-failure invariant and is an implementation
-> gap, not a reliability guarantee.
+> **Release check:** `@parallel` currently sets a concurrency limit of 30, and plain `while`
+> permits at most 15 iterations. FlowScript has no `break` or `continue`; function `return` does
+> not yet terminate the whole function. Loop control nodes can log and absorb child-path errors,
+> so work may continue and a run may end with Success despite Error evidence. This remains an
+> implementation gap. The sections below mark the behavior of each loop.
 
 ## 10.1 `if`, `else if`, and `else`
 
@@ -78,18 +68,19 @@ if (report.contains({
 }
 ```
 
-The condition resolves to a Boolean data input on a branch node. The two blocks connect to its
-True and False execution outputs. At runtime one of those outputs becomes active. Moving one block
-below another on the canvas cannot change the choice; only the wires and the condition do.
+The Boolean condition feeds a branch node. Its blocks connect to True and False execution outputs,
+and only one activates. Position on the canvas cannot change the choice; wires and data do. The
+condition itself is data flow into the branch, so failures while producing it remain attributable
+to their source nodes.
 
-This is different from the ternary in Chapter 9:
+Chapter 9's ternary makes a different kind of choice:
 
 ```flow
 let status = critical ? "critical" : "investigate"
 ```
 
-The ternary selects one value. `if` selects an execution path. Use `if` when the alternatives
-contain calls, writes, retries, tickets, or other work that should run only on the selected side.
+A ternary selects a value. `if` selects a path, which suits calls, writes, retries, tickets, and
+other work that should run on only one side.
 
 FlowScript accepts an `else if` ladder:
 
@@ -117,23 +108,19 @@ if (productionStopped) {
 }
 ```
 
-The second form shows the actual topology: the second decision is reached only through the False
-arm of the first. The indentation is not merely style; it describes which branch owns the next
-decision.
+The nested form matches the topology: the second decision is reachable only through the first
+branch's False arm. Its indentation shows that ownership.
 
 ### A branch is not an error handler
 
-A False arm means that a Boolean condition evaluated to false. It does not catch an error thrown
-while calculating the condition or running the True arm. Expected negative outcomes should have
-their own modeled execution output. Unexpected node failures use the node's **Handle Errors** path
-when the Flow is designed to recover from them. Those are separate contracts, which is why the
-visual workflow can show them separately.
+A False arm means the condition evaluated to false; it catches no error from the condition or True
+arm. Expected negative outcomes need a modeled execution output. Recoverable unexpected node
+failures use **Handle Errors**. The Board shows these contracts separately.
 
 ## 10.2 Named execution arms
 
-True and False are not sufficient names for every decision. The built-in HTTP API Call node, for
-example, has Success and Error execution outputs. FlowScript preserves those labels with a named
-arm block:
+Some decisions need labels beyond True and False. The HTTP API Call node exposes Success and Error,
+which FlowScript preserves in a named arm block:
 
 ```flow
 const request = http::request({ method: "GET", url: healthUrl })
@@ -148,17 +135,15 @@ apiCall {
 }
 ```
 
-`apiCall` is a handle to the call. It can expose data outputs such as `apiCall.response`, while the
-block below it connects work to the call's execution pins. A node with three or more outcomes uses
-the same shape with one named block per connected arm. This is clearer than pretending every
-multi-outcome operation is a Boolean or hiding its routes behind exceptions.
+`apiCall` is a handle that can expose data such as `apiCall.response`. The block connects work to
+its execution pins. Nodes with more outcomes use one named block per connected arm.
 
-For the current HTTP node, a completed 2xx response selects Success. A completed non-2xx response
-selects Error. A transport failure, an invalid request value, or a failure while reading the
-response can instead be an unexpected node error. Enabling **Handle Errors** adds the generic
-`On Error` execution path and an Error string output for that second category.
+For the current HTTP node, a completed 2xx response selects Success and a completed non-2xx
+response selects Error. Transport failure, an invalid request, or a response-read failure can
+raise an unexpected node error. **Handle Errors** adds an `On Error` path and Error string output
+for that category.
 
-The distinction is operationally useful:
+The Board keeps both routes visible:
 
 <WorkflowFigure
   src={controlApi}
@@ -166,19 +151,20 @@ The distinction is operationally useful:
   caption="The source-authored Success and Error arms remain wired; this capture applies Studio's Handle Errors toggle so the generic On Error execution and Error string outputs are visible."
 />
 
-A Flow can route Error to a retry, ticket, or domain response without claiming that the node
-crashed. If an On Error recovery path completes, the runtime can continue while the original node
-still carries failed evidence. Handling an error does not erase where it happened.
+A Flow can route Error to a retry, ticket, or domain response. If an On Error recovery path
+completes, execution can continue while the original node retains failed evidence.
 
-Arm names are part of the node contract. Do not rename `execError` to something friendlier in
-source and assume it means the same thing. Canonical source camel-cases the internal pin name, such
-as `exec_error` to `execError`; Apply can also recognize supported raw and friendly spellings. Use
-the Board's canonical rendering, editor completion, or Apply's available-output diagnostic instead
-of guessing.
+This separation matters in operations: an HTTP 503 is an expected protocol outcome, while a
+malformed request value indicates that the node could not perform the call as modeled. They need
+different recovery policies and traces.
 
-Some two-output nodes render in compact `if (nodeCall())` form with comments such as
-`// exec_out_exists` and `// exec_out_missing` after the braces. Those comments are semantic pin
-labels, not disposable prose; they preserve which graph output each arm represents.
+Arm names belong to the node contract. Canonical source camel-cases internal pin names, such as
+`exec_error` to `execError`; Apply also recognizes supported raw and friendly spellings. Use Board
+rendering, editor completion, or Apply's available-output diagnostic for the accepted name.
+
+Some two-output nodes render as `if (nodeCall())` with comments such as `// exec_out_exists` and
+`// exec_out_missing` after the braces. These semantic labels preserve the graph output represented
+by each arm.
 
 ## 10.3 Sequential `for … of`
 
@@ -198,10 +184,9 @@ for (const [index, report] of reports) {
 }
 ```
 
-The loop evaluates its array once, then processes values in input order. For each element, it
-publishes the current value and index and waits for the connected body chain to settle before
-starting the next item. Only after every item does the **Done** output activate and allow the
-statement following the loop to run.
+The loop evaluates its array once and processes values in order. It publishes each value and index,
+then waits for the body chain to settle before starting the next item. **Done** activates after all
+items and starts the following statement.
 
 <WorkflowFigure
   src={controlForEach}
@@ -209,27 +194,22 @@ statement following the loop to run.
   caption="The static Board shows one body path: the runtime reuses it for each array item in order, then activates Done once."
 />
 
-This makes ordinary `for` the safe default when iterations touch shared or external state:
+Use ordinary `for` when iterations touch shared or external state: rate-limited APIs, ordered or
+deduplicated tickets, dependent database writes, bounded model spend, or any operation whose
+idempotency remains unproven.
 
-- an API with a strict rate limit;
-- a ticket system where order or deduplication matters;
-- a database update whose later write depends on an earlier one;
-- a model call whose concurrent spend or provider rate must remain bounded; or
-- any operation whose idempotency is not yet proven.
+Sequential here describes scheduling, not outcome policy. The loop still owns every iteration and
+decides how execution continues after a child path settles.
 
-Sequential does not mean fail-fast today. The For Each node owns the iterations. If a body chain
-returns an unhandled error, that chain stops, the loop records an Error message attributed to the
-loop node and naming the iteration, and the next item still runs. Logs emitted inside the failed
-chain retain attribution to their child nodes. A modeled or handled failure can likewise route to
-ticket creation and then allow later items to proceed. This behavior is useful for batch-style
-work in which one bad record should not discard all good records.
+Sequential loops are not fail-fast today. When a body chain returns an unhandled error, that chain
+stops. The loop logs an Error under its own node and names the iteration, then continues. Logs from
+the failed chain retain child-node attribution. A modeled or handled failure can create a ticket
+before later items run, which suits batches where one bad record should not discard the rest.
 
-It also creates a current status caveat. The loop node itself returns success after logging a child
-error, so the enclosing run may report Success even though a child trace and Error log show a
-failure. Flow-Like's intended invariant is stricter: any unhandled child failure should make the
-aggregate run Failed after the remaining work settles. Until that invariant is uniformly
-implemented, a production Flow that must report “all records succeeded” should model that fact
-explicitly—capture and collect per-item outcomes, then make the final success decision visible.
+The loop node returns success after logging a child error, so the run may report Success despite a
+failed child trace. The intended invariant marks the aggregate run Failed after remaining work
+settles. Until it is uniform, a Flow that must report “all records succeeded” should collect
+per-item outcomes and make the final decision visible.
 
 ## 10.4 `@parallel for`
 
@@ -242,9 +222,8 @@ for (const report of reports) {
 }
 ```
 
-The current Parallel For Each node starts work for independent items up to its configured
-concurrency limit. The `@parallel` sugar is lossless only at the node's default of 30. A custom
-limit remains an explicit call so the meaningful setting cannot disappear:
+Parallel For Each starts independent items up to its configured concurrency limit. `@parallel`
+is lossless only at the default of 30; a custom limit remains explicit:
 
 ```flow
 for (const parallelForEach of control::parallelForEach({
@@ -256,41 +235,31 @@ for (const parallelForEach of control::parallelForEach({
 ```
 
 `maxConcurrent: 1` schedules one task at a time. A positive value bounds active item/body-root
-tasks; most loops have one body root, so it behaves as the familiar number of active iterations.
-`0` is documented as unlimited, and the current implementation treats any non-positive value that
-way. Unlimited concurrency is rarely a responsible setting for an external service.
+tasks; with one body root, it matches active iterations. `0` means unlimited, and current code
+treats every non-positive value that way. Avoid unlimited concurrency for external services.
 
 ### Done is a barrier, not an ordering guarantee
 
-Parallel For Each waits for every child to settle before it activates Done. It does not expose a
-collected-results array, and side effects may complete in any order. Carry the original index,
-collect the per-item results, and sort them when order matters. The catalog's execution-only Gather
-node can provide a barrier, but it does not collect data values for you. Never infer result order
-from the vertical position of nodes, log arrival time, or the order in which parallel branches
-appear to finish.
+Parallel For Each activates Done after every child settles. It exposes no collected-results array,
+and effects may finish in any order. When order matters, carry the original index, collect results,
+and sort them. Gather provides an execution barrier without collecting data values. Node position,
+log arrival, and apparent finish order reveal nothing about result order.
 
-A failing child does not cancel its siblings. The current node continues scheduling remaining
-items, drains all child work, logs each returned failure, activates Done, and returns success from
-the loop node itself. The aggregate-status gap described for sequential loops therefore also
-applies here.
+A failing child does not cancel siblings. The node schedules remaining items, drains child work,
+logs each failure, activates Done, and returns success. The sequential loop's aggregate-status gap
+also applies.
 
-Parallel execution is not automatically faster or cheaper. Before opting in, answer these
-questions:
+Before opting in, verify that order is irrelevant, writes are idempotent, retries cannot duplicate
+effects, downstream rate and connection limits are known, concurrent model/network/memory cost is
+bounded, failures are collected, and sibling behavior after failure is acceptable. Keep external
+calls, ticket creation, and database writes sequential until that contract justifies overlap.
 
-1. Can the iterations safely run in any order?
-2. Are writes idempotent, or can a retry create duplicates?
-3. What are the downstream rate and connection limits?
-4. What is the maximum acceptable simultaneous model, network, memory, and cost load?
-5. How are individual failures represented and collected?
-6. What should happen to already-running siblings after one failure?
-
-The production default is simple: keep external API calls, model calls, ticket creation, and
-database writes sequential until bounded concurrency has been justified. Parallelize independent
-work because its contract permits overlap, not because an annotation is available.
+Already-running siblings are especially important: the current node does not cancel them after a
+failure. Any side effects they start must remain safe even when another item has already failed.
 
 ## 10.5 Bounded `while`
 
-Workflow loops must have an operational ceiling. The compact form is:
+Flow loops must have an operational ceiling. The compact form is:
 
 ```flow
 let attempt = 0
@@ -300,10 +269,9 @@ while (attempt < 3) {
 }
 ```
 
-Before each body run, While retriggers the dependencies of its condition and evaluates the Boolean
-again. The body runs only while that value is true. The current node also has a `maxIter` guard. A
-plain `while (condition)` preserves the default value of 15; changing the guard makes the node call
-explicit:
+Before each body run, While retriggers its condition dependencies and evaluates the Boolean. The
+current node also has a `maxIter` guard. Plain `while (condition)` keeps the default of 15; a custom
+guard makes the node call explicit. The body starts only when the refreshed condition is true:
 
 ```flow
 while (control::whileLoop({ condition: retryReady, maxIter: 3 })) {
@@ -311,27 +279,22 @@ while (control::whileLoop({ condition: retryReady, maxIter: 3 })) {
 }
 ```
 
-The maximum bounds the number of body starts and prevents an accidentally true condition from
-starting bodies forever. It does not prove that the loop made progress, enforce a wall-clock
-deadline, add delay or backoff, or cancel a slow operation inside the body. Those policies still
-belong to the Flow and the called nodes.
+The maximum bounds body starts. It cannot prove progress, enforce a wall-clock deadline, add delay
+or backoff, or cancel a slow body operation. Model those policies in the Flow and called nodes.
 
-There is another current edge to understand: if the condition remains true at the maximum, While
-silently activates Done. It has no separate Exhausted output and emits no warning merely because
-the ceiling was reached. A Flow in which exhaustion means failure must make that state explicit,
-for example by maintaining an attempt value and checking it after the loop before choosing Success,
-Retry Later, or Escalate.
+If the condition remains true at the maximum, While silently activates Done. It has no Exhausted
+output and emits no warning for reaching the ceiling. When exhaustion means failure, maintain an
+attempt value and check it after the loop before choosing Success, Retry Later, or Escalate.
 
-Body failures currently follow the same ownership rule as collection loops: they are logged, the
-loop proceeds to reevaluate its condition, and it can still finish successfully. A failure while
-directly evaluating the condition can propagate, while a failure to retrigger a dependency is
-currently logged before the loop exits through Done. These details are release-sensitive and
-deserve runtime tests before a Flow relies on them.
+Body failures are logged; the loop reevaluates its condition and may finish successfully. Direct
+condition evaluation failures can propagate. Failure to retrigger a dependency is currently
+logged before the loop exits through Done. Test these release-sensitive details before relying on
+them.
 
-Cancellation is cooperative. A stopped run is observed at node boundaries, and long-running nodes
-must cooperate with cancellation themselves. The plain loop nodes do not currently stop walking or
-scheduling iterations as consistently as the batch-loop variants. A maximum iteration count and
-timeouts on external operations therefore remain useful even when a caller can cancel the run.
+Cancellation is observed at node boundaries. Long-running nodes must cooperate with it themselves.
+Plain loop nodes observe cancellation less consistently while walking or scheduling iterations
+than batch-loop variants. Keep an iteration maximum and external-operation timeouts even when
+callers can cancel.
 
 ## 10.6 Stopping and skipping are structural today
 
@@ -348,18 +311,14 @@ for (const report of reports) {
 }
 ```
 
-The False arm contains no further work, so that execution path reaches the end of the body and the
-loop advances. On the Board, the skipped path is obvious rather than hidden in a jump statement.
+The empty False arm reaches the body end and advances the loop. The Board shows the skipped path.
 
-The catalog also contains a separate **For Each (Break)** node. It samples a Boolean Break input
-before the loop and after each body root; a true value stops any remaining body roots and later
-items, then activates Completed.
-That node is available visually but is not currently part of FlowScript's structured loop registry,
-so it does not round-trip as a `break` keyword or ordinary `for` sugar. Treat it as an explicit
-catalog capability and verify its rendered source against the target release.
+The catalog's **For Each (Break)** node samples a Boolean Break input before the loop and after each
+body root. True stops remaining roots and items, then activates Completed. This visual node is
+outside FlowScript's structured loop registry, so it does not round-trip as `break` or ordinary
+`for` sugar. Use it explicitly and verify rendered source against the target release.
 
-This is a real authoring gap, not an invitation to emulate arbitrary jumps. A future text form
-should preserve the same visible stop condition and Completed path in both views.
+This authoring gap needs a future text form that preserves the stop condition and Completed path.
 
 ## 10.7 `return` is a boundary, not stack unwinding
 
@@ -376,10 +335,9 @@ function classify(report: string): (status: string, normalized: string) {
 }
 ```
 
-The first expression wires to `status`; the second wires to `normalized`. Literals can be
-materialized as typed values, and a previously bound call output can supply a return pin.
-Validation reports extra return values or declared output pins left without a source rather than
-guessing how an arity mismatch should be repaired.
+The expressions wire positionally to `status` and `normalized`. Literals can become typed values,
+and a bound call output can supply a return pin. Validation reports extra return values or output
+pins without sources instead of guessing at an arity mismatch.
 
 What this does **not** mean today is JavaScript-style early return:
 
@@ -391,11 +349,11 @@ if (invalid) {
 performSideEffect()
 ```
 
-The current function reconciliation wires data to layer output pins; there is not yet a function-wide
-execution-terminating Return node. FlowPilot's intermediate representation consequently rejects
-nested function returns and permits a single final, unconditional top-level return. Write
-functions in that supported shape. When early selection is needed, branch to compute or assign the
-result, rejoin, and return it once at the boundary.
+Current function reconciliation wires data to layer output pins and has no function-wide Return
+node. FlowPilot's intermediate representation rejects nested function returns and permits one
+final, unconditional top-level return. For early selection, branch to compute the result, rejoin,
+and return once at the boundary. This makes every declared output's source visible before the
+function completes.
 
 An Event return has a different implementation:
 
@@ -405,25 +363,22 @@ eventsGeneric status(payload: Struct) {
 }
 ```
 
-It becomes a terminal Return Result node with no execution successor. It ends that execution
-branch and publishes one Event result. An Event accepts at most one return value; wrap several
-fields in a Struct when the caller needs a compound response.
+This becomes a terminal Return Result node with no execution successor. It ends that branch and
+publishes one Event result. Events accept one return value; use a Struct for a compound response.
 
-Even an Event return does not cancel sibling execution branches. In addition, current execution
-surfaces do not all aggregate several competing result events the same way. Synchronous server and
-remote callers usually retain the first emitted result. Subcontext merging overwrites with the
-last merged child result, UI run state displays the last result event it received, and streaming
-SSE forwards every result event. Parallel timing makes any implicit choice a poor business
-contract.
+An Event return does not cancel sibling branches. Execution surfaces also aggregate competing
+results differently. Synchronous server and remote callers usually keep the first; subcontext
+merging overwrites with the last merged child; UI run state shows the last received result; SSE
+forwards every result. Parallel timing makes implicit selection unreliable.
 
-The robust rule is therefore:
+These differences are observable API behavior. A Flow with several result paths may answer
+differently depending on how it was invoked, even when its Board is unchanged.
 
-> Produce one logical result path per invocation. Do not race several `return` statements and let
-> timing choose the caller's answer.
+Produce one logical result path per invocation. Never let racing `return` statements choose an
+answer by timing.
 
-When branches can finish with different domain outcomes, join them through explicit data and make
-one final selection before the result boundary. That design is easier to read, test, trace, and
-eventually migrate to a true function-wide Return node.
+When branches produce different outcomes, join their data and select once before the result
+boundary. This also eases migration to a future function-wide Return node.
 
 ## 10.8 Read the whole control-flow example
 
@@ -459,17 +414,13 @@ eventsGeneric coordinateIncident(payload: Struct, reports: string[], healthUrl: 
 }
 ```
 
-Read the same source as a workflow. The Event opens an execution path. API Call splits that path
-into named outcomes. Because both arms contain continuing work, the statement after the block fans
-in from both arm tails; the HTTP node itself has no separate Done output. For Each owns the reports,
-exposes value and index, and joins at Done. The function exposes one output pin. Return Result
-terminates the Event branch and supplies the caller's value.
+On the Board, the Event opens a path and API Call splits it into named outcomes. Because both arms
+continue, the following statement fans in from both tails; HTTP has no separate Done output. For
+Each owns the reports, exposes value and index, and joins at Done. The function exposes one output
+pin. Return Result ends the Event branch and supplies the caller's value.
 
-The complete canonical fixture also includes `@parallel for` and bounded `while`, and is checked by
-the repository's FlowScript parser/renderer test. It remains deliberately small enough to inspect
-in both views. Complexity belongs in visible layers and functions, not in control flow that only
-one author can mentally simulate.
+The canonical fixture also includes `@parallel for` and bounded `while`; the repository's
+FlowScript parser/renderer test checks it. It stays small enough to inspect in both views. Move
+larger logic into visible layers and functions.
 
-The goal is not to make FlowScript look like TypeScript at any cost. The goal is to make familiar
-control structures honest projections of a workflow whose paths, limits, failures, and results a
-system expert can understand during the next 3 a.m. call.
+FlowScript uses familiar control syntax only where it maps faithfully onto the Board.

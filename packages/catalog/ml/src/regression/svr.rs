@@ -10,8 +10,9 @@ use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, POLYNOMIAL_KERNEL_CONSTANT,
     validate_polynomial_degree, values_to_array1_f64, values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
 #[cfg(feature = "execute")]
-use flow_like::flow::{board::Board, execution::LogLevel};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -22,7 +23,6 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
@@ -382,7 +382,6 @@ impl NodeLogic for FitSVMRegressionNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 
