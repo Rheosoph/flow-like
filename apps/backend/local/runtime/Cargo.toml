@@ -10,10 +10,10 @@ local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda", "
 local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt", "flow-like-executor/local-ml-tensorrt"]
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure"] }
-flow-like-catalog = { workspace = true, features = ["execute", "remote"] }
-flow-like-executor = { workspace = true, features = ["all-execute"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["local-runtime-ml"] }
+flow-like-executor = { workspace = true, features = ["local-runtime-ml"] }
 flow-like-storage.workspace = true
 mimalloc.workspace = true
 axum.workspace = true
@@ -23,11 +23,3 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
 dotenv.workspace = true
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

@@ -20,11 +20,3 @@ lambda_runtime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 chrono.workspace = true
 urlencoding.workspace = true
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

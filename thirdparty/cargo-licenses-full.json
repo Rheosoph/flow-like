@@ -4626,15 +4626,6 @@
 		"description": null
 	},
 	{
-		"name": "flow-like-bits",
-		"version": "0.1.0",
-		"authors": null,
-		"repository": null,
-		"license": null,
-		"license_file": null,
-		"description": null
-	},
-	{
 		"name": "flow-like-catalog",
 		"version": "0.1.0",
 		"authors": null,

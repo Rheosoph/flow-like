@@ -13,11 +13,3 @@ serde_json.workspace = true
 reqwest.workspace = true
 aws-config.workspace = true
 aws-sdk-scheduler = { version = "1.59", default-features = false, features = ["default-https-client", "rt-tokio"] }
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

@@ -26,7 +26,7 @@ use flow_like_executor::{
     fetch_bounded, report_queue_failure, resolve_payload_from_str,
 };
 use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
-use flow_like_types::dispatch::{CompilationJob, CompilationJobRef};
+use flow_like_types_contracts::dispatch::{CompilationJob, CompilationJobRef};
 use media_transformation::{MediaTransformationContext, MediaTransformationError};
 use serde::Deserialize;
 use std::fmt::{Display, Formatter};

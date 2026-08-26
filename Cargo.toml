@@ -1,5 +1,12 @@
 [workspace]
 resolver = "2"
+# Bare Cargo commands target the shared editing loop. Product crates remain one
+# short alias away, while CI always passes --workspace explicitly.
+default-members = [
+    "packages/core/dev-check",
+    "packages/ast",
+    "packages/types/contracts",
+]
 members = [
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
@@ -36,10 +43,14 @@ members = [
     "apps/backend/docker-compose/runtime",
     "apps/backend/docker-compose/sink-services",
     "packages/core",
+    "packages/core/contracts",
+    "packages/core/dev-check",
     "packages/ast",
     "packages/model-provider",
-    "packages/bits",
+    "packages/model-provider/protocol",
     "packages/types",
+    "packages/types/contracts",
+    "packages/types/proto",
     "packages/catalog",
     "packages/catalog/core",
     "packages/catalog/std",
@@ -57,26 +68,34 @@ members = [
     "packages/catalog-macros",
     "packages/catalog-build-helper",
     "packages/storage",
+    "packages/storage/contracts",
+    "packages/storage/files",
     "packages/api",
+    "packages/api/entity",
     "packages/sinks",
     "packages/secrets",
     "packages/executor",
     "packages/compiler",
     "packages/wasm",
+    "packages/wasm/schema",
     "apps/utils/board-decoder",
     "apps/utils/flowscript-render-data",
     "packages/dexie-tauri-adapter/backend",
 ]
 
 [workspace.dependencies]
-flow-like = { path = "packages/core" }
+flow-like = { path = "packages/core", default-features = false, features = ["flow"] }
 flow-like-ast = { path = "packages/ast" }
-flow-like-types = { path = "packages/types" }
+flow-like-types = { path = "packages/types", default-features = false }
+flow-like-types-contracts = { path = "packages/types/contracts", default-features = false }
+flow-like-types-proto = { path = "packages/types/proto", default-features = false }
 flow-like-api = { path = "packages/api", default-features = false }
+flow-like-api-entity = { path = "packages/api/entity", default-features = false }
+flow-like-core-contracts = { path = "packages/core/contracts", default-features = false }
 flow-like-model-provider = { path = "packages/model-provider" }
-flow-like-bits = { path = "packages/bits" }
-flow-like-catalog = { path = "packages/catalog" }
-flow-like-catalog-core = { path = "packages/catalog/core" }
+flow-like-model-protocol = { path = "packages/model-provider/protocol", default-features = false }
+flow-like-catalog = { path = "packages/catalog", default-features = false }
+flow-like-catalog-core = { path = "packages/catalog/core", default-features = false }
 flow-like-catalog-std = { path = "packages/catalog/std" }
 flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
@@ -90,11 +109,14 @@ flow-like-catalog-geo = { path = "packages/catalog/geo" }
 flow-like-catalog-automation = { path = "packages/catalog/automation" }
 flow-like-catalog-macros = { path = "packages/catalog-macros" }
 flow-like-catalog-build-helper = { path = "packages/catalog-build-helper" }
-flow-like-storage = { path = "packages/storage" }
+flow-like-storage = { path = "packages/storage", default-features = false, features = ["files", "query-parser"] }
+flow-like-storage-contracts = { path = "packages/storage/contracts", default-features = false }
+flow-like-storage-files = { path = "packages/storage/files", default-features = false }
 flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor" }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
+flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = false }
 flow-like-secrets = { path = "packages/secrets" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }
@@ -105,7 +127,7 @@ futures = "0.3.31"
 bytes = "1.10.1"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0.134"
-schemars = {version="1.1.0", features = ["preserve_order"]}
+schemars = { version = "1.1.0", features = ["preserve_order", "chrono04"] }
 chrono = {version="0.4.41", features = ["serde"]}
 chrono-tz = "0.10.4"
 icalendar = "0.17.4"
@@ -166,13 +188,14 @@ tracing-opentelemetry = "0.33"
 ndarray = "0.17"
 dirs-next = "2.0.0"
 regex = "1.11.3"
-rig = { package = "rig-core", version="0.38.2", default-features = false, features = ["rmcp", "rustls"]}
+rig = { package = "rig-core", version="0.38.2", default-features = false, features = ["rustls"]}
 rig-vertexai = { version = "=0.38.2" }
 google-cloud-auth = "1.0"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 rumqttc = "0.25.1"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
 async-trait = "0.1.89"
+sqlparser = "0.59.0"
 jsonschema = "0.33.0"
 rmcp = { version = "=1.7.0", features = ["auth", "client", "client-side-sse", "macros", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 thiserror = "2.0.17"
@@ -193,7 +216,21 @@ sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "47.0.3", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime = { version = "47.0.3", default-features = false, features = [
+    "anyhow",
+    "async",
+    "component-model",
+    "component-model-async",
+    "cranelift",
+    "gc-drc",
+    "parallel-compilation",
+    "pulley",
+    "runtime",
+    "stack-switching",
+    "std",
+    "threads",
+    "wit-parser",
+] }
 wasmtime-wasi = "47.0.3"
 wasmtime-wasi-http = "47.0.3"
 
@@ -204,7 +241,7 @@ esaxx-rs = { git = "https://github.com/Rheosoph/esaxx-rs.git", branch = "main" }
 # Fix erasable's unstable extern type / never type probes on newer stable Rust toolchains.
 erasable = { git = "https://github.com/Rheosoph/pointer-utils.git", rev = "e1c31813a156e656f8d0b2c194410ac7192ffbd4" }
 
-# Use line-tables-only debug info and strip debuginfo to keep .so under 4GB for Android APK ZIP32 limit
+# Keep useful backtraces with much smaller debug data; developer artifacts stay unstripped.
 [profile.dev]
 debug = "line-tables-only"
 incremental = true

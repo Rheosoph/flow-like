@@ -9,8 +9,6 @@ pnpm-debug.log*
 lerna-debug.log*
 .venv
 
-/.cargo/config.toml
-
 api.config.json
 # Deployment-specific cloud build configs (BuildKit secret inputs). Note the
 # tracked repo-root flow-like.config.json is the committed public default that
@@ -69,7 +67,6 @@ next-env.d.ts
 .yarn/install-state.gz
 .env
 .VSCodeCounter
-/.cargo/config.toml
 .codacy/codacy.yaml
 
 # Kubernetes secrets

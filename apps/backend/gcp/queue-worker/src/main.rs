@@ -29,7 +29,7 @@ use flow_like_gcp_data::firestore::FirestoreClient;
 use flow_like_gcp_data::metadata::ensure_no_forbidden_credential_env;
 use flow_like_gcp_data::postgres::{self, IamPostgresConfig};
 use flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder;
-use flow_like_types::dispatch::{CompilationJob, CompilationJobRef};
+use flow_like_types_contracts::dispatch::{CompilationJob, CompilationJobRef};
 use gcs_events::{GcsEvent, GcsEventError};
 use media_transformation::{MediaTransformationContext, MediaTransformationError};
 use push_auth::{PushAuthError, PushTokenVerifier};

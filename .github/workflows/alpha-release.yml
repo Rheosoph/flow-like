@@ -389,7 +389,6 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C link-arg=/STACK:8388608' || '' }}
           CXXFLAGS_x86_64_pc_windows_msvc: ${{ runner.os == 'Windows' && '/std:c++17' || '' }}
         with:
           tagName: beta-v__VERSION__

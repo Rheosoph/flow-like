@@ -1,5 +1,11 @@
-[build]
-rustflags = ["-C", "target-cpu=native"]
+# Opt-in linker experiments for local development.
+#
+# Invoke with:
+#   cargo --config .cargo/fast-compile.toml <command>
+#
+# This file deliberately avoids target-cpu=native: that setting optimizes the
+# produced program rather than rustc itself and fragments caches by CPU model.
+# The base .cargo/config.toml relies on Rust's portable OS defaults.
 
 [net]
 git-fetch-with-cli = true
@@ -11,35 +17,15 @@ protocol = "sparse"
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
-[target.aarch64-apple-ios]
-rustflags = [
-  "-C", "debug-assertions=yes",
-  "-C", "debuginfo=0",
-  "-C", "strip=symbols",
-  "-C", "opt-level=z",
-  "-C", "panic=abort",
-]
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
 
-[target.aarch64-apple-ios-sim]
-rustflags = [
-  "-C", "debug-assertions=yes",
-  "-C", "debuginfo=0",
-  "-C", "strip=symbols",
-  "-C", "opt-level=z",
-  "-C", "panic=abort",
-]
-
-[target.x86_64-apple-ios]
-rustflags = [
-  "-C", "debug-assertions=yes",
-  "-C", "debuginfo=0",
-  "-C", "strip=symbols",
-  "-C", "opt-level=z",
-  "-C", "panic=abort",
-]
+[target.aarch64-pc-windows-msvc]
+linker = "rust-lld.exe"
 
 [unstable]
 min-publish-age = true
