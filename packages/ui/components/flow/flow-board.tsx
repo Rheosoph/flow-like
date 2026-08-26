@@ -43,6 +43,7 @@ import {
 	FlaskConicalIcon,
 	GitBranchIcon,
 	HistoryIcon,
+	HouseIcon,
 	LayoutTemplateIcon,
 	MessageSquareIcon,
 	NotebookPenIcon,
@@ -66,7 +67,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
 	type ComponentProps,
 	type ReactElement,
@@ -119,6 +120,7 @@ import type {
 } from "../../components/flow/flowscript/flowscript-run-lens";
 import { useFlowScriptFiles } from "../../components/flow/flowscript/use-flowscript-files";
 import { MediaNode } from "../../components/flow/media-node";
+import { BoardAccountItem } from "../../components/flow/shell/board-account-item";
 import { BoardActivityRail } from "../../components/flow/shell/board-activity-rail";
 import type { IBoardRailItem } from "../../components/flow/shell/board-activity-rail";
 import { BoardBreadcrumb } from "../../components/flow/shell/board-breadcrumb";
@@ -133,6 +135,7 @@ import {
 	executionModeIcon,
 } from "../../components/flow/shell/board-meta-controls";
 import { BoardMobileHost } from "../../components/flow/shell/board-mobile-host";
+import { BoardNavMenu } from "../../components/flow/shell/board-nav-menu";
 import { BoardPane, BoardPanel } from "../../components/flow/shell/board-panes";
 import { BoardShell } from "../../components/flow/shell/board-shell";
 import {
@@ -188,6 +191,7 @@ import {
 	upsertCommentCommand,
 	upsertVariableCommand,
 } from "../../lib";
+import { ownsWindowChrome } from "../../lib/chrome-route";
 import { getErrorMessage } from "../../lib/error-message";
 import {
 	type LayoutBox,
@@ -273,7 +277,6 @@ import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowPresenceBar } from "./flow-presence-bar";
 import { FlowRuns } from "./flow-runs";
 import { FlowSearch } from "./flow-search";
-import { FlowTests } from "./flow-tests";
 import {
 	type FlowElementOption,
 	createEmptyFlowSelectorData,
@@ -281,6 +284,7 @@ import {
 	indexBitsByRef,
 } from "./flow-selector-data";
 import { FlowTemplateSelector } from "./flow-template-selector";
+import { FlowTests } from "./flow-tests";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
 import { LayerNode } from "./layer-node";
@@ -493,7 +497,26 @@ export function FlowBoard({
 	const hub = useHub();
 	const edgeReconnectSuccessful = useRef(true);
 	const { isOver, setNodeRef, active } = useDroppable({ id: "flow" });
-	const parentRegister = useFlowBoardParentState();
+	// Selector, not the whole store: `boardParents` is one global map, so
+	// registering a parent for any board in any app re-rendered the entire board.
+	const boardParent = useFlowBoardParentState(
+		(state) => state.boardParents[boardId],
+	);
+	// FlowBoard is also embedded — the university lesson workspace mounts it
+	// beside its own reading pane, where the global sidebar is still there and
+	// the host owns navigation. Only the route that unmounts that sidebar may
+	// grow the board's own way out.
+	const ownsWindow = ownsWindowChrome(usePathname());
+	// Where "out" goes when nothing registered a parent — the app's flow list,
+	// which keeps the app context that "/" throws away. Without an app there is
+	// no such list, so fall back to the root.
+	const appHref = useMemo(
+		() => (appId ? `/library/config/flows?id=${appId}` : "/"),
+		[appId],
+	);
+	// Board-owned navigation exists when the board can actually go somewhere:
+	// a registered parent, or the board owning the window and falling back home.
+	const canNavigateOut = Boolean(boardParent) || ownsWindow;
 	// Field selectors: the log store also holds currentLogs/isLoading, which
 	// churn during runs — subscribing to the whole store re-renders the entire
 	// board on every log tick.
@@ -870,20 +893,17 @@ export function FlowBoard({
 		const left: ReactElement[] = [];
 		const right: ReactElement[] = [];
 
-		if (
-			typeof parentRegister.boardParents[boardId] === "string" &&
-			!currentLayer
-		) {
+		if (canNavigateOut) {
 			left.push(
 				<Button
 					variant={"default"}
 					size={"icon"}
-					onClick={async () => {
-						const urlWithQuery = parentRegister.boardParents[boardId];
-						router.push(urlWithQuery);
-					}}
+					aria-label={
+						boardParent ? t("backToApp", "Back to app") : t("home", "Home")
+					}
+					onClick={() => router.push(boardParent ?? appHref)}
 				>
-					<ArrowBigLeftDashIcon />
+					{boardParent ? <ArrowBigLeftDashIcon /> : <HouseIcon />}
 				</Button>,
 			);
 		}
@@ -978,7 +998,9 @@ export function FlowBoard({
 		currentMetadata,
 		currentLayer,
 		insideModule,
-		parentRegister.boardParents,
+		boardParent,
+		appHref,
+		canNavigateOut,
 		boardId,
 		updateHeader,
 		externalAssistant,
@@ -3980,14 +4002,20 @@ export function FlowBoard({
 	const boardCommands = useMemo<IBoardCommand[]>(
 		() => [
 			{
+				// Survives layers and module tabs, and falls back to the app's flow
+				// list. Gating it on a registered parent left every entry point that
+				// is not the flows overview — Spotlight, deeplinks, FlowPilot — with
+				// no exit at all, and the board owns the window there.
+				//
+				// No chord: ⌘B already places a Branch node, and that handler is on
+				// `document`, upstream of this registry's `window` listener, so it
+				// stops propagation before the command could ever see the event.
 				id: "back",
 				surface: "rail",
-				title: t("back", "Back"),
-				icon: ArrowBigLeftDashIcon,
-				when:
-					typeof parentRegister.boardParents[boardId] === "string" &&
-					!currentLayer,
-				run: () => router.push(parentRegister.boardParents[boardId]),
+				title: boardParent ? t("backToApp", "Back to app") : t("home", "Home"),
+				icon: boardParent ? ArrowBigLeftDashIcon : HouseIcon,
+				when: canNavigateOut,
+				run: () => router.push(boardParent ?? appHref),
 			},
 			{
 				id: "explorer",
@@ -4110,7 +4138,8 @@ export function FlowBoard({
 		[
 			t,
 			router,
-			parentRegister.boardParents,
+			boardParent,
+			appHref,
 			boardId,
 			togglePages,
 			toggleVars,
@@ -4523,10 +4552,31 @@ export function FlowBoard({
 			: board.data?.layers[currentLayer]?.name
 		: undefined;
 
+	// Only where the board replaced the global sidebar — embedded hosts still
+	// show theirs, and a second avatar beside it is chrome the board did not
+	// remove. Memoised, or a fresh element every board render would defeat
+	// `BoardActivityRail`'s memo on every canvas drag frame.
+	const railFooter = useMemo(
+		() =>
+			ownsWindow ? (
+				<BoardAccountItem
+					onOpenSettings={() => router.push("/settings")}
+					onOpenNotifications={() => router.push("/notifications")}
+				/>
+			) : undefined,
+		[ownsWindow, router],
+	);
+
 	return (
 		<>
 			<BoardShell
-				rail={<BoardActivityRail top={railItems} bottom={railBottomItems} />}
+				rail={
+					<BoardActivityRail
+						top={railItems}
+						bottom={railBottomItems}
+						footer={railFooter}
+					/>
+				}
 				sidebar={
 					!isMobile && shell.sidebar ? (
 						<BoardPane
@@ -4608,6 +4658,23 @@ export function FlowBoard({
 					<BoardStatusBar
 						left={
 							<>
+								{ownsWindow && (
+									<BoardStatusItem
+										icon={<HouseIcon />}
+										title={t("navigate", "Navigate")}
+										popoverClassName="w-64 p-1"
+										popover={
+											<BoardNavMenu
+												appHref={appHref}
+												boardParent={boardParent}
+												boardId={boardId}
+												onNavigate={(href) => router.push(href)}
+											/>
+										}
+									>
+										{app.data?.name ?? t("home", "Home")}
+									</BoardStatusItem>
+								)}
 								{board.data && (
 									<BoardStatusItem
 										icon={<NotebookPenIcon />}

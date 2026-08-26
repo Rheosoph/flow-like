@@ -117,11 +117,9 @@ pub async fn create_widget_version(
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let mut app = App::load(app_id, flow_like_state.clone()).await?;
 
-    let mut widget = app.open_widget(widget_id.clone(), None).await?;
-    widget.bump_version(version_type);
-    app.save_widget(&widget).await?;
+    let version = app.create_widget_version(&widget_id, version_type).await?;
 
-    Ok(widget.version.unwrap_or((0, 0, 1)))
+    Ok(version)
 }
 
 #[tauri::command(async)]

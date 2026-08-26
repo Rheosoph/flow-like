@@ -245,6 +245,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::widget::get_widget::get_widget,
         crate::routes::app::widget::upsert_widget::upsert_widget,
         crate::routes::app::widget::delete_widget::delete_widget,
+        crate::routes::app::widget::get_widget_versions::get_widget_versions,
+        crate::routes::app::widget::create_widget_version::create_widget_version,
         // Template routes
         crate::routes::app::template::get_templates::get_templates,
         crate::routes::app::template::get_template::get_template,
@@ -717,6 +719,7 @@ impl Modify for SecurityAddon {
         // Widgets
         crate::routes::app::widget::get_widget::VersionQuery,
         crate::routes::app::widget::upsert_widget::WidgetUpsert,
+        crate::routes::app::widget::create_widget_version::CreateWidgetVersion,
         // Templates
         crate::routes::app::template::get_template::VersionQuery,
         crate::routes::app::template::get_template_preview::TemplatePreview,

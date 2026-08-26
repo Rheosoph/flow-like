@@ -1021,6 +1021,47 @@ impl App {
         Ok(())
     }
 
+    /// Publish an immutable snapshot of a widget and advance its working copy.
+    ///
+    /// The snapshot is what `open_widget(id, Some(version))` reads back and what
+    /// `get_widget_versions` lists, so bumping the working copy alone leaves the
+    /// version history permanently empty. It is written before the working copy
+    /// is advanced: an interrupted publish then leaves an unreferenced snapshot
+    /// that the next attempt rewrites, rather than a version number no snapshot
+    /// backs. The dash separator is the one `open_widget` reads and
+    /// `get_widget_versions` parses — boards use underscores.
+    pub async fn create_widget_version(
+        &mut self,
+        widget_id: &str,
+        version_type: crate::a2ui::widget::VersionType,
+    ) -> flow_like_types::Result<(u32, u32, u32)> {
+        let state = self
+            .app_state
+            .clone()
+            .ok_or(flow_like_types::anyhow!("App state not found"))?;
+        let store = FlowLikeState::project_meta_store(&state)
+            .await?
+            .as_generic();
+
+        let mut widget = self.open_widget(widget_id.to_string(), None).await?;
+        widget.bump_version(version_type);
+        let version = widget
+            .version
+            .ok_or(flow_like_types::anyhow!("Widget version missing after bump"))?;
+
+        let version_path = Path::from("apps")
+            .child(self.id.clone())
+            .child("widgets")
+            .child("versions")
+            .child(widget_id.to_string())
+            .child(format!("{}-{}-{}.widget", version.0, version.1, version.2));
+        compress_to_file_json(store, version_path, &widget).await?;
+
+        self.save_widget(&widget).await?;
+
+        Ok(version)
+    }
+
     /// Get all versions of a widget
     pub async fn get_widget_versions(
         &self,
@@ -1315,6 +1356,67 @@ mod tests {
         let deser = super::App::from_proto(flow_like_types::proto::App::decode(&buf[..]).unwrap());
 
         assert_eq!(app.id, deser.id);
+    }
+
+    #[tokio::test]
+    async fn create_widget_version_writes_a_readable_snapshot() {
+        use crate::a2ui::widget::{VersionType, Widget};
+
+        let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = super::App::new(
+            Some("widget-version-test-app".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .expect("test app should be created");
+
+        let mut widget = Widget::new("widget-1", "Widget One", "root");
+        widget.version = Some((0, 0, 1));
+        app.save_widget(&widget).await.expect("widget should save");
+
+        let first = app
+            .create_widget_version("widget-1", VersionType::Patch)
+            .await
+            .expect("first version should publish");
+        let second = app
+            .create_widget_version("widget-1", VersionType::Minor)
+            .await
+            .expect("second version should publish");
+
+        assert_eq!(first, (0, 0, 2));
+        assert_eq!(second, (0, 1, 0));
+
+        let versions = app
+            .get_widget_versions("widget-1")
+            .await
+            .expect("versions should list");
+        assert_eq!(
+            versions,
+            vec![(0, 1, 0), (0, 0, 2)],
+            "published snapshots must be listed newest first"
+        );
+
+        let snapshot = app
+            .open_widget("widget-1".to_string(), Some(first))
+            .await
+            .expect("a published snapshot must be readable back");
+        assert_eq!(snapshot.version, Some(first));
+
+        let working = app
+            .open_widget("widget-1".to_string(), None)
+            .await
+            .expect("the working copy must still exist");
+        assert_eq!(
+            working.version,
+            Some(second),
+            "publishing must advance the working copy"
+        );
     }
 
     #[tokio::test]

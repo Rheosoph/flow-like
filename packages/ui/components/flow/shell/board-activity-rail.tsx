@@ -79,19 +79,37 @@ const RailButton = memo(function RailButton({
 export const BoardActivityRail = memo(function BoardActivityRail({
 	top,
 	bottom,
-}: Readonly<{ top: IBoardRailItem[]; bottom: IBoardRailItem[] }>) {
+	footer,
+}: Readonly<{
+	top: IBoardRailItem[];
+	bottom: IBoardRailItem[];
+	/**
+	 * Pinned below the bottom commands. Holds what the rail cannot express as a
+	 * command — the account avatar, whose icon is an image rather than a
+	 * `LucideIcon`.
+	 */
+	footer?: ReactNode;
+}>) {
 	return (
 		<nav
 			aria-label="Board surfaces"
 			className="flex w-11 shrink-0 flex-col items-center border-r bg-muted/20 py-1"
 		>
-			{top.map((item) => (
-				<RailButton key={item.id} item={item} />
-			))}
-			<span className="flex-1" />
+			{/* Only the view list scrolls. A short viewport must not be able to push
+			    the account or the pinned commands off the bottom of the window. */}
+			<div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto no-scrollbar">
+				{top.map((item) => (
+					<RailButton key={item.id} item={item} />
+				))}
+			</div>
 			{bottom.map((item) => (
 				<RailButton key={item.id} item={item} />
 			))}
+			{footer && (
+				<div className="mt-1 flex w-full shrink-0 flex-col items-center border-t pt-1">
+					{footer}
+				</div>
+			)}
 		</nav>
 	);
 });

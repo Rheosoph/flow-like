@@ -109,7 +109,18 @@ export default function WidgetEditorPage() {
 					version,
 				);
 				setWidget(loadedWidget);
-			} catch {
+			} catch (error) {
+				// Only an unversioned miss means "this widget does not exist yet".
+				// Fabricating a blank widget for a failed snapshot read would let
+				// autosave write it over the real working copy.
+				if (version) {
+					console.error("Failed to load widget version", error);
+					toast.error(
+						t("failedToLoadWidgetVersion", "Failed to load widget version"),
+					);
+					setWidget(null);
+					return;
+				}
 				const newWidget: IWidget = {
 					id: widgetId,
 					name: t("newWidget", "New Widget"),
@@ -139,9 +150,14 @@ export default function WidgetEditorPage() {
 		};
 	}, []);
 
+	// A pinned version is an immutable snapshot. Every save here targets the
+	// working copy, so writing while one is displayed would put the old
+	// snapshot's contents over the current widget.
+	const readOnly = typeof version !== "undefined";
+
 	const performSave = useCallback(
 		async (components: SurfaceComponent[]) => {
-			if (!widget || !appId) return;
+			if (!widget || !appId || readOnly) return;
 
 			setIsSaving(true);
 			try {
@@ -160,7 +176,7 @@ export default function WidgetEditorPage() {
 				setIsSaving(false);
 			}
 		},
-		[widget, appId, backend.widgetState],
+		[widget, appId, backend.widgetState, readOnly],
 	);
 
 	// Manual save handler
@@ -180,7 +196,7 @@ export default function WidgetEditorPage() {
 	// Auto-save on change with debouncing
 	const handleChange = useCallback(
 		(components: SurfaceComponent[]) => {
-			if (!widget || !appId) return;
+			if (!widget || !appId || readOnly) return;
 
 			setHasUnsavedChanges(true);
 			pendingComponentsRef.current = components;
@@ -201,7 +217,7 @@ export default function WidgetEditorPage() {
 				}
 			}, 1500);
 		},
-		[widget, appId, performSave],
+		[widget, appId, performSave, readOnly],
 	);
 
 	const updateWidgetProperty = useCallback(
@@ -257,6 +273,17 @@ export default function WidgetEditorPage() {
 	const handleCreateVersion = useCallback(
 		async (versionType: VersionType) => {
 			if (!widget || !appId) return;
+			// Publishing always snapshots the working copy, and the pre-save below
+			// would push the displayed snapshot into it.
+			if (readOnly) {
+				toast.error(
+					t(
+						"switchToLatestToCreateAVersion",
+						"Switch to Latest to create a version",
+					),
+				);
+				return;
+			}
 
 			setIsCreatingVersion(true);
 			try {
@@ -284,11 +311,12 @@ export default function WidgetEditorPage() {
 				versions.refetch();
 			} catch (error) {
 				console.error("Failed to create version:", error);
+				toast.error(t("failedToCreateVersion", "Failed to create version"));
 			} finally {
 				setIsCreatingVersion(false);
 			}
 		},
-		[widget, appId, widgetId, backend.widgetState, versions],
+		[widget, appId, widgetId, backend.widgetState, versions, readOnly, t],
 	);
 
 	const handleSwitchVersion = useCallback(
@@ -350,6 +378,11 @@ export default function WidgetEditorPage() {
 					{widget.version && (
 						<Badge variant="secondary">
 							v{widget.version[0]}.{widget.version[1]}.{widget.version[2]}
+						</Badge>
+					)}
+					{readOnly && (
+						<Badge variant="outline">
+							{t("readOnlyVersion", "Read-only version")}
 						</Badge>
 					)}
 				</div>
