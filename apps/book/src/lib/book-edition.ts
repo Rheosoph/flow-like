@@ -147,6 +147,11 @@ export const CURRENT_BOOK_EDITION = {
 					entryId: "part-3/14-board-ast-text",
 					anchor: "chapter-14",
 				},
+				{
+					number: 15,
+					entryId: "part-3/15-identity-anchors-safe-change",
+					anchor: "chapter-15",
+				},
 			],
 		},
 	],

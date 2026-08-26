@@ -88,6 +88,16 @@ two independently persisted programs, and do not describe FlowScript as a separa
 - Board reroutes lower transparently and decorative Board comments are not source comments.
   Existing anchored Function signatures are currently immutable through reconciliation. A known
   ignored whole-fixture round-trip test also covers duplicated/cross-handler name collapse.
+- Anchored variables, Events, and modules have verified in-place rename paths. An anchored
+  Function can move between modules under the same layer ID, but a true Function name change is
+  currently rejected even though in-place rename is the intended identity rule. The Board's
+  Function editor can rename that layer through its own command path.
+- Selection-scoped editing is user-facing in Web and Desktop. The render expands selected nodes to
+  their owning sections and transitively referenced Functions, retains variables and interfaces,
+  and returns section anchors that limit the deletion diff on Apply.
+- FlowScript reconciliation does not currently emit a complete Function or module layer-removal
+  plan when its declaration is omitted. Do not teach declaration omission as boundary deletion.
+  Use a text-visible node removal for deletion-guard examples.
 
 Pre-publication verification should exercise array destructuring, complex union/intersection
 schemas, explicit multi-execution outputs, large layers, reroute presentation, layout

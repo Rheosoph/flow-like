@@ -783,7 +783,8 @@ destructive intent explicit.
 ### 15.1 Identity is not the same as spelling
 
 Show why renaming a local variable or call display must not accidentally replace the wrong
-node, function layer, or event entry.
+node, function layer, or event entry. State the current gap: an anchored Function name should be
+renamable in place, but FlowScript still rejects that edit while the Board editor can perform it.
 
 ### 15.2 `//@n`, `//@v`, and `//@l`
 
@@ -801,8 +802,9 @@ Distinguish safe canonical corrections from ambiguous changes that fail closed.
 
 ### 15.5 Deletions require explicit intent
 
-Walk through a missing anchor, the blocked apply, the destructive command preview, and the
-separate approval to proceed.
+Remove one node anchor from an otherwise unchanged Incident Desk call. Walk through the proposed
+replacement and removal, the blocked Apply, the destructive command preview, and the separate
+approval to proceed.
 
 ### 15.6 One atomic, undoable change
 
@@ -815,8 +817,9 @@ Show how selected event/function sections and their transitive dependencies can 
 without treating the unseen remainder as deleted.
 
 **Evidence:** SRC-RECONCILER, SRC-APPLY, and SRC-EDITOR.
-**Interview dependency:** INT-04 should give examples of the failures this safety model was
-designed to prevent.
+**Interview dependency:** Resolved in the Chapter 15 follow-up to INT-04. No historical failure
+was supplied, so the chapter uses a clearly labeled safety drill and treats AI as one editor among
+people and tools.
 
 ## Chapter 16 — The Dual-View Editor and Language Tools
 

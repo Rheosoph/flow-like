@@ -337,8 +337,10 @@ lifetime, and App scope. A structured form sets namespace, TTL, and App or user 
 skips the body, including side effects, so use it only when inputs determine the output.
 
 Function anchors use `//@l:` because the layer holds the durable identity. Inner nodes use
-`//@n:`. Preserving the layer anchor during a rename updates one callable entity; copying without
-it creates a new plan.
+`//@n:`. The layer anchor is intended to preserve one callable entity through a rename. Current
+FlowScript reconciliation still blocks a true anchored Function name change, so rename the
+Function from the Board and re-render source for now. Copying without the anchor creates a new
+plan.
 
 ## 6.6 Events
 

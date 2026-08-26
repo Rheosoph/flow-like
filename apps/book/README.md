@@ -40,7 +40,7 @@ Both deploy scripts run the full release build before Wrangler, so the hosted
 The browser preview at `/print/` is intentionally light-only so it matches the printable
 artifact rather than the dark documentation UI.
 
-The published manuscript lives in `src/content/docs`. The introduction and first fourteen
+The published manuscript lives in `src/content/docs`. The introduction and first fifteen
 chapters are drafted; the complete editorial plan and interview dependencies remain beside
 the app.
 
