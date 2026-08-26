@@ -1,6 +1,7 @@
 import { getCollection } from "astro:content";
 import type { APIRoute, GetStaticPaths } from "astro";
 import sharp from "sharp";
+import flowLikeIcon from "../../../../web/public/favicon.svg?raw";
 import { CURRENT_BOOK_EDITION } from "../../lib/book-edition";
 import { normalizeBookEntryId, resolveBookSeo } from "../../lib/seo";
 
@@ -77,6 +78,10 @@ function cardEyebrow(entryId: string): string {
 
 function renderCardSvg(props: SocialCardProps): string {
 	const lines = wrapTitle(props.title.replace(/\s+\|\s+FlowBook$/, ""));
+	const brandIcon = flowLikeIcon.replace(
+		/^<svg\b[^>]*>/,
+		'<svg x="86" y="64" width="72" height="72" viewBox="0 0 1024 1024" fill="none">',
+	);
 	const fontSize = lines.length >= 3 ? 55 : 64;
 	const lineHeight = lines.length >= 3 ? 66 : 76;
 	const titleStart = lines.length >= 3 ? 225 : 248;
@@ -124,10 +129,8 @@ function renderCardSvg(props: SocialCardProps): string {
 			<circle cx="1080" cy="50" r="240" fill="none" stroke="url(#accent)" stroke-width="52" opacity=".13"/>
 			<circle cx="1160" cy="-24" r="154" fill="none" stroke="url(#accent)" stroke-width="24" opacity=".2"/>
 			<rect x="0" y="0" width="12" height="630" fill="url(#accent)"/>
-			<g transform="translate(86 67)">
-				<path d="M0 28c14-24 32-24 46-24h30c16 0 26 12 26 26S92 56 76 56H51c-16 0-29 8-38 23" fill="none" stroke="url(#accent)" stroke-width="11" stroke-linecap="round"/>
-				<text x="126" y="49" class="brand">FlowBook</text>
-			</g>
+			${brandIcon}
+			<text x="178" y="113" class="brand">FlowBook</text>
 			<text x="86" y="153" class="eyebrow">${escapeXml(props.eyebrow)}</text>
 			${titleMarkup}
 			<line x1="86" y1="486" x2="1114" y2="486" stroke="#ffffff" stroke-opacity=".13"/>
