@@ -54,8 +54,9 @@ export async function createRealtimeSession(args: {
 		existing.refCount++;
 
 		const awareness = existing.provider.awareness;
+		// Shared with a still-mounted consumer: identity may be (re)asserted,
+		// but its live selection broadcast is not ours to reset.
 		awareness.setLocalStateField("sub", sub);
-		awareness.setLocalStateField("selection", { nodes: [] });
 
 		const dispose = () => {
 			existing.refCount--;
@@ -78,9 +79,14 @@ export async function createRealtimeSession(args: {
 
 		const reconnect = async () => {
 			if (onStatusChange) onStatusChange("reconnecting");
-			// Provider should auto-reconnect, just reset awareness state
-			awareness.setLocalStateField("sub", sub);
-			if (onStatusChange) onStatusChange("connected");
+			try {
+				existing.provider.disconnect();
+				existing.provider.connect();
+				awareness.setLocalStateField("sub", sub);
+			} catch (e) {
+				console.error("[WebRTC] Reconnection failed:", e);
+				if (onStatusChange) onStatusChange("disconnected");
+			}
 		};
 
 		return {
@@ -199,19 +205,21 @@ export async function createRealtimeSession(args: {
 
 	const reconnect = async () => {
 		if (onStatusChange) onStatusChange("reconnecting");
-
 		try {
-			// Reinitialize awareness state
+			// Actually drive the transport: drop the signaling sockets and the
+			// room, then rejoin. Awareness fields survive (the local state is
+			// re-announced on join), so peers keep the clicker's selection.
+			provider.disconnect();
+			provider.connect();
 			awareness.setLocalStateField("sub", sub);
-			awareness.setLocalStateField("selection", { nodes: [] });
-			awareness.setLocalStateField("cursor", undefined);
-
-			// Trigger awareness update to broadcast to peers
 			awareness.setLocalStateField("reconnected", Date.now());
-
-			if (onStatusChange) onStatusChange("connected");
+			// The status is whatever the sockets say once they settle — never
+			// asserted here.
+			lastStatus = undefined;
+			setTimeout(checkConnectionStatus, 1000);
 		} catch (e) {
-			console.error(`[WebRTC] Reconnection failed:`, e);
+			console.error("[WebRTC] Reconnection failed:", e);
+			lastStatus = "disconnected";
 			if (onStatusChange) onStatusChange("disconnected");
 		}
 	};

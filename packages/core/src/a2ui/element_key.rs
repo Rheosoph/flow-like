@@ -66,7 +66,10 @@ mod tests {
 
     #[test]
     fn exact_key_wins() {
-        let map = elements(&[("page-a/progress", "progress"), ("page-b/progress", "progress")]);
+        let map = elements(&[
+            ("page-a/progress", "progress"),
+            ("page-b/progress", "progress"),
+        ]);
         assert_eq!(
             resolve_element_key(&map, "page-b/progress").map(String::as_str),
             Some("page-b/progress")

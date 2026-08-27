@@ -2,6 +2,35 @@ import { applyA2UIMessage } from "./apply-a2ui-message";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
 /**
+ * Find the surface addressed by an element reference. A scoped reference can
+ * name the surface itself or a widget instance hosted by that surface.
+ */
+export function resolveElementUpdateSurfaceId(
+	surfaces: Map<string, Surface>,
+	elementId: string,
+): string | undefined {
+	if (!elementId.includes("/")) return surfaces.keys().next().value;
+
+	const prefix = elementId.slice(0, elementId.indexOf("/"));
+	if (surfaces.has(prefix)) return prefix;
+
+	for (const [surfaceId, surface] of surfaces) {
+		for (const component of Object.values(surface.components)) {
+			const data = component.component as unknown as Record<string, unknown>;
+			if (
+				(data.type === "widgetInstance" ||
+					data.type === "microWidgetInstance") &&
+				data.instanceId === prefix
+			) {
+				return surfaceId;
+			}
+		}
+	}
+
+	return undefined;
+}
+
+/**
  * Pure reducer that folds one a2ui server message into a surface map — the map-level subset of
  * {@link useSurfaceManager}'s `handleServerMessage` (create on `beginRendering`, delete on
  * `deleteSurface`, everything else delegated to {@link applyA2UIMessage}), without the
@@ -36,12 +65,7 @@ export function foldA2UIServerMessage(
 			break;
 		}
 		case "upsertElement": {
-			// Resolve the multi-surface fallback (first key) before delegating, matching the live
-			// surface manager — applyA2UIMessage falls back to whichever surface it is handed.
-			const { element_id } = message;
-			const surfaceId = element_id.includes("/")
-				? element_id.split("/", 2)[0]
-				: Array.from(next.keys())[0];
+			const surfaceId = resolveElementUpdateSurfaceId(next, message.element_id);
 			if (!surfaceId) break;
 			const existing = next.get(surfaceId);
 			if (!existing) break;

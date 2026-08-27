@@ -7,11 +7,9 @@ description = "Flow-Like GCP synchronous HTTP executor (Cloud Run service, serve
 [dependencies]
 axum.workspace = true
 base64.workspace = true
-# The feature set is the Azure/GCP queue-worker's, not the Kubernetes
-# executor's `all-execute` + `local-ml`. `local-ml` compiles the ONNX runtime
-# and local model weights into the image; on Azure and GCP every ML node reaches
-# a remote endpoint (`remote-ml`), and the supply-chain posture of both ports is
-# that no inference runtime ships in a serving image.
+# The remote-only server bundle matches the Azure and GCP queue workers. It
+# excludes ONNX metadata, ONNX Runtime and local model weights. Remote-capable
+# text model nodes reach the authenticated API proxy.
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-executor = { workspace = true, features = ["server"] }
 # Only `metadata::ensure_no_forbidden_credential_env` is used. The executor

@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
+import { resolveElementUpdateSurfaceId } from "./fold-surfaces";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -89,12 +90,10 @@ export function useSurfaceManager() {
 					break;
 				}
 				case "upsertElement": {
-					// Resolve the multi-surface fallback (first key) before delegating,
-					// since applyA2UIMessage falls back to the surface it is handed.
-					const { element_id } = message;
-					const surfaceId = element_id.includes("/")
-						? element_id.split("/", 2)[0]
-						: Array.from(next.keys())[0];
+					const surfaceId = resolveElementUpdateSurfaceId(
+						next,
+						message.element_id,
+					);
 					if (!surfaceId) break;
 					const existing = next.get(surfaceId);
 					if (!existing) break;

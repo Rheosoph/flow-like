@@ -15,11 +15,10 @@ import {
 	IValueType,
 	IVariableType,
 } from "../../../lib/schema/flow/pin";
-import { registerFlowScriptFeatureProviders } from "./flowscript-language-features";
-import {
-	type CancellationTokenLike,
-	requestFlowScriptWorkerEnvDoc,
-} from "./flowscript-worker-client";
+import type {
+	CancellationTokenLike,
+	FlowScriptWorkerRequests,
+} from "./flowscript-worker-contract";
 
 export type { FlowScriptBoardScope };
 
@@ -2963,12 +2962,13 @@ function methodItems(
 function withEnvDoc<T>(
 	model: { uri: unknown; getValue: () => string; getVersionId?: () => number },
 	getCatalogNodes: () => INode[] | undefined,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestEnvDoc">,
 	token: CancellationTokenLike | undefined,
 	compute: (envDoc: FlowScriptEnvDoc, index: FlowScriptIndex) => T,
 ): T | Promise<T | null> {
 	const nodes = getCatalogNodes();
 	const index = getFlowScriptIndex(nodes);
-	const viaWorker = requestFlowScriptWorkerEnvDoc(model, nodes, token);
+	const viaWorker = workerRequests.requestEnvDoc(model, nodes, token);
 	if (!viaWorker)
 		return compute(getFlowScriptEnvDoc(model.getValue(), index), index);
 	return viaWorker.then((outcome) => {
@@ -2982,168 +2982,158 @@ function withEnvDoc<T>(
 }
 
 /**
- * Registers every FlowScript language provider: completion, hover and signature help here,
- * plus the analysis-backed features (code actions, auto-import, outline, folding, snippets,
- * inlay hints, definition/references, semantic tokens, rename) from the sibling module —
- * all backed by the live catalog. Returns a single disposable that tears every provider down.
+ * Registers the completion, hover and signature-help providers backed by the live catalog.
+ * The main-thread provider facade composes these with the structural feature providers.
  */
-export function registerFlowScriptProviders(
+export function registerFlowScriptCoreProviders(
 	monaco: Monaco,
 	getCatalogNodes: () => INode[] | undefined,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestEnvDoc">,
 ): { dispose: () => void } {
 	const completion = monaco.languages.registerCompletionItemProvider(
 		FLOWSCRIPT_LANGUAGE_ID,
 		{
 			triggerCharacters: [".", ":", "{", ",", " ", "@"],
 			provideCompletionItems: (model, position, _context, token) =>
-				withEnvDoc(model, getCatalogNodes, token, (envDoc, index) => {
-					const word = model.getWordUntilPosition(position);
-					const range = {
-						startLineNumber: position.lineNumber,
-						endLineNumber: position.lineNumber,
-						startColumn: word.startColumn,
-						endColumn: word.endColumn,
-					};
+				withEnvDoc(
+					model,
+					getCatalogNodes,
+					workerRequests,
+					token,
+					(envDoc, index) => {
+						const word = model.getWordUntilPosition(position);
+						const range = {
+							startLineNumber: position.lineNumber,
+							endLineNumber: position.lineNumber,
+							startColumn: word.startColumn,
+							endColumn: word.endColumn,
+						};
 
-					const maskedFull = envDoc.masked;
-					const offset = model.getOffsetAt(position);
-					const maskedBefore = maskedFull.slice(0, offset);
-					const decoratorToken = /@[A-Za-z_]*$/.exec(maskedBefore);
-					if (decoratorToken) {
-						const decoratorRange = {
-							...range,
-							startColumn: position.column - decoratorToken[0].length,
-						};
-						return {
-							suggestions: [
-								{
-									label: "@cache",
-									kind: monaco.languages.CompletionItemKind.Keyword,
-									detail: "Enable function result caching with defaults",
-									documentation: { value: CACHE_DECORATOR_MARKDOWN },
-									insertText: "@cache",
-									range: decoratorRange,
-									sortText: "0_cache_bare",
-								},
-								{
-									label: "@cache({ … })",
-									kind: monaco.languages.CompletionItemKind.Keyword,
-									detail: "Configure function result caching",
-									documentation: { value: CACHE_DECORATOR_MARKDOWN },
-									insertText:
-										'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
-									insertTextRules:
-										monaco.languages.CompletionItemInsertTextRule
-											.InsertAsSnippet,
-									range: decoratorRange,
-									sortText: "0_cache_configured",
-								},
-								{
-									label: "@parallel",
-									kind: monaco.languages.CompletionItemKind.Keyword,
-									detail: "Run the following for…of loop body in parallel",
-									insertText: "@parallel",
-									range: decoratorRange,
-									sortText: "1_parallel",
-								},
-							],
-						};
-					}
-
-					const cacheContext = analyzeCacheDecoratorContext(maskedBefore);
-					if (cacheContext?.mode === "value") {
-						if (cacheContext.activeField !== "scope") {
-							return { suggestions: [] };
-						}
-						const quotedValue = /"[^"\n]*$/.exec(envDoc.text.slice(0, offset));
-						const scopeRange = quotedValue
-							? {
-									...range,
-									startColumn: position.column - quotedValue[0].length,
-								}
-							: range;
-						return {
-							suggestions: ["app", "user"].map((scope) => ({
-								label: `"${scope}"`,
-								kind: monaco.languages.CompletionItemKind.EnumMember,
-								detail:
-									scope === "app"
-										? "Shared across the app"
-										: "Isolated by triggering user",
-								insertText: `"${scope}"`,
-								range: scopeRange,
-								sortText: `0_${scope}`,
-							})),
-						};
-					}
-					if (cacheContext?.mode === "key") {
-						const present = new Set(cacheContext.existingKeys);
-						const fields = [
-							{
-								name: "namespace",
-								detail: "string (optional)",
-								insertText: 'namespace: "${1:global}"',
-							},
-							{
-								name: "ttlSeconds",
-								detail: "non-negative integer (optional)",
-								insertText: "ttlSeconds: ${1:300}",
-							},
-							{
-								name: "scope",
-								detail: '"app" | "user" (optional)',
-								insertText: 'scope: "${1|app,user|}"',
-							},
-						];
-						return {
-							suggestions: fields
-								.filter((field) => !present.has(field.name))
-								.map((field) => ({
-									label: field.name,
-									kind: monaco.languages.CompletionItemKind.Field,
-									detail: field.detail,
-									documentation: {
-										value: CACHE_FIELD_MARKDOWN[field.name],
+						const maskedFull = envDoc.masked;
+						const offset = model.getOffsetAt(position);
+						const maskedBefore = maskedFull.slice(0, offset);
+						const decoratorToken = /@[A-Za-z_]*$/.exec(maskedBefore);
+						if (decoratorToken) {
+							const decoratorRange = {
+								...range,
+								startColumn: position.column - decoratorToken[0].length,
+							};
+							return {
+								suggestions: [
+									{
+										label: "@cache",
+										kind: monaco.languages.CompletionItemKind.Keyword,
+										detail: "Enable function result caching with defaults",
+										documentation: { value: CACHE_DECORATOR_MARKDOWN },
+										insertText: "@cache",
+										range: decoratorRange,
+										sortText: "0_cache_bare",
 									},
-									insertText: field.insertText,
-									insertTextRules:
-										monaco.languages.CompletionItemInsertTextRule
-											.InsertAsSnippet,
-									range,
-									sortText: `0_${field.name}`,
+									{
+										label: "@cache({ … })",
+										kind: monaco.languages.CompletionItemKind.Keyword,
+										detail: "Configure function result caching",
+										documentation: { value: CACHE_DECORATOR_MARKDOWN },
+										insertText:
+											'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
+										insertTextRules:
+											monaco.languages.CompletionItemInsertTextRule
+												.InsertAsSnippet,
+										range: decoratorRange,
+										sortText: "0_cache_configured",
+									},
+									{
+										label: "@parallel",
+										kind: monaco.languages.CompletionItemKind.Keyword,
+										detail: "Run the following for…of loop body in parallel",
+										insertText: "@parallel",
+										range: decoratorRange,
+										sortText: "1_parallel",
+									},
+								],
+							};
+						}
+
+						const cacheContext = analyzeCacheDecoratorContext(maskedBefore);
+						if (cacheContext?.mode === "value") {
+							if (cacheContext.activeField !== "scope") {
+								return { suggestions: [] };
+							}
+							const quotedValue = /"[^"\n]*$/.exec(
+								envDoc.text.slice(0, offset),
+							);
+							const scopeRange = quotedValue
+								? {
+										...range,
+										startColumn: position.column - quotedValue[0].length,
+									}
+								: range;
+							return {
+								suggestions: ["app", "user"].map((scope) => ({
+									label: `"${scope}"`,
+									kind: monaco.languages.CompletionItemKind.EnumMember,
+									detail:
+										scope === "app"
+											? "Shared across the app"
+											: "Isolated by triggering user",
+									insertText: `"${scope}"`,
+									range: scopeRange,
+									sortText: `0_${scope}`,
 								})),
-						};
-					}
+							};
+						}
+						if (cacheContext?.mode === "key") {
+							const present = new Set(cacheContext.existingKeys);
+							const fields = [
+								{
+									name: "namespace",
+									detail: "string (optional)",
+									insertText: 'namespace: "${1:global}"',
+								},
+								{
+									name: "ttlSeconds",
+									detail: "non-negative integer (optional)",
+									insertText: "ttlSeconds: ${1:300}",
+								},
+								{
+									name: "scope",
+									detail: '"app" | "user" (optional)',
+									insertText: 'scope: "${1|app,user|}"',
+								},
+							];
+							return {
+								suggestions: fields
+									.filter((field) => !present.has(field.name))
+									.map((field) => ({
+										label: field.name,
+										kind: monaco.languages.CompletionItemKind.Field,
+										detail: field.detail,
+										documentation: {
+											value: CACHE_FIELD_MARKDOWN[field.name],
+										},
+										insertText: field.insertText,
+										insertTextRules:
+											monaco.languages.CompletionItemInsertTextRule
+												.InsertAsSnippet,
+										range,
+										sortText: `0_${field.name}`,
+									})),
+							};
+						}
 
-					const env = envDoc.env;
-					const beforeWord = stripTrailingWord(maskedBefore).trimEnd();
+						const env = envDoc.env;
+						const beforeWord = stripTrailingWord(maskedBefore).trimEnd();
 
-					// Path position (`string::`, `ai::ml::`) → members and nested namespaces.
-					if (beforeWord.endsWith("::")) {
-						const pathMatch = new RegExp(`((?:${IDENT_SRC}\\s*::\\s*)+)$`).exec(
-							beforeWord,
-						);
-						const segments = pathMatch
-							? pathMatch[1].split(PATH_SPLIT_RE).filter(Boolean)
-							: [];
-						const ns = env.index.namespaces.get(
-							namespaceKey(expandPath(segments, env.scope)),
-						);
-						return {
-							suggestions: (ns
-								? namespaceMemberItems(monaco, ns, range)
-								: []) as never[],
-						};
-					}
-
-					// Dot notation → members (output pins / struct fields, following bindings and
-					// nested $refs) plus the methods callable on the receiver's class.
-					if (beforeWord.endsWith(".")) {
-						const receiverExpr = extractTrailingExpr(beforeWord.slice(0, -1));
-						const receiver = evaluateExpr(receiverExpr, env);
-						if (receiver.namespace) {
+						// Path position (`string::`, `ai::ml::`) → members and nested namespaces.
+						if (beforeWord.endsWith("::")) {
+							const pathMatch = new RegExp(
+								`((?:${IDENT_SRC}\\s*::\\s*)+)$`,
+							).exec(beforeWord);
+							const segments = pathMatch
+								? pathMatch[1].split(PATH_SPLIT_RE).filter(Boolean)
+								: [];
 							const ns = env.index.namespaces.get(
-								namespaceKey(receiver.namespace),
+								namespaceKey(expandPath(segments, env.scope)),
 							);
 							return {
 								suggestions: (ns
@@ -3151,159 +3141,177 @@ export function registerFlowScriptProviders(
 									: []) as never[],
 							};
 						}
-						const members: {
-							name: string;
-							typeString: string;
-							description: string;
-						}[] = [];
-						if (receiver.node && receiver.node.outputs.length > 1)
-							members.push(
-								...sourceMembers({ kind: "node", info: receiver.node }),
-							);
-						if (receiver.source?.kind === "struct")
-							members.push(...sourceMembers(receiver.source));
-						const memberNames = new Set(members.map((member) => member.name));
-						const suggestions: unknown[] = members.map((member) => ({
-							label: member.name,
-							kind: monaco.languages.CompletionItemKind.Property,
-							detail: member.typeString,
-							documentation: member.description
-								? { value: member.description }
-								: undefined,
-							insertText: member.name,
-							range,
-							sortText: `0_${member.name}`,
-						}));
-						if (receiver.value?.isArray && !memberNames.has("length")) {
-							memberNames.add("length");
-							suggestions.push({
-								label: "length",
+
+						// Dot notation → members (output pins / struct fields, following bindings and
+						// nested $refs) plus the methods callable on the receiver's class.
+						if (beforeWord.endsWith(".")) {
+							const receiverExpr = extractTrailingExpr(beforeWord.slice(0, -1));
+							const receiver = evaluateExpr(receiverExpr, env);
+							if (receiver.namespace) {
+								const ns = env.index.namespaces.get(
+									namespaceKey(receiver.namespace),
+								);
+								return {
+									suggestions: (ns
+										? namespaceMemberItems(monaco, ns, range)
+										: []) as never[],
+								};
+							}
+							const members: {
+								name: string;
+								typeString: string;
+								description: string;
+							}[] = [];
+							if (receiver.node && receiver.node.outputs.length > 1)
+								members.push(
+									...sourceMembers({ kind: "node", info: receiver.node }),
+								);
+							if (receiver.source?.kind === "struct")
+								members.push(...sourceMembers(receiver.source));
+							const memberNames = new Set(members.map((member) => member.name));
+							const suggestions: unknown[] = members.map((member) => ({
+								label: member.name,
 								kind: monaco.languages.CompletionItemKind.Property,
-								detail: "int",
-								insertText: "length",
+								detail: member.typeString,
+								documentation: member.description
+									? { value: member.description }
+									: undefined,
+								insertText: member.name,
 								range,
-								sortText: "0_length",
-							});
-						}
-						suggestions.push(
-							...methodItems(
-								monaco,
-								classOfValue(receiver.value),
-								env,
-								range,
-								memberNames,
-							),
-						);
-						return { suggestions: suggestions as never[] };
-					}
-
-					const context = analyzeContext(maskedBefore, env);
-
-					// Enum argument value → offer the allowed literals only.
-					if (context?.info) {
-						const activeArg =
-							context.mode === "value" && context.activeArg
-								? context.info.args.find(
-										(candidate) => candidate.name === context.activeArg,
-									)
-								: context.mode === "positional"
-									? context.params[0]
-									: undefined;
-						if (activeArg?.enumValues && activeArg.enumValues.length > 0) {
-							return {
-								suggestions: activeArg.enumValues.map((value) => ({
-									label: `"${value}"`,
-									kind: monaco.languages.CompletionItemKind.EnumMember,
-									insertText: `"${value}"`,
+								sortText: `0_${member.name}`,
+							}));
+							if (receiver.value?.isArray && !memberNames.has("length")) {
+								memberNames.add("length");
+								suggestions.push({
+									label: "length",
+									kind: monaco.languages.CompletionItemKind.Property,
+									detail: "int",
+									insertText: "length",
 									range,
-									sortText: `0_${value}`,
-								})),
+									sortText: "0_length",
+								});
+							}
+							suggestions.push(
+								...methodItems(
+									monaco,
+									classOfValue(receiver.value),
+									env,
+									range,
+									memberNames,
+								),
+							);
+							return { suggestions: suggestions as never[] };
+						}
+
+						const context = analyzeContext(maskedBefore, env);
+
+						// Enum argument value → offer the allowed literals only.
+						if (context?.info) {
+							const activeArg =
+								context.mode === "value" && context.activeArg
+									? context.info.args.find(
+											(candidate) => candidate.name === context.activeArg,
+										)
+									: context.mode === "positional"
+										? context.params[0]
+										: undefined;
+							if (activeArg?.enumValues && activeArg.enumValues.length > 0) {
+								return {
+									suggestions: activeArg.enumValues.map((value) => ({
+										label: `"${value}"`,
+										kind: monaco.languages.CompletionItemKind.EnumMember,
+										insertText: `"${value}"`,
+										range,
+										sortText: `0_${value}`,
+									})),
+								};
+							}
+							// Non-enum value → fall through to variables / functions / constants.
+						}
+
+						// Key position inside a known call → offer the remaining argument names.
+						if (context?.mode === "key" && context.info) {
+							const keyInfo = context.info;
+							const present = new Set(context.existingKeys);
+							return {
+								suggestions: context.params
+									.filter((arg) => !present.has(arg.name))
+									.map((arg) => ({
+										label: { label: arg.name, description: arg.friendlyName },
+										kind: monaco.languages.CompletionItemKind.Field,
+										detail: `${arg.typeString}${arg.optional ? " (optional)" : ""}`,
+										documentation: { value: argHoverMarkdown(keyInfo, arg) },
+										insertText: `${arg.name}: `,
+										filterText: `${arg.name} ${arg.friendlyName}`,
+										range,
+										sortText: `${arg.optional ? "1" : "0"}_${arg.name}`,
+									})),
 							};
 						}
-						// Non-enum value → fall through to variables / functions / constants.
-					}
 
-					// Key position inside a known call → offer the remaining argument names.
-					if (context?.mode === "key" && context.info) {
-						const keyInfo = context.info;
-						const present = new Set(context.existingKeys);
-						return {
-							suggestions: context.params
-								.filter((arg) => !present.has(arg.name))
-								.map((arg) => ({
-									label: { label: arg.name, description: arg.friendlyName },
-									kind: monaco.languages.CompletionItemKind.Field,
-									detail: `${arg.typeString}${arg.optional ? " (optional)" : ""}`,
-									documentation: { value: argHoverMarkdown(keyInfo, arg) },
-									insertText: `${arg.name}: `,
-									filterText: `${arg.name} ${arg.friendlyName}`,
-									range,
-									sortText: `${arg.optional ? "1" : "0"}_${arg.name}`,
-								})),
-						};
-					}
-
-					// Default: document symbols, node calls, namespaces, keywords, types and constants.
-					const suggestions: unknown[] = [];
-					const symbols = env.symbols;
-					for (const [name, type] of symbols.variables) {
-						if (index.byName.has(name)) continue;
-						suggestions.push({
-							label: name,
-							kind: monaco.languages.CompletionItemKind.Variable,
-							detail: type ? `variable: ${type}` : "variable",
-							insertText: name,
-							range,
-							sortText: `1_${name}`,
-						});
-					}
-					for (const name of symbols.functions) {
-						if (index.byName.has(name)) continue;
-						suggestions.push({
-							label: name,
-							kind: monaco.languages.CompletionItemKind.Function,
-							detail: "function (this board)",
-							insertText: name,
-							range,
-							sortText: `1_${name}`,
-						});
-					}
-					for (const name of symbols.interfaces) {
-						if (index.byName.has(name)) continue;
-						suggestions.push({
-							label: name,
-							kind: monaco.languages.CompletionItemKind.Interface,
-							detail: "interface",
-							insertText: name,
-							range,
-							sortText: `1_${name}`,
-						});
-					}
-					const listed = new Set<FlowScriptNodeInfo>();
-					for (const bucket of env.scope.openMembers.values()) {
-						for (const info of bucket) {
-							if (listed.has(info) || !info.alias) continue;
-							listed.add(info);
+						// Default: document symbols, node calls, namespaces, keywords, types and constants.
+						const suggestions: unknown[] = [];
+						const symbols = env.symbols;
+						for (const [name, type] of symbols.variables) {
+							if (index.byName.has(name)) continue;
 							suggestions.push({
-								label: { label: info.alias, description: info.qualified },
-								kind: monaco.languages.CompletionItemKind.Function,
-								detail: renderSignature(info),
-								documentation: { value: nodeHoverMarkdown(info) },
-								insertText: buildCallSnippet(info, info.alias),
-								insertTextRules:
-									monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-								filterText: `${info.alias} ${info.identifier} ${info.friendlyName}`,
+								label: name,
+								kind: monaco.languages.CompletionItemKind.Variable,
+								detail: type ? `variable: ${type}` : "variable",
+								insertText: name,
 								range,
-								sortText: `1_${info.alias}`,
+								sortText: `1_${name}`,
 							});
 						}
-					}
-					for (const entry of catalogCompletionCache(monaco, index).statics) {
-						if (entry.info && listed.has(entry.info)) continue;
-						suggestions.push({ ...entry.item, range });
-					}
-					return { suggestions: suggestions as never[] };
-				}),
+						for (const name of symbols.functions) {
+							if (index.byName.has(name)) continue;
+							suggestions.push({
+								label: name,
+								kind: monaco.languages.CompletionItemKind.Function,
+								detail: "function (this board)",
+								insertText: name,
+								range,
+								sortText: `1_${name}`,
+							});
+						}
+						for (const name of symbols.interfaces) {
+							if (index.byName.has(name)) continue;
+							suggestions.push({
+								label: name,
+								kind: monaco.languages.CompletionItemKind.Interface,
+								detail: "interface",
+								insertText: name,
+								range,
+								sortText: `1_${name}`,
+							});
+						}
+						const listed = new Set<FlowScriptNodeInfo>();
+						for (const bucket of env.scope.openMembers.values()) {
+							for (const info of bucket) {
+								if (listed.has(info) || !info.alias) continue;
+								listed.add(info);
+								suggestions.push({
+									label: { label: info.alias, description: info.qualified },
+									kind: monaco.languages.CompletionItemKind.Function,
+									detail: renderSignature(info),
+									documentation: { value: nodeHoverMarkdown(info) },
+									insertText: buildCallSnippet(info, info.alias),
+									insertTextRules:
+										monaco.languages.CompletionItemInsertTextRule
+											.InsertAsSnippet,
+									filterText: `${info.alias} ${info.identifier} ${info.friendlyName}`,
+									range,
+									sortText: `1_${info.alias}`,
+								});
+							}
+						}
+						for (const entry of catalogCompletionCache(monaco, index).statics) {
+							if (entry.info && listed.has(entry.info)) continue;
+							suggestions.push({ ...entry.item, range });
+						}
+						return { suggestions: suggestions as never[] };
+					},
+				),
 		},
 	);
 
@@ -3311,153 +3319,165 @@ export function registerFlowScriptProviders(
 		provideHover: (model, position, token) => {
 			const word = model.getWordAtPosition(position);
 			if (!word) return null;
-			return withEnvDoc(model, getCatalogNodes, token, (envDoc) => {
-				const range = {
-					startLineNumber: position.lineNumber,
-					endLineNumber: position.lineNumber,
-					startColumn: word.startColumn,
-					endColumn: word.endColumn,
-				};
-				const value = envDoc.text;
-				const wordStartOffset = model.getOffsetAt({
-					lineNumber: position.lineNumber,
-					column: word.startColumn,
-				});
-				if (
-					word.word === "cache" &&
-					value.slice(0, wordStartOffset).endsWith("@")
-				) {
-					return { range, contents: [{ value: CACHE_DECORATOR_MARKDOWN }] };
-				}
-				if (
-					CACHE_FIELD_MARKDOWN[word.word] &&
-					analyzeCacheDecoratorContext(
-						maskLiterals(value.slice(0, wordStartOffset)),
-					)
-				) {
-					return {
-						range,
-						contents: [{ value: CACHE_FIELD_MARKDOWN[word.word] }],
+			return withEnvDoc(
+				model,
+				getCatalogNodes,
+				workerRequests,
+				token,
+				(envDoc) => {
+					const range = {
+						startLineNumber: position.lineNumber,
+						endLineNumber: position.lineNumber,
+						startColumn: word.startColumn,
+						endColumn: word.endColumn,
 					};
-				}
+					const value = envDoc.text;
+					const wordStartOffset = model.getOffsetAt({
+						lineNumber: position.lineNumber,
+						column: word.startColumn,
+					});
+					if (
+						word.word === "cache" &&
+						value.slice(0, wordStartOffset).endsWith("@")
+					) {
+						return { range, contents: [{ value: CACHE_DECORATOR_MARKDOWN }] };
+					}
+					if (
+						CACHE_FIELD_MARKDOWN[word.word] &&
+						analyzeCacheDecoratorContext(
+							maskLiterals(value.slice(0, wordStartOffset)),
+						)
+					) {
+						return {
+							range,
+							contents: [{ value: CACHE_FIELD_MARKDOWN[word.word] }],
+						};
+					}
 
-				const maskedFull = envDoc.masked;
-				const env = envDoc.env;
-				const lineBefore = model.getValueInRange({
-					startLineNumber: position.lineNumber,
-					startColumn: 1,
-					endLineNumber: position.lineNumber,
-					endColumn: word.startColumn,
-				});
-				const lineAfter = model.getValueInRange({
-					startLineNumber: position.lineNumber,
-					startColumn: word.endColumn,
-					endLineNumber: position.lineNumber,
-					endColumn: Number.MAX_SAFE_INTEGER,
-				});
-				const maskedLine = maskLiterals(lineBefore).trimEnd();
-				const followedByPathSep = /^\s*::/.test(lineAfter);
-				const followedByCall = /^\s*\(/.test(lineAfter);
+					const maskedFull = envDoc.masked;
+					const env = envDoc.env;
+					const lineBefore = model.getValueInRange({
+						startLineNumber: position.lineNumber,
+						startColumn: 1,
+						endLineNumber: position.lineNumber,
+						endColumn: word.startColumn,
+					});
+					const lineAfter = model.getValueInRange({
+						startLineNumber: position.lineNumber,
+						startColumn: word.endColumn,
+						endLineNumber: position.lineNumber,
+						endColumn: Number.MAX_SAFE_INTEGER,
+					});
+					const maskedLine = maskLiterals(lineBefore).trimEnd();
+					const followedByPathSep = /^\s*::/.test(lineAfter);
+					const followedByCall = /^\s*\(/.test(lineAfter);
 
-				// Qualified spelling: `hash::md5`, or a namespace segment of it.
-				if (maskedLine.endsWith("::") || followedByPathSep) {
-					const pathMatch = new RegExp(`((?:${IDENT_SRC}\\s*::\\s*)*)$`).exec(
-						maskedLine,
-					);
-					const prefix = pathMatch
-						? pathMatch[1].split(PATH_SPLIT_RE).filter(Boolean)
-						: [];
-					if (followedByPathSep) {
-						const ns = env.index.namespaces.get(
-							namespaceKey(expandPath([...prefix, word.word], env.scope)),
+					// Qualified spelling: `hash::md5`, or a namespace segment of it.
+					if (maskedLine.endsWith("::") || followedByPathSep) {
+						const pathMatch = new RegExp(`((?:${IDENT_SRC}\\s*::\\s*)*)$`).exec(
+							maskedLine,
 						);
-						if (ns)
+						const prefix = pathMatch
+							? pathMatch[1].split(PATH_SPLIT_RE).filter(Boolean)
+							: [];
+						if (followedByPathSep) {
+							const ns = env.index.namespaces.get(
+								namespaceKey(expandPath([...prefix, word.word], env.scope)),
+							);
+							if (ns)
+								return {
+									range,
+									contents: [{ value: namespaceHoverMarkdown(ns) }],
+								};
+						} else {
+							const info = resolvePathCall(prefix, word.word, env).info;
+							if (info)
+								return {
+									range,
+									contents: [{ value: nodeHoverMarkdown(info) }],
+								};
+						}
+					}
+
+					// Method call: `s.trim(` → the node dispatched on the receiver's class.
+					if (maskedLine.endsWith(".") && followedByCall) {
+						const receiver = evaluateExpr(
+							extractTrailingExpr(maskedLine.slice(0, -1)),
+							env,
+						);
+						const resolution = receiver.namespace
+							? resolvePathCall(receiver.namespace, word.word, env)
+							: resolveMethod(receiver, word.word, env);
+						if (resolution.info)
+							return {
+								range,
+								contents: [{ value: nodeHoverMarkdown(resolution.info) }],
+							};
+					}
+
+					if (!maskedLine.endsWith(".")) {
+						const bare = resolveBareCall(word.word, env);
+						if (bare.info) {
+							return {
+								range,
+								contents: [{ value: nodeHoverMarkdown(bare.info) }],
+							};
+						}
+						const ns = env.index.namespaces.get(
+							namespaceKey(expandPath([word.word], env.scope)),
+						);
+						if (ns && !isBoundName(word.word, env))
 							return {
 								range,
 								contents: [{ value: namespaceHoverMarkdown(ns) }],
 							};
-					} else {
-						const info = resolvePathCall(prefix, word.word, env).info;
-						if (info)
-							return { range, contents: [{ value: nodeHoverMarkdown(info) }] };
 					}
-				}
 
-				// Method call: `s.trim(` → the node dispatched on the receiver's class.
-				if (maskedLine.endsWith(".") && followedByCall) {
-					const receiver = evaluateExpr(
-						extractTrailingExpr(maskedLine.slice(0, -1)),
-						env,
-					);
-					const resolution = receiver.namespace
-						? resolvePathCall(receiver.namespace, word.word, env)
-						: resolveMethod(receiver, word.word, env);
-					if (resolution.info)
-						return {
-							range,
-							contents: [{ value: nodeHoverMarkdown(resolution.info) }],
-						};
-				}
-
-				if (!maskedLine.endsWith(".")) {
-					const bare = resolveBareCall(word.word, env);
-					if (bare.info) {
-						return {
-							range,
-							contents: [{ value: nodeHoverMarkdown(bare.info) }],
-						};
+					// Member access on a variable (`result.value`) → describe the source node's output pin.
+					if (maskedLine.endsWith(".")) {
+						const receiver = evaluateExpr(
+							extractTrailingExpr(maskedLine.slice(0, -1)),
+							env,
+						);
+						const source: MemberSource | null =
+							receiver.node && receiver.node.outputs.length > 1
+								? { kind: "node", info: receiver.node }
+								: receiver.source;
+						const member = source
+							? sourceMembers(source).find((m) => m.name === word.word)
+							: undefined;
+						if (source && member) {
+							const owner =
+								source.kind === "node"
+									? `\`${displayName(source.info)}\``
+									: source.title
+										? `\`${source.title}\``
+										: "struct";
+							const kind = source.kind === "node" ? "output" : "field";
+							const lines = [
+								`\`${member.name}: ${member.typeString}\` — ${kind} of ${owner}`,
+							];
+							if (member.description) lines.push(member.description);
+							return { range, contents: [{ value: lines.join("\n\n") }] };
+						}
 					}
-					const ns = env.index.namespaces.get(
-						namespaceKey(expandPath([word.word], env.scope)),
-					);
-					if (ns && !isBoundName(word.word, env))
-						return { range, contents: [{ value: namespaceHoverMarkdown(ns) }] };
-				}
 
-				// Member access on a variable (`result.value`) → describe the source node's output pin.
-				if (maskedLine.endsWith(".")) {
-					const receiver = evaluateExpr(
-						extractTrailingExpr(maskedLine.slice(0, -1)),
-						env,
-					);
-					const source: MemberSource | null =
-						receiver.node && receiver.node.outputs.length > 1
-							? { kind: "node", info: receiver.node }
-							: receiver.source;
-					const member = source
-						? sourceMembers(source).find((m) => m.name === word.word)
-						: undefined;
-					if (source && member) {
-						const owner =
-							source.kind === "node"
-								? `\`${displayName(source.info)}\``
-								: source.title
-									? `\`${source.title}\``
-									: "struct";
-						const kind = source.kind === "node" ? "output" : "field";
-						const lines = [
-							`\`${member.name}: ${member.typeString}\` — ${kind} of ${owner}`,
-						];
-						if (member.description) lines.push(member.description);
-						return { range, contents: [{ value: lines.join("\n\n") }] };
+					const maskedBefore = maskedFull.slice(0, model.getOffsetAt(position));
+					const context = analyzeContext(maskedBefore, env);
+					if (context?.info) {
+						const arg = context.info.args.find(
+							(candidate) => candidate.name === word.word,
+						);
+						if (arg) {
+							return {
+								range,
+								contents: [{ value: argHoverMarkdown(context.info, arg) }],
+							};
+						}
 					}
-				}
-
-				const maskedBefore = maskedFull.slice(0, model.getOffsetAt(position));
-				const context = analyzeContext(maskedBefore, env);
-				if (context?.info) {
-					const arg = context.info.args.find(
-						(candidate) => candidate.name === word.word,
-					);
-					if (arg) {
-						return {
-							range,
-							contents: [{ value: argHoverMarkdown(context.info, arg) }],
-						};
-					}
-				}
-				return null;
-			});
+					return null;
+				},
+			);
 		},
 	});
 
@@ -3467,7 +3487,7 @@ export function registerFlowScriptProviders(
 			signatureHelpTriggerCharacters: ["(", "{", ",", ":"],
 			signatureHelpRetriggerCharacters: [",", ":"],
 			provideSignatureHelp: (model, position, token) =>
-				withEnvDoc(model, getCatalogNodes, token, (envDoc) => {
+				withEnvDoc(model, getCatalogNodes, workerRequests, token, (envDoc) => {
 					const context = analyzeContext(
 						envDoc.masked.slice(0, model.getOffsetAt(position)),
 						envDoc.env,
@@ -3518,14 +3538,11 @@ export function registerFlowScriptProviders(
 		},
 	);
 
-	const features = registerFlowScriptFeatureProviders(monaco, getCatalogNodes);
-
 	return {
 		dispose: () => {
 			completion.dispose();
 			hover.dispose();
 			signature.dispose();
-			features.dispose();
 		},
 	};
 }

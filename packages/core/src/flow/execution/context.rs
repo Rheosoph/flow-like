@@ -354,6 +354,7 @@ impl ExecutionContext {
         Some(ModelUsageContext {
             app_id: cache.model_usage_app_id.clone(),
             run_id: Some(self.run_id.clone()),
+            api_base_url: (!self.profile.hub.trim().is_empty()).then(|| self.profile.hub.clone()),
         })
     }
 

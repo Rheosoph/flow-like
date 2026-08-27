@@ -12,12 +12,12 @@ local-ml = ["flow-like-model-provider/local-ml", "flow-like/local-ml"]
 remote-ml = ["flow-like-model-provider/remote-ml", "flow-like/remote-ml"]
 tauri = ["flow-like/tauri"]
 # Execution feature - enables the core execution surface and the database
-# implementation used by NodeDBConnection. Metadata keeps only `flow` and the
-# lightweight file/query-parser storage baseline.
+# implementation used by NodeDBConnection. Metadata keeps only `flow-metadata`
+# and the lightweight file/query-parser storage baseline.
 execute = ["flow-like/flow-runtime", "flow-like-storage/database-runtime"]
 
 [dependencies]
-flow-like = { workspace = true, default-features = false, features = ["flow"] }
+flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, default-features = false }

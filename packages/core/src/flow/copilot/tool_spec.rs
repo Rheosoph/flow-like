@@ -642,7 +642,9 @@ fn run_board_tests_message(args: &Value) -> String {
     if board_id.is_empty() {
         "FlowPilot wants to run the board's test events and inspect their logs.".to_string()
     } else {
-        format!("FlowPilot wants to run the test events of board '{board_id}' and inspect their logs.")
+        format!(
+            "FlowPilot wants to run the test events of board '{board_id}' and inspect their logs."
+        )
     }
 }
 
@@ -2065,7 +2067,10 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
             },
             "index_name": { "type": "string" },
             "optimize": { "type": "boolean" },
-            "keep_versions": { "type": "boolean" },
+            "keep_versions": {
+                "type": "boolean",
+                "description": "Defaults to true. False prunes versions older than seven days after compaction and index maintenance."
+            },
             "nullable": { "type": "boolean" },
             "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
         },
@@ -2843,10 +2848,7 @@ mod tests {
         );
 
         let run_board_tests = find_runtime_execution_tool_spec("run_board_tests").unwrap();
-        assert_eq!(
-            (run_board_tests.schema)()["required"],
-            json!(["board_id"])
-        );
+        assert_eq!((run_board_tests.schema)()["required"], json!(["board_id"]));
         assert_eq!(
             resolve_tool_approval(&run_board_tests, &json!({"board_id":"board"})).kind,
             "execute"

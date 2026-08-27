@@ -589,12 +589,35 @@ export function parseBoard(
 	const fnRefsHash = fnRefEntries.sort().join(";");
 	const reduceEdgeMotion = isWebkitLite() || connectionCount > 150;
 
+	// Presence (peer selections/editors, identity cache) is injected into node
+	// data by awareness effects that only re-run when presence changes — a node
+	// rebuilt here after a re-hash (every drag) must carry it over by id, or
+	// the chips vanish until the next awareness event.
+	const oldNodesById = new Map<string, { data?: unknown }>();
 	for (const oldNode of oldNodes ?? []) {
+		if (typeof oldNode.id === "string") oldNodesById.set(oldNode.id, oldNode);
 		const hash = oldNode.data?.hash;
 		if (typeof oldNode.id === "string" && hash !== undefined && hash !== null) {
 			oldNodesMap.set(renderedNodeCacheKey(oldNode.id, hash), oldNode);
 		}
 	}
+	const carriedPresence = (id: string) => {
+		const data = oldNodesById.get(id)?.data as
+			| {
+					remoteSelections?: unknown;
+					remoteEditors?: unknown;
+					peerUsers?: unknown;
+			  }
+			| undefined;
+		if (!data) return {};
+		return {
+			...(data.remoteSelections
+				? { remoteSelections: data.remoteSelections }
+				: {}),
+			...(data.remoteEditors ? { remoteEditors: data.remoteEditors } : {}),
+			...(data.peerUsers ? { peerUsers: data.peerUsers } : {}),
+		};
+	};
 
 	for (const edge of oldEdges ?? []) {
 		oldEdgesMap.set(edge.id, edge);
@@ -719,6 +742,7 @@ export function parseBoard(
 					onExplain: onExplain,
 					onFilterLogs: onFilterLogs,
 					executionMode: board.execution_mode,
+					...carriedPresence(node.id),
 				},
 				selected: selected.has(node.id),
 			});
@@ -886,6 +910,7 @@ export function parseBoard(
 					hash: layer.hash ?? -1,
 					version: version,
 					pinLookup: lookup,
+					...carriedPresence(layer.id),
 					pushLayer: async (layer: ILayer) => {
 						pushLayer(layer);
 					},

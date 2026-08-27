@@ -60,7 +60,7 @@ serde_path_to_error = "0.1.20"
 async-trait.workspace = true
 percent-encoding.workspace = true
 utoipa = { version = "5", optional = true }
-any-tts = { version = "0.1.2", default-features = false, optional = true }
+any-tts = { version = "0.1.3", default-features = false, optional = true }
 any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", rev = "e043cec6935003ad746454d7df5a1d932f6c8ac5", default-features = false, optional = true }
 
 [dev-dependencies]
@@ -95,14 +95,19 @@ local-stt-metal = ["local-stt", "any-speech-to-text/metal"]
 local-stt-cuda = ["local-stt", "any-speech-to-text/cuda"]
 local-stt-accelerate = ["local-stt", "any-speech-to-text/accelerate"]
 remote-ml = ["flow-like-model-provider/remote-ml"]
-schema-gen = ["app", "flow"]
-# Flow metadata and editing currently share app/model/profile types. Keep that public surface
-# available while separating the Lance/Arrow/DataFusion implementation behind `flow-runtime`.
-flow = ["app"]
-flow-runtime = ["flow", "flow-like-storage/database-runtime"]
+schema-gen = ["app", "flow-metadata"]
+# Internal metadata consumers use the flow types without pulling in the
+# Lance/Arrow/DataFusion implementation.
+flow-metadata = ["app"]
+# Keep the historical public contract: consumers that enable `flow` receive a
+# working execution runtime, including database-backed log persistence.
+flow = ["flow-runtime"]
+flow-runtime = ["flow-metadata", "flow-like-storage/database-runtime"]
 hub = []
 bit = ["hub"]
-model = ["bit"]
+# Model and Bit APIs expose Flow execution context types, so direct model
+# consumers need the metadata surface as part of the public contract.
+model = ["bit", "flow-metadata"]
 app = ["bit", "model", "hub"]
 app-runtime = ["flow-runtime", "app"]
 openapi = ["dep:utoipa"]

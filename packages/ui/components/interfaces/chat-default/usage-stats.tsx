@@ -1,18 +1,16 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	ArrowDownIcon,
-	ArrowUpIcon,
-	BrainIcon,
-	ChevronRightIcon,
-	ClockIcon,
-	CoinsIcon,
-	HashIcon,
-	LayersIcon,
-	RepeatIcon,
-	ZapIcon,
-} from "lucide-react";
+import ArrowDownIcon from "lucide-react/dist/esm/icons/arrow-down.js";
+import ArrowUpIcon from "lucide-react/dist/esm/icons/arrow-up.js";
+import BrainIcon from "lucide-react/dist/esm/icons/brain.js";
+import ChevronRightIcon from "lucide-react/dist/esm/icons/chevron-right.js";
+import ClockIcon from "lucide-react/dist/esm/icons/clock.js";
+import CoinsIcon from "lucide-react/dist/esm/icons/coins.js";
+import HashIcon from "lucide-react/dist/esm/icons/hash.js";
+import LayersIcon from "lucide-react/dist/esm/icons/layers.js";
+import RepeatIcon from "lucide-react/dist/esm/icons/repeat.js";
+import ZapIcon from "lucide-react/dist/esm/icons/zap.js";
 import {
 	createContext,
 	useCallback,
@@ -21,20 +19,23 @@ import {
 	useState,
 } from "react";
 import { useModelNames } from "../../../hooks/use-model-names";
-import { cn, modelLabel } from "../../../lib";
+import { modelLabel } from "../../../lib/bit/model-display-name";
+import { cn } from "../../../lib/utils";
+import { Badge } from "../../ui/badge";
+import { Separator } from "../../ui/separator";
 import {
-	Badge,
-	Separator,
 	Sheet,
 	SheetContent,
 	SheetDescription,
 	SheetHeader,
 	SheetTitle,
+} from "../../ui/sheet";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
 	TooltipTrigger,
-} from "../../ui";
+} from "../../ui/tooltip";
 import type { IChatUsageStat, IModelCallEntry } from "./chat-db";
 
 // --- Formatting helpers ---

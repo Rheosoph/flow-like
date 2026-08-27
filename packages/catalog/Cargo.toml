@@ -21,6 +21,9 @@ package-llm = ["dep:flow-like-catalog-llm"]
 package-processing = ["dep:flow-like-catalog-processing"]
 package-geo = ["dep:flow-like-catalog-geo"]
 package-automation = ["dep:flow-like-catalog-automation"]
+# Product catalogs omit nodes whose optional runtime implementation is absent.
+# Metadata tooling leaves this disabled so it can inspect every valid node.
+runtime-catalog = []
 portable-metadata = [
     "package-std",
     "package-data",
@@ -32,6 +35,25 @@ portable-metadata = [
     "package-processing",
     "package-geo",
 ]
+# Metadata for remote-only execution. ONNX nodes require the local inference
+# runtime, so advertising them in this bundle creates catalog entries whose
+# implementations can only return a feature-disabled error.
+remote-metadata = [
+    "runtime-catalog",
+    "package-std",
+    "package-data",
+    "package-web",
+    "package-media",
+    "package-ml",
+    "package-llm",
+    "package-processing",
+    "package-geo",
+]
+# Metadata advertised by APIs paired with a local-ML server executor. The API
+# can describe ONNX nodes without linking their execution dependencies.
+server-local-metadata = ["remote-metadata", "package-onnx"]
+# Metadata paired with executors that also ship desktop/RPA automation.
+executor-local-metadata = ["server-local-metadata", "package-automation"]
 all-metadata = [
     "portable-metadata",
     "package-automation",
@@ -66,11 +88,12 @@ mobile-apple = [
 # Remote-only headless bundle used by deployments that deliberately do not
 # ship a native inference runtime. The historical `server-execute` feature
 # remains compatibility-complete below; product crates should use this bundle.
-server = ["portable-all", "portable-execute", "remote"]
-server-local-ml = ["server", "local-ml"]
+server = ["remote-all", "portable-execute", "remote"]
+server-local-ml = ["server", "package-onnx", "local-ml"]
 executor = [
-    "all",
+    "remote-all",
     "portable-execute",
+    "package-automation",
     "flow-like-catalog-automation/execute",
     "remote",
 ]
@@ -80,8 +103,9 @@ executor-local-ml = ["executor", "local-ml"]
 # implementations; relying on a sibling executor dependency to unify `all`
 # made the advertised bundle silently empty in isolation.
 local-runtime = [
-    "all",
+    "remote-all",
     "portable-execute",
+    "package-automation",
     "flow-like-catalog-automation/execute",
     "remote",
 ]
@@ -90,10 +114,28 @@ local-runtime-ml = ["local-runtime", "local-ml"]
 # Execution environment - determines how interactions are handled
 # local: Desktop app with polling-based interactions
 # remote: Server execution with SSE-based interactions via API
-local = ["flow-like-catalog-data/local", "flow-like-catalog-web/local"]
-remote = ["flow-like-catalog-data/remote", "flow-like-catalog-web/remote"]
+local = [
+    "package-data",
+    "package-web",
+    "flow-like-catalog-data/local",
+    "flow-like-catalog-web/local",
+]
+remote = [
+    "package-data",
+    "package-web",
+    "flow-like-catalog-data/remote",
+    "flow-like-catalog-web/remote",
+]
 
 local-ml = [
+    "package-std",
+    "package-data",
+    "package-web",
+    "package-media",
+    "package-ml",
+    "package-onnx",
+    "package-llm",
+    "package-processing",
     "flow-like-catalog-core/local-ml",
     "flow-like-catalog-std/local-ml",
     "flow-like-catalog-data/local-ml",
@@ -108,19 +150,21 @@ local-ml = [
 # Feature unification applies the provider to ONNX nodes and core FastEmbed sessions.
 local-ml-cuda = ["local-ml", "flow-like-catalog-onnx/cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like-catalog-onnx/tensorrt"]
-local-tts = ["flow-like-catalog-media/local-tts"]
+local-tts = ["package-media", "flow-like-catalog-media/local-tts"]
 local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
 local-tts-accelerate = ["local-tts", "flow-like-catalog-media/local-tts-accelerate"]
-local-stt = ["flow-like-catalog-media/local-stt"]
+local-stt = ["package-media", "flow-like-catalog-media/local-stt"]
 local-stt-metal = ["local-stt", "flow-like-catalog-media/local-stt-metal"]
 local-stt-cuda = ["local-stt", "flow-like-catalog-media/local-stt-cuda"]
 local-stt-accelerate = ["local-stt", "flow-like-catalog-media/local-stt-accelerate"]
 remote-ml = [
+    "package-llm",
     "flow-like-catalog-core/remote-ml",
     "flow-like-catalog-llm/remote-ml",
 ]
 tauri = [
+    "package-llm",
     "flow-like-catalog-llm/tauri",
 ]
 mimalloc = ["dep:mimalloc"]
@@ -128,10 +172,11 @@ mimalloc = ["dep:mimalloc"]
 
 # Portable execution support shared by desktop, mobile, and headless runtimes.
 # Automation is deliberately separate because that package has no iOS/Android
-# nodes. ONNX execution is also separate: it is local inference and is enabled
-# by `local-ml`; keeping only its metadata here makes the base `server` and
-# `executor` bundles genuinely remote-only.
+# nodes. ONNX execution is also separate because it requires local inference.
+# `local-ml` enables it only for products that opt in, leaving the base `server`
+# bundle remote-only.
 portable-execute = [
+    "runtime-catalog",
     "remote-ml",
     "flow-like-catalog-core/execute",
     "flow-like-catalog-std/execute",
@@ -149,6 +194,7 @@ portable-execute = [
 # metadata should NOT enable this. New products should prefer the named bundles
 # above so their local-inference intent is visible in their manifest.
 execute = [
+    "all-metadata",
     "portable-execute",
     "flow-like-catalog-automation/execute",
     "local-ml",
@@ -158,34 +204,35 @@ execute = [
 # local ONNX inference, but no desktop/RPA automation. `server` is the new
 # remote-only product bundle; `server-local-ml` states the old behavior
 # explicitly.
-server-execute = ["portable-execute", "local-ml"]
+server-execute = ["portable-metadata", "portable-execute", "local-ml"]
 
 # Data lake formats
-delta = ["flow-like-catalog-data/delta"]
-iceberg = ["flow-like-catalog-data/iceberg"]
+delta = ["package-data", "flow-like-catalog-data/delta"]
+iceberg = ["package-data", "flow-like-catalog-data/iceberg"]
 all-lakes = ["delta", "iceberg"]
 
 # Database providers
-postgres = ["flow-like-catalog-data/postgres"]
-mysql = ["flow-like-catalog-data/mysql"]
-sqlite = ["flow-like-catalog-data/sqlite"]
-duckdb = ["flow-like-catalog-data/duckdb"]
-clickhouse = ["flow-like-catalog-data/clickhouse"]
-flight = ["flow-like-catalog-data/flight"]
-odbc = ["flow-like-catalog-data/odbc"]
+postgres = ["package-data", "flow-like-catalog-data/postgres"]
+mysql = ["package-data", "flow-like-catalog-data/mysql"]
+sqlite = ["package-data", "flow-like-catalog-data/sqlite"]
+duckdb = ["package-data", "flow-like-catalog-data/duckdb"]
+clickhouse = ["package-data", "flow-like-catalog-data/clickhouse"]
+flight = ["package-data", "flow-like-catalog-data/flight"]
+bigquery = ["package-data", "flow-like-catalog-data/bigquery"]
+odbc = ["package-data", "flow-like-catalog-data/odbc"]
 # ODBC excluded by default - requires system library (unixodbc on macOS/Linux)
-all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight"]
+all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "bigquery"]
 all-databases-with-odbc = ["all-databases", "odbc"]
 
 # Federation support
-federation = ["flow-like-catalog-data/federation"]
-postgres-federation = ["flow-like-catalog-data/postgres-federation"]
-mysql-federation = ["flow-like-catalog-data/mysql-federation"]
+federation = ["package-data", "flow-like-catalog-data/federation"]
+postgres-federation = ["package-data", "flow-like-catalog-data/postgres-federation"]
+mysql-federation = ["package-data", "flow-like-catalog-data/mysql-federation"]
 # Explicit rustls variants (transparent — postgres/mysql already use rustls under the hood)
-sqlite-federation = ["flow-like-catalog-data/sqlite-federation"]
-duckdb-federation = ["flow-like-catalog-data/duckdb-federation"]
-clickhouse-federation = ["flow-like-catalog-data/clickhouse-federation"]
-odbc-federation = ["flow-like-catalog-data/odbc-federation"]
+sqlite-federation = ["package-data", "flow-like-catalog-data/sqlite-federation"]
+duckdb-federation = ["package-data", "flow-like-catalog-data/duckdb-federation"]
+clickhouse-federation = ["package-data", "flow-like-catalog-data/clickhouse-federation"]
+odbc-federation = ["package-data", "flow-like-catalog-data/odbc-federation"]
 # ODBC excluded by default - requires system library (unixodbc on macOS/Linux)
 all-databases-federation = ["postgres-federation", "mysql-federation", "sqlite-federation", "duckdb-federation", "clickhouse-federation"]
 all-databases-federation-with-odbc = ["all-databases-federation", "odbc-federation"]
@@ -195,6 +242,7 @@ all-databases-federation-with-odbc = ["all-databases-federation", "odbc-federati
 all = ["all-metadata", "all-lakes", "all-databases", "all-databases-federation"]
 all-with-odbc = ["all-metadata", "all-lakes", "all-databases-with-odbc", "all-databases-federation-with-odbc"]
 portable-all = ["portable-metadata", "all-lakes", "all-databases", "all-databases-federation"]
+remote-all = ["remote-metadata", "all-lakes", "all-databases", "all-databases-federation"]
 
 # Full with execution (for executors and desktop app)
 all-execute = ["all", "execute"]

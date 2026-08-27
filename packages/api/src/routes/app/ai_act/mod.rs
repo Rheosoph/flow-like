@@ -617,6 +617,7 @@ pub async fn suggest_assessment(
     let usage_context = Some(flow_like::models::llm::ModelUsageContext {
         app_id: Some(app_id.clone()),
         run_id: None,
+        api_base_url: None,
     });
 
     let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(

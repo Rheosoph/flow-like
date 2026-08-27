@@ -680,6 +680,65 @@ branch that omits the remainder of an iteration. A separate For Each (Break) cat
 a Boolean Break input, but it is not registered as FlowScript loop sugar and must not be taught as
 a keyword.
 
+### Identity and safe-change doctrine for Chapter 15
+
+The founder supplied no historical incident or near miss behind the anchor model. The chapter
+must present its lost-anchor walkthrough as a designed safety drill. It must not imply that a
+customer or early FlowPilot run destroyed a Board in this way.
+
+Board identity should continue when an entity remains in the same semantic context and fulfills
+the same logical purpose. Context means its containing module, Function, or Event and its role in
+that scope. A readable rename or move should retain identity; replacing an operation with a
+different logical operation should create a new entity or fail for review. AI is one editor among
+people and other tools and receives no separate identity or deletion rules.
+
+Anchors should remain in editable source. The code check confirms that trailing `//@n`, `//@v`,
+and `//@l` comments are the current identity transport across parse/render, navigation, scoped
+editing, statement merge, and Apply. Authors should leave them alone during ordinary edits. When
+copying source to create another entity, keep the original anchor and remove only the copy's
+anchor. One anchor assigned to two distinct entities fails during raw-source preflight, including
+when the ID is absent from the current Board. A multi-output Event header and its immediate first
+arm-routing Branch may repeat the anchor because they represent one entry. An ordinary node,
+variable, Function, or module ID absent from the current Board is then reported as unavailable and
+the entity follows ordinary unanchored reconciliation.
+
+The founder wants deterministic correction to be as automatic as possible. Ordinary node,
+variable, Function, and module anchors absent from the current Board are cleared after
+duplicate-anchor preflight. Their unanchored resolvers may reuse one unique compatible live entity
+or create a new one. Absent Event anchors keep a specialized recovery path. One compatible live
+entry can replace the stale anchor, and the first still-live execution-body connection can narrow
+several candidates to one. If zero or several candidates remain, the normal entry-creation path
+creates a fresh identity instead of guessing. It recreates an exact typed entry or uses the
+standard Simple/Generic fallback for an alias-only header. Valid Event metadata remains required.
+Anchors that resolve to incompatible live state fail closed. The chapter presents this as the
+current proof boundary rather than a universal rebind guarantee. Corrections trigger canonical
+reload but are not yet explained in the editor UI.
+
+The code-backed deletion drill removes `//@n:contains-report` from an otherwise unchanged Incident
+Desk call. Reconciliation then plans a fresh Contains node and removal of the existing anchored
+node. The recognized removal makes Apply stop until the author restores the anchor or explicitly
+approves the replacement and deletion. Function and module declaration omission are unsuitable
+examples because current reconciliation can remove visible body nodes without emitting the
+complete layer deletion.
+
+Apply is one Board-level authoring change. Diagnostics and unapproved recognized deletions execute
+zero commands. Later command failure triggers rollback, Web persists only after the full plan
+succeeds, and both clients record a successful returned batch as one local undo step. Rollback,
+offline persistence, and history-bookkeeping failures remain observable boundaries, so the book
+must not promise an infallible storage transaction.
+
+Selection-scoped editing is current in Web and Desktop. The canvas action expands selected nodes
+to their containing sections and transitively referenced Functions, retains variables and
+interfaces as visible shared context, and carries the rendered section anchors back to Apply.
+Unrendered Event and Function sections are outside the deletion diff; an in-scope deletion and a
+visible variable deletion remain guarded.
+
+The Function rule now matches the identity doctrine. Renaming an anchored Function emits
+`RenameLayer` for the same layer ID, subject to final-name collision and call-resolution checks.
+Written callers use the final Function name and final module path in that revision. FlowScript
+still rejects Function signature changes. Chapter 15 presents the rename as current behavior and
+keeps boundary migration outside the guarantee.
+
 ### Remaining questions
 
 - **Q1:** What runtime invariant matters most when a Flow has hundreds or thousands of nodes?

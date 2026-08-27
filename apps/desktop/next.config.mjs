@@ -23,9 +23,13 @@ const nextConfig = {
 	serverExternalPackages: ["yjs"],
 	staticPageGenerationTimeout: 120,
 	reactCompiler: true,
-	missingSuspenseWithCSRBailout: false,
 	experimental: {
 		serverComponentsHmrCache: true,
+		// PostCSS and other Node-backed Turbopack plugins otherwise run in child
+		// processes connected over sockets. Worker threads avoid the process-pool
+		// stall seen while compiling dependency CSS and keep the work parallel.
+		turbopackPluginRuntimeStrategy: "workerThreads",
+		turbopackRustReactCompiler: true,
 		webpackMemoryOptimizations: true,
 		preloadEntriesOnStart: false,
 		turbopackFileSystemCacheForDev: true,

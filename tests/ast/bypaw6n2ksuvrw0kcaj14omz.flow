@@ -390,7 +390,7 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     }
 }
 
-eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     loadConfig()
     filterSources({ hash: widgetInstanceId })
     saveConfig({ config: userConfiguration })

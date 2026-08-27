@@ -2899,7 +2899,7 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/data/datafusion/databases/df-mount-athena-query"
               },
               {
-                "label": "Register Athena Table",
+                "label": "Register AWS Athena",
                 "slug": "nodes/data/datafusion/databases/df-register-athena"
               },
               {
@@ -8793,6 +8793,20 @@ export const generatedNodeSidebar = [
           {
             "label": "Word Count",
             "slug": "nodes/utils/string/string-word-count"
+          }
+        ]
+      },
+      {
+        "label": "Testing",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/utils/testing"
+          },
+          {
+            "label": "Assert",
+            "slug": "nodes/utils/testing/flow-assert"
           }
         ]
       },

@@ -15,149 +15,26 @@
 //! A fixture named `*.wip.flow` is known-incomplete: it is reported but does not fail the run.
 //! `FLOWSCRIPT_ONLY=<substring>` restricts the run to matching fixtures.
 //! `FLOWSCRIPT_REPORT=1` prints the full report and does not fail, for triage runs.
+//!
+//! The other direction — board -> text -> board, i.e. that the renderer's own output feeds back
+//! through parse and reconcile without changing the board — lives in `render_contract_catalog.rs`.
+//! The two share `flowscript_support`, so both run against the same catalog and enricher.
+
+mod flowscript_support;
 
 use flow_like::flow::ast::{
-    MetadataEnricher, RenderOptions, parse, reconcile_text_with_catalog_enriched, render,
+    MetadataEnricher, RenderOptions, apply_flowscript_to_board, board_to_flowscript, parse,
+    reconcile_text_with_catalog_enriched, render,
 };
 use flow_like::flow::board::Board;
-use flow_like::flow::copilot::{NodeMetadata, node_to_metadata};
-use flow_like::flow::node::{Node, NodeLogic};
-use flow_like::flow::pin::PinType;
-use flow_like_catalog::CatalogBuilder;
+use flow_like::flow::copilot::{BoardCommand, NodeMetadata};
 use flow_like_storage::object_store::path::Path;
-use std::collections::HashMap;
+use flowscript_support::{
+    CATALOG, board_node_and_layer_ids, catalog, catalog_state, collect_files,
+    handwritten_fixture_dir as fixture_dir,
+};
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
-
-/// Node types whose `on_update` derives pins from their own literal arguments. Mirrors
-/// `ENRICH_ALLOWLIST` in `packages/core/src/flow/ast/apply.rs`: the product apply path enriches
-/// through it, so a harness that skipped it would under-test every dynamic-pin node.
-fn enrich_allowlist() -> Vec<&'static str> {
-    let mut list = vec![
-        "string_format",
-        "string_render_template",
-        "a2ui_push_csv_to_chart",
-        "df_sql_query",
-        "df_sql_query_cached",
-        "df_execute_sql",
-        "df_write_delta",
-        "graph_sql_query",
-        "control_switch",
-        "struct_break",
-        "struct_make_from_schema",
-        "ml_apply_transform",
-        "ml_predict",
-    ];
-    list.extend(ML_FIT_NODES);
-    list
-}
-
-const ML_FIT_NODES: &[&str] = &[
-    "fit_adaboost",
-    "fit_dbscan",
-    "fit_decision_tree",
-    "fit_elastic_net",
-    "fit_feature_scaler",
-    "fit_gaussian_mixture",
-    "fit_glm",
-    "fit_kmeans",
-    "fit_knn_classifier",
-    "fit_knn_regressor",
-    "fit_linear_regression",
-    "fit_logistic_regression",
-    "fit_multinomial_naive_bayes",
-    "fit_naive_bayes",
-    "fit_one_class_svm",
-    "fit_pca",
-    "fit_random_forest",
-    "fit_svm_multi_class",
-    "fit_svm_regression",
-    "fit_tfidf_vectorizer",
-    "fit_tsne",
-];
-
-/// `pin_name_matches` is crate-private, so this mirrors it: compare ignoring case and any
-/// `_`/space separators, which makes `output_col` match `outputCol` and `Input Col`.
-fn loose_pin_match(left: &str, right: &str) -> bool {
-    let norm = |s: &str| {
-        s.chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-    };
-    norm(left) == norm(right)
-}
-
-/// Build the same enricher the product apply path builds: seed a scratch node with the call's
-/// literal arguments, run its `on_update`, and read the pins back.
-fn build_enricher(logic: &[Arc<dyn NodeLogic>]) -> MetadataEnricher {
-    let allow = enrich_allowlist();
-    let logic_by_type: HashMap<String, Arc<dyn NodeLogic>> = logic
-        .iter()
-        .map(|logic| (logic.get_node().name, logic.clone()))
-        .filter(|(name, _)| allow.contains(&name.as_str()))
-        .collect();
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("current-thread runtime for on_update"),
-    );
-    Box::new(
-        move |meta: &NodeMetadata, args: &[(String, flow_like_types::Value)], board: &Board| {
-            let logic = logic_by_type.get(&meta.name)?;
-            let mut scratch = logic.get_node();
-            let mut seeded = false;
-            for (arg_name, value) in args {
-                let pin_id = scratch
-                    .pins
-                    .iter()
-                    .find(|(_, pin)| {
-                        pin.pin_type == PinType::Input
-                            && (loose_pin_match(&pin.name, arg_name)
-                                || loose_pin_match(&pin.friendly_name, arg_name))
-                    })
-                    .map(|(id, _)| id.clone());
-                if let Some(pin_id) = pin_id
-                    && let Some(pin) = scratch.pins.get_mut(&pin_id)
-                    && let Ok(bytes) = flow_like_types::json::to_vec(value)
-                {
-                    pin.default_value = Some(bytes);
-                    seeded = true;
-                }
-            }
-            if !seeded {
-                return None;
-            }
-            runtime.block_on(logic.on_update(&mut scratch, board));
-            Some(node_to_metadata(&scratch))
-        },
-    )
-}
-
-fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/ast/handwritten")
-}
-
-fn catalog() -> (Vec<NodeMetadata>, MetadataEnricher) {
-    let logic: Vec<Arc<dyn NodeLogic>> = CatalogBuilder::new().build();
-    let nodes: Vec<Node> = logic.iter().map(|logic| logic.get_node()).collect();
-    let metadata = nodes.iter().map(node_to_metadata).collect();
-    (metadata, build_enricher(&logic))
-}
-
-fn collect_fixtures(dir: &PathBuf, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_fixtures(&path, out);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("flow") {
-            out.push(path);
-        }
-    }
-}
 
 #[derive(Default)]
 struct Report {
@@ -239,7 +116,7 @@ fn check(path: &PathBuf, catalog: &[NodeMetadata], enricher: &MetadataEnricher) 
 fn handwritten_fixtures_reconcile_cleanly() {
     let dir = fixture_dir();
     let mut fixtures: Vec<PathBuf> = Vec::new();
-    collect_fixtures(&dir, &mut fixtures);
+    collect_files(&dir, "flow", &mut fixtures);
     fixtures.sort();
 
     if let Ok(filter) = std::env::var("FLOWSCRIPT_ONLY")
@@ -340,4 +217,396 @@ fn handwritten_fixtures_reconcile_cleanly() {
         failed.len(),
         fixtures.len()
     );
+}
+
+/// Exercise the product Apply boundary for representative gating handwritten fixtures, then copy
+/// the anchored result to a second Board. The second Apply must recreate node and layer identities,
+/// and both Boards must reconcile their own rendered source as a no-op.
+#[tokio::test]
+async fn clean_handwritten_fixtures_apply_and_copy_roundtrip() {
+    let dir = fixture_dir();
+    // These fixtures span positional syntax, dates, byte arrays, Function calls, multiple Events,
+    // globals, caches, DataFrames, and geospatial structures. The wider corpus remains covered by
+    // `handwritten_fixtures_reconcile_cleanly`; several larger fixtures document independent
+    // lower/apply gaps and cannot yet satisfy this stronger lifecycle invariant.
+    let fixtures = [
+        "t0-positional-args.flow",
+        "t1-datetime-window.flow",
+        "t1-faker-seed.flow",
+        "t1-hash-encode.flow",
+        "t1-string-hygiene.flow",
+        "t2-cron-cache.flow",
+        "t2-csv-dataframe.flow",
+        "t2-geo-fencing.flow",
+    ]
+    .map(|name| dir.join(name));
+
+    let state = catalog_state().await;
+    let render_options = RenderOptions {
+        anchors: true,
+        ..RenderOptions::default()
+    };
+    let mut failures = Vec::new();
+
+    for path in fixtures {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+        let mut source_board =
+            Board::new_detached(Some(format!("handwritten-source-{name}")), Path::default());
+        let source_apply = match apply_flowscript_to_board(
+            &mut source_board,
+            &source,
+            &CATALOG.nodes,
+            state.clone(),
+            None,
+            false,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                failures.push(format!("{name}: source Apply failed: {error:#}"));
+                continue;
+            }
+        };
+        if !source_apply.diagnostics.is_empty() {
+            failures.push(format!(
+                "{name}: source Apply diagnostics: {:?}",
+                source_apply.diagnostics
+            ));
+            continue;
+        }
+
+        let anchored_source = board_to_flowscript(&source_board, &render_options);
+        let source_ids = board_node_and_layer_ids(&source_board);
+        let source_noop = match apply_flowscript_to_board(
+            &mut source_board,
+            &anchored_source,
+            &CATALOG.nodes,
+            state.clone(),
+            None,
+            false,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                failures.push(format!("{name}: source round-trip Apply failed: {error:#}"));
+                continue;
+            }
+        };
+        if !source_noop.diagnostics.is_empty() || !source_noop.board_commands.is_empty() {
+            failures.push(format!(
+                "{name}: source round-trip was not a no-op: diagnostics={:?}, commands={:?}",
+                source_noop.diagnostics, source_noop.board_commands
+            ));
+            continue;
+        }
+
+        let mut copied_board =
+            Board::new_detached(Some(format!("handwritten-copy-{name}")), Path::default());
+        let copied_apply = match apply_flowscript_to_board(
+            &mut copied_board,
+            &anchored_source,
+            &CATALOG.nodes,
+            state.clone(),
+            None,
+            false,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                failures.push(format!("{name}: copied-anchor Apply failed: {error:#}"));
+                continue;
+            }
+        };
+        if !copied_apply.diagnostics.is_empty() {
+            failures.push(format!(
+                "{name}: copied-anchor Apply diagnostics: {:?}",
+                copied_apply.diagnostics
+            ));
+            continue;
+        }
+
+        let copied_ids = board_node_and_layer_ids(&copied_board);
+        let reused_ids = source_ids
+            .intersection(&copied_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !reused_ids.is_empty() {
+            failures.push(format!(
+                "{name}: copied Board reused source entity IDs: {reused_ids:?}"
+            ));
+            continue;
+        }
+
+        let anchored_copy = board_to_flowscript(&copied_board, &render_options);
+        let copied_noop = match apply_flowscript_to_board(
+            &mut copied_board,
+            &anchored_copy,
+            &CATALOG.nodes,
+            state.clone(),
+            None,
+            false,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                failures.push(format!(
+                    "{name}: copied Board round-trip Apply failed: {error:#}"
+                ));
+                continue;
+            }
+        };
+        if !copied_noop.diagnostics.is_empty() || !copied_noop.board_commands.is_empty() {
+            failures.push(format!(
+                "{name}: copied Board round-trip was not a no-op: diagnostics={:?}, commands={:?}",
+                copied_noop.diagnostics, copied_noop.board_commands
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "handwritten Apply/copy lifecycle failures:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// Rename the Function in a real handwritten program through the complete Apply path. The layer,
+/// body, boundary pins, and runtime callers must retain their IDs, and the rendered result must be
+/// stable on the next Apply.
+#[tokio::test]
+async fn handwritten_function_rename_preserves_runtime_identity() {
+    let source = std::fs::read_to_string(fixture_dir().join("t0-positional-args.flow"))
+        .expect("read positional-args fixture");
+    let state = catalog_state().await;
+    let mut board = Board::new_detached(
+        Some("handwritten-function-rename".to_string()),
+        Path::default(),
+    );
+    let initial = apply_flowscript_to_board(
+        &mut board,
+        &source,
+        &CATALOG.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("initial handwritten program applies");
+    assert!(initial.diagnostics.is_empty(), "{:?}", initial.diagnostics);
+
+    let before = board
+        .layers
+        .values()
+        .find(|layer| layer.name == "tag")
+        .expect("tag Function layer")
+        .clone();
+    let before_node_ids = board_node_and_layer_ids(&board);
+    let before_call_ids = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "control_call_function")
+        .map(|node| node.id.clone())
+        .collect::<HashSet<_>>();
+    assert_eq!(before_call_ids.len(), 3, "three handwritten Function calls");
+
+    let anchored = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    let renamed_source = anchored.replace("tag(", "formatTag(");
+    assert_ne!(renamed_source, anchored, "fixture rename changed no source");
+
+    let renamed = apply_flowscript_to_board(
+        &mut board,
+        &renamed_source,
+        &CATALOG.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("renamed handwritten program applies");
+    assert!(renamed.diagnostics.is_empty(), "{:?}", renamed.diagnostics);
+    assert_eq!(
+        renamed.board_commands.len(),
+        1,
+        "{:?}",
+        renamed.board_commands
+    );
+    assert!(matches!(
+        &renamed.board_commands[0],
+        BoardCommand::RenameLayer { layer_id, name, .. }
+            if layer_id == &before.id && name == "formatTag"
+    ));
+
+    let after = board
+        .layers
+        .get(&before.id)
+        .expect("renamed Function keeps its layer ID");
+    assert_eq!(after.name, "formatTag");
+    assert_eq!(after.parent_id, before.parent_id);
+    assert_eq!(after.cache, before.cache);
+    assert_eq!(
+        after.pins.keys().collect::<HashSet<_>>(),
+        before.pins.keys().collect::<HashSet<_>>()
+    );
+    assert_eq!(
+        after.nodes.keys().collect::<HashSet<_>>(),
+        before.nodes.keys().collect::<HashSet<_>>()
+    );
+    assert_eq!(
+        after.variables.keys().collect::<HashSet<_>>(),
+        before.variables.keys().collect::<HashSet<_>>()
+    );
+    assert_eq!(board_node_and_layer_ids(&board), before_node_ids);
+
+    let after_calls = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "control_call_function")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_calls
+            .iter()
+            .map(|node| node.id.clone())
+            .collect::<HashSet<_>>(),
+        before_call_ids
+    );
+    for call in after_calls {
+        let target = call
+            .pins
+            .values()
+            .find(|pin| pin.name == "function_layer_id")
+            .and_then(|pin| pin.default_value.as_deref())
+            .and_then(|bytes| flow_like_types::json::from_slice::<String>(bytes).ok());
+        assert_eq!(target.as_deref(), Some(before.id.as_str()));
+    }
+
+    let rendered = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    assert!(rendered.contains("function formatTag("), "{rendered}");
+    assert!(!rendered.contains("function tag("), "{rendered}");
+    let noop = apply_flowscript_to_board(&mut board, &rendered, &CATALOG.nodes, state, None, false)
+        .await
+        .expect("renamed rendering reapplies");
+    assert!(noop.diagnostics.is_empty(), "{:?}", noop.diagnostics);
+    assert!(noop.board_commands.is_empty(), "{:?}", noop.board_commands);
+}
+
+/// Copy a nested Event whose module, Function, body nodes, and local identities are all foreign to
+/// the destination Board. Every unavailable anchor must flow through same-batch layer references
+/// and produce a self-contained graph with fresh node and layer IDs.
+#[tokio::test]
+async fn copied_nested_event_recreates_inside_new_module_and_function() {
+    let source = r#"use log::{ info }
+use string::{ trim }
+
+module tools {
+    function normalize(value: string): (result: string) {
+        eventsGeneric audit(message: string) {
+            info({ message: message, toast: false })
+        }
+        const result = trim(value)
+        return result
+    }
+}
+
+eventsSimple copiedAnchorProbe() {
+    const result = tools::normalize("  ready  ")
+    info({ message: result, toast: false })
+}
+"#;
+    let state = catalog_state().await;
+    let mut source_board =
+        Board::new_detached(Some("nested-anchor-source".to_string()), Path::default());
+    let initial = apply_flowscript_to_board(
+        &mut source_board,
+        source,
+        &CATALOG.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("nested source applies");
+    assert!(initial.diagnostics.is_empty(), "{:?}", initial.diagnostics);
+
+    let anchored = board_to_flowscript(
+        &source_board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    assert!(anchored.contains("//@l:"), "{anchored}");
+    assert!(anchored.contains("//@n:"), "{anchored}");
+    let source_ids = board_node_and_layer_ids(&source_board);
+
+    let mut copied_board =
+        Board::new_detached(Some("nested-anchor-copy".to_string()), Path::default());
+    let copied = apply_flowscript_to_board(
+        &mut copied_board,
+        &anchored,
+        &CATALOG.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("nested copied anchors apply");
+    assert!(copied.diagnostics.is_empty(), "{:?}", copied.diagnostics);
+    assert!(
+        source_ids.is_disjoint(&board_node_and_layer_ids(&copied_board)),
+        "copied graph reused a source node or layer ID"
+    );
+
+    let function = copied_board
+        .layers
+        .values()
+        .find(|layer| layer.name == "normalize")
+        .expect("copied Function layer");
+    let audit = copied_board
+        .nodes
+        .values()
+        .find(|node| node.name == "events_generic" && node.friendly_name == "audit")
+        .expect("copied nested Event entry");
+    assert_eq!(audit.layer.as_deref(), Some(function.id.as_str()));
+
+    let rendered = board_to_flowscript(
+        &copied_board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    let noop = apply_flowscript_to_board(
+        &mut copied_board,
+        &rendered,
+        &CATALOG.nodes,
+        state,
+        None,
+        false,
+    )
+    .await
+    .expect("copied nested graph reapplies");
+    assert!(noop.diagnostics.is_empty(), "{:?}", noop.diagnostics);
+    assert!(noop.board_commands.is_empty(), "{:?}", noop.board_commands);
 }

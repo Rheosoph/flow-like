@@ -70,7 +70,7 @@ export const FlowLayerIndicators = memo(function FlowLayerIndicators({
 		const result: LayerIndicator[] = [];
 
 		for (const node of nodes) {
-			if (node.type !== "layer") continue;
+			if (node.type !== "layerNode") continue;
 
 			const matchingPeers: PeerPresence[] = [];
 

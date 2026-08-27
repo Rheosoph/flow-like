@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "next dev -p 3001",
-		"build": "bun ../../scripts/sync-node-icons.ts && next build",
+		"build": "bun ../../scripts/sync-node-icons.ts && next build --turbopack",
 		"start": "next start -p 3001",
 		"upload-sourcemaps": "bun ../../scripts/upload-sourcemaps.ts --source=web --dir=out",
 		"deploy": "bun run build && bunx wrangler pages deploy out",
@@ -76,7 +76,7 @@
 		"lucide-react": "^0.525.0",
 		"mini-svg-data-uri": "^1.4.4",
 		"minisearch": "^7.1.1",
-		"next": "^16.1.6",
+		"next": "^16.3.3",
 		"next-themes": "^0.4.6",
 		"oidc-client-ts": "^3.2.1",
 		"react": "19.2.1",

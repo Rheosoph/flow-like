@@ -294,6 +294,25 @@ export default {
 	"v5.control.item3": "Pronto per l'EU AI Act",
 	"v5.control.item4": "Osservabilità end-to-end",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "GUIDA APERTA PER SVILUPPATORI",
+	"v5.book.title":
+		"Una guida per sviluppatori, dall’incidente all’implementazione.",
+	"v5.book.body":
+		"FlowBook è pensato per gli sviluppatori che lavorano con Flow-Like. Segui un flusso di lavoro eseguibile attraverso il suo codice sorgente tipizzato in FlowScript, il canvas visuale e le evidenze di runtime lasciate in caso di successo o errore.",
+	"v5.book.meta": "Edizione aperta · 2026 · Inglese",
+	"v5.book.read": "Leggi FlowBook online",
+	"v5.book.download": "Scarica il PDF",
+	"v5.book.note": "Lettura gratuita. Non è richiesta la registrazione.",
+	"v5.book.generalLabel": "GUIDE GENERALI",
+	"v5.book.generalBody":
+		"Per una panoramica del prodotto e tutorial passo passo, inizia dalla documentazione o dal canale YouTube di Flow-Like.",
+	"v5.book.docs": "Esplora la documentazione",
+	"v5.book.youtube": "Guarda su YouTube",
+	"v5.book.coverCta": "Scarica l’edizione aperta",
+	"v5.book.aria":
+		"Scarica FlowBook, una guida per sviluppatori di Flow-Like, in formato PDF",
+
 	"v5.footer.notes.kicker": "Note dalla sala macchine",
 	"v5.footer.notes.title": "Cosa stiamo costruendo e cosa abbiamo imparato.",
 	"v5.footer.notes.all": "Tutte le note →",

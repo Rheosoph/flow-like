@@ -41,7 +41,9 @@ jobs:
           --target-dir target/feature-boundaries
           core-contracts
           dev-default
+          core-flow-metadata
           core-flow
+          core-model
           types-contracts
           types-proto
           storage-contracts
@@ -56,13 +58,25 @@ jobs:
           ./tools/check-feature-boundaries.sh
           --target-dir target/feature-boundaries
           catalog-portable
+          catalog-portable-execute
           catalog-server
 
-      - name: Verify the opt-in server ML bundle remains complete
+      - name: Verify catalog aliases and product feature composition
         run: >-
           ./tools/check-feature-boundaries.sh
           --mode deps
           catalog-server-local-ml
+          catalog-execute
+          catalog-server-execute
+          catalog-executor
+          catalog-local-runtime
+          catalog-modifier-local-ml
+          catalog-modifier-data
+          executor-default
+          executor-server
+          api-remote-catalog
+          api-aws-catalog
+          api-local-ml-catalog
 
       - name: Guard the API/WASM host separation
         run: >-

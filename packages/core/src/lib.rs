@@ -1,10 +1,10 @@
 #![recursion_limit = "256"]
 
 pub mod a2ui;
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 pub mod copilot;
 pub mod credentials;
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 pub mod flow;
 pub mod protobuf;
 pub mod state;

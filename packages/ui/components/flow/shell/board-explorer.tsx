@@ -15,9 +15,10 @@ import {
 	Trash2Icon,
 	TriangleAlertIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
+import { type PeerUserInfo, colorFromSub } from "../../../hooks/use-peer-users";
 import type { IGenericCommand } from "../../../lib";
 import {
 	FLOWSCRIPT_KEYWORDS,
@@ -29,12 +30,18 @@ import {
 } from "../../../lib/flow-modules";
 import { owningModuleId } from "../../../lib/layer-to-function";
 import {
+	type PresenceMark,
+	mergePresenceMarks,
+} from "../../../lib/realtime/presence-locations";
+import {
 	type IBoard,
 	type ILayer,
 	ILayerType,
 } from "../../../lib/schema/flow/board";
+import { userInitials } from "../../../lib/user-display";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import { Button } from "../../ui/button";
 import {
 	ContextMenu,
@@ -146,6 +153,91 @@ function TreeRow({
 	);
 }
 
+const MAX_PRESENCE_DOTS = 3;
+const NO_MARKS: PresenceMark[] = [];
+
+/**
+ * Who is at a place — a file, a layer, a node — as a facepile small enough to
+ * sit in a tree row. Shared with the inspector so the same person looks the
+ * same in both rails.
+ */
+export const PresenceDots = memo(function PresenceDots({
+	marks,
+	peerUsers,
+	className,
+}: Readonly<{
+	marks: readonly PresenceMark[];
+	peerUsers?: Map<string, PeerUserInfo>;
+	className?: string;
+}>) {
+	const { t } = useTranslation("flow");
+	if (marks.length === 0) return null;
+	const shown = marks.slice(0, MAX_PRESENCE_DOTS);
+	const overflow = marks.length - shown.length;
+	return (
+		<span className={cn("flex shrink-0 items-center -space-x-1", className)}>
+			{shown.map((mark) => {
+				const info = peerUsers?.get(mark.sub);
+				const color = info?.color ?? colorFromSub(mark.sub);
+				const displayName = info?.name ?? mark.sub.slice(-8);
+				const label = mark.self ? t("you", "You") : displayName;
+				return (
+					<Avatar
+						key={mark.sub}
+						className="size-3.5 rounded-full ring-1 ring-background"
+						style={{ boxShadow: `0 0 0 1px ${color}` }}
+						title={mark.sessions > 1 ? `${label} ×${mark.sessions}` : label}
+					>
+						{info?.avatarUrl && (
+							<AvatarImage
+								src={info.avatarUrl}
+								alt=""
+								className="object-cover"
+							/>
+						)}
+						<AvatarFallback
+							className="rounded-full text-[7px] font-semibold leading-none text-white"
+							style={{ background: color }}
+						>
+							{userInitials(displayName).charAt(0)}
+						</AvatarFallback>
+					</Avatar>
+				);
+			})}
+			{overflow > 0 && (
+				<span
+					className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[7px] font-semibold leading-none text-muted-foreground ring-1 ring-background"
+					title={marks
+						.slice(MAX_PRESENCE_DOTS)
+						.map((mark) =>
+							mark.self
+								? t("you", "You")
+								: (peerUsers?.get(mark.sub)?.name ?? mark.sub.slice(-8)),
+						)
+						.join(", ")}
+				>
+					+{overflow}
+				</span>
+			)}
+		</span>
+	);
+});
+
+/** A row's trailing slot with presence in front of whatever control it already had. */
+function withPresence(
+	dots: React.ReactNode,
+	control: React.ReactNode,
+): React.ReactNode {
+	if (!dots) return control;
+	if (!control) return dots;
+	return (
+		<span className="flex shrink-0 items-center gap-1">
+			{dots}
+			{control}
+		</span>
+	);
+}
+
 function SectionHeader({
 	label,
 	action,
@@ -180,6 +272,9 @@ export function BoardExplorer({
 	executeCommand,
 	readOnly,
 	reservedRoots = FLOWSCRIPT_KEYWORDS,
+	presenceByFile,
+	presenceByLayer,
+	peerUsers,
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -194,6 +289,11 @@ export function BoardExplorer({
 	) => Promise<unknown>;
 	readOnly: boolean;
 	reservedRoots?: readonly string[];
+	/** Who has which file open in code, keyed by `main` or a module layer id. */
+	presenceByFile?: Map<string, PresenceMark[]>;
+	/** Who has which layer open on the canvas, keyed by layer id. */
+	presenceByLayer?: Map<string, PresenceMark[]>;
+	peerUsers?: Map<string, PeerUserInfo>;
 }>) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
@@ -300,6 +400,26 @@ export function BoardExplorer({
 		});
 	}, []);
 
+	// A module is both a file and a layer, so its row shows whoever is in
+	// either. The parent's arrays are handed through untouched whenever only
+	// one side has anyone, which is what keeps the dots' memo intact.
+	const marksFor = useCallback(
+		(id: string): readonly PresenceMark[] => {
+			const inFile = presenceByFile?.get(id);
+			const onLayer = presenceByLayer?.get(id);
+			if (!inFile) return onLayer ?? NO_MARKS;
+			if (!onLayer) return inFile;
+			return mergePresenceMarks(inFile, onLayer);
+		},
+		[presenceByFile, presenceByLayer],
+	);
+
+	const presenceDots = (id: string): React.ReactNode => {
+		const marks = marksFor(id);
+		if (marks.length === 0) return null;
+		return <PresenceDots marks={marks} peerUsers={peerUsers} />;
+	};
+
 	// Nesting is what makes a module a folder, so the draft must be visible —
 	// expand a collapsed parent before opening the name field inside it.
 	const startDraftInside = useCallback((parentId: string) => {
@@ -362,7 +482,8 @@ export function BoardExplorer({
 				label={`${layer.name}${MODULE_FILE_EXTENSION}`}
 				active={isActive}
 				onSelect={() => onSelectFile(layer.id)}
-				trailing={
+				trailing={withPresence(
+					presenceDots(layer.id),
 					!readOnly ? (
 						<button
 							type="button"
@@ -381,8 +502,8 @@ export function BoardExplorer({
 						>
 							<PlusIcon className="size-3" />
 						</button>
-					) : undefined
-				}
+					) : undefined,
+				)}
 				expander={
 					children.length > 0 ? (
 						<button
@@ -499,7 +620,8 @@ export function BoardExplorer({
 				label={MAIN_FILE_LABEL}
 				active={currentFileId === MAIN_FILE_ID}
 				onSelect={() => onSelectFile(null)}
-				trailing={
+				trailing={withPresence(
+					presenceDots(MAIN_FILE_ID),
 					<LockIcon
 						className={cn(
 							"size-3 shrink-0",
@@ -511,8 +633,8 @@ export function BoardExplorer({
 							"theRootFileCannotBeChanged",
 							"The root file cannot be changed",
 						)}
-					/>
-				}
+					/>,
+				)}
 			/>
 			{roots.map((node) => renderModule(node, 0))}
 			{draftParent === null &&

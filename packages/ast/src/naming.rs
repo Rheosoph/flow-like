@@ -294,6 +294,25 @@ pub fn is_keyword(ident: &str) -> bool {
     KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(ident))
 }
 
+/// Turn a board-authored name (`Retry Count`, `Return`) into an identifier FlowScript can write
+/// bare at a declaration and every reference to it.
+///
+/// [`to_camel_case`] alone is not enough. It strips every character the lexer would choke on, but
+/// it has no idea about keywords, so a board variable named `Return` reached the renderer as a bare
+/// `return` and its assignment (`return = classify.result`) stopped parsing; one named `True` was
+/// worse still, re-parsing as a boolean literal so the wire to it silently vanished.
+///
+/// A colliding name gets a numeric suffix, matching how minted bindings are disambiguated
+/// elsewhere, and the result is a `to_camel_case` fixed point so it stays stable across re-renders.
+pub fn declared_identifier(name: &str) -> String {
+    let camel = to_camel_case(name);
+    if is_keyword(&camel) {
+        format!("{camel}2")
+    } else {
+        camel
+    }
+}
+
 /// The legacy flat spelling of a node type (`string_trim` → `stringTrim`). Accepted forever.
 pub fn legacy_display(node_type: &str) -> String {
     to_camel_case(node_type)
@@ -1199,7 +1218,8 @@ mod tests {
         assert_eq!(receiver_class("Struct", "HashMap"), Some("map"));
         assert_eq!(receiver_class("Integer", "HashSet"), Some("set"));
         assert_eq!(receiver_class("Struct", "Normal"), Some("struct"));
-        assert_eq!(receiver_class("Byte", "Normal"), Some("bytes"));
+        assert_eq!(receiver_class("Byte", "Array"), Some("bytes"));
+        assert_eq!(receiver_class("Byte", "Normal"), Some("byte"));
         assert_eq!(receiver_class("PathBuf", "Normal"), Some("path"));
         assert_eq!(receiver_class("Date", "Normal"), Some("datetime"));
         assert_eq!(receiver_class("Generic", "Normal"), None);

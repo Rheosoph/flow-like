@@ -1010,6 +1010,18 @@ impl Parser<'_> {
             Tok::Ident(kw) if kw == "for" => self.for_stmt(),
             Tok::Ident(kw) if kw == "while" => self.while_stmt(),
             Tok::Ident(_) => self.ident_stmt(),
+            // A method call whose receiver is a literal starts the line with that literal:
+            // `"payload".sha256()`. The renderer emits exactly this for an impure method-form node
+            // whose receiver pin holds a typed-in value and whose output nobody reads, so the
+            // grammar has to accept it or those boards cannot be re-applied. Only a call qualifies
+            // as a statement — a bare literal on its own line is still an error. `{` is excluded on
+            // purpose: it opens a branch-arm map, not an expression.
+            Tok::Str(_)
+            | Tok::Int(_)
+            | Tok::Float(_)
+            | Tok::Template(_)
+            | Tok::LBracket
+            | Tok::LParen => self.expression_stmt(),
             other => Err(self.err(format!("unexpected token in block: `{other:?}`"))),
         }
     }
@@ -1157,8 +1169,13 @@ impl Parser<'_> {
         let return_line = self.line();
         self.bump(); // return
         let mut values = Vec::new();
-        // A value list, if present, sits on the same source line as `return`.
-        if !matches!(self.cur(), Tok::RBrace | Tok::Semi) && self.line() == return_line {
+        // A value list, if present, sits on the same source line as `return`. A trailing comment
+        // does too and is not one: an anchored value-less return renders as `return   //@n:id`,
+        // and treating that comment as the start of an expression rejected the document — which
+        // every board holding a value-less Return Result node produces.
+        if !matches!(self.cur(), Tok::RBrace | Tok::Semi | Tok::Comment(_))
+            && self.line() == return_line
+        {
             values.push(self.expr()?);
             while self.eat(&Tok::Comma) {
                 values.push(self.expr()?);
@@ -1216,6 +1233,19 @@ impl Parser<'_> {
     }
 
     /// A statement beginning with an identifier: an assignment, a call, or an N-way branch.
+    /// A statement that is an expression not starting with an identifier. Only a call is a
+    /// meaningful statement; anything else has no effect and is far more likely to be a typo.
+    fn expression_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let value = self.expr()?;
+        let Expr::Call(call) = value else {
+            return Err(self.err(
+                "an expression statement must be a call (a bare value on its own line does nothing)",
+            ));
+        };
+        let anchor = self.take_anchor();
+        Ok(Stmt::Call { call, anchor })
+    }
+
     fn ident_stmt(&mut self) -> Result<Stmt, ParseError> {
         // A nested event handler (`name(params) { … }`) — an independent trigger entry that
         // closes over the enclosing scope, distinct from an object-arg call/branch.
@@ -1254,7 +1284,15 @@ impl Parser<'_> {
         // first-class `Stmt::FieldAssign` (round-trips back to the dot form); reconcile expands it
         // to `structSet({ structIn: base, field: "path", value })` and rebinds `base`.
         if matches!(self.cur(), Tok::Assign | Tok::CompoundAssign(_)) {
-            let (base, path) = lvalue_to_field_path(&value).filter(|(_, p)| !p.is_empty()).ok_or_else(
+            // A bare `x = v` is a plain assignment and is handled above; anything reached through a
+            // `.`/`[…]` step is a field write. Keying that off the shape rather than off a non-empty
+            // path matters because the path text may legitimately be empty — an unset `struct_set`
+            // field pin renders as `row[""] = v`, which used to be rejected outright.
+            let is_field_target = matches!(
+                value,
+                Expr::Member { .. } | Expr::Field { .. } | Expr::Index { .. }
+            );
+            let (base, path) = lvalue_to_field_path(&value).filter(|_| is_field_target).ok_or_else(
                 || self.err("assignment target must be a variable or a struct field path (e.g. `x.field`)"),
             )?;
             let compound = match self.bump() {
@@ -1462,7 +1500,11 @@ impl Parser<'_> {
             self.expect_no_arg(dec)?;
         }
         let for_token = self.cur_token().clone();
-        let mut stmt = self.for_stmt()?;
+        // `@parallel` only exists on the sugared form, which settles the ambiguity `for_stmt`
+        // otherwise cannot: a call head is normally kept as the explicit handle form, so
+        // `@parallel for (const item of links.toArray())` — which the renderer emits for any
+        // parallel loop over a computed array — was read as a loop-node call and rejected.
+        let mut stmt = self.for_stmt_with(ForHead::Sugared)?;
         let Stmt::Loop {
             keyword, iterable, ..
         } = &mut stmt
@@ -1485,6 +1527,12 @@ impl Parser<'_> {
     /// call returning an array, so a plain-identifier head whose iterable is a call stays the
     /// handle form and reconcile decides by the resolved node type.
     fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.for_stmt_with(ForHead::Infer)
+    }
+
+    /// `for_stmt`, with the caller able to settle the call-head ambiguity when it already knows the
+    /// answer (see the `@parallel` decorator).
+    fn for_stmt_with(&mut self, head_kind: ForHead) -> Result<Stmt, ParseError> {
         self.bump(); // for
         self.expect(&Tok::LParen)?;
         if !self.is_ident("const") {
@@ -1511,7 +1559,7 @@ impl Parser<'_> {
         let body = self.block_body()?;
         let keyword = FOR_EACH_KEYWORD.to_string();
         match head {
-            Expr::Call(call) if index.is_none() => Ok(Stmt::Loop {
+            Expr::Call(call) if index.is_none() && head_kind == ForHead::Infer => Ok(Stmt::Loop {
                 keyword,
                 bind: Some(name),
                 call,
@@ -2078,6 +2126,15 @@ fn compound_assign_value(op: String, target: Expr, rhs: Expr) -> Expr {
     }
 }
 
+/// Whether the caller already knows a `for` head is the sugared array form.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ForHead {
+    /// Decide from the head expression: a bare call is the explicit loop-node form.
+    Infer,
+    /// The head is an array expression whatever its shape — a call is the array, not the loop node.
+    Sugared,
+}
+
 /// Flattens an lvalue member/index chain rooted at a variable into `(base_variable, dot_path)`:
 /// `pref.cost_weight` → `("pref", "cost_weight")`, `p.a.b` → `("p", "a.b")`,
 /// `p.items[0].name` → `("p", "items[0].name")`. Returns `None` for non-static lvalues.
@@ -2108,10 +2165,16 @@ fn lvalue_to_field_path(expr: &Expr) -> Option<(String, String)> {
     }
 }
 
-/// True when `s` is a camelCase fixed point (no separators), so a `.s` access renders the same
-/// whether treated as an output-pin selection or a struct field.
+/// True when `s` is a camelCase fixed point, so a `.s` access renders the same whether it is
+/// treated as an output-pin selection or a struct field.
+///
+/// This has to be the actual transform, not an approximation of it. "All alphanumeric" accepted
+/// `DisplayName` and `ID`, which are not fixed points: read as `Expr::Field` they re-render
+/// camelized, so `row.DisplayName` became `row.displayName` on the second render and the struct key
+/// silently changed. A pin name in rendered text is always already camelCase, so nothing that is
+/// genuinely a pin selection is lost by requiring it.
 fn is_camel_fixed_point(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+    !s.is_empty() && crate::text::to_camel_case(s) == s
 }
 
 /// Find the byte offset just past the balanced `{…}`/`[…]` span starting at `start`, skipping

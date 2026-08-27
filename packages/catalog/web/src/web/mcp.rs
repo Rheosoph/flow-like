@@ -1,83 +1,53 @@
 #[cfg(not(feature = "execute"))]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::{
-    LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
-};
+use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
+#[cfg(all(feature = "execute", not(all(feature = "local", feature = "remote"))))]
+use flow_like::flow::execution::{internal_node::InternalNode, log::LogMessage};
 use flow_like::flow::{
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType as NodeVariableType,
 };
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like::flow::{
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_types::async_trait;
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like_types::json;
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(all(feature = "local", feature = "remote"))))]
 use flow_like_types::json::json;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use std::collections::{HashMap, HashSet};
 
 use super::{rest::RestAuthConfig, tls::TlsConfig};
 
 const MCP_CONFIG_NODE_VERSION: u32 = 4;
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_WELL_KNOWN_OAUTH_PATH: &str = "/.well-known/oauth-protected-resource";
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_SSE_HEARTBEAT_SECONDS: u64 = 15;
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_LEGACY_SESSION_QUERY_PARAM: &str = "sessionId";
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_EMPTY_STRING_HASH: &str = "16248035215404677707";
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 const MCP_BROWSER_INSPECTOR_TEMPLATE: &str =
     include_str!("../../../../../assets/mcp-inspector.html");
 
@@ -604,7 +574,7 @@ impl NodeLogic for McpServerNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
+        #[cfg(not(feature = "remote"))]
         use std::sync::{
             Arc,
             atomic::{AtomicU32, Ordering},
@@ -614,6 +584,16 @@ impl NodeLogic for McpServerNode {
         context.deactivate_exec_pin("on_close").await?;
         context.activate_exec_pin("exec_error").await?;
 
+        #[cfg(all(feature = "local", feature = "remote"))]
+        {
+            context.log_message(
+                "MCP server execution is ambiguous: features 'local' and 'remote' are both enabled",
+                LogLevel::Error,
+            );
+            return Ok(());
+        }
+
+        #[cfg(not(all(feature = "local", feature = "remote")))]
         let config: McpServerConfig = context.evaluate_pin("config").await?;
 
         // Remote build: don't bind a socket. Emit the composed config so the
@@ -643,7 +623,7 @@ impl NodeLogic for McpServerNode {
             return Ok(());
         }
 
-        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
+        #[cfg(not(feature = "remote"))]
         {
             let addr = format!("{}:{}", config.host, config.port);
             let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -808,7 +788,7 @@ impl NodeLogic for McpServerNode {
                 return Err(flow_like_types::anyhow!("Execution was cancelled"));
             }
         }
-        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
+        #[cfg(not(feature = "remote"))]
         Ok(())
     }
 
@@ -820,10 +800,7 @@ impl NodeLogic for McpServerNode {
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[derive(Clone)]
 struct ToolEntry {
     name: String,
@@ -833,10 +810,7 @@ struct ToolEntry {
     argument_aliases: HashMap<String, String>,
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[derive(Clone)]
 struct CachedMcpResource {
     uri: String,
@@ -846,10 +820,7 @@ struct CachedMcpResource {
     bytes: Vec<u8>,
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn build_tool_contexts(
     context: &ExecutionContext,
     function_refs: &[String],
@@ -887,10 +858,7 @@ async fn build_tool_contexts(
     map
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn tool_metadata(
     node: &std::sync::Arc<InternalNode>,
     board_refs: &HashMap<String, String>,
@@ -962,10 +930,7 @@ async fn tool_metadata(
     )
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn resolve_mcp_text_ref(value: &str, board_refs: &HashMap<String, String>) -> String {
     let trimmed = value.trim();
     if trimmed == MCP_EMPTY_STRING_HASH {
@@ -977,10 +942,7 @@ fn resolve_mcp_text_ref(value: &str, board_refs: &HashMap<String, String>) -> St
         .unwrap_or_else(|| trimmed.to_string())
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn resolved_mcp_description(
     description: &str,
     board_refs: &HashMap<String, String>,
@@ -994,10 +956,7 @@ fn resolved_mcp_description(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn resolve_mcp_schema_ref(
     schema: Option<&str>,
     board_refs: &HashMap<String, String>,
@@ -1005,10 +964,7 @@ fn resolve_mcp_schema_ref(
     schema.map(|schema| resolve_mcp_text_ref(schema, board_refs))
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn unique_tool_argument_name(pin: &Pin, used: &HashSet<String>) -> String {
     let friendly = super::http_runtime::sanitize_identifier(pin.friendly_name.trim());
     let raw = super::http_runtime::sanitize_identifier(pin.name.trim());
@@ -1035,10 +991,7 @@ fn unique_tool_argument_name(pin: &Pin, used: &HashSet<String>) -> String {
     candidate
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn register_tool_argument_aliases(
     aliases: &mut HashMap<String, String>,
     public_name: &str,
@@ -1059,10 +1012,7 @@ fn register_tool_argument_aliases(
     );
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn register_tool_argument_alias(
     aliases: &mut HashMap<String, String>,
     alias: &str,
@@ -1077,10 +1027,7 @@ fn register_tool_argument_alias(
         .or_insert_with(|| pin_name.to_string());
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn normalize_tool_arguments(
     arguments: flow_like_types::Value,
     tool: &ToolEntry,
@@ -1105,10 +1052,7 @@ fn normalize_tool_arguments(
     flow_like_types::Value::Object(normalized)
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn pin_schema(
     data_type: &VariableType,
     value_type: &ValueType,
@@ -1139,10 +1083,7 @@ fn pin_schema(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn preload_resources(
     context: &mut ExecutionContext,
     resources: &[McpResourceRegistration],
@@ -1172,10 +1113,7 @@ async fn preload_resources(
     out
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[allow(dead_code)]
 struct McpSession {
     protocol_version: String,
@@ -1185,20 +1123,14 @@ struct McpSession {
     created_at: std::time::Instant,
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 type SessionMap = std::sync::Arc<
     flow_like_types::sync::Mutex<
         HashMap<String, std::sync::Arc<flow_like_types::sync::Mutex<McpSession>>>,
     >,
 >;
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn negotiate_protocol_version(requested: Option<&str>) -> String {
     match requested {
         Some(v) if MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v.to_string(),
@@ -1206,18 +1138,12 @@ fn negotiate_protocol_version(requested: Option<&str>) -> String {
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn cors_origin_header(origin: Option<&str>) -> String {
     origin.unwrap_or("*").to_string()
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn apply_cors_headers(response: &mut super::http_runtime::HttpResponse, origin: Option<&str>) {
     response.headers.insert(
         "access-control-allow-origin".to_string(),
@@ -1238,10 +1164,7 @@ fn apply_cors_headers(response: &mut super::http_runtime::HttpResponse, origin: 
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn cors_preflight_response(
     request: &super::http_runtime::HttpRequest,
     origin: Option<&str>,
@@ -1270,10 +1193,7 @@ fn cors_preflight_response(
     response
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn resource_url(config: &McpServerConfig, host_header: Option<&str>) -> String {
     let authority = host_header
         .map(str::trim)
@@ -1297,10 +1217,7 @@ fn resource_url(config: &McpServerConfig, host_header: Option<&str>) -> String {
     )
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn add_www_authenticate(
     response: &mut super::http_runtime::HttpResponse,
     config: &McpServerConfig,
@@ -1317,10 +1234,7 @@ fn add_www_authenticate(
         .insert("www-authenticate".to_string(), header);
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn oauth_metadata_response(
     config: &McpServerConfig,
     origin: Option<&str>,
@@ -1364,10 +1278,7 @@ fn oauth_metadata_response(
     response
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn parse_accept_types(accept: &str) -> (bool, bool) {
     let trimmed = accept.trim();
     if trimmed.is_empty() || trimmed.contains("*/*") {
@@ -1392,10 +1303,7 @@ fn parse_accept_types(accept: &str) -> (bool, bool) {
     (wants_json, wants_sse)
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn accepts_html(accept: &str) -> bool {
     accept.split(',').any(|piece| {
         let mime = piece
@@ -1408,10 +1316,7 @@ fn accepts_html(accept: &str) -> bool {
     })
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn browser_inspector_response(
     config: &McpServerConfig,
     origin: Option<&str>,
@@ -1431,10 +1336,7 @@ fn browser_inspector_response(
     response
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn request_session_id(request: &super::http_runtime::HttpRequest) -> Option<String> {
     request
         .headers
@@ -1450,18 +1352,12 @@ fn request_session_id(request: &super::http_runtime::HttpRequest) -> Option<Stri
         })
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn new_session_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn create_session(
     client: &flow_like_types::Value,
     protocol_version: &str,
@@ -1486,10 +1382,7 @@ async fn create_session(
     (session_id, session)
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn legacy_message_endpoint(
     config: &McpServerConfig,
     host_header: Option<&str>,
@@ -1503,10 +1396,7 @@ fn legacy_message_endpoint(
     )
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut stream: super::tls::BoxedIo,
@@ -1668,10 +1558,7 @@ async fn handle_connection(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_post_request<S>(
     stream: &mut S,
@@ -1907,10 +1794,7 @@ async fn handle_post_request<S>(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn handle_initialize(
     payload: &flow_like_types::Value,
     client: &flow_like_types::Value,
@@ -1967,10 +1851,7 @@ async fn handle_initialize(
     (response, session_id, session)
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_get_sse<S>(
     stream: &mut S,
@@ -2090,10 +1971,7 @@ async fn handle_get_sse<S>(
     let _ = stream.shutdown().await;
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn dispatch_json_rpc(
     payload: &flow_like_types::Value,
     config: &McpServerConfig,
@@ -2194,10 +2072,7 @@ async fn dispatch_json_rpc(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn tool_call_response(
     id: Option<flow_like_types::Value>,
     params: flow_like_types::Value,
@@ -2257,10 +2132,7 @@ async fn tool_call_response(
     }
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn resource_read_result(
     params: &flow_like_types::Value,
     resources: &[CachedMcpResource],
@@ -2294,10 +2166,7 @@ fn resource_read_result(
     Ok(json!({"contents": [content]}))
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn prompt_argument_specs(template: &str) -> Vec<flow_like_types::Value> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
@@ -2323,10 +2192,7 @@ fn prompt_argument_specs(template: &str) -> Vec<flow_like_types::Value> {
     out
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn substitute_prompt_template(template: &str, arguments: &flow_like_types::Value) -> String {
     let map = arguments.as_object().cloned().unwrap_or_default();
     let mut output = String::with_capacity(template.len());
@@ -2359,10 +2225,7 @@ fn substitute_prompt_template(template: &str, arguments: &flow_like_types::Value
     output
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn prompt_get_result(
     params: &flow_like_types::Value,
     prompts: &[McpPromptRegistration],
@@ -2391,10 +2254,7 @@ fn prompt_get_result(
     }))
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn result_text(value: &flow_like_types::Value) -> String {
     value
         .as_str()
@@ -2402,10 +2262,7 @@ fn result_text(value: &flow_like_types::Value) -> String {
         .unwrap_or_else(|| json::to_string(value).unwrap_or_default())
 }
 
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn json_rpc_error(
     id: Option<flow_like_types::Value>,
     code: i64,
@@ -2414,7 +2271,7 @@ fn json_rpc_error(
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(all(feature = "local", feature = "remote"))))]
 async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, log_name: &str) {
     let Ok(pin) = context.get_pin_by_name(pin_name).await else {
         return;
@@ -2432,11 +2289,7 @@ async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, 
     }
 }
 
-#[cfg(all(
-    test,
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(test, feature = "execute", not(feature = "remote")))]
 mod tests {
     use super::*;
     use crate::web::test_support::{internal_node, internal_node_with_logic, test_context};

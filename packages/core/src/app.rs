@@ -1045,9 +1045,9 @@ impl App {
 
         let mut widget = self.open_widget(widget_id.to_string(), None).await?;
         widget.bump_version(version_type);
-        let version = widget
-            .version
-            .ok_or(flow_like_types::anyhow!("Widget version missing after bump"))?;
+        let version = widget.version.ok_or(flow_like_types::anyhow!(
+            "Widget version missing after bump"
+        ))?;
 
         let version_path = Path::from("apps")
             .child(self.id.clone())

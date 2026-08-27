@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import { useShallow } from "zustand/react/shallow";
 import { useRunExecutionStore } from "../../state/run-execution-state";
+import { BoardStatusItem } from "./shell/board-status-bar";
 
 interface BoardActivityIndicatorProps {
 	boardId: string;
@@ -13,39 +14,24 @@ interface BoardActivityIndicatorProps {
 type ActivityStatus = "active" | "warning" | "stale" | "inactive";
 
 function getStatusColor(status: ActivityStatus): {
-	border: string;
-	bg: string;
 	text: string;
-	icon: string;
 } {
 	switch (status) {
 		case "active":
 			return {
-				border: "border-green-500/35",
-				bg: "bg-green-500/10",
-				text: `text-green-600 dark:text-green-400`,
-				icon: "text-green-500",
+				text: "text-green-600 dark:text-green-400",
 			};
 		case "warning":
 			return {
-				border: "border-yellow-500/35",
-				bg: "bg-yellow-500/10",
-				text: `text-yellow-600 dark:text-yellow-400`,
-				icon: "text-yellow-500",
+				text: "text-yellow-600 dark:text-yellow-400",
 			};
 		case "stale":
 			return {
-				border: "border-red-500/35",
-				bg: "bg-red-500/10",
-				text: `text-red-600 dark:text-red-400`,
-				icon: "text-red-500",
+				text: "text-red-600 dark:text-red-400",
 			};
 		default:
 			return {
-				border: "border-muted-foreground/35",
-				bg: "bg-muted/50",
 				text: "text-muted-foreground",
-				icon: "text-muted-foreground",
 			};
 	}
 }
@@ -162,29 +148,26 @@ export function BoardActivityIndicator({
 
 	// Only show time after 15 seconds
 	const showTime = timeSinceUpdate >= 15000;
+	const runDisplay = t("countRuns", {
+		defaultValue_one: "{{count}} run",
+		defaultValue_other: "{{count}} runs",
+		count: activeRunIds.length,
+	});
+	const elapsedDisplay = showTime
+		? t("durationAgo", "{{duration}} ago", {
+				duration: formatDuration(timeSinceUpdate),
+			})
+		: undefined;
+	const summary = `${runDisplay} · ${nodeDisplay}`;
 
 	return (
-		<div
-			className={`flex items-center gap-2 rounded-xl border ${colors.border} ${colors.bg} px-3 py-1.5 backdrop-blur-sm shadow-sm`}
+		<BoardStatusItem
+			icon={<PuffLoader color="currentColor" size={12} className="shrink-0" />}
+			className={`font-medium ${colors.text}`}
+			title={elapsedDisplay ? `${summary} · ${elapsedDisplay}` : summary}
 		>
-			<PuffLoader color="currentColor" size={14} className={colors.icon} />
-			<div className="flex flex-col">
-				<span className={`text-xs font-medium ${colors.text}`}>
-					{t("countRuns", {
-						defaultValue_one: "{{count}} run",
-						defaultValue_other: "{{count}} runs",
-						count: activeRunIds.length,
-					})}{" "}
-					• {nodeDisplay}
-				</span>
-				{showTime && (
-					<span className={`text-[10px] ${colors.text} opacity-75`}>
-						{t("durationAgo", "{{duration}} ago", {
-							duration: formatDuration(timeSinceUpdate),
-						})}
-					</span>
-				)}
-			</div>
-		</div>
+			{summary}
+			{elapsedDisplay && <span className="opacity-75">· {elapsedDisplay}</span>}
+		</BoardStatusItem>
 	);
 }

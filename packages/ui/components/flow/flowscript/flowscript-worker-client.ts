@@ -24,6 +24,12 @@ import type {
 	FlowScriptFoldingRange,
 	FlowScriptInlayHint,
 } from "./flowscript-language-features";
+import type {
+	CancellationTokenLike,
+	FlowScriptWorkerModelLike,
+	FlowScriptWorkerOutcome,
+	FlowScriptWorkerRequests,
+} from "./flowscript-worker-contract";
 import {
 	type FlowScriptDocRequestKind,
 	type FlowScriptEnvSnapshot,
@@ -32,29 +38,17 @@ import {
 	hydrateFlowScriptEnvDoc,
 } from "./flowscript-worker-protocol";
 
+export type {
+	CancellationTokenLike,
+	FlowScriptWorkerModelLike,
+	FlowScriptWorkerOutcome,
+} from "./flowscript-worker-contract";
+
 /**
  * Below this text length the postMessage round trip costs about as much as
  * computing in place (measured: ~8 KB of FlowScript analyzes in ~1.5 ms).
  */
 export const FLOWSCRIPT_WORKER_MIN_TEXT_LENGTH = 8_000;
-
-export interface FlowScriptWorkerModelLike {
-	uri: unknown;
-	getValue: () => string;
-	getVersionId?: () => number;
-}
-
-export interface CancellationTokenLike {
-	isCancellationRequested?: boolean;
-	onCancellationRequested?: (
-		listener: () => void,
-	) => { dispose: () => void } | undefined;
-}
-
-export type FlowScriptWorkerOutcome<T> =
-	| { status: "ok"; value: T }
-	| { status: "cancelled" }
-	| { status: "failed" };
 
 interface PendingEntry {
 	key: string;
@@ -342,6 +336,15 @@ export function requestFlowScriptWorkerEnvDoc(
 			hydrateFlowScriptEnvDoc(text, r.snapshot, getFlowScriptIndex(nodes)),
 	);
 }
+
+/** The worker implementation injected into the main-thread Monaco provider facade. */
+export const flowScriptWorkerRequests = {
+	requestEnvDoc: requestFlowScriptWorkerEnvDoc,
+	requestDocumentSymbols: requestFlowScriptWorkerDocumentSymbols,
+	requestFolding: requestFlowScriptWorkerFolding,
+	requestInlayHints: requestFlowScriptWorkerInlayHints,
+	requestSemanticTokens: requestFlowScriptWorkerSemanticTokens,
+} satisfies FlowScriptWorkerRequests;
 
 /**
  * Client-lint markers for the panel: computed in the worker for large

@@ -1,15 +1,9 @@
 "use client";
 
 import {
-	type InstalledPackage,
-	PackageStatusBadge,
-	type PackageUpdate,
-	useMutation,
-	useQuery,
-	useQueryClient,
-	useSearch,
-} from "@flow-like/flow-like-ui";
-import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
 	Badge,
 	Button,
 	Card,
@@ -19,13 +13,15 @@ import {
 	CardHeader,
 	CardTitle,
 	Input,
+	type InstalledPackage,
+	PackageStatusBadge,
+	type PackageUpdate,
 	Skeleton,
-} from "@flow-like/flow-like-ui/components";
-import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
-} from "@flow-like/flow-like-ui/components/ui/avatar";
+	useMutation,
+	useQuery,
+	useQueryClient,
+	useSearch,
+} from "@flow-like/flow-like-ui";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";

@@ -260,16 +260,19 @@ function TableView({
 		list.refetch();
 	}, [schema, count, list]);
 
-	const handleOptimize = useCallback(async () => {
-		try {
-			await backend.dbState.optimize(appId, table, undefined, userScoped);
-			toast.success("Optimized table");
-			handleRefresh();
-		} catch (err) {
-			toast.error(`Optimize failed: ${extractErrorMessage(err)}`);
-			throw err;
-		}
-	}, [backend.dbState, appId, table, userScoped, handleRefresh]);
+	const handleOptimize = useCallback(
+		async (keepVersions = true) => {
+			try {
+				await backend.dbState.optimize(appId, table, keepVersions, userScoped);
+				toast.success("Optimized table");
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Optimize failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
+		},
+		[backend.dbState, appId, table, userScoped, handleRefresh],
+	);
 
 	const handleUpdateItem = useCallback(
 		async (filter: string, updates: Record<string, unknown>) => {

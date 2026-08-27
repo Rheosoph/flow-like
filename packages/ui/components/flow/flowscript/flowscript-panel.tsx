@@ -6,6 +6,7 @@ import { createId } from "@paralleldrive/cuid2";
 import {
 	AlertTriangleIcon,
 	AnchorIcon,
+	BugIcon,
 	CopyIcon,
 	FileCode2Icon,
 	FocusIcon,
@@ -27,6 +28,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { useDeveloperMode } from "../../../hooks/use-developer-mode";
 import {
 	PEER_COLOR_COUNT,
 	type PeerUserInfo,
@@ -107,8 +109,8 @@ import {
 	type FlowScriptBoardScope,
 	defineFlowScriptThemes,
 	registerFlowScriptLanguage,
-	registerFlowScriptProviders,
 } from "./flowscript-language";
+import { registerFlowScriptProviders } from "./flowscript-language-providers";
 import {
 	type FlowScriptConflictLensHandle,
 	type FlowScriptConflictLensLabels,
@@ -130,9 +132,13 @@ import {
 	findClaimCollision,
 	peersSharingFlowScriptScope,
 	resolveWireCursor,
+	resolveWireViewport,
 	useFlowScriptPresence,
 	useFlowScriptScopeBroadcast,
+	useFlowScriptViewBroadcast,
+	useFlowScriptViewportBroadcast,
 } from "./flowscript-presence";
+import { FlowScriptPresenceDebug } from "./flowscript-presence-debug";
 import {
 	type FlowScriptDeferredReloadRunner,
 	type FlowScriptSeat,
@@ -257,6 +263,8 @@ export interface FlowScriptPanelProps {
 	peerUsers?: Map<string, PeerUserInfo>;
 	/** Follow mode: reveal + flash this node's line whenever `token` changes. */
 	revealRequest?: { nodeId: string; token: number };
+	/** Follow mode: keep this user's editor viewport at the top of ours while set. */
+	followingSub?: string;
 	/** Run an event from its header lens; absent = no run lenses at all. */
 	onRunEventNode?: (nodeId: string, mode: FlowScriptRunMode) => void;
 	/** Entry-node id → run modes the live board allows (gates the lenses). */
@@ -294,6 +302,8 @@ function rustDiagnosticToMarker(
 		endColumn: diagnostic.col + Math.max(token.length, 1),
 	};
 }
+
+const PRESENCE_DEBUG_STORAGE_KEY = "flowscript.presenceDebug";
 
 function readDimAnchorsPreference(): boolean {
 	try {
@@ -334,6 +344,7 @@ export function FlowScriptPanel({
 	sub,
 	peerUsers,
 	revealRequest,
+	followingSub,
 	onRunEventNode,
 	runnableEventNodes,
 	remoteExecutions,
@@ -366,6 +377,27 @@ export function FlowScriptPanel({
 		string | undefined
 	>(undefined);
 	const [dimAnchors, setDimAnchors] = useState(readDimAnchorsPreference);
+	// Developer mode only: a live readout of the presence pipeline.
+	const { developerMode } = useDeveloperMode();
+	const [presenceDebug, setPresenceDebug] = useState(() => {
+		try {
+			return localStorage.getItem(PRESENCE_DEBUG_STORAGE_KEY) === "on";
+		} catch {
+			return false;
+		}
+	});
+	const togglePresenceDebug = useCallback(() => {
+		setPresenceDebug((value) => {
+			try {
+				localStorage.setItem(PRESENCE_DEBUG_STORAGE_KEY, value ? "off" : "on");
+			} catch {}
+			return !value;
+		});
+	}, []);
+	const editorHasTextFocus = useCallback(
+		() => editorRef.current?.hasTextFocus() ?? false,
+		[],
+	);
 	const [scopeAnchors, setScopeAnchors] = useState<string[] | undefined>(
 		undefined,
 	);
@@ -577,6 +609,15 @@ export function FlowScriptPanel({
 	// Shared scoped sessions: broadcast this panel's scope node ids while it is
 	// open in scoped mode so teammates can join from the presence bar. Persists
 	// across editor blur; withdrawn on scope exit, panel close, and unmount.
+	// Which file this editor shows, so the presence list can say "in main.flow".
+	useFlowScriptViewBroadcast({ awareness, enabled: !readOnly, file: fileId });
+	// The top of this editor's viewport, so a teammate can scroll-follow it.
+	useFlowScriptViewportBroadcast({
+		awareness,
+		enabled: !readOnly,
+		editor: editorReady ? editorRef.current : null,
+		anchorIndexRef,
+	});
 	useFlowScriptScopeBroadcast({
 		awareness,
 		enabled: scoped,
@@ -1272,10 +1313,23 @@ export function FlowScriptPanel({
 			setCommentThreadState(undefined);
 	}, [anchorIndex, commentThreadState]);
 
+	// Set once every decoration ref below exists; a remounted <Editor> (load
+	// error → Retry) gets fresh collections instead of ones bound to the
+	// disposed instance, whose `.set()` silently drops everything.
+	const resetDecorationCollectionsRef = useRef<() => void>(() => {});
 	const handleEditorMount: OnMount = useCallback(
 		(editor, monaco) => {
+			const remount =
+				editorRef.current !== null && editorRef.current !== editor;
 			editorRef.current = editor;
 			monacoRef.current = monaco;
+			if (remount) {
+				resetDecorationCollectionsRef.current();
+				// Two commits, so every `editorReady`-gated effect runs its cleanup
+				// against the old instance and re-attaches to the new one.
+				setEditorReady(false);
+				queueMicrotask(() => setEditorReady(true));
+			}
 			registerFlowScriptLanguage(monaco);
 			defineFlowScriptThemes(monaco);
 			monaco.editor.setTheme(
@@ -1479,7 +1533,7 @@ export function FlowScriptPanel({
 	const { store: presenceStore } = useFlowScriptPresence({
 		awareness,
 		sub,
-		enabled: !readOnly && !loading,
+		enabled: !readOnly,
 		editor: editorReady ? editorRef.current : null,
 		anchorIndexRef,
 		text,
@@ -1493,10 +1547,17 @@ export function FlowScriptPanel({
 	presenceSnapshotRef.current = presenceSnapshot;
 
 	// Peer presence decorations: remote carets + name flags, remote selections,
-	// claim glyphs, and a faint wash on lines whose node a teammate has selected
-	// on the canvas. All positions resolve against THIS client's anchor index.
+	// claim glyphs, and — the editor-side twin of the canvas selection ring —
+	// a wash + gutter bar + name tag on the lines of nodes a teammate has
+	// selected on the board, with a one-shot flash on the node they just
+	// clicked. All positions resolve against THIS client's anchor index.
 	const presenceDecorationsRef = useRef<DecorationsCollection | null>(null);
 	const glyphMarginOnRef = useRef(false);
+	// Peer click flashes live in their own collection: re-setting the main one
+	// on every presence tick would re-create the line element and restart (or
+	// cut short) the one-shot animation.
+	const peerFlashDecorationsRef = useRef<DecorationsCollection | null>(null);
+	const peerFlashKeyRef = useRef("");
 	useEffect(() => {
 		const editor = editorRef.current;
 		const monaco = monacoRef.current;
@@ -1506,15 +1567,50 @@ export function FlowScriptPanel({
 		const maxLine = model.getLineCount();
 		const clampColumn = (line: number, column: number) =>
 			Math.max(1, Math.min(column, model.getLineMaxColumn(line)));
-		const peerName = (peerSub?: string) =>
-			(peerSub ? peerUsers?.get(peerSub)?.truncatedName : undefined) ??
-			t("common:user", "User");
+		const peerName = (peer: { sub?: string; self?: boolean }) =>
+			peer.self
+				? t("you", "You")
+				: ((peer.sub ? peerUsers?.get(peer.sub)?.truncatedName : undefined) ??
+					t("common:user", "User"));
 		const slotOf = (peerSub: string | undefined, clientId: number) =>
 			peerColorSlot(peerSub) ?? clientId % PEER_COLOR_COUNT;
 		type PresenceDecoration = Parameters<
 			DecorationsCollection["set"]
 		>[0][number];
 		const decorations: PresenceDecoration[] = [];
+		const stickiness =
+			monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges;
+		// Monaco renders injected text ONLY for decorations that span at least
+		// one character — on a collapsed range the name tag silently vanishes
+		// (verified against 0.54; a caret without its name is a 2px bar nobody
+		// recognises). So a tag rides a one-character range next to its
+		// column: `before` the character at the column, or `after` the last
+		// character when the column is the end of the line.
+		const injectTag = (
+			line: number,
+			column: number,
+			content: string,
+			inlineClassName: string,
+		) => {
+			const lineMax = model.getLineMaxColumn(line);
+			if (lineMax <= 1) return;
+			const injected = {
+				content,
+				inlineClassName,
+				cursorStops: monaco.editor.InjectedTextCursorStops.None,
+			};
+			decorations.push(
+				column < lineMax
+					? {
+							range: new monaco.Range(line, column, line, column + 1),
+							options: { stickiness, before: injected },
+						}
+					: {
+							range: new monaco.Range(line, lineMax - 1, line, lineMax),
+							options: { stickiness, after: injected },
+						},
+			);
+		};
 
 		for (const remote of presenceSnapshot.cursors) {
 			const resolved = resolveWireCursor(anchorIndex, remote.cursor, maxLine);
@@ -1529,16 +1625,16 @@ export function FlowScriptPanel({
 					column,
 				),
 				options: {
-					stickiness:
-						monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+					stickiness,
 					beforeContentClassName: `flowscript-peer-caret flowscript-peer-slot-${slot}`,
-					after: {
-						content: peerName(remote.sub),
-						inlineClassName: `flowscript-peer-flag flowscript-peer-slot-${slot}`,
-						cursorStops: monaco.editor.InjectedTextCursorStops.None,
-					},
 				},
 			});
+			injectTag(
+				resolved.lineNumber,
+				column,
+				peerName(remote),
+				`flowscript-peer-flag flowscript-peer-slot-${slot}`,
+			);
 			if (resolved.selection) {
 				decorations.push({
 					range: new monaco.Range(
@@ -1565,7 +1661,7 @@ export function FlowScriptPanel({
 			const slot = slotOf(claim.sub, claim.clientId);
 			const label = t("flowscriptBeingEditedBy", {
 				defaultValue: "Being edited by {{name}}",
-				name: peerName(claim.sub),
+				name: peerName(claim),
 			});
 			for (const anchorId of claim.anchorIds) {
 				const line = anchorIndex.firstLineById.get(anchorId);
@@ -1581,8 +1677,11 @@ export function FlowScriptPanel({
 			}
 		}
 
+		type PeerFlash = { key: string; line: number; slot: number };
+		const flashes: PeerFlash[] = [];
 		for (const selection of presenceSnapshot.canvasSelections) {
 			const slot = slotOf(selection.sub, selection.clientId);
+			let tagged = false;
 			for (const nodeId of selection.nodeIds) {
 				const line = anchorIndex.firstLineById.get(nodeId);
 				if (!line || line > maxLine) continue;
@@ -1591,9 +1690,47 @@ export function FlowScriptPanel({
 					options: {
 						isWholeLine: true,
 						className: `flowscript-peer-canvas-line flowscript-peer-slot-${slot}`,
+						linesDecorationsClassName: `flowscript-peer-canvas-gutter flowscript-peer-slot-${slot}`,
+						linesDecorationsTooltip: t("flowscriptSelectedOnCanvasBy", {
+							defaultValue: "{{name}} has this selected on the board",
+							name: peerName(selection),
+						}),
 					},
 				});
+				if (tagged) continue;
+				tagged = true;
+				injectTag(
+					line,
+					model.getLineMaxColumn(line),
+					`⌖ ${peerName(selection)}`,
+					`flowscript-peer-canvas-flag flowscript-peer-slot-${slot}`,
+				);
 			}
+			if (!selection.activeNodeId) continue;
+			const line = anchorIndex.firstLineById.get(selection.activeNodeId);
+			if (!line || line > maxLine) continue;
+			flashes.push({
+				key: `${selection.clientId}:${selection.activeNodeId}:${selection.activeNodeTs ?? 0}`,
+				line,
+				slot,
+			});
+		}
+		const flashKey = flashes.map((flash) => flash.key).join("|");
+		if (flashKey !== peerFlashKeyRef.current) {
+			peerFlashKeyRef.current = flashKey;
+			const peerFlashDecorations =
+				peerFlashDecorationsRef.current ??
+				editor.createDecorationsCollection([]);
+			peerFlashDecorationsRef.current = peerFlashDecorations;
+			peerFlashDecorations.set(
+				flashes.map((flash) => ({
+					range: new monaco.Range(flash.line, 1, flash.line, 1),
+					options: {
+						isWholeLine: true,
+						className: `flowscript-peer-line-flash flowscript-peer-slot-${flash.slot}`,
+					},
+				})),
+			);
 		}
 
 		const presenceDecorations =
@@ -1608,6 +1745,89 @@ export function FlowScriptPanel({
 			editor.updateOptions({ glyphMargin: wantGlyphMargin });
 		}
 	}, [presenceSnapshot, anchorIndex, editorReady, peerUsers, t]);
+
+	// Scroll-follow (presence bar "Follow"): keep the top of the followed user's
+	// editor viewport at the top of ours. Their position arrives anchor-relative
+	// and resolves against THIS buffer — an anchor we do not render (other file,
+	// other scope) is nothing to do. The local user always wins: a wheel/drag
+	// scroll or a keystroke pauses following briefly, and a timer catches up
+	// once that pause lapses even if the peer sits still.
+	const scrollFollowRef = useRef({
+		seen: new Map<number, { key: string; changedAt: number }>(),
+		userScrolledAt: 0,
+		ownScrollUntil: 0,
+	});
+	useEffect(() => {
+		const editor = editorRef.current;
+		const monaco = monacoRef.current;
+		if (!followingSub || !editorReady || !editor || !monaco) return;
+		const FOLLOW_PAUSE_MS = 1500;
+		// Monaco's smooth scroll (125ms) reports its own frames as scroll events.
+		const OWN_SCROLL_GRACE_MS = 250;
+		const follow = scrollFollowRef.current;
+		const scrollListener = editor.onDidScrollChange((event) => {
+			if (!event.scrollTopChanged || Date.now() < follow.ownScrollUntil) return;
+			follow.userScrolledAt = Date.now();
+		});
+
+		// The followed user's most recently moved session leads (local clock —
+		// peers' timestamps are never compared); ties go to the lowest clientId.
+		const now = Date.now();
+		const sessions = [...presenceSnapshot.viewports]
+			.filter(([, remote]) => remote.sub === followingSub)
+			.map(([clientId, remote]) => {
+				const key = `${remote.viewport.anchor.id}:${remote.viewport.dLine}`;
+				const seen = follow.seen.get(clientId);
+				const changedAt = seen?.key === key ? seen.changedAt : now;
+				follow.seen.set(clientId, { key, changedAt });
+				return { clientId, viewport: remote.viewport, changedAt };
+			});
+		for (const clientId of follow.seen.keys()) {
+			if (!sessions.some((session) => session.clientId === clientId))
+				follow.seen.delete(clientId);
+		}
+		const target = sessions.reduce<(typeof sessions)[number] | undefined>(
+			(best, session) =>
+				!best || session.changedAt > best.changedAt ? session : best,
+			undefined,
+		);
+
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const apply = () => {
+			timer = undefined;
+			const model = editor.getModel();
+			if (!target || !model) return;
+			const line = resolveWireViewport(
+				anchorIndex,
+				target.viewport,
+				model.getLineCount(),
+			);
+			if (typeof line === "undefined") return;
+			const at = Date.now();
+			const pausedFor = Math.max(
+				follow.userScrolledAt + FOLLOW_PAUSE_MS - at,
+				lastInputAtRef.current + FOLLOW_PAUSE_MS - at,
+				composingRef.current ? FOLLOW_PAUSE_MS : 0,
+			);
+			if (pausedFor > 0) {
+				timer = setTimeout(apply, pausedFor + 1);
+				return;
+			}
+			const maxTop = Math.max(
+				0,
+				editor.getScrollHeight() - editor.getLayoutInfo().height,
+			);
+			const top = Math.min(editor.getTopForLineNumber(line), maxTop);
+			if (Math.abs(editor.getScrollTop() - top) < 1) return;
+			follow.ownScrollUntil = at + OWN_SCROLL_GRACE_MS;
+			editor.setScrollTop(top, monaco.editor.ScrollType.Smooth);
+		};
+		apply();
+		return () => {
+			scrollListener.dispose();
+			if (timer) clearTimeout(timer);
+		};
+	}, [followingSub, presenceSnapshot, anchorIndex, editorReady]);
 
 	// Merge-conflict decorations: warning wash + gutter bar on each conflicted
 	// unit's anchor line, and the "Keep mine / Take theirs" lens pair refreshed
@@ -1868,6 +2088,23 @@ export function FlowScriptPanel({
 		return deriveRunStatsInlays(anchorIndex.anchors, heatmap.nodes);
 	}, [heatmapEnabled, heatmap, heatmapFilter, anchorIndex, appId, boardId]);
 	const statsDecorationsRef = useRef<DecorationsCollection | null>(null);
+	resetDecorationCollectionsRef.current = () => {
+		for (const ref of [
+			anchorDecorationsRef,
+			flashDecorationsRef,
+			presenceDecorationsRef,
+			peerFlashDecorationsRef,
+			conflictDecorationsRef,
+			commentDecorationsRef,
+			runTraceDecorationsRef,
+			statsDecorationsRef,
+		])
+			ref.current = null;
+		anchorDecorationKeyRef.current = undefined;
+		commentDecorationKeyRef.current = undefined;
+		glyphMarginOnRef.current = false;
+		peerFlashKeyRef.current = "";
+	};
 	const statsKeyRef = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		const editor = editorRef.current;
@@ -1946,10 +2183,26 @@ export function FlowScriptPanel({
 		if (!revealRequest || !editorReady) return;
 		if (consumedRevealTokenRef.current === revealRequest.token) return;
 		const line = anchorIndex.firstLineById.get(revealRequest.nodeId);
-		if (!line) return;
+		if (!line) {
+			// Still loading: try again once the index fills in. Loaded and absent
+			// (the peer is in another file, or a scoped render): the request must
+			// not lie in wait to scroll a line the peer left long ago — hand it to
+			// the canvas instead.
+			if (loading) return;
+			consumedRevealTokenRef.current = revealRequest.token;
+			onRevealNode?.(revealRequest.nodeId);
+			return;
+		}
 		consumedRevealTokenRef.current = revealRequest.token;
 		revealAndFlashLine(line);
-	}, [revealRequest, editorReady, anchorIndex, revealAndFlashLine]);
+	}, [
+		revealRequest,
+		editorReady,
+		anchorIndex,
+		revealAndFlashLine,
+		loading,
+		onRevealNode,
+	]);
 
 	// Realtime linting: instant client-side structural markers everywhere, authoritative
 	// positioned diagnostics from the native parser where available, and — on the same
@@ -2171,9 +2424,11 @@ export function FlowScriptPanel({
 	);
 	const scopeSharerName =
 		scopeSharers.length > 0
-			? ((scopeSharers[0].sub
-					? peerUsers?.get(scopeSharers[0].sub)?.truncatedName
-					: undefined) ?? t("common:user", "User"))
+			? scopeSharers[0].self
+				? t("you", "You")
+				: ((scopeSharers[0].sub
+						? peerUsers?.get(scopeSharers[0].sub)?.truncatedName
+						: undefined) ?? t("common:user", "User"))
 			: undefined;
 
 	return (
@@ -2234,6 +2489,23 @@ export function FlowScriptPanel({
 								: t("dimAnchorComments", "Dim anchor comments")}
 						</TooltipContent>
 					</Tooltip>
+					{developerMode && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									className={`h-7 w-7 ${presenceDebug ? "text-primary" : ""}`}
+									onClick={togglePresenceDebug}
+								>
+									<BugIcon className="h-3.5 w-3.5" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{t("flowscriptPresenceDebug", "Presence diagnostics")}
+							</TooltipContent>
+						</Tooltip>
+					)}
 					{formatSupported && !readOnly && (
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -2509,6 +2781,15 @@ export function FlowScriptPanel({
 							suggestSelection: "recentlyUsedByPrefix",
 							parameterHints: { enabled: true },
 						}}
+					/>
+				)}
+				{developerMode && presenceDebug && !loadError && (
+					<FlowScriptPresenceDebug
+						awareness={awareness}
+						snapshot={presenceSnapshot}
+						anchorIndex={anchorIndex}
+						enabled={!readOnly}
+						hasTextFocus={editorHasTextFocus}
 					/>
 				)}
 				{commentThreadState && commentsEnabled && !loading && !loadError && (

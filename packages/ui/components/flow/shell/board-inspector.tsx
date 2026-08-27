@@ -3,6 +3,12 @@
 import { useTranslation } from "@flow-like/locales";
 import { LockIcon, MousePointerSquareDashedIcon } from "lucide-react";
 import { memo, useMemo } from "react";
+import type { PeerUserInfo } from "../../../hooks/use-peer-users";
+import {
+	type NodeWatchers,
+	type PresenceMark,
+	mergePresenceMarks,
+} from "../../../lib/realtime/presence-locations";
 import type { IBoard } from "../../../lib/schema/flow/board";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
@@ -12,6 +18,7 @@ import {
 } from "../../../lib/schema/flow/pin";
 import { cn } from "../../../lib/utils";
 import { typeToColor } from "../utils";
+import { PresenceDots } from "./board-explorer";
 
 const SCORE_KEYS = [
 	"privacy",
@@ -118,6 +125,50 @@ const PinRow = memo(function PinRow({ pin }: Readonly<{ pin: IPin }>) {
 	);
 });
 
+/** "Selected by Anna · Edited in code by You" under the node title, with faces. */
+const WatchersRow = memo(function WatchersRow({
+	watchers,
+	peerUsers,
+}: Readonly<{
+	watchers: NodeWatchers;
+	peerUsers?: Map<string, PeerUserInfo>;
+}>) {
+	const { t } = useTranslation("flow");
+	const marks = useMemo(
+		() => mergePresenceMarks(watchers.selected, watchers.editing),
+		[watchers],
+	);
+	const nameOf = (mark: PresenceMark) =>
+		mark.self
+			? t("you", "You")
+			: (peerUsers?.get(mark.sub)?.truncatedName ?? mark.sub.slice(-8));
+	const parts: string[] = [];
+	if (watchers.selected.length > 0) {
+		parts.push(
+			t("presenceSelectedBy", "Selected by {{names}}", {
+				names: watchers.selected.map(nameOf).join(", "),
+			}),
+		);
+	}
+	if (watchers.editing.length > 0) {
+		parts.push(
+			t("presenceEditedInCodeBy", "Edited in code by {{names}}", {
+				names: watchers.editing.map(nameOf).join(", "),
+			}),
+		);
+	}
+	if (parts.length === 0) return null;
+	const text = parts.join(" · ");
+	return (
+		<div className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-muted-foreground">
+			<PresenceDots marks={marks} peerUsers={peerUsers} />
+			<span className="min-w-0 truncate" title={text}>
+				{text}
+			</span>
+		</div>
+	);
+});
+
 /**
  * Everything a node carries beyond its position — pins with their value types
  * and constraints, docs, quality scores and the permissions a WASM node
@@ -129,10 +180,15 @@ export const BoardInspector = memo(function BoardInspector({
 	board,
 	selectedNodeIds,
 	onRevealNode,
+	watchers,
+	peerUsers,
 }: Readonly<{
 	board?: IBoard;
 	selectedNodeIds: string[];
 	onRevealNode?: (nodeId: string) => void;
+	/** Peers whose canvas selection or code editor touches the selected node. */
+	watchers?: NodeWatchers;
+	peerUsers?: Map<string, PeerUserInfo>;
 }>) {
 	const { t } = useTranslation("flow");
 
@@ -183,6 +239,10 @@ export const BoardInspector = memo(function BoardInspector({
 		<div className="flex flex-col">
 			<Group title={t("nodeInfo", "Node Info")}>
 				<Row label={t("nodeName", "Node Name")} value={node.friendly_name} />
+				{watchers &&
+					(watchers.selected.length > 0 || watchers.editing.length > 0) && (
+						<WatchersRow watchers={watchers} peerUsers={peerUsers} />
+					)}
 				<Row label={t("category", "Category")} value={node.category} mono />
 				{typeof node.version === "number" && (
 					<Row label={t("version", "Version")} value={node.version} mono />

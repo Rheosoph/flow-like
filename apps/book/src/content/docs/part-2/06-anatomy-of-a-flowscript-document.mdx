@@ -135,9 +135,17 @@ eventsGeneric triageIncident(payload: Struct, report: string) {   //@n:event-nod
 edit update an existing entity by identity. The authoring surface emits them when requested; book
 examples normally hide them.
 
-Edit anchors carefully. Duplicate anchors and stale anchors without one compatible target produce
-diagnostics; a safe unique rebind appears as a correction. Removing anchored sections can trigger
-a deletion plan that requires explicit approval.
+Edit anchors carefully. Preflight checks whether one anchor is assigned to two distinct entities
+before Board lookup and produces a diagnostic, including when the ID is absent from this Board. A
+multi-output Event header and its immediate first arm-routing Branch may repeat one node anchor
+because they represent the same Event entry. After that check, an ordinary node, variable,
+Function, or module anchor whose ID is absent from the current Board is reported as a correction
+and treated as unanchored. The normal resolver can then create the entity or reuse one unique
+compatible target. Absent Event anchors keep their specialized recovery path. It re-anchors one
+compatible entry or creates a fresh entry instead of guessing between zero or several candidates.
+An anchor that resolves to incompatible live Board state, or an ordinary unanchored declaration
+with several possible targets, fails closed. Removing anchored sections can trigger a deletion plan
+that requires explicit approval.
 
 ## 6.2 `use` declarations
 
@@ -337,8 +345,11 @@ lifetime, and App scope. A structured form sets namespace, TTL, and App or user 
 skips the body, including side effects, so use it only when inputs determine the output.
 
 Function anchors use `//@l:` because the layer holds the durable identity. Inner nodes use
-`//@n:`. Preserving the layer anchor during a rename updates one callable entity; copying without
-it creates a new plan.
+`//@n:`. Changing the name of an anchored Function emits `RenameLayer` for the same Function layer
+ID, so its body and existing call targets keep their identity. The new name must remain unique in
+its module. Changes to an established Function's parameters or returns are still rejected because
+the reconciler cannot migrate its boundary and callers safely. Copying without the anchor creates
+a new plan.
 
 ## 6.6 Events
 

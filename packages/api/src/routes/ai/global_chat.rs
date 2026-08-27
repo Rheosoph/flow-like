@@ -57,6 +57,7 @@ use flow_like::flow::copilot::{
     AttachmentManifestEntry, ChatMessage, GlobalDataStudioContext, GlobalOpenBoardContext,
     PlatformContextInput, PlatformSpecialist, build_platform_context, run_platform_chat,
 };
+use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like_types::tokio::{
     sync::{mpsc, oneshot},
@@ -944,6 +945,7 @@ pub async fn global_chat(
         return Err(rejection);
     }
     let flow_like_state = master_flow_like_state(&state).await?;
+    let run_id = next_run_id();
 
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
     // User-scoped by `sub` so tenants never share a namespace. Failures degrade to no memory.
@@ -959,6 +961,12 @@ pub async fn global_chat(
                         Some(&sub),
                         &profile.id,
                         &bit,
+                        token.clone(),
+                        Some(ModelUsageContext {
+                            app_id: None,
+                            run_id: Some(run_id.clone()),
+                            api_base_url: None,
+                        }),
                     )
                     .await
                     {
@@ -997,7 +1005,6 @@ pub async fn global_chat(
         (!images.is_empty()).then_some(images)
     };
 
-    let run_id = next_run_id();
     let scope = payload.scope;
 
     // Ownership marker, written before anything streams. Stop/steer arrive on a possibly different

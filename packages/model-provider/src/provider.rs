@@ -67,17 +67,20 @@ impl EmbeddingModelProvider {
             .remote
             .as_ref()
             .and_then(|r| r.model_id.as_deref())
-            .or(self.provider.model_id.as_deref())
-            .is_some_and(|model_id| !model_id.trim().is_empty());
+            .filter(|model_id| !model_id.trim().is_empty())
+            .or_else(|| {
+                self.provider
+                    .model_id
+                    .as_deref()
+                    .filter(|model_id| !model_id.trim().is_empty())
+            })
+            .is_some();
 
         if !has_model_id {
             return false;
         }
 
-        self.remote
-            .as_ref()
-            .is_some_and(|r| r.implementation.is_some())
-            || is_internal_hosted_provider_name(&self.provider.provider_name)
+        self.remote.is_some() || is_hosted_provider_name(&self.provider.provider_name)
     }
 }
 
@@ -93,27 +96,18 @@ pub struct ImageEmbeddingModelProvider {
 }
 
 impl ImageEmbeddingModelProvider {
-    /// Check if this provider supports remote execution via API proxy
+    /// Whether the current runtime can execute this image model through the
+    /// embedding API proxy.
+    ///
+    /// The proxy protocol currently accepts text inputs only. Keep returning
+    /// `false` even when a Bit carries a future-facing `remote` configuration so
+    /// callers do not advertise an execution path that cannot handle images.
     pub fn supports_remote(&self) -> bool {
-        let has_model_id = self
-            .remote
-            .as_ref()
-            .and_then(|r| r.model_id.as_deref())
-            .or(self.provider.model_id.as_deref())
-            .is_some_and(|model_id| !model_id.trim().is_empty());
-
-        if !has_model_id {
-            return false;
-        }
-
-        self.remote
-            .as_ref()
-            .is_some_and(|r| r.implementation.is_some())
-            || is_internal_hosted_provider_name(&self.provider.provider_name)
+        false
     }
 }
 
-fn is_internal_hosted_provider_name(provider_name: &str) -> bool {
+pub fn is_hosted_provider_name(provider_name: &str) -> bool {
     let normalized = provider_name.trim().to_ascii_lowercase();
     normalized == "premium"
         || normalized == "hosted"
@@ -312,4 +306,57 @@ where
         rng.random_range(0..vec.len())
     };
     Ok(vec[index].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_embedding_accepts_legacy_remote_config_without_implementation() {
+        let provider = EmbeddingModelProvider {
+            languages: vec!["en".to_string()],
+            vector_length: 384,
+            input_length: 512,
+            prefix: Prefix {
+                query: String::new(),
+                paragraph: String::new(),
+            },
+            pooling: Pooling::Mean,
+            provider: ModelProvider {
+                provider_name: "Local".to_string(),
+                model_id: Some("embedding-model".to_string()),
+                version: None,
+                params: None,
+            },
+            remote: Some(RemoteExecutionConfig {
+                model_id: Some("  ".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        assert!(provider.supports_remote());
+    }
+
+    #[test]
+    fn image_embedding_does_not_advertise_unimplemented_remote_execution() {
+        let provider = ImageEmbeddingModelProvider {
+            languages: vec!["en".to_string()],
+            vector_length: 512,
+            pooling: Pooling::Mean,
+            provider: ModelProvider {
+                provider_name: "Local".to_string(),
+                model_id: Some("clip".to_string()),
+                version: None,
+                params: None,
+            },
+            remote: Some(RemoteExecutionConfig {
+                implementation: Some(RemoteEmbeddingProvider::Internal),
+                model_id: Some("clip".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        assert!(!provider.supports_remote());
+    }
 }

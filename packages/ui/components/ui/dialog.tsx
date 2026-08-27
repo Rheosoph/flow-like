@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { XIcon } from "lucide-react";
+import XIcon from "lucide-react/dist/esm/icons/x.js";
 import type * as React from "react";
 
 import { cn } from "../../lib/utils";

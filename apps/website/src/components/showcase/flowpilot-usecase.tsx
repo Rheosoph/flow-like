@@ -108,6 +108,13 @@ export default function FlowPilotUseCase({
 	const startedRef = useRef(false);
 	const cancelledRef = useRef(false);
 
+	useEffect(() => {
+		const stage = rootRef.current?.closest(".pilot-stage");
+		if (!(stage instanceof HTMLElement)) return;
+		stage.classList.add("flowpilot-ready");
+		return () => stage.classList.remove("flowpilot-ready");
+	}, []);
+
 	const userMsg = useMemo(
 		() =>
 			mkMsg(

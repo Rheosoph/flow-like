@@ -15,15 +15,21 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, serde::Deserialize, ToSchema)]
 pub struct OptimizePayload {
-    #[serde(default)]
+    /// Retain every table version. Set this to false to prune versions older than seven days
+    /// after compaction and index maintenance finish.
+    #[serde(default = "default_keep_versions")]
     pub keep_versions: bool,
+}
+
+fn default_keep_versions() -> bool {
+    true
 }
 
 #[utoipa::path(
     post,
     path = "/apps/{app_id}/db/{table}/optimize",
     tag = "database",
-    description = "Optimize table storage and indices.",
+    description = "Compact table storage and update indices. Version history is retained by default; optional cleanup prunes versions older than seven days.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("table" = String, Path, description = "Table name")
@@ -66,4 +72,21 @@ pub async fn optimize_table(
     db.optimize(payload.keep_versions).await?;
 
     Ok(Json(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_keep_versions_defaults_to_retention() {
+        let omitted: OptimizePayload =
+            serde_json::from_value(serde_json::json!({})).expect("payload should deserialize");
+        assert!(omitted.keep_versions);
+
+        let explicit_cleanup: OptimizePayload =
+            serde_json::from_value(serde_json::json!({ "keep_versions": false }))
+                .expect("payload should deserialize");
+        assert!(!explicit_cleanup.keep_versions);
+    }
 }

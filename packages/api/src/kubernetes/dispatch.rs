@@ -254,6 +254,11 @@ impl JobDispatcher {
                 value: Some(request.execution_context.callback_url.clone()),
                 ..Default::default()
             },
+            EnvVar {
+                name: "API_BASE_URL".to_string(),
+                value: Some(request.execution_context.callback_url.clone()),
+                ..Default::default()
+            },
         ];
 
         if let Some(event_id) = &request.event_id {
@@ -419,3 +424,42 @@ impl std::fmt::Display for DispatchError {
 }
 
 impl std::error::Error for DispatchError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_jobs_receive_the_api_proxy_base_url() {
+        let dispatcher = JobDispatcher::new(KubernetesConfig::default());
+        let request = SubmitJobRequest {
+            run_id: "run-1".to_string(),
+            app_id: "app-1".to_string(),
+            board_id: "board-1".to_string(),
+            version: None,
+            event_id: None,
+            payload: None,
+            mode: JobMode::Isolated,
+            user_id: "user-1".to_string(),
+            execution_context: ExecutionContext {
+                credentials_json: "{}".to_string(),
+                jwt: "token".to_string(),
+                callback_url: "https://api.example.test".to_string(),
+            },
+        };
+
+        let job = dispatcher.build_job_spec("job-1", &request);
+        let env = job
+            .spec
+            .and_then(|spec| spec.template.spec)
+            .and_then(|pod| pod.containers.into_iter().next())
+            .and_then(|container| container.env)
+            .expect("executor environment");
+        let api_base_url = env
+            .iter()
+            .find(|variable| variable.name == "API_BASE_URL")
+            .and_then(|variable| variable.value.as_deref());
+
+        assert_eq!(api_base_url, Some("https://api.example.test"));
+    }
+}

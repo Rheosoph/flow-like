@@ -9,7 +9,8 @@ flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmo
 flow-like-secrets.workspace = true
 flow-like-azure-data.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog = { workspace = true, features = ["all-metadata"] }
+# Match the remote-only executor catalog: no ONNX or desktop automation nodes.
+flow-like-catalog = { workspace = true, features = ["remote-metadata"] }
 mimalloc.workspace = true
 axum.workspace = true
 azure_core = "0.32.0"

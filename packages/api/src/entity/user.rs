@@ -74,6 +74,8 @@ pub enum Relation {
     ExecutionUsageTracking,
     #[sea_orm(has_many = "super::feedback::Entity")]
     Feedback,
+    #[sea_orm(has_many = "super::flow_script_apply_failure::Entity")]
+    FlowScriptApplyFailure,
     #[sea_orm(has_many = "super::interaction::Entity")]
     Interaction,
     #[sea_orm(has_many = "super::invitation::Entity")]
@@ -147,6 +149,12 @@ impl Related<super::execution_usage_tracking::Entity> for Entity {
 impl Related<super::feedback::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Feedback.def()
+    }
+}
+
+impl Related<super::flow_script_apply_failure::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::FlowScriptApplyFailure.def()
     }
 }
 

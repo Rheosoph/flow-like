@@ -17,7 +17,7 @@ use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};
 use flow_like::flow::variable::VariableType;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
-use flow_like_types::{sync::Mutex, tokio::sync::RwLock, Cacheable, Value};
+use flow_like_types::{Cacheable, Value, sync::Mutex, tokio::sync::RwLock};
 use parking_lot::RwLock as ParkingRwLock;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -448,6 +448,7 @@ pub fn build_node_from_definition(definition: &WasmNodeDefinition) -> Node {
         wasm.permissions = definition.permissions.clone();
     }
 
+    node.ensure_flowscript_names();
     node
 }
 

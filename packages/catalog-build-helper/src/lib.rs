@@ -1,6 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "code-interpreter-build")]
+pub mod code_interpreter_build {
+    pub use blake3;
+    pub use dirs_next;
+    pub use ureq;
+    pub use wasmtime;
+}
+
 struct NodeEntry {
     module_path: String,
     struct_name: String,

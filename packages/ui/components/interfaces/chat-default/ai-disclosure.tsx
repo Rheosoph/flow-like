@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { BotIcon } from "lucide-react";
+import BotIcon from "lucide-react/dist/esm/icons/bot.js";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../../lib/chat-appearance";
 
 export const FLOWPILOT_AI_DISCLOSURE =

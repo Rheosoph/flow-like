@@ -2,6 +2,7 @@
 import { useStore } from "@xyflow/react";
 import { ArrowRight } from "lucide-react";
 import { memo, useMemo, useSyncExternalStore } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
 	type PeerUserInfo,
 	colorFromSub,
@@ -32,7 +33,7 @@ interface CursorDisplay {
 	angle?: number;
 }
 
-function calculateEdgePosition(
+export function calculateEdgePosition(
 	screenX: number,
 	screenY: number,
 	viewportWidth: number,
@@ -96,14 +97,23 @@ export const FlowCursors = memo(function FlowCursors({
 	peerUsers: Map<string, PeerUserInfo>;
 	className?: string;
 }) {
-	const transform = useStore((state) => state.transform);
+	// Positions are relative to the React Flow container, which no longer fills
+	// the window (rail, sidebars, panels) — so the edge math must use ITS size,
+	// or peers near the right/bottom edge read as off-screen while visible.
+	const { transform, width, height } = useStore(
+		useShallow((state) => ({
+			transform: state.transform,
+			width: state.width,
+			height: state.height,
+		})),
+	);
 	const [tx, ty, zoom] = transform;
 
 	const cursors = useMemo(() => {
 		if (typeof window === "undefined") return [];
 
-		const viewportWidth = window.innerWidth;
-		const viewportHeight = window.innerHeight;
+		const viewportWidth = width || window.innerWidth;
+		const viewportHeight = height || window.innerHeight;
 		const margin = 80;
 
 		return peers
@@ -146,7 +156,7 @@ export const FlowCursors = memo(function FlowCursors({
 					angle: edge?.angle,
 				} satisfies CursorDisplay;
 			});
-	}, [peers, currentLayerPath, tx, ty, zoom, peerUsers]);
+	}, [peers, currentLayerPath, tx, ty, zoom, width, height, peerUsers]);
 
 	return (
 		<div

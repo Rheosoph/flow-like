@@ -11,8 +11,8 @@
 
 use flow_like::flow::{
     ast::{
-        NodeNames, binary_operator_node_types, check_names, node_name_entry, node_names,
-        pin_is_untouched_default,
+        NodeNames, binary_operator_node_types, binary_operator_rows, check_names, node_name_entry,
+        node_names, pin_is_untouched_default,
     },
     board::Board,
     node::{Node, NodeLogic},
@@ -248,6 +248,128 @@ fn binary_operator_nodes_trailing_inputs_default_to_zero() {
     assert!(
         violations.is_empty(),
         "Binary-operator nodes whose trailing inputs cannot be implied by the operator form:\n{}",
+        format_violations(&violations)
+    );
+}
+
+/// The reconciler picks the catalog node for `a op b` from a hard-coded table of
+/// `(operator, operand type, result type, node type)` rows, and its unit tests run against a
+/// hand-built catalog — so a row that disagrees with the real node was invisible until an apply
+/// failed with "no suitable two-input catalog node". `int_divide` claimed an `Integer` result
+/// while the node yields a `Float`, which killed every `int / int` apply and mistyped the
+/// surrounding expression. This pins the table to the catalog it resolves against.
+#[test]
+fn binary_operator_rows_resolve_against_the_catalog() {
+    let nodes: BTreeMap<String, Node> = all_nodes().into_iter().collect();
+    let mut violations = Vec::new();
+
+    for (op, operand_type, result_type, node_type) in binary_operator_rows() {
+        let Some(node) = nodes.get(*node_type) else {
+            violations.push(LintViolation {
+                node: (*node_type).to_string(),
+                message: format!("operator `{op}` maps to a node that is not in the catalog"),
+            });
+            continue;
+        };
+
+        let mut push = |message: String| {
+            violations.push(LintViolation {
+                node: (*node_type).to_string(),
+                message,
+            })
+        };
+
+        let mut inputs: Vec<_> = node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution
+            })
+            .collect();
+        inputs.sort_by_key(|pin| pin.index);
+        match inputs.as_slice() {
+            [lhs, rhs, ..] => {
+                for pin in [lhs, rhs] {
+                    if format!("{:?}", pin.data_type) != *operand_type {
+                        push(format!(
+                            "operator `{op}` declares `{operand_type}` operands, but input `{}` is `{:?}`",
+                            pin.name, pin.data_type
+                        ));
+                    }
+                }
+            }
+            _ => push(format!(
+                "operator `{op}` needs two data inputs, the node has {}",
+                inputs.len()
+            )),
+        }
+
+        let outputs: Vec<_> = node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .collect();
+        match outputs.as_slice() {
+            [output] => {
+                if format!("{:?}", output.data_type) != *result_type {
+                    push(format!(
+                        "operator `{op}` declares a `{result_type}` result, but output `{}` is `{:?}`",
+                        output.name, output.data_type
+                    ));
+                }
+            }
+            many => push(format!(
+                "operator `{op}` needs exactly one data output for the operator form to read, the node has {}",
+                many.len()
+            )),
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Binary-operator table rows that disagree with the catalog:\n{}",
+        format_violations(&violations)
+    );
+}
+
+/// `lower.rs::BINARY_OPS` (board -> FlowScript) and `reconcile.rs::BINARY_OPERATOR_NODES`
+/// (FlowScript -> board) must cover the same nodes. A node only the reader knows renders as
+/// `a op b` that no longer applies: re-applying onto the same board diagnoses on every edit, and
+/// applying onto a fresh one (copy, fork, duplicate) drops the node and its connection silently.
+/// A node only the writer knows is materialized and then rendered back as a call, so the next
+/// apply churns the board.
+#[test]
+fn binary_operator_reader_and_writer_tables_agree() {
+    let reader: HashSet<&str> = binary_operator_node_types().collect();
+    let writer: HashSet<&str> = binary_operator_rows()
+        .iter()
+        .map(|(_, _, _, node_type)| *node_type)
+        .collect();
+
+    let mut violations: Vec<LintViolation> = reader
+        .difference(&writer)
+        .map(|node_type| LintViolation {
+            node: (*node_type).to_string(),
+            message: "lower.rs sugars this node to an operator, but reconcile.rs has no \
+                      BINARY_OPERATOR_NODES row to materialize it back"
+                .to_string(),
+        })
+        .chain(writer.difference(&reader).map(|node_type| {
+            LintViolation {
+                node: (*node_type).to_string(),
+                message: "reconcile.rs materializes this node from an operator, but lower.rs \
+                      BINARY_OPS will not sugar it back"
+                    .to_string(),
+            }
+        }))
+        .collect();
+    violations.sort_by(|a, b| a.node.cmp(&b.node));
+
+    assert!(
+        violations.is_empty(),
+        "FlowScript binary-operator read/write tables disagree:\n{}",
         format_violations(&violations)
     );
 }

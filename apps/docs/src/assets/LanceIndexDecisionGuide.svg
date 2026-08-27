@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1070" viewBox="0 0 720 1070" overflow="hidden" role="img" aria-labelledby="lance-index-title lance-index-desc">
+  <title id="lance-index-title">Flow-Like Lance index decision guide</title>
+  <desc id="lance-index-desc">Start with the repeated query. Similar-vector queries use a flat scan for small or exact workloads and a tuned approximate-nearest-neighbor index at scale. Token and phrase search uses Full Text, while raw substring search uses the FM-index. Scalar point and range filters use BTree when values are mostly distinct and Bitmap when few values are distinct. List membership uses Label List. Zone Map, Bloom Filter, and RTree need lower-level Lance integration.</desc>
+  <defs>
+    <linearGradient id="lance-index-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101216"/>
+      <stop offset="1" stop-color="#17191f"/>
+    </linearGradient>
+    <pattern id="lance-index-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/>
+    </pattern>
+    <marker id="lance-index-arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#ff7656"/>
+    </marker>
+    <marker id="lance-index-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#a78bfa"/>
+    </marker>
+    <marker id="lance-index-arrow-emerald" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#34d399"/>
+    </marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:14px;font-weight:750;letter-spacing:2.1px}.heading{fill:#f7f8fa;font-size:30px;font-weight:720;letter-spacing:-.6px}.sub{fill:#a7adb8;font-size:15px}.prompt-kicker{fill:#ff9b82;font-size:12px;font-weight:800;letter-spacing:1.7px}.prompt{fill:#f7f8fa;font-size:25px;font-weight:740;letter-spacing:-.3px}.branch{font-size:12px;font-weight:800;letter-spacing:1.25px}.choice{fill:#f7f8fa;font-size:23px;font-weight:760;letter-spacing:-.2px}.signal{fill:#d7dae0;font-size:16px;font-weight:680}.answer{font-size:20px;font-weight:760}.note{fill:#969daa;font-size:14px}.tag{font-size:11px;font-weight:800;letter-spacing:.7px}.footer{fill:#d8dbe1;font-size:15px;font-weight:650}
+    </style>
+  </defs>
+
+  <rect width="720" height="1070" rx="28" fill="#101216"/>
+  <rect width="720" height="1070" rx="28" fill="url(#lance-index-bg)"/>
+  <rect width="720" height="1070" rx="28" fill="url(#lance-index-grid)"/>
+
+  <rect x="32" y="26" width="318" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+  <circle cx="52" cy="43" r="5" fill="#ff7656"/>
+  <text x="67" y="49" class="kicker">LANCE INDEX DECISION GUIDE</text>
+  <text x="32" y="100" class="heading">Choose from the repeated query</text>
+  <text x="32" y="128" class="sub">Rare, broad, or already fast: keep the scan and measure again later.</text>
+
+  <g>
+    <rect x="84" y="148" width="568" height="112" rx="27" fill="none" stroke="#ff7656" stroke-width="10" opacity=".06"/>
+    <rect x="90" y="154" width="556" height="100" rx="22" fill="#1d1c24" stroke="#ff7656" stroke-width="2"/>
+    <circle cx="136" cy="204" r="25" fill="#ff7656" opacity=".12" stroke="#ff7656" stroke-opacity=".65"/>
+    <path d="M124 204h24M136 192v24" stroke="#ff7656" stroke-width="3" stroke-linecap="round"/>
+    <text x="176" y="190" class="prompt-kicker">START HERE</text>
+    <text x="176" y="224" class="prompt">What must the query find repeatedly?</text>
+  </g>
+
+  <path d="M368 254V274H72V917" fill="none" stroke="#59606d" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="368" cy="274" r="12" fill="#ff7656" opacity=".1"/>
+  <circle cx="368" cy="274" r="5" fill="#ff7656"/>
+  <path d="M72 340H104" fill="none" stroke="#ff7656" stroke-width="3" stroke-linecap="round" marker-end="url(#lance-index-arrow-coral)"/>
+  <path d="M72 520H104" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" marker-end="url(#lance-index-arrow-violet)"/>
+  <path d="M72 700H104" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" marker-end="url(#lance-index-arrow-emerald)"/>
+  <path d="M72 880H104" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" marker-end="url(#lance-index-arrow-violet)"/>
+
+  <g>
+    <rect x="110" y="290" width="578" height="165" rx="24" fill="#191c22" stroke="#5b3d36" stroke-width="2"/>
+    <rect x="132" y="308" width="180" height="28" rx="14" fill="#2b211f" stroke="#6b443b"/>
+    <circle cx="150" cy="322" r="5" fill="#ff7656"/>
+    <text x="164" y="327" class="branch" fill="#ff9b82">SIMILAR VECTORS</text>
+    <rect x="516" y="308" width="150" height="28" rx="14" fill="#ff7656" opacity=".11"/>
+    <text x="526" y="327" class="tag" fill="#ff9b82">ANN TUNING UPDATE</text>
+    <text x="132" y="374" class="choice">Scan or tuned ANN</text>
+    <line x1="132" y1="391" x2="666" y2="391" stroke="#343a45"/>
+    <text x="132" y="419" class="signal">Small or exact workload</text>
+    <text x="132" y="445" class="answer" fill="#ff9b82">Flat scan</text>
+    <line x1="410" y1="407" x2="410" y2="443" stroke="#343a45"/>
+    <text x="430" y="419" class="signal">Scale, approximation is OK</text>
+    <text x="430" y="445" class="answer" fill="#ff9b82">Tuned vector index</text>
+  </g>
+
+  <g>
+    <rect x="110" y="470" width="578" height="165" rx="24" fill="#1d1c24" stroke="#4f4766" stroke-width="2"/>
+    <rect x="132" y="488" width="154" height="28" rx="14" fill="#282534" stroke="#62577f"/>
+    <circle cx="150" cy="502" r="5" fill="#a78bfa"/>
+    <text x="164" y="507" class="branch" fill="#c4b5fd">SEARCH TEXT</text>
+    <rect x="516" y="488" width="150" height="28" rx="14" fill="#a78bfa" opacity=".12"/>
+    <text x="530" y="507" class="tag" fill="#c4b5fd">FM NEEDS UPDATE</text>
+    <text x="132" y="554" class="choice">Meaning of a match</text>
+    <line x1="132" y1="571" x2="666" y2="571" stroke="#3b374a"/>
+    <text x="132" y="599" class="signal">Words, phrases, BM25 rank</text>
+    <text x="132" y="625" class="answer" fill="#c4b5fd">FULL TEXT</text>
+    <line x1="410" y1="587" x2="410" y2="623" stroke="#3b374a"/>
+    <text x="430" y="599" class="signal">Raw substring or bytes</text>
+    <text x="430" y="625" class="answer" fill="#c4b5fd">FM-INDEX</text>
+  </g>
+
+  <g>
+    <rect x="110" y="650" width="578" height="165" rx="24" fill="#1b2422" stroke="#365d50" stroke-width="2"/>
+    <rect x="132" y="668" width="174" height="28" rx="14" fill="#202b28" stroke="#42705f"/>
+    <circle cx="150" cy="682" r="5" fill="#34d399"/>
+    <text x="164" y="687" class="branch" fill="#6ee7b7">FILTER A VALUE</text>
+    <text x="132" y="734" class="choice">Cardinality of the column</text>
+    <line x1="132" y1="751" x2="666" y2="751" stroke="#30483f"/>
+    <text x="132" y="779" class="signal">Point or range, mostly distinct</text>
+    <text x="132" y="805" class="answer" fill="#6ee7b7">BTREE</text>
+    <line x1="410" y1="767" x2="410" y2="803" stroke="#30483f"/>
+    <text x="430" y="779" class="signal">Few distinct values</text>
+    <text x="430" y="805" class="answer" fill="#6ee7b7">BITMAP</text>
+  </g>
+
+  <g>
+    <rect x="110" y="830" width="578" height="195" rx="24" fill="#1d1c24" stroke="#4f4766" stroke-width="2"/>
+    <rect x="132" y="848" width="158" height="28" rx="14" fill="#282534" stroke="#62577f"/>
+    <circle cx="150" cy="862" r="5" fill="#a78bfa"/>
+    <text x="164" y="867" class="branch" fill="#c4b5fd">LIST OR PRUNE</text>
+    <rect x="492" y="848" width="174" height="28" rx="14" fill="#a78bfa" opacity=".12"/>
+    <text x="506" y="867" class="tag" fill="#c4b5fd">PRUNING: LANCE API</text>
+    <text x="132" y="914" class="choice">Membership or skipping</text>
+    <line x1="132" y1="931" x2="666" y2="931" stroke="#3b374a"/>
+    <text x="132" y="959" class="signal">Any or all labels in a list</text>
+    <text x="132" y="985" class="answer" fill="#c4b5fd">LABEL LIST</text>
+    <line x1="410" y1="947" x2="410" y2="1005" stroke="#3b374a"/>
+    <text x="430" y="959" class="signal">Zone pruning or 2D bounds</text>
+    <text x="430" y="985" class="answer" fill="#c4b5fd">Zone Map · Bloom</text>
+    <text x="430" y="1011" class="answer" fill="#c4b5fd">RTree</text>
+  </g>
+
+  <circle cx="151" cy="1047" r="5" fill="#ff7656"/>
+  <text x="360" y="1053" text-anchor="middle" class="footer">Benchmark first. Maintain the index after writes.</text>
+</svg>

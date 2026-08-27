@@ -33,6 +33,8 @@ The **Sources** tab lists project and personal relational tables. Tables may be 
 
 ![A screenshot of Flow-Like Desktop showing a preview of a custom database populated with data from flow executions](../../../assets/AppDatabases.webp)
 
+Use [Choosing a Lance index](/topics/datascience/lance-indexes/) before adding an index. It maps the repeated query to the appropriate index and identifies options that require the planned Lance update.
+
 ## The ontology layer
 
 On top of those tables you can define an **ontology**: object types, link types, object views, and governed actions — a knowledge graph you can search, traverse, visualize, and act on without moving any data.

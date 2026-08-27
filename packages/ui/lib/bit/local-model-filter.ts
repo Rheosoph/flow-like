@@ -1,13 +1,8 @@
 import type { IBit } from "../schema";
 import { IBitTypes } from "../schema";
 
-/** Provider names whose LLM/VLM models require a local llama.cpp runtime. */
-export const LLAMA_CPP_PROVIDER_NAMES: ReadonlySet<string> = new Set([
-	"local",
-	"llama.cpp",
-	"llamacpp",
-	"ollama",
-]);
+/** Provider names whose LLM/VLM models start an embedded llama.cpp runtime. */
+export const LLAMA_CPP_PROVIDER_NAMES: ReadonlySet<string> = new Set(["local"]);
 
 /** Provider names whose LLM/VLM models require Apple's MLX runtime. */
 export const MLX_PROVIDER_NAMES: ReadonlySet<string> = new Set(["mlx"]);
@@ -66,6 +61,22 @@ export function getLlmModelTier(bit: IBit): string | undefined {
 
 export function isFreeLlmModel(bit: IBit): boolean {
 	return getLlmModelTier(bit) === "FREE";
+}
+
+export function isHostedLlmProviderName(providerName?: null | string): boolean {
+	const normalized = providerName?.trim().toLowerCase() ?? "";
+	return (
+		normalized === "premium" ||
+		normalized === "internal" ||
+		normalized === "hosted" ||
+		normalized.startsWith("hosted:")
+	);
+}
+
+export function isHostedLlmModel(bit: IBit): boolean {
+	return isHostedLlmProviderName(
+		bit.parameters?.provider?.provider_name as string | undefined,
+	);
 }
 
 /**

@@ -783,7 +783,9 @@ destructive intent explicit.
 ### 15.1 Identity is not the same as spelling
 
 Show why renaming a local variable or call display must not accidentally replace the wrong
-node, function layer, or event entry.
+node, function layer, or event entry. Show an anchored Function rename producing one
+`RenameLayer` under the stable layer ID. Keep Function signature migration outside the current
+guarantee.
 
 ### 15.2 `//@n`, `//@v`, and `//@l`
 
@@ -797,12 +799,20 @@ the graph.
 
 ### 15.4 Corrections and diagnostics
 
-Distinguish safe canonical corrections from ambiguous changes that fail closed.
+Distinguish safe canonical corrections from ambiguous changes that fail closed. Explain that one
+anchor assigned to two distinct entities fails during raw-source preflight, before Board lookup.
+The Event header and immediate first arm-routing Branch may repeat an anchor because they represent
+one entity. Ordinary node, variable, Function, and module anchor IDs absent from the current Board
+are then reported as unavailable and reconciled as unanchored entities. Absent Event anchors retain
+their specialized recovery path. It re-anchors one compatible entry or creates a fresh entry when
+zero or several candidates remain. Invalid Event metadata, incompatible live anchors, and ambiguous
+ordinary recovery still stop the plan.
 
 ### 15.5 Deletions require explicit intent
 
-Walk through a missing anchor, the blocked apply, the destructive command preview, and the
-separate approval to proceed.
+Remove one node anchor from an otherwise unchanged Incident Desk call. Walk through the proposed
+replacement and removal, the blocked Apply, the destructive command preview, and the separate
+approval to proceed.
 
 ### 15.6 One atomic, undoable change
 
@@ -815,8 +825,9 @@ Show how selected event/function sections and their transitive dependencies can 
 without treating the unseen remainder as deleted.
 
 **Evidence:** SRC-RECONCILER, SRC-APPLY, and SRC-EDITOR.
-**Interview dependency:** INT-04 should give examples of the failures this safety model was
-designed to prevent.
+**Interview dependency:** Resolved in the Chapter 15 follow-up to INT-04. No historical failure
+was supplied, so the chapter uses a clearly labeled safety drill and treats AI as one editor among
+people and tools.
 
 ## Chapter 16 — The Dual-View Editor and Language Tools
 

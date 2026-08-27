@@ -42,9 +42,9 @@ enum HostedProvider {
 
 impl HostedProvider {
     fn from_provider_name(name: &str) -> Option<Self> {
-        let name_lower = name.to_lowercase();
+        let name_lower = name.trim().to_lowercase();
         match name_lower.as_str() {
-            "hosted" | "hosted:openrouter" => Some(Self::OpenRouter),
+            "premium" | "internal" | "hosted" | "hosted:openrouter" => Some(Self::OpenRouter),
             "hosted:openai" => Some(Self::OpenAI),
             "hosted:anthropic" => Some(Self::Anthropic),
             "hosted:bedrock" => Some(Self::Bedrock),
@@ -87,24 +87,27 @@ impl HostedProvider {
         }
     }
 
-    fn completions_path(&self) -> &'static str {
+    fn completions_url(&self, endpoint: &str) -> String {
+        let endpoint = endpoint.trim_end_matches('/');
+        if endpoint.ends_with("/chat/completions") {
+            return endpoint.to_string();
+        }
+        if endpoint.ends_with("/v1") {
+            return format!("{endpoint}/chat/completions");
+        }
+
         match self {
-            Self::OpenRouter | Self::OpenAI | Self::Azure | Self::Bedrock | Self::Vertex => {
-                "/v1/chat/completions"
+            Self::Azure if endpoint.ends_with("/openai") => {
+                format!("{endpoint}/v1/chat/completions")
             }
-            Self::Anthropic => "/v1/messages",
+            Self::Azure => format!("{endpoint}/openai/v1/chat/completions"),
+            Self::Vertex if endpoint.ends_with("/openapi") => {
+                format!("{endpoint}/chat/completions")
+            }
+            Self::OpenRouter | Self::OpenAI | Self::Anthropic | Self::Bedrock | Self::Vertex => {
+                format!("{endpoint}/v1/chat/completions")
+            }
         }
-    }
-
-    fn auth_header_name(&self) -> &'static str {
-        match self {
-            Self::Anthropic => "x-api-key",
-            _ => "Authorization",
-        }
-    }
-
-    fn uses_bearer_auth(&self) -> bool {
-        !matches!(self, Self::Anthropic)
     }
 
     fn label(&self) -> &'static str {
@@ -193,7 +196,7 @@ async fn fetch_provider(
     let hosted_provider = HostedProvider::from_provider_name(&provider.provider_name).ok_or_else(
         || {
             ApiError::bad_request(format!(
-                "Unsupported provider: {}. Supported: Hosted, hosted:openrouter, hosted:openai, hosted:anthropic, hosted:bedrock, hosted:azure, hosted:vertex",
+                "Unsupported provider: {}. Supported: Premium, Internal, Hosted, hosted:openrouter, hosted:openai, hosted:anthropic, hosted:bedrock, hosted:azure, hosted:vertex",
                 provider.provider_name
             ))
         },
@@ -300,15 +303,15 @@ fn prepare_upstream_body(
                         .insert("include".to_string(), json!(true));
                 }
             }
-            HostedProvider::Anthropic => {
-                obj.insert("max_tokens".to_string(), json!(4096));
-            }
-            HostedProvider::OpenAI | HostedProvider::Azure => {
+            HostedProvider::OpenAI
+            | HostedProvider::Anthropic
+            | HostedProvider::Azure
+            | HostedProvider::Bedrock
+            | HostedProvider::Vertex => {
                 if stream {
                     enable_stream_usage_options(obj);
                 }
             }
-            HostedProvider::Bedrock | HostedProvider::Vertex => {}
         }
 
         if let Some(u) = tracking_user {
@@ -354,11 +357,7 @@ async fn build_provider_url(
         )));
     }
 
-    let url = format!(
-        "{}{}",
-        endpoint.trim_end_matches('/'),
-        hosted_provider.completions_path()
-    );
+    let url = hosted_provider.completions_url(&endpoint);
     Ok((url, api_key))
 }
 
@@ -888,17 +887,13 @@ async fn handle_non_streaming(
         )
         .await;
     }
-    let mut out_headers = HeaderMap::new();
-    if let Some(ct) = headers.get(axum::http::header::CONTENT_TYPE) {
-        out_headers.insert(axum::http::header::CONTENT_TYPE, ct.clone());
-    } else {
-        out_headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-    }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let response = AxumResponse::builder()
         .status(status)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
         .body(Body::from(body_bytes))
         .unwrap();
     Ok(response)
@@ -959,25 +954,12 @@ pub async fn invoke_llm(
     .await?;
     let client = flow_like_types::reqwest::Client::new();
 
-    let mut request_builder = if hosted_provider.uses_bearer_auth() {
-        client.post(&url).bearer_auth(&api_key).json(&upstream_body)
-    } else {
-        client
-            .post(&url)
-            .header(hosted_provider.auth_header_name(), &api_key)
-            .json(&upstream_body)
-    };
+    let mut request_builder = client.post(&url).bearer_auth(&api_key).json(&upstream_body);
 
     if hosted_provider == HostedProvider::OpenRouter {
         request_builder = request_builder
             .header("HTTP-Referer", "https://flow-like.com")
             .header("X-Title", "Flow-Like");
-    }
-
-    if hosted_provider == HostedProvider::Anthropic {
-        request_builder = request_builder
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json");
     }
 
     if let Some(tracking_id) = &tracking_id_opt {
@@ -1175,17 +1157,60 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_upstream_body_anthropic_adds_max_tokens() {
-        let payload = serde_json::json!({"model": "bit_123", "messages": [], "stream": false});
-        let (rewritten, _) =
+    fn test_prepare_upstream_body_anthropic_uses_openai_compatibility() {
+        let payload = serde_json::json!({"model": "bit_123", "messages": [], "stream": true});
+        let (rewritten, stream) =
             prepare_upstream_body(&payload, "claude-3-opus", None, &HostedProvider::Anthropic);
-        assert_eq!(rewritten.get("max_tokens").unwrap().as_i64().unwrap(), 4096);
+        assert!(stream);
+        assert!(rewritten.get("max_tokens").is_none());
+        assert_eq!(
+            rewritten
+                .get("stream_options")
+                .and_then(|options| options.get("include_usage"))
+                .and_then(|include| include.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_hosted_provider_completion_urls_match_openai_compatible_endpoints() {
+        assert_eq!(
+            HostedProvider::Anthropic.completions_url("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/chat/completions"
+        );
+        assert_eq!(
+            HostedProvider::Bedrock
+                .completions_url("https://bedrock-mantle.eu-central-1.api.aws/v1"),
+            "https://bedrock-mantle.eu-central-1.api.aws/v1/chat/completions"
+        );
+        assert_eq!(
+            HostedProvider::Azure.completions_url("https://example.openai.azure.com"),
+            "https://example.openai.azure.com/openai/v1/chat/completions"
+        );
+        assert_eq!(
+            HostedProvider::Vertex.completions_url(
+                "https://europe-west1-aiplatform.googleapis.com/v1/projects/project/locations/europe-west1/endpoints/openapi",
+            ),
+            "https://europe-west1-aiplatform.googleapis.com/v1/projects/project/locations/europe-west1/endpoints/openapi/chat/completions"
+        );
+        assert_eq!(
+            HostedProvider::OpenAI.completions_url("https://gateway.example/v1/chat/completions/"),
+            "https://gateway.example/v1/chat/completions"
+        );
     }
 
     #[test]
     fn test_hosted_provider_from_name() {
         assert_eq!(
             HostedProvider::from_provider_name("Hosted"),
+            Some(HostedProvider::OpenRouter)
+        );
+        assert_eq!(
+            HostedProvider::from_provider_name("Premium"),
+            Some(HostedProvider::OpenRouter)
+        );
+        assert_eq!(
+            HostedProvider::from_provider_name(" internal "),
             Some(HostedProvider::OpenRouter)
         );
         assert_eq!(

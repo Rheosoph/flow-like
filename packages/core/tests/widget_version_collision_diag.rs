@@ -60,11 +60,17 @@ async fn publishing_from_an_old_version_overwrites_a_published_snapshot() {
         .create_widget_version("w", VersionType::Patch)
         .await
         .unwrap();
-    println!("second publish returned {again:?} (already existed: {})", again == v3);
+    println!(
+        "second publish returned {again:?} (already existed: {})",
+        again == v3
+    );
 
     let snap3_after = app.open_widget("w".to_string(), Some(v3)).await.unwrap();
     println!("0.0.3 snapshot name AFTER:  {:?}", snap3_after.name);
-    println!("versions listed: {:?}", app.get_widget_versions("w").await.unwrap());
+    println!(
+        "versions listed: {:?}",
+        app.get_widget_versions("w").await.unwrap()
+    );
 
     assert_eq!(
         snap3_before.name, "v3 content",

@@ -17,9 +17,11 @@ fn get_pin_string_value(node: &Node, name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Register an AWS Athena table in DataFusion
-/// This allows querying Athena data sources through DataFusion's SQL interface
-#[crate::register_node]
+/// Prototype for a direct Athena DataFusion provider.
+///
+/// DataFusion does not implement the `STORED AS ATHENA` statement emitted by
+/// this prototype. Keep it out of the catalog so it cannot collide with the
+/// executable ODBC-backed `df_register_athena` node.
 #[derive(Default)]
 pub struct RegisterAthenaNode {}
 

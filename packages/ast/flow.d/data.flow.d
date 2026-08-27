@@ -885,7 +885,7 @@ declare namespace db {
      * Optimize and Update the Database
      * @node optimize_local_db @receiver database @alias optimizeLocalDb
      * @param database — Database Connection Reference (receiver: `this` in `x.optimize(...)`)
-     * @param keepVersions (optional) — Otherwise deletes old versions
+     * @param keepVersions (optional) — Retain all versions. Disable only to prune versions older than seven days after maintenance.
      * @impure has side effects / drives control flow
      */
     function optimize(this: NodeDBConnection, { database: Struct, keepVersions?: bool }): void;

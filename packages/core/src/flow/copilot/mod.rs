@@ -97,9 +97,8 @@ pub use tools::{
     GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool, ModelFacingEmitCommandsTool,
     PatchFlowScriptTool, PlanBoardScopeTool, QueryExecutionLogsArgs, QueryExecutionLogsTool,
     QueryLogsArgs, QueryLogsTool, RunBoardTestsArgs, RunBoardTestsTool, SearchArgs,
-    SearchByPinArgs, SearchByPinTool,
-    SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool, ThinkingArgs,
-    UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
+    SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool,
+    ThinkingArgs, UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
     build_find_connectable_nodes_output, build_list_board_nodes_output, build_node_details_output,
     build_unconfigured_nodes_output, declaration_queries, detect_flowscript_candidate_regression,
     flowscript_has_executable_node_call, flowscript_missing_function_helpers,
@@ -2795,19 +2794,20 @@ impl Copilot {
         token: Option<String>,
     ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
         let bit = if let Some(profile) = &self.profile {
-            if let Some(id) = model_id {
-                profile
-                    .find_bit(&id, self.state.http_client.clone())
-                    .await?
-            } else {
-                let preference = BitModelPreference {
-                    reasoning_weight: Some(1.0),
-                    ..Default::default()
-                };
-                profile
-                    .get_best_model(&preference, false, false, self.state.http_client.clone())
-                    .await?
-            }
+            let preference = BitModelPreference {
+                reasoning_weight: Some(1.0),
+                ..Default::default()
+            };
+            let capabilities = FlowLikeState::completion_model_capabilities(&self.state).await;
+            profile
+                .resolve_completion_model(
+                    model_id.as_deref(),
+                    &preference,
+                    false,
+                    capabilities,
+                    self.state.http_client.clone(),
+                )
+                .await?
         } else {
             Bit {
                 id: "gpt-4o".to_string(),

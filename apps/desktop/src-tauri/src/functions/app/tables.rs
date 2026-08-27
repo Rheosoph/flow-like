@@ -525,7 +525,7 @@ pub async fn build_index(
     .await?;
     db.index(&column, Some(&index_type)).await?;
     if optimize.unwrap_or(false) {
-        db.optimize(false).await?;
+        db.optimize(true).await?;
     }
     Ok(())
 }
@@ -549,7 +549,7 @@ pub async fn db_optimize(
         sub,
     )
     .await?;
-    db.optimize(keep_versions.unwrap_or(false)).await?;
+    db.optimize(keep_versions.unwrap_or(true)).await?;
     Ok(())
 }
 

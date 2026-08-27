@@ -71176,12 +71176,12 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Whether to keep old row versions (false = prune for disk savings)"
+          "doc": "Retain all versions. Disable only to prune versions older than seven days after maintenance."
         }
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, prune old versions, and rebuild indices. Run periodically or after bulk writes.",
+      "doc": "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, and update indices. Optional cleanup prunes versions older than seven days after maintenance.",
       "namespace": "ai.memory",
       "alias": "optimize",
       "receiver": "memory_config"
@@ -74190,7 +74190,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Otherwise deletes old versions"
+          "doc": "Retain all versions. Disable only to prune versions older than seven days after maintenance."
         }
       ],
       "outputs": [],

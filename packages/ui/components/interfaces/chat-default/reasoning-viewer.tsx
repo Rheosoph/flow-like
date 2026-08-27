@@ -1,9 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { BrainCircuit, ChevronDown, ChevronUp } from "lucide-react";
+import BrainCircuit from "lucide-react/dist/esm/icons/brain-circuit.js";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import { Suspense, lazy, useMemo, useState } from "react";
-import { cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
 
 const TextEditor = lazy(() =>
 	import("../../ui/text-editor").then((m) => ({ default: m.TextEditor })),

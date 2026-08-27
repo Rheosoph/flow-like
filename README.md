@@ -234,6 +234,8 @@ a configured provider.
 Flow-Like is a Rust and TypeScript monorepo. Bun manages the JavaScript workspace, Tauri hosts the
 desktop client, and the runtime and core application model live in Rust.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Rheosoph/flow-like)
+
 ## Extend the platform
 
 The catalog turns each supported operation into a node with typed pins. For domain-specific work,

@@ -417,6 +417,15 @@ function llmsEntry(
 export function renderLlmsTxt(entries: readonly LlmBookEntry[]): string {
 	const byId = entryById(entries);
 	const home = byId.get("");
+	const publishedChapterCount = CURRENT_BOOK_EDITION.parts.reduce(
+		(total, part) => total + part.chapters.length,
+		0,
+	);
+	const lastPublishedChapter = CURRENT_BOOK_EDITION.parts.reduce(
+		(highest, part) =>
+			Math.max(highest, ...part.chapters.map((chapter) => chapter.number)),
+		0,
+	);
 	const lines = [
 		"# FlowBook",
 		"",
@@ -427,7 +436,7 @@ export function renderLlmsTxt(entries: readonly LlmBookEntry[]): string {
 		"Important interpretation guidance:",
 		"",
 		"- Treat release-check callouts and current-status caveats as authoritative limitations.",
-		"- Chapters 1-14 and the introduction are published open drafts; Chapters 15-26, the epilogue, and appendices are planned, not published.",
+		`- Chapters 1-${lastPublishedChapter} and the introduction are published open drafts; Chapters ${lastPublishedChapter + 1}-26, the epilogue, and appendices are planned, not published.`,
 		"- FlowScript is an authoring language. The current Flow-Like runtime executes the persisted Board graph.",
 		"- Do not infer capabilities, compatibility, performance, or security guarantees beyond the evidence stated in a page.",
 		"",
@@ -462,7 +471,7 @@ export function renderLlmsTxt(entries: readonly LlmBookEntry[]): string {
 		"",
 		"## Optional",
 		"",
-		`- [Complete FlowBook Markdown](${absoluteUrl("/llms-full.txt")}): Single-file context containing the introduction and all 14 published chapters; prefer the individual page links above when only one topic is needed.`,
+		`- [Complete FlowBook Markdown](${absoluteUrl("/llms-full.txt")}): Single-file context containing the introduction and all ${publishedChapterCount} published chapters; prefer the individual page links above when only one topic is needed.`,
 		`- [Canonical FlowBook website](${BOOK_ORIGIN}/): Human-readable edition with interactive examples, search, and workflow figures.`,
 		`- [FlowBook PDF](${absoluteUrl("/flowbook.pdf")}): Downloadable open-edition book.`,
 		"- [Flow-Like project](https://flow-like.com): Product and platform context.",
@@ -489,7 +498,7 @@ export function renderLlmsFullTxt(entries: readonly LlmBookEntry[]): string {
 	const preamble = [
 		"# FlowBook: Complete Markdown Edition",
 		"",
-		"> A single-file rendering of the FlowBook introduction and all 14 chapters published in the open 2026 edition.",
+		`> A single-file rendering of the FlowBook introduction and all ${readingOrder.length - 1} chapters published in the open 2026 edition.`,
 		"",
 		`- **Canonical book:** [${BOOK_ORIGIN}/](${BOOK_ORIGIN}/)`,
 		`- **Selective LLM index:** [${absoluteUrl("/llms.txt")}](${absoluteUrl("/llms.txt")})`,

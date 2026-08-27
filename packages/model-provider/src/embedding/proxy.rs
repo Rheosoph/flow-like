@@ -7,7 +7,6 @@ use text_splitter::{Characters, ChunkConfig, MarkdownSplitter, TextSplitter};
 
 use crate::provider::EmbeddingModelProvider;
 
-use super::proxy_config::api_base_url;
 use super::{EmbeddingModelLogic, GeneralTextSplitter};
 
 /// Proxy embedding model that calls the internal API
@@ -18,6 +17,7 @@ pub struct ProxyEmbeddingModel {
     bit_id: String,
     access_token: String,
     usage_headers: Vec<(String, String)>,
+    api_base_url: String,
     client: reqwest::Client,
 }
 
@@ -51,24 +51,35 @@ struct EmbedUsage {
     total_tokens: i64,
 }
 
+fn normalize_api_base_url(api_base_url: &str) -> String {
+    let trimmed = api_base_url.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/api/v1")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/')
+        .to_string()
+}
+
 impl ProxyEmbeddingModel {
     pub fn new(
         provider: EmbeddingModelProvider,
         bit_id: String,
         access_token: String,
         usage_headers: Vec<(String, String)>,
+        api_base_url: String,
     ) -> Self {
         Self {
             provider,
             bit_id,
             access_token,
             usage_headers,
+            api_base_url: normalize_api_base_url(&api_base_url),
             client: reqwest::Client::new(),
         }
     }
 
     async fn call_api(&self, texts: &[String], embed_type: &str) -> Result<Vec<Vec<f32>>> {
-        let url = format!("{}/api/v1/embeddings/embed", api_base_url());
+        let url = format!("{}/api/v1/embeddings/embed", self.api_base_url);
 
         let request = EmbedRequest {
             model: self.bit_id.clone(),
@@ -111,6 +122,23 @@ impl ProxyEmbeddingModel {
             .map_err(|e| flow_like_types::anyhow!("Failed to parse embedding response: {}", e))?;
 
         Ok(embed_response.embeddings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_api_base_url;
+
+    #[test]
+    fn proxy_base_accepts_an_origin_or_api_v1_base() {
+        assert_eq!(
+            normalize_api_base_url("https://api.example.test/"),
+            "https://api.example.test"
+        );
+        assert_eq!(
+            normalize_api_base_url("https://api.example.test/api/v1/"),
+            "https://api.example.test"
+        );
     }
 }
 

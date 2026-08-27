@@ -2,15 +2,19 @@ import { describe, expect, test } from "bun:test";
 import {
 	FLOWSCRIPT_CLAIMS_FIELD,
 	FLOWSCRIPT_CURSOR_FIELD,
+	FLOWSCRIPT_MAIN_FILE_WIRE,
 	FLOWSCRIPT_SCOPE_FIELD,
+	FLOWSCRIPT_VIEW_FIELD,
 	MAX_CLAIM_ANCHORS,
 	MAX_SCOPE_NODES,
+	MAX_SELECTION_ANCHORS,
 	MAX_WIRE_COLUMN,
 	MAX_WIRE_DLINE,
 	sanitizeClaimsForWire,
 	sanitizeCursorForWire,
 	sanitizeForWire,
 	sanitizeScopeForWire,
+	sanitizeViewForWire,
 	wireSafetyViolations,
 } from "./flowscript-presence-protocol";
 
@@ -77,6 +81,62 @@ describe("FlowScript presence wire schema (collab rule 2)", () => {
 				column: Number.POSITIVE_INFINITY,
 			}),
 		).toBeUndefined();
+	});
+
+	test("selection: covered anchor ids are id-validated, deduped and capped", () => {
+		const sanitized = sanitizeCursorForWire({
+			...validCursor(),
+			sel: {
+				endDLine: 0,
+				endColumn: 3,
+				anchorIds: [
+					VALID_ID,
+					VALID_ID,
+					"const leaked = renderBoard()",
+					...Array.from(
+						{ length: 200 },
+						(_, i) => `selanchor000${String(i).padStart(8, "0")}`,
+					),
+				],
+			},
+		});
+		expect(sanitized?.sel?.anchorIds?.length).toBe(MAX_SELECTION_ANCHORS);
+		expect(sanitized?.sel?.anchorIds?.[0]).toBe(VALID_ID);
+		expect(
+			sanitized?.sel?.anchorIds?.filter((id) => id === VALID_ID).length,
+		).toBe(1);
+		expect(wireSafetyViolations(sanitized)).toEqual([]);
+		// An all-invalid list is dropped, not emptied.
+		expect(
+			sanitizeCursorForWire({
+				...validCursor(),
+				sel: { endDLine: 0, endColumn: 3, anchorIds: ["free text"] },
+			})?.sel?.anchorIds,
+		).toBeUndefined();
+	});
+
+	test("view: accepts the root marker or a module layer id, nothing else", () => {
+		expect(
+			sanitizeViewForWire({ file: FLOWSCRIPT_MAIN_FILE_WIRE, ts: 5 }),
+		).toEqual({ file: "main", ts: 5 });
+		expect(sanitizeViewForWire({ file: VALID_ID, ts: -1 })).toEqual({
+			file: VALID_ID,
+			ts: 0,
+		});
+		for (const file of ["main.flow", "checkout/payments", "", 3, undefined]) {
+			expect(sanitizeViewForWire({ file, ts: 1 })).toBeUndefined();
+		}
+		expect(
+			sanitizeViewForWire({ file: VALID_ID, ts: 1, label: "Checkout" }),
+		).toEqual({ file: VALID_ID, ts: 1 });
+		expect(
+			wireSafetyViolations(
+				sanitizeViewForWire({ file: FLOWSCRIPT_MAIN_FILE_WIRE, ts: 1 }),
+			),
+		).toEqual([]);
+		expect(
+			sanitizeForWire(FLOWSCRIPT_VIEW_FIELD, { file: VALID_ID, ts: 1 }),
+		).toBeDefined();
 	});
 
 	test("drops a selection whose end anchor fails validation instead of guessing", () => {

@@ -46,10 +46,10 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
         node.add_input_pin(
             "keep_versions",
             "Keep Versions?",
-            "Otherwise deletes old versions",
+            "Retain all versions. Disable only to prune versions older than seven days after maintenance.",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(false)));
+        .set_default_value(Some(json!(true)));
 
         node.add_output_pin(
             "exec_out",

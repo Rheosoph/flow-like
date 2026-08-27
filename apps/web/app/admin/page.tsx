@@ -2,4 +2,6 @@
 
 import { AdminDashboardPage } from "@flow-like/flow-like-ui";
 
-export default AdminDashboardPage;
+export default function AdminPage() {
+	return <AdminDashboardPage />;
+}

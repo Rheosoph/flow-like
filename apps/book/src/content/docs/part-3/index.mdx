@@ -23,11 +23,12 @@ Two editable views are only trustworthy when neither view quietly destroys what 
 owns. Part III explains the contract that lets a Flow move between its persisted Board, a typed
 semantic model, and canonical FlowScript while preserving identity, layout, and runtime meaning.
 
-The current open edition begins this part with the complete round trip: lowering a Board into
-`BoardAst`, rendering canonical text, parsing edits, reconciling semantic differences, and applying
-atomic Board commands. Later chapters in the first-edition plan will continue with identity
-anchors, safe change, language tools, and run evidence; they will become links here only when
-substantive chapters are available.
+The current open edition begins with the complete round trip: lowering a Board into `BoardAst`,
+rendering canonical text, parsing edits, reconciling semantic differences, and applying atomic
+Board commands. It then examines the identity anchors, deterministic corrections, deletion guards,
+undo batches, and scoped editing rules that keep those changes bounded. Later chapters in the
+first-edition plan will continue with language tools and run evidence; they will become links here
+only when substantive chapters are available.
 
 This part is especially useful for developers building editor integrations, reviewers evaluating
 AI-authored changes, and architects who need to understand which representation owns which facts.

@@ -9,22 +9,19 @@ import {
 } from "react";
 import type { RemoteSelectionParticipant } from "../components/flow/flow-node";
 import { type IRealtimeAccess, createRealtimeSession } from "../lib";
-import { normalizeSelectionNodes } from "../lib/flow-board-utils";
 import { decodeJwtExpiryMs } from "../lib/realtime/authenticated-websocket";
+import {
+	type PeerPresence,
+	createPeerActivityTracker,
+	peerPresenceListEqual,
+	readPeerPresence,
+} from "../lib/realtime/peer-presence";
 import type { IBoard } from "../lib/schema/flow/board";
 
-export interface PeerPresence {
-	clientId: number;
-	cursor?: { x: number; y: number };
-	/** The sub (subject) from the auth token - use this to resolve user info via API */
-	sub?: string;
-	layerPath: string;
-	selection: { nodes: string[] };
-	/** The node the user just clicked/focused — cleared after a short timeout */
-	activeNodeId?: string;
-	/** Timestamp of the last active node click for freshness detection */
-	activeNodeTs?: number;
-}
+export type {
+	PeerEditorPresence,
+	PeerPresence,
+} from "../lib/realtime/peer-presence";
 
 /** High-frequency cursor data, kept out of React state so cursor motion does not
  *  re-render the board. Consumed via useSyncExternalStore by the cursor overlay. */
@@ -59,29 +56,6 @@ function cursorsEqual(a: PeerCursor[], b: PeerCursor[]): boolean {
 			p.sub !== n.sub
 		) {
 			return false;
-		}
-	}
-	return true;
-}
-
-function presenceEqual(a: PeerPresence[], b: PeerPresence[]): boolean {
-	if (a.length !== b.length) return false;
-	for (let i = 0; i < a.length; i++) {
-		const p = a[i];
-		const n = b[i];
-		if (
-			p.clientId !== n.clientId ||
-			p.sub !== n.sub ||
-			p.layerPath !== n.layerPath ||
-			p.activeNodeId !== n.activeNodeId
-		) {
-			return false;
-		}
-		const ps = p.selection.nodes;
-		const ns = n.selection.nodes;
-		if (ps.length !== ns.length) return false;
-		for (let j = 0; j < ps.length; j++) {
-			if (ps[j] !== ns[j]) return false;
 		}
 	}
 	return true;
@@ -128,10 +102,16 @@ export function useRealtimeCollaboration({
 		refreshAccess: (access: IRealtimeAccess) => void;
 	} | null>(null);
 	const tokenExpiresAtRef = useRef<number | null>(null);
+	// The room key the live provider was built with; the server rotates it
+	// daily and a session on the old key cannot decrypt anyone who joined after.
+	const keyIdRef = useRef<string | null>(null);
 	const [peerStates, setPeerStates] = useState<PeerPresence[]>([]);
 	const remoteSelectionsRef = useRef<Map<string, RemoteSelectionParticipant[]>>(
 		new Map(),
 	);
+	// Local-clock "last did something" per session, for idle badges. Kept out of
+	// React state: it changes on every pointer tick.
+	const activityTrackerRef = useRef(createPeerActivityTracker());
 
 	// External store for high-frequency cursor data so cursor motion re-renders
 	// only the cursor overlay (via useSyncExternalStore), never the whole board.
@@ -207,6 +187,14 @@ export function useRealtimeCollaboration({
 					boardId,
 				);
 				if (disposed || !sessionRef.current) return;
+				if (keyIdRef.current && access.key_id !== keyIdRef.current) {
+					// New room key: the provider's AES key is fixed at construction,
+					// so a swapped JWT alone would leave this session deaf to every
+					// peer on the new key (and them to us) while both say "Live".
+					teardownSession();
+					await setup(access);
+					return;
+				}
 				sessionRef.current.refreshAccess(access);
 				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
 				scheduleTokenRotation();
@@ -215,6 +203,19 @@ export function useRealtimeCollaboration({
 			} finally {
 				rotating = false;
 			}
+		};
+
+		const teardownSession = () => {
+			try {
+				sessionRef.current?.dispose();
+			} catch {}
+			sessionRef.current = null;
+			sessionInitializedRef.current = null;
+			keyIdRef.current = null;
+			tokenExpiresAtRef.current = null;
+			awarenessRef.current = undefined;
+			commandAwarenessRef.current = undefined;
+			setAwareness(undefined);
 		};
 
 		const scheduleTokenRotation = () => {
@@ -230,7 +231,7 @@ export function useRealtimeCollaboration({
 			);
 		};
 
-		const setup = async () => {
+		const setup = async (prefetchedAccess?: IRealtimeAccess) => {
 			try {
 				const offline = await backend.isOffline(appId);
 
@@ -238,10 +239,9 @@ export function useRealtimeCollaboration({
 				if (offline) return;
 
 				const room = sessionKey;
-				const access = await backend.boardState.getRealtimeAccess(
-					appId,
-					boardId,
-				);
+				const access: IRealtimeAccess =
+					prefetchedAccess ??
+					(await backend.boardState.getRealtimeAccess(appId, boardId));
 
 				const session = await createRealtimeSession({
 					room,
@@ -272,6 +272,7 @@ export function useRealtimeCollaboration({
 					refreshAccess: session.refreshAccess,
 				};
 				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
+				keyIdRef.current = access.key_id ?? null;
 				scheduleTokenRotation();
 				awarenessRef.current = session.awareness;
 				commandAwarenessRef.current = session.awareness;
@@ -311,19 +312,29 @@ export function useRealtimeCollaboration({
 			} catch {}
 			sessionRef.current = null;
 			tokenExpiresAtRef.current = null;
+			keyIdRef.current = null;
 			awarenessRef.current = undefined;
 			commandAwarenessRef.current = undefined;
 			setAwareness(undefined);
 			setConnectionStatus("disconnected");
 		};
-		// Only depend on board identity and essential data, not profile updates
-		// Profile updates are handled by a separate effect that updates awareness
-	}, [backend, appId, boardId, hasBoardData, version]);
+		// Board identity plus `sub`: on a cold start the board (persisted cache)
+		// is ready before auth, so the first attempt may run without an identity
+		// — or fail its access fetch outright. A late `sub` re-runs the setup.
+	}, [backend, appId, boardId, hasBoardData, version, sub]);
+
+	// Identity is asserted on the live awareness whenever it changes, not only
+	// at session creation.
+	useEffect(() => {
+		if (!awareness) return;
+		awareness.setLocalStateField("sub", sub);
+	}, [awareness, sub]);
 
 	// Update peer states
 	useEffect(() => {
 		if (!awareness) {
 			setPeerStates([]);
+			activityTrackerRef.current.reset();
 			if (cursorDataRef.current.snapshot.length > 0) {
 				cursorDataRef.current.snapshot = EMPTY_CURSORS;
 				for (const listener of cursorDataRef.current.listeners) listener();
@@ -331,6 +342,7 @@ export function useRealtimeCollaboration({
 			return;
 		}
 
+		let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 		const updatePeers = () => {
 			const states = awareness.getStates() as Map<number, any>;
 			const invalidPeers: Set<number> | undefined = (awareness as any)
@@ -338,36 +350,32 @@ export function useRealtimeCollaboration({
 			const now = Date.now();
 			const next: PeerPresence[] = [];
 			const nextCursors: PeerCursor[] = [];
+			const tracker = activityTrackerRef.current;
+			tracker.observe(states, awareness.clientID);
+			let nextExpiry = Number.POSITIVE_INFINITY;
 			states.forEach((state, clientId) => {
 				const isSelf = clientId === awareness.clientID;
 				const isInvalid = invalidPeers?.has(clientId) ?? false;
 				if (isSelf || isInvalid) return;
+				const activeSeenAt = tracker.activeClickSeenAt(clientId);
+				const presence = readPeerPresence(state, clientId, now, activeSeenAt);
+				if (presence.activeNodeId && activeSeenAt !== undefined) {
+					nextExpiry = Math.min(nextExpiry, activeSeenAt + 3000 - now);
+				}
 				const cursor = state?.cursor;
-				const layerPath = state?.layerPath ?? "root";
-				if (cursor) {
+				if (
+					cursor &&
+					typeof cursor.x === "number" &&
+					typeof cursor.y === "number"
+				) {
 					nextCursors.push({
 						clientId,
 						cursor: { x: cursor.x, y: cursor.y },
-						sub: state?.sub,
-						layerPath,
+						sub: presence.sub,
+						layerPath: presence.layerPath,
 					});
 				}
-				const activeNodeTs = state?.activeNodeTs as number | undefined;
-				const activeNodeFresh = activeNodeTs && now - activeNodeTs < 3000;
-				next.push({
-					clientId,
-					sub: state?.sub,
-					layerPath,
-					selection: {
-						// sorted so presenceEqual is order-independent (getStates() order
-						// and node-id order are not guaranteed stable)
-						nodes: normalizeSelectionNodes(state?.selection?.nodes).sort(),
-					},
-					activeNodeId: activeNodeFresh
-						? (state?.activeNodeId as string | undefined)
-						: undefined,
-					activeNodeTs: activeNodeFresh ? activeNodeTs : undefined,
-				});
+				next.push(presence);
 			});
 
 			// Sort both snapshots by clientId so the index-by-index equality checks
@@ -386,7 +394,18 @@ export function useRealtimeCollaboration({
 
 			// Presence: only re-render the board when low-frequency presence actually
 			// changes (selection, layer, active node, peer set) — not on cursor ticks.
-			setPeerStates((prev) => (presenceEqual(prev, next) ? prev : next));
+			setPeerStates((prev) =>
+				peerPresenceListEqual(prev, next) ? prev : next,
+			);
+
+			// A click ages out without any wire traffic: wake up once to clear it.
+			if (expiryTimer !== null) clearTimeout(expiryTimer);
+			expiryTimer = Number.isFinite(nextExpiry)
+				? setTimeout(() => {
+						expiryTimer = null;
+						scheduleUpdate();
+					}, nextExpiry + 1)
+				: null;
 		};
 
 		// Remote peers broadcast cursors at ~20Hz each. Coalesce the resulting
@@ -406,6 +425,7 @@ export function useRealtimeCollaboration({
 
 		return () => {
 			if (rafId !== null) cancelAnimationFrame(rafId);
+			if (expiryTimer !== null) clearTimeout(expiryTimer);
 			try {
 				awareness.off("change", scheduleUpdate);
 			} catch {}
@@ -492,6 +512,7 @@ export function useRealtimeCollaboration({
 				const participant: RemoteSelectionParticipant = {
 					clientId: peer.clientId,
 					sub: peer.sub,
+					self: Boolean(sub && peer.sub === sub),
 					isActive: peer.activeNodeId === nodeId,
 				};
 				const existing = map.get(nodeId) ?? [];
@@ -548,7 +569,11 @@ export function useRealtimeCollaboration({
 		setNodes((nds: any) => {
 			if (nds.length === 0) return nds;
 			const updated = nds.map((node: any) => {
-				if (node.type !== "node" && node.type !== "callFunctionNode")
+				if (
+					node.type !== "node" &&
+					node.type !== "callFunctionNode" &&
+					node.type !== "layerNode"
+				)
 					return node;
 				const participants = map.get(node.id) ?? [];
 				const hasSelections = participants.length > 0;
@@ -567,7 +592,7 @@ export function useRealtimeCollaboration({
 			});
 			return updated;
 		});
-	}, [peerStates, setNodes]);
+	}, [peerStates, setNodes, sub]);
 
 	const reconnect = useCallback(() => {
 		sessionRef.current?.reconnect();
@@ -585,6 +610,25 @@ export function useRealtimeCollaboration({
 		[awareness],
 	);
 
+	/** Local-clock time a user (any of their sessions) last did something. */
+	const getPeerLastActiveAt = useCallback(
+		(peerSub: string) => activityTrackerRef.current.lastActiveAt(peerSub),
+		[],
+	);
+	/** Live activity predicates — local clock only, cheap enough to poll. */
+	const isPeerTypingInEditor = useCallback(
+		(peerSub: string) => activityTrackerRef.current.isTypingInEditor(peerSub),
+		[],
+	);
+	const isPeerTypingInChat = useCallback(
+		(peerSub: string) => activityTrackerRef.current.isTypingInChat(peerSub),
+		[],
+	);
+	const isPeerAway = useCallback(
+		(peerSub: string) => activityTrackerRef.current.isAway(peerSub),
+		[],
+	);
+
 	return {
 		awareness,
 		connectionStatus,
@@ -592,5 +636,9 @@ export function useRealtimeCollaboration({
 		cursorStore,
 		reconnect,
 		broadcastActiveNode,
+		getPeerLastActiveAt,
+		isPeerTypingInEditor,
+		isPeerTypingInChat,
+		isPeerAway,
 	};
 }

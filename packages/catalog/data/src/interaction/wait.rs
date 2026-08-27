@@ -19,7 +19,7 @@ fn get_app_id(context: &ExecutionContext) -> String {
 ///
 /// With `local` feature: Uses polling-based interaction handling (desktop app)
 /// With `remote` feature: Uses SSE-based interaction via API endpoint
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local", not(feature = "remote")))]
 pub async fn wait_for_interaction_response(
     context: &mut ExecutionContext,
     request: InteractionRequest,
@@ -62,6 +62,20 @@ pub async fn wait_for_interaction_response(
         responded,
         value: response_value,
     })
+}
+
+/// Cargo features are additive, but an interaction host cannot be local and
+/// remote at the same time. Failing explicitly prevents feature unification
+/// from silently switching a server executor to the local polling path.
+#[cfg(all(feature = "local", feature = "remote"))]
+pub async fn wait_for_interaction_response(
+    _context: &mut ExecutionContext,
+    _request: InteractionRequest,
+    _ttl_seconds: u64,
+) -> flow_like_types::Result<InteractionWaitResult> {
+    Err(flow_like_types::anyhow!(
+        "Interaction execution is ambiguous: features 'local' and 'remote' are both enabled"
+    ))
 }
 
 /// Wait for an interaction response.

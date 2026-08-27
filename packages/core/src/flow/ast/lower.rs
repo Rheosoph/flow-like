@@ -204,6 +204,11 @@ pub(crate) fn sugared_loop_head_pin(node_type: &str) -> &'static str {
 
 /// Board-side mapping helpers (depend on core's `VariableType`/`ValueType`).
 mod util {
+    /// Board name -> FlowScript identifier for anything the document DECLARES (variables,
+    /// functions, parameters, modules, event headers). Keyword-safe, unlike bare camelization.
+    /// Every declaration site and every reference map must use this same function or the two
+    /// spellings drift and the reference stops resolving.
+    pub use flow_like_ast::declared_identifier as declared_name;
     use flow_like_ast::model::Literal;
     pub use flow_like_ast::to_camel_case;
 
@@ -798,31 +803,56 @@ fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// One declared FlowScript name per board variable, keyed by variable id.
+///
+/// Camelization is not injective: `user id`, `user_id` and `userId` all become `userId`, so two
+/// board variables can render two identical `const` declarations. Reconcile then cannot tell which
+/// declaration means which variable — rather than mis-assigning, it derives nothing at all, so the
+/// board silently stops accepting edits with no error anywhere. Allocating every name from one set
+/// keeps them distinct.
+///
+/// Scopes are kept separate on purpose: a function-local `let` is *supposed* to be able to shadow a
+/// board-level `const`, so uniquifying across that boundary would rename correct code. Allocation
+/// order is by (name, id) — the same order the declarations render in — so the result is stable
+/// across runs and machines.
+fn variable_names(board: &Board) -> HashMap<&str, String> {
+    fn allocate<'a>(
+        variables: impl Iterator<Item = &'a Variable>,
+        names: &mut HashMap<&'a str, String>,
+    ) {
+        let mut used: HashSet<String> = KEYWORDS.iter().map(|k| k.to_lowercase()).collect();
+        let mut sorted: Vec<&Variable> = variables.collect();
+        sorted.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        for variable in sorted {
+            let name = unique_name(&util::declared_name(&variable.name), &mut used);
+            names.insert(variable.id.as_str(), name);
+        }
+    }
+
+    let mut names = HashMap::new();
+    allocate(board.variables.values(), &mut names);
+    let mut layers: Vec<&Layer> = board.layers.values().collect();
+    layers.sort_by(|a, b| a.id.cmp(&b.id));
+    for layer in layers {
+        allocate(layer.variables.values(), &mut names);
+    }
+    names
+}
+
 /// Names that are never minted for a binding: FlowScript keywords plus every user-declared name
 /// a binding could shadow in the text (variables, functions, and the parameters of entries).
 fn declared_names(board: &Board) -> HashSet<String> {
     let mut names: HashSet<String> = KEYWORDS.iter().map(|k| k.to_string()).collect();
-    names.extend(
-        board
-            .variables
-            .values()
-            .map(|v| util::to_camel_case(&v.name)),
-    );
+    names.extend(variable_names(board).into_values());
     for layer in board.layers.values() {
-        names.extend(
-            layer
-                .variables
-                .values()
-                .map(|v| util::to_camel_case(&v.name)),
-        );
         if matches!(layer.r#type, LayerType::Function) {
-            names.insert(util::to_camel_case(&layer.name));
+            names.insert(util::declared_name(&layer.name));
             names.extend(
                 layer
                     .pins
                     .values()
                     .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
-                    .map(|pin| util::to_camel_case(&pin.name)),
+                    .map(|pin| util::declared_name(&pin.name)),
             );
         }
     }
@@ -834,7 +864,7 @@ fn declared_names(board: &Board) -> HashSet<String> {
                     .pins
                     .values()
                     .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
-                    .map(|pin| util::to_camel_case(&pin.name)),
+                    .map(|pin| util::declared_name(&pin.name)),
             );
         }
     }
@@ -880,7 +910,7 @@ pub(crate) fn module_path(board: &Board, module_id: &str) -> Vec<String> {
         if !matches!(layer.r#type, LayerType::Module) {
             break;
         }
-        segments.push(util::to_camel_case(&layer.name));
+        segments.push(util::declared_name(&layer.name));
         current = layer.parent_id.as_deref();
     }
     segments.reverse();
@@ -890,8 +920,8 @@ pub(crate) fn module_path(board: &Board, module_id: &str) -> Vec<String> {
 /// Sibling module layers render in (camelCase name, layer id) order.
 fn sort_module_layers(layers: &mut [&Layer]) {
     layers.sort_by(|left, right| {
-        util::to_camel_case(&left.name)
-            .cmp(&util::to_camel_case(&right.name))
+        util::declared_name(&left.name)
+            .cmp(&util::declared_name(&right.name))
             .then_with(|| left.id.cmp(&right.id))
     });
 }
@@ -925,7 +955,7 @@ fn build_module_decls<'a>(
             .map(Vec::as_slice)
             .unwrap_or_default();
         decls.push(ModuleDecl {
-            name: util::to_camel_case(&layer.name),
+            name: util::declared_name(&layer.name),
             anchor: Some(layer.id.clone()),
             functions: functions.remove(&layer.id).unwrap_or_default(),
             events: events.remove(&layer.id).unwrap_or_default(),
@@ -945,7 +975,7 @@ fn module_root_names(board: &Board) -> Vec<String> {
         .values()
         .filter(|layer| matches!(layer.r#type, LayerType::Module))
         .filter(|layer| owning_module(board, layer.parent_id.as_deref()).is_none())
-        .map(|layer| util::to_camel_case(&layer.name))
+        .map(|layer| util::declared_name(&layer.name))
         .collect()
 }
 
@@ -1168,6 +1198,11 @@ struct Lowering<'a> {
     /// The module owning the section being lowered right now. Cross-module calls out of this
     /// section render fully qualified; everything else stays bare.
     current_module: Option<String>,
+    /// Event names already taken in each module scope, so two entries whose friendly names
+    /// camelize alike cannot render two `eventsGeneric widgetActionEvent(…)` headers that nothing
+    /// downstream can tell apart. Scopes are kept separate because two modules may legitimately
+    /// each own an event of the same name.
+    event_names_by_scope: HashMap<String, HashSet<String>>,
     /// node id -> stable `const` binding name (impure nodes with consumed outputs).
     bindings: HashMap<String, String>,
     /// node id -> element/index bindings of a loop rendered in its sugared `for…of`/`while`
@@ -1225,7 +1260,7 @@ impl<'a> Lowering<'a> {
             for pin in layer.pins.values() {
                 function_boundary_pins.insert(pin.id.as_str(), pin);
                 if pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution {
-                    boundary_params.insert(pin.id.as_str(), util::to_camel_case(&pin.name));
+                    boundary_params.insert(pin.id.as_str(), util::declared_name(&pin.name));
                 }
             }
         }
@@ -1246,25 +1281,14 @@ impl<'a> Lowering<'a> {
         // Resolve opaque ids to human names: variable ids -> camelCase variable names, and
         // function-layer ids -> camelCase function names. These back the `varRef` / `fnRef`
         // sugar so the clean text never leaks a CUID.
-        let mut var_names = HashMap::new();
-        for var in board.variables.values() {
-            var_names.insert(var.id.as_str(), util::to_camel_case(&var.name));
-        }
-        // Layer-local variables (e.g. function-scoped) also back `varRef` sugar.
-        for layer in board.layers.values() {
-            for var in layer.variables.values() {
-                var_names
-                    .entry(var.id.as_str())
-                    .or_insert_with(|| util::to_camel_case(&var.name));
-            }
-        }
+        let var_names = variable_names(board);
         let mut fn_names = HashMap::new();
         let mut module_of_function = HashMap::new();
         let mut module_paths = HashMap::new();
         for layer in board.layers.values() {
             match layer.r#type {
                 LayerType::Function => {
-                    fn_names.insert(layer.id.as_str(), util::to_camel_case(&layer.name));
+                    fn_names.insert(layer.id.as_str(), util::declared_name(&layer.name));
                     if let Some(module) = owning_module(board, layer.parent_id.as_deref()) {
                         module_of_function.insert(layer.id.as_str(), module);
                     }
@@ -1293,6 +1317,7 @@ impl<'a> Lowering<'a> {
             module_of_node,
             module_paths,
             current_module: None,
+            event_names_by_scope: HashMap::new(),
             bindings: HashMap::new(),
             loop_sugar: HashMap::new(),
             loop_bindings: HashMap::new(),
@@ -1320,7 +1345,11 @@ impl<'a> Lowering<'a> {
         self.assign_struct_accumulators();
         self.assign_destructures(&function_nodes, &root_nodes);
 
-        let variables = lower_variables(self.board.variables.values(), &self.board.refs);
+        let variables = lower_variables(
+            self.board.variables.values(),
+            &self.board.refs,
+            &self.var_names,
+        );
 
         let mut functions = Vec::new();
         let mut function_layers: Vec<&Layer> = self
@@ -1899,7 +1928,7 @@ impl<'a> Lowering<'a> {
         boundary.sort_by_key(|p| p.index);
         for pin in boundary {
             let param = Param {
-                name: util::to_camel_case(&pin.name),
+                name: util::declared_name(&pin.name),
                 ty: self.type_ref_for_pin(pin),
             };
             match pin.pin_type {
@@ -1910,7 +1939,7 @@ impl<'a> Lowering<'a> {
 
         let mut body = self.lower_scope_body(nodes);
 
-        let fn_name = util::to_camel_case(&layer.name);
+        let fn_name = util::declared_name(&layer.name);
         let (return_stmt, folded_return_variables) =
             self.lower_function_return(layer, nodes, &fn_name);
 
@@ -1925,7 +1954,14 @@ impl<'a> Lowering<'a> {
         locals.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         let local_stmts: Vec<Stmt> = locals
             .iter()
-            .map(|v| Stmt::Local(var_decl_of(v, &self.board.refs)))
+            .map(|v| {
+                let name = self
+                    .var_names
+                    .get(v.id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| util::declared_name(&v.name));
+                Stmt::Local(var_decl_of(v, &self.board.refs, &name))
+            })
             .collect();
         body.stmts.splice(0..0, local_stmts);
         body.stmts.extend(return_stmt);
@@ -2115,11 +2151,14 @@ impl<'a> Lowering<'a> {
                 let params = params_by_entry
                     .remove(entry.id.as_str())
                     .unwrap_or_default();
+                // Allocated before walking the body so a nested handler cannot take the outer
+                // event's own name.
+                let event_name = self.event_name_of(entry);
                 let body = self.walk_entry_body(entry);
                 events.push(EventBlock {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
-                    event_name: event_alias(entry),
+                    event_name,
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -2350,6 +2389,22 @@ impl<'a> Lowering<'a> {
 
     /// Collect an event entry's non-exec data output pins as a typed parameter list, registering
     /// each pin id under a unique camelCase name in `event_params`.
+    /// The event's given name, made unique within its module scope.
+    ///
+    /// Two entries whose friendly names camelize alike (`Widget Action Event` and
+    /// `widget_action_event`) rendered the same header twice, and a document that declares one name
+    /// twice cannot be reconciled: neither declaration can be addressed, so nothing is derived and
+    /// the board quietly stops accepting edits.
+    fn event_name_of(&mut self, entry: &Node) -> Option<String> {
+        let base = event_alias(entry)?;
+        let scope = self.current_module.clone().unwrap_or_default();
+        let used = self
+            .event_names_by_scope
+            .entry(scope)
+            .or_insert_with(|| KEYWORDS.iter().map(|k| k.to_lowercase()).collect());
+        Some(unique_name(&base, used))
+    }
+
     fn event_params_of(&mut self, entry: &'a Node) -> Vec<Param> {
         let mut outputs: Vec<&Pin> = entry
             .pins
@@ -2361,7 +2416,7 @@ impl<'a> Lowering<'a> {
         let mut used: HashSet<String> = HashSet::new();
         let mut params = Vec::new();
         for pin in outputs {
-            let name = unique_name(&util::to_camel_case(&pin.name), &mut used);
+            let name = unique_name(&util::declared_name(&pin.name), &mut used);
             self.event_params.insert(pin.id.as_str(), name.clone());
             params.push(Param {
                 name,
@@ -2431,11 +2486,12 @@ impl<'a> Lowering<'a> {
                 let params = params_by_entry
                     .remove(entry.id.as_str())
                     .unwrap_or_default();
+                let event_name = self.event_name_of(entry);
                 let body = self.walk_entry_body(entry);
                 block.stmts.push(Stmt::Handler(EventBlock {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
-                    event_name: event_alias(entry),
+                    event_name,
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -3593,18 +3649,21 @@ impl<'a> Lowering<'a> {
 }
 
 fn interfaces_for_board_text_surfaces(board: &Board) -> Vec<InterfaceDecl> {
-    let mut schema_sources = lower_variables(board.variables.values(), &board.refs);
+    let names = variable_names(board);
+    let mut schema_sources = lower_variables(board.variables.values(), &board.refs, &names);
 
     let mut layers = board.layers.values().collect::<Vec<_>>();
     layers.sort_by(|left, right| left.id.cmp(&right.id));
     for layer in &layers {
         let mut variables = layer.variables.values().collect::<Vec<_>>();
         variables.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
-        schema_sources.extend(
-            variables
-                .into_iter()
-                .map(|variable| var_decl_of(variable, &board.refs)),
-        );
+        schema_sources.extend(variables.into_iter().map(|variable| {
+            let name = names
+                .get(variable.id.as_str())
+                .cloned()
+                .unwrap_or_else(|| util::declared_name(&variable.name));
+            var_decl_of(variable, &board.refs, &name)
+        }));
 
         if matches!(layer.r#type, LayerType::Function) {
             let mut pins = layer.pins.values().collect::<Vec<_>>();
@@ -3660,7 +3719,7 @@ fn schema_source_for_pin(name: &str, pin: &Pin, refs: &HashMap<String, String>) 
         .cloned()
         .unwrap_or_else(|| raw_schema.to_string());
     Some(VarDecl {
-        name: util::to_camel_case(name),
+        name: util::declared_name(name),
         ty: util::type_ref(&pin.data_type, &pin.value_type),
         default: None,
         exposed: false,
@@ -3674,13 +3733,25 @@ fn schema_source_for_pin(name: &str, pin: &Pin, refs: &HashMap<String, String>) 
     })
 }
 
-fn lower_variables<'a, I>(variables: I, refs: &HashMap<String, String>) -> Vec<VarDecl>
+fn lower_variables<'a, I>(
+    variables: I,
+    refs: &HashMap<String, String>,
+    names: &HashMap<&str, String>,
+) -> Vec<VarDecl>
 where
     I: Iterator<Item = &'a Variable>,
 {
     let mut vars: Vec<&Variable> = variables.collect();
     vars.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-    vars.iter().map(|v| var_decl_of(v, refs)).collect()
+    vars.iter()
+        .map(|v| {
+            let name = names
+                .get(v.id.as_str())
+                .cloned()
+                .unwrap_or_else(|| util::declared_name(&v.name));
+            var_decl_of(v, refs, &name)
+        })
+        .collect()
 }
 
 /// Whether a trailing operator-node input (`ignore_case`) can be implied by the operator form:
@@ -3738,14 +3809,17 @@ fn is_exec(pin: &Pin) -> bool {
 /// table (`hash -> full string`); `schema` and `description` are stored as ref hashes, so they
 /// are resolved back to their literal content for the clean text (falling back to the raw value
 /// when it is already inline / not a known ref).
-fn var_decl_of(v: &Variable, refs: &HashMap<String, String>) -> VarDecl {
+/// `name` is the variable's allocated declaration spelling from [`variable_names`]. It is passed
+/// in rather than recomputed so the declaration and every reference to it cannot drift apart — a
+/// disambiguated name (`userId2`) exists only in that map.
+fn var_decl_of(v: &Variable, refs: &HashMap<String, String>, name: &str) -> VarDecl {
     let resolve = |value: &str| {
         refs.get(value)
             .cloned()
             .unwrap_or_else(|| value.to_string())
     };
     VarDecl {
-        name: util::to_camel_case(&v.name),
+        name: name.to_string(),
         ty: util::type_ref(&v.data_type, &v.value_type),
         // Secret values must never enter the text domain: rendered FlowScript is shown in
         // editors, copied, and sent to LLMs. Reconcile lowers the live board through this
@@ -4176,7 +4250,7 @@ fn is_materialized_return_name(variable_name: &str, fn_name: &str, pin_name: &st
 /// An impure node with no execution input is accepted as a trigger even without the flag: the two
 /// properties coincide across the catalog, and taking the shape too keeps a board snapshot that
 /// predates a node's `start` metadata rendering as the event it is.
-fn is_trigger_entry(node: &Node) -> bool {
+pub(crate) fn is_trigger_entry(node: &Node) -> bool {
     node.start == Some(true) || (is_impure(node) && !has_exec_input(node))
 }
 
@@ -4263,7 +4337,7 @@ fn event_alias(node: &Node) -> Option<String> {
         return None;
     }
 
-    let alias = util::to_camel_case(friendly_name);
+    let alias = util::declared_name(friendly_name);
     (alias != event_type_name(node)).then_some(alias)
 }
 

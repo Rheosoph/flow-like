@@ -27,6 +27,7 @@ import {
 	IBitTypes,
 	IRole,
 	isFreeLlmModel,
+	isHostedLlmModel,
 	selectProfileLlmModels,
 	useAssistantSurface,
 	useBackend,
@@ -478,9 +479,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
-			const hosted = bitsModels.find(
-				(bit) => bit.parameters?.provider?.provider_name === "Hosted",
-			);
+			const hosted = bitsModels.find(isHostedLlmModel);
 			setSelectedModelId((hosted ?? bitsModels[0]).id);
 		}
 	}, [

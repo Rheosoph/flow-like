@@ -15,5 +15,5 @@ minimumReleaseAgeExcludes = [
 	"flow-like-desktop",
 	"flow-like-wasm-node-ts",
 	"flow-like-wasm-node-typescript",
-	"flow-like-web",
+	"flow-like-web"
 ]

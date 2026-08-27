@@ -8,6 +8,7 @@ import V5Apps from "../sections/v5-apps.astro";
 import V5Platform from "../sections/v5-platform.astro";
 import V5Flowpilot from "../sections/v5-flowpilot.astro";
 import V5Control from "../sections/v5-control.astro";
+import V5Book from "../sections/v5-book.astro";
 import NotesFooterV4 from "../sections/notes-footer-v4.astro";
 
 import type { Lang, TranslationKey } from "../i18n";
@@ -108,7 +109,6 @@ const websiteLd = {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-    <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#ef5b42" />
@@ -159,6 +159,7 @@ const websiteLd = {
       <V5Platform lang={lang} />
       <V5Flowpilot lang={lang} />
       <V5Control lang={lang} />
+      <V5Book lang={lang} />
     </main>
     <NotesFooterV4 lang={lang} />
   </body>

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::model::*;
+use crate::naming::is_keyword;
 use crate::schema::{normalize_object_schema, normalize_schema};
 use crate::text::{is_valid_identifier, quote_string, to_camel_case};
 
@@ -538,12 +539,36 @@ impl Writer<'_> {
             Stmt::Handler(event) => {
                 self.event_block(event);
             }
-            Stmt::Comment(text) => {
-                self.indent();
+            Stmt::Comment(text) => self.comment_lines(text),
+        }
+    }
+
+    /// A free-standing comment. Board comment text is free-form: it can span lines, and it can
+    /// contain the `//@` anchor marker. Both break the document if written through verbatim -- a
+    /// raw newline ends the comment and leaves the tail as code, and an embedded `//@` is split
+    /// off by the lexer into a second comment (that split is what keeps `// label   //@n:id` on
+    /// one line working). Each line is emitted as its own `//`, and an embedded marker is
+    /// separated so it re-lexes as the text it was.
+    fn comment_lines(&mut self, text: &str) {
+        let mut wrote = false;
+        for line in text.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            // The lexer drops trailing whitespace from a comment, so emitting any would make the
+            // document disagree with itself on the second render.
+            let line = neutralize_anchor_markers(line.trim_end());
+            self.indent();
+            if line.is_empty() {
+                self.out.push_str("//");
+            } else {
                 self.out.push_str("// ");
-                self.out.push_str(text);
-                self.out.push('\n');
+                self.out.push_str(&line);
             }
+            self.out.push('\n');
+            wrote = true;
+        }
+        if !wrote {
+            self.indent();
+            self.out.push_str("//\n");
         }
     }
 
@@ -842,7 +867,7 @@ fn render_literal(lit: &Literal) -> String {
         }
         Literal::Bool(b) => b.to_string(),
         Literal::Null => "null".to_string(),
-        Literal::Json(raw) => raw.clone(),
+        Literal::Json(raw) => compact_json(raw),
     }
 }
 
@@ -945,18 +970,94 @@ fn render_member(base: &str, field: &str) -> String {
     }
 }
 
+/// Whether `field` can be written with dot notation, i.e. whether it lexes back as the same path.
+///
+/// A character-class test is not enough: `row.a..b`, `row.a]b` and `row.` all pass one and none of
+/// them parse, and `row.for` parses as a keyword rather than a field. The path is checked as a
+/// grammar — dot-joined identifier segments, each with optional `[index]` suffixes — so anything
+/// else falls back to the bracketed string form the caller already emits.
 fn is_plain_field_path(field: &str) -> bool {
     if field.is_empty() {
         return false;
     }
-    let mut chars = field.chars();
-    let first = chars.next().unwrap();
-    if !(first.is_ascii_alphabetic() || first == '_') {
+    field.split('.').all(is_plain_field_segment)
+}
+
+/// Strip insignificant whitespace from a JSON literal.
+///
+/// The grammar only accepts a compact `{…}`/`[…]` initializer, but a board's struct default is
+/// whatever was stored on the pin — often pretty-printed. Emitting it verbatim produced a
+/// declaration the parser rejects outright.
+///
+/// This removes whitespace *outside* string literals rather than re-serializing: `serde_json`'s
+/// map is sorted, so a round trip through `Value` would silently reorder every object key and
+/// change what the document says. Input that is not well-formed JSON is returned untouched, so a
+/// malformed default still surfaces as the parse error it is instead of being quietly rewritten.
+fn compact_json(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    // An unterminated string means this was never JSON; hand back the original so the failure stays
+    // visible rather than being masked by a mangled rewrite.
+    if in_string { raw.to_string() } else { out }
+}
+
+/// Break up any `//@` inside comment text so the lexer does not split the comment there and read
+/// the tail as an identity anchor. A space after the slashes reads naturally in an editor and
+/// cannot be mistaken for a marker.
+fn neutralize_anchor_markers(line: &str) -> String {
+    if !line.contains("//@") {
+        return line.to_string();
+    }
+    line.replace("//@", "// @")
+}
+
+/// One `.`-separated segment: an identifier, then any number of `[…]` index suffixes.
+fn is_plain_field_segment(segment: &str) -> bool {
+    let (name, mut rest) = match segment.find('[') {
+        Some(index) => segment.split_at(index),
+        None => (segment, ""),
+    };
+    if !is_plain_ident(name) || is_keyword(name) {
         return false;
     }
-    field
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '[' | ']'))
+    while !rest.is_empty() {
+        let Some(stripped) = rest.strip_prefix('[') else {
+            return false;
+        };
+        let Some(end) = stripped.find(']') else {
+            return false;
+        };
+        let index = &stripped[..end];
+        // Only a literal index keeps the dot form unambiguous; a computed or quoted one is an
+        // `Expr::Index`, not part of the field path.
+        if index.is_empty() || !index.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        rest = &stripped[end + 1..];
+    }
+    true
 }
 
 fn render_object(fields: &[ObjectField]) -> String {
@@ -978,16 +1079,11 @@ fn render_object_key(key: &str) -> String {
     }
 }
 
+/// Whether `s` can be written bare where the grammar expects an identifier. This must agree with
+/// the lexer: an ASCII-only rule here rendered a non-ASCII field with a dot and re-rendered it
+/// bracketed, because the parse side judged the same name by the lexer's Unicode-aware rule.
 fn is_plain_ident(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    let mut chars = s.chars();
-    let first = chars.next().unwrap();
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    is_valid_identifier(s)
 }
 
 /// `[receiver.][path::]display(positional, …, { named })`.

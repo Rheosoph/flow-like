@@ -249,6 +249,30 @@ impl Node {
         self
     }
 
+    /// Stamp the effective FlowScript names as explicit fields where they are missing.
+    ///
+    /// First-party nodes declare them; third-party (WASM) and generated nodes only carry a
+    /// `category`, so consumers that read the fields instead of deriving — the editor's
+    /// catalog index, `flow.d` tooling — never saw them. Explicit values are left untouched,
+    /// and the receiver is only stamped when the default rule yields one, so a static-only
+    /// node stays `None` on both sides.
+    pub fn ensure_flowscript_names(&mut self) -> &mut Self {
+        if self.namespace.is_none() || self.alias.is_none() {
+            let (namespace, alias) =
+                flow_like_ast::effective_spelling(&self.name, &self.category, self.name_fields());
+            if self.namespace.is_none() && !namespace.is_empty() {
+                self.namespace = Some(namespace);
+            }
+            if self.alias.is_none() && !alias.is_empty() {
+                self.alias = Some(alias);
+            }
+        }
+        if self.receiver.is_none() {
+            self.receiver = self.flowscript_receiver();
+        }
+        self
+    }
+
     fn name_fields(&self) -> flow_like_ast::NameFields<'_> {
         flow_like_ast::NameFields {
             namespace: self.namespace.as_deref(),
@@ -1197,6 +1221,41 @@ mod tests {
         md5.set_flowscript_name("digest", "md5").set_receiver("");
         assert_eq!(md5.flowscript_namespace(), "digest");
         assert_eq!(md5.flowscript_receiver(), None);
+    }
+
+    #[test]
+    fn ensure_flowscript_names_stamps_derived_names_for_third_party_nodes() {
+        let mut limit = super::Node::new("limit_feed_items", "Limit Feed Items", "", "RSS/Items");
+        limit.add_input_pin("items", "Items", "", super::VariableType::Struct);
+        limit.add_input_pin("limit", "Limit", "", super::VariableType::Integer);
+        assert_eq!(limit.namespace, None);
+        assert_eq!(limit.alias, None);
+
+        limit.ensure_flowscript_names();
+        assert_eq!(limit.namespace.as_deref(), Some("rss.items"));
+        assert_eq!(limit.alias.as_deref(), Some("limitFeedItems"));
+        assert_eq!(
+            limit.receiver, None,
+            "a non-value-type namespace stays static-only"
+        );
+        assert_eq!(limit.flowscript_namespace(), "rss.items");
+        assert_eq!(limit.flowscript_alias(), "limitFeedItems");
+
+        let mut trim = super::Node::new("string_trim", "Trim", "", "Utils/String");
+        trim.add_input_pin("string", "String", "", super::VariableType::String);
+        trim.ensure_flowscript_names();
+        assert_eq!(trim.namespace.as_deref(), Some("string"));
+        assert_eq!(trim.alias.as_deref(), Some("trim"));
+        assert_eq!(trim.receiver.as_deref(), Some("string"));
+
+        let mut explicit = super::Node::new("string_trim", "Trim", "", "Utils/String");
+        explicit
+            .set_flowscript_name("text", "strip")
+            .set_receiver("");
+        explicit.ensure_flowscript_names();
+        assert_eq!(explicit.namespace.as_deref(), Some("text"));
+        assert_eq!(explicit.alias.as_deref(), Some("strip"));
+        assert_eq!(explicit.receiver.as_deref(), Some(""));
     }
 
     #[test]
