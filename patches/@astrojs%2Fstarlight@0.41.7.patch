@@ -1,0 +1,27 @@
+diff --git a/components/Search.astro b/components/Search.astro
+--- a/components/Search.astro
++++ b/components/Search.astro
+@@ -132,7 +132,7 @@
+ 			const stripTrailingSlash = (path: string) => path.replace(/(.)\/(#.*)?$/, '$1$2');
+ 			const formatURL = shouldStrip ? stripTrailingSlash : (path: string) => path;
+
+-			window.addEventListener('DOMContentLoaded', () => {
++			const initializeSearch = () => {
+ 				if (import.meta.env.DEV) return;
+ 				const onIdle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+ 				onIdle(async () => {
+@@ -157,7 +157,13 @@
+ 						},
+ 					});
+ 				});
+-			});
++			};
++
++			if (document.readyState === 'loading') {
++				window.addEventListener('DOMContentLoaded', initializeSearch, { once: true });
++			} else {
++				initializeSearch();
++			}
+ 		}
+ 	}
+ 	customElements.define('site-search', SiteSearch);
