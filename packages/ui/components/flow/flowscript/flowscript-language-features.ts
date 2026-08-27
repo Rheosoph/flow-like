@@ -37,14 +37,10 @@ import {
 	toFlowScriptIdentifier,
 	trimTrailingSpacesTabs,
 } from "./flowscript-language";
-import {
-	type CancellationTokenLike,
-	requestFlowScriptWorkerDocumentSymbols,
-	requestFlowScriptWorkerEnvDoc,
-	requestFlowScriptWorkerFolding,
-	requestFlowScriptWorkerInlayHints,
-	requestFlowScriptWorkerSemanticTokens,
-} from "./flowscript-worker-client";
+import type {
+	CancellationTokenLike,
+	FlowScriptWorkerRequests,
+} from "./flowscript-worker-contract";
 
 type GetCatalogNodes = () => INode[] | undefined;
 
@@ -1864,6 +1860,7 @@ function registerSnippetsAndAutoImport(
 	monaco: Monaco,
 	analysisFor: AnalysisFor,
 	getCatalogNodes: GetCatalogNodes,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestEnvDoc">,
 ): { dispose: () => void } {
 	const computeItems = (
 		analysis: FlowScriptEnvContext,
@@ -1918,7 +1915,7 @@ function registerSnippetsAndAutoImport(
 			_context: unknown,
 			token?: CancellationTokenLike,
 		) => {
-			const viaWorker = requestFlowScriptWorkerEnvDoc(
+			const viaWorker = workerRequests.requestEnvDoc(
 				model,
 				getCatalogNodes(),
 				token,
@@ -2074,6 +2071,7 @@ function registerDocumentSymbols(
 	monaco: Monaco,
 	analysisFor: AnalysisFor,
 	getCatalogNodes: GetCatalogNodes,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestDocumentSymbols">,
 ): { dispose: () => void } {
 	const symbolsInThread = (model: ModelLike) =>
 		flowScriptSymbolsToMonaco(
@@ -2085,7 +2083,7 @@ function registerDocumentSymbols(
 			model: ModelLike,
 			token?: CancellationTokenLike,
 		) => {
-			const viaWorker = requestFlowScriptWorkerDocumentSymbols(
+			const viaWorker = workerRequests.requestDocumentSymbols(
 				model,
 				getCatalogNodes(),
 				token,
@@ -2162,6 +2160,7 @@ function registerFolding(
 	monaco: Monaco,
 	analysisFor: AnalysisFor,
 	getCatalogNodes: GetCatalogNodes,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestFolding">,
 ): { dispose: () => void } {
 	const foldInThread = (model: ModelLike) =>
 		flowScriptFoldingToMonaco(
@@ -2174,7 +2173,7 @@ function registerFolding(
 			_context: unknown,
 			token?: CancellationTokenLike,
 		) => {
-			const viaWorker = requestFlowScriptWorkerFolding(
+			const viaWorker = workerRequests.requestFolding(
 				model,
 				getCatalogNodes(),
 				token,
@@ -2364,6 +2363,7 @@ function registerInlayHints(
 	monaco: Monaco,
 	analysisFor: AnalysisFor,
 	getCatalogNodes: GetCatalogNodes,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestInlayHints">,
 ): { dispose: () => void } {
 	const hintsInThread = (model: ModelLike, range?: RangeLike) => {
 		const analysis = analysisFor(model);
@@ -2386,7 +2386,7 @@ function registerInlayHints(
 			// Without a range Monaco wants the whole document; the worker request
 			// needs concrete bounds, so derive them from the text only when cheap.
 			const viaWorker = range
-				? requestFlowScriptWorkerInlayHints(
+				? workerRequests.requestInlayHints(
 						model,
 						getCatalogNodes(),
 						range.startLineNumber,
@@ -2534,6 +2534,7 @@ function registerSemanticTokens(
 	monaco: Monaco,
 	analysisFor: AnalysisFor,
 	getCatalogNodes: GetCatalogNodes,
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestSemanticTokens">,
 ): { dispose: () => void } {
 	const encodeInThread = (model: ModelLike) => ({
 		data: buildFlowScriptSemanticTokens(analysisFor(model)),
@@ -2546,7 +2547,7 @@ function registerSemanticTokens(
 			_lastResultId: unknown,
 			token?: CancellationTokenLike,
 		) => {
-			const viaWorker = requestFlowScriptWorkerSemanticTokens(
+			const viaWorker = workerRequests.requestSemanticTokens(
 				model,
 				getCatalogNodes(),
 				token,
@@ -2709,11 +2710,12 @@ function registerRename(
 /**
  * Registers the analysis-backed language features (code actions, auto-import and snippet
  * completions, outline, folding, inlay hints, definition/references, semantic tokens and
- * rename). Called from `registerFlowScriptProviders`; returns one disposable for the set.
+ * rename). The main-thread provider facade composes this set with the core providers.
  */
 export function registerFlowScriptFeatureProviders(
 	monaco: Monaco,
 	getCatalogNodes: () => INode[] | undefined,
+	workerRequests: FlowScriptWorkerRequests,
 ): { dispose: () => void } {
 	const analysisFor: AnalysisFor = (model) =>
 		analyzeFlowScriptDocument(
@@ -2722,12 +2724,27 @@ export function registerFlowScriptFeatureProviders(
 		);
 	const disposables = [
 		registerCodeActions(monaco, analysisFor),
-		registerSnippetsAndAutoImport(monaco, analysisFor, getCatalogNodes),
-		registerDocumentSymbols(monaco, analysisFor, getCatalogNodes),
-		registerFolding(monaco, analysisFor, getCatalogNodes),
-		registerInlayHints(monaco, analysisFor, getCatalogNodes),
+		registerSnippetsAndAutoImport(
+			monaco,
+			analysisFor,
+			getCatalogNodes,
+			workerRequests,
+		),
+		registerDocumentSymbols(
+			monaco,
+			analysisFor,
+			getCatalogNodes,
+			workerRequests,
+		),
+		registerFolding(monaco, analysisFor, getCatalogNodes, workerRequests),
+		registerInlayHints(monaco, analysisFor, getCatalogNodes, workerRequests),
 		registerDefinitionAndReferences(monaco, analysisFor),
-		registerSemanticTokens(monaco, analysisFor, getCatalogNodes),
+		registerSemanticTokens(
+			monaco,
+			analysisFor,
+			getCatalogNodes,
+			workerRequests,
+		),
 		registerRename(monaco, analysisFor),
 	];
 	return {

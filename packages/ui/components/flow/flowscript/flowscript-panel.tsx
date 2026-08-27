@@ -107,8 +107,8 @@ import {
 	type FlowScriptBoardScope,
 	defineFlowScriptThemes,
 	registerFlowScriptLanguage,
-	registerFlowScriptProviders,
 } from "./flowscript-language";
+import { registerFlowScriptProviders } from "./flowscript-language-providers";
 import {
 	type FlowScriptConflictLensHandle,
 	type FlowScriptConflictLensLabels,

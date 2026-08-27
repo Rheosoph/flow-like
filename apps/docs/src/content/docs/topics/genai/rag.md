@@ -89,6 +89,8 @@ Use [Embed Query](/nodes/ai/embedding/embed-query/) with the same embedding mode
 
 Hybrid Search can rerank the combined candidates with reciprocal rank fusion. Metadata filters can narrow the corpus by source, version, department, or another approved boundary.
 
+For the physical database index behind these searches, use [Choosing a Lance index](/topics/datascience/lance-indexes/). The guide separates the choices Flow-Like exposes today from indexes available in the latest stable Lance release.
+
 ### 3. Select context
 
 Do not pass every result to the model. Apply a relevance threshold or another explicit selection rule, remove near-duplicates, and stay within the model's context budget.

@@ -1,14 +1,6 @@
 "use client";
 
 import {
-	MemoryTier,
-	type PackageManifest,
-	TimeoutTier,
-	useBackend,
-	useInvoke,
-	useMutation,
-} from "@flow-like/flow-like-ui";
-import {
 	Badge,
 	Button,
 	Card,
@@ -19,6 +11,8 @@ import {
 	Checkbox,
 	Input,
 	Label,
+	MemoryTier,
+	type PackageManifest,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -26,7 +20,11 @@ import {
 	SelectValue,
 	Separator,
 	Textarea,
-} from "@flow-like/flow-like-ui/components";
+	TimeoutTier,
+	useBackend,
+	useInvoke,
+	useMutation,
+} from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";

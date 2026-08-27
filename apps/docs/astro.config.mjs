@@ -233,6 +233,10 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 											slug: "topics/datascience/loading",
 										},
 										{
+											label: "Choosing a Lance Index",
+											slug: "topics/datascience/lance-indexes",
+										},
+										{
 											label: "DataFusion & SQL",
 											slug: "topics/datascience/datafusion",
 										},

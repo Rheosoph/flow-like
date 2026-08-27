@@ -54,7 +54,7 @@
 		"lodash-es": "4.18.1",
 		"mdast-util-to-hast": "13.2.1",
 		"minimatch": "3.1.5",
-		"next": "16.2.6",
+		"next": "16.3.3",
 		"path-to-regexp": "8.4.2",
 		"picomatch": "4.0.4",
 		"postcss": "8.5.26",

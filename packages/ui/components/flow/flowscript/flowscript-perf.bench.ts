@@ -25,8 +25,8 @@ import {
 	analyzeFlowScriptDocument,
 	buildFlowScriptIndex,
 	computeFlowScriptDiagnostics,
-	registerFlowScriptProviders,
 } from "./flowscript-language";
+import { registerFlowScriptProviders } from "./flowscript-language-providers";
 
 // ---------------------------------------------------------------------------
 // Catalog from packages/ast/signatures.json

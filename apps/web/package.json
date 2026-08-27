@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "next dev -p 3001",
-		"build": "bun ../../scripts/sync-node-icons.ts && next build",
+		"build": "bun ../../scripts/sync-node-icons.ts && next build --turbopack",
 		"start": "next start -p 3001",
 		"upload-sourcemaps": "bun ../../scripts/upload-sourcemaps.ts --source=web --dir=out",
 		"deploy": "bun run build && bunx wrangler pages deploy out",

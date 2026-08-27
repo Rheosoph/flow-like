@@ -13,8 +13,8 @@ import {
 	catalogNamespaceRoots,
 	computeFlowScriptDiagnostics,
 	parseUseDeclarations,
-	registerFlowScriptProviders,
 } from "./flowscript-language";
+import { registerFlowScriptProviders } from "./flowscript-language-providers";
 import { tokenizeMonarch } from "./monarch-test-harness";
 
 interface PinSpec {

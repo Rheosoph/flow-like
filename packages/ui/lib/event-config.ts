@@ -1,20 +1,18 @@
 import { createId } from "@paralleldrive/cuid2";
-import {
-	ChatInterface,
-	CronJobConfig,
-	DaemonConfig,
-	DeeplinkConfig,
-	DiscordConfig,
-	GenericEventFormInterface,
-	GenericFormConfig,
-	HttpConfig,
-	type IEventMapping,
-	McpConfig,
-	RestConfig,
-	SimpleChatConfig,
-	TelegramConfig,
-	UserMailConfig,
-} from "../index";
+import { ChatInterface } from "../components/interfaces/chat-default";
+import { CronJobConfig } from "../components/interfaces/configs/cron";
+import { DaemonConfig } from "../components/interfaces/configs/daemon";
+import { DeeplinkConfig } from "../components/interfaces/configs/deeplink";
+import { DiscordConfig } from "../components/interfaces/configs/discord";
+import { GenericFormConfig } from "../components/interfaces/configs/generic_form";
+import { HttpConfig } from "../components/interfaces/configs/http";
+import { McpConfig } from "../components/interfaces/configs/mcp";
+import { RestConfig } from "../components/interfaces/configs/rest";
+import { SimpleChatConfig } from "../components/interfaces/configs/simple_chat";
+import { TelegramConfig } from "../components/interfaces/configs/telegram";
+import { UserMailConfig } from "../components/interfaces/configs/user_mail";
+import { GenericEventFormInterface } from "../components/interfaces/generic-event-form";
+import type { IEventMapping } from "../components/interfaces/interfaces";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "./chat-appearance";
 import { DEFAULT_CHAT_THEME_CSS } from "./chat-theme-presets";
 

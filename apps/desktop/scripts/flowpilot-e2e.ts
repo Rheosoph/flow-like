@@ -872,8 +872,9 @@ async function run(options: CliOptions): Promise<number> {
 			await stopChild(child);
 			throw error;
 		} finally {
-			process.off("SIGINT", onSigint);
-			process.off("SIGTERM", onSigterm);
+			// Bun's Process.off overload currently exposes only its memory-pressure event.
+			Reflect.apply(process.off, process, ["SIGINT", onSigint]);
+			Reflect.apply(process.off, process, ["SIGTERM", onSigterm]);
 			callbackServer.stop(true);
 		}
 	} finally {
