@@ -389,8 +389,29 @@ impl CatalogBuilder {
     }
 }
 
-/// Static cached catalog - initialized once on first access
-static CATALOG: LazyLock<Vec<Arc<dyn NodeLogic>>> = LazyLock::new(|| CatalogBuilder::new().build());
+#[cfg(feature = "runtime-catalog")]
+fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
+    match node.get_node().name.as_str() {
+        "ai_audio_local_text_to_speech" => cfg!(feature = "local-tts"),
+        "ai_audio_local_speech_to_text" => cfg!(feature = "local-stt"),
+        "df_register_oracle" | "df_register_athena" => cfg!(feature = "odbc"),
+        _ => true,
+    }
+}
+
+fn product_catalog_builder() -> CatalogBuilder {
+    let builder = CatalogBuilder::new();
+    #[cfg(feature = "runtime-catalog")]
+    {
+        return builder.with_filter(runtime_implementation_available);
+    }
+    #[cfg(not(feature = "runtime-catalog"))]
+    builder
+}
+
+/// Static cached product catalog, initialized once on first access.
+static CATALOG: LazyLock<Vec<Arc<dyn NodeLogic>>> =
+    LazyLock::new(|| product_catalog_builder().build());
 
 /// Get the full catalog from all sub-crates (cached, initialized once)
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
@@ -399,19 +420,61 @@ pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
 
 /// Get catalog from specific packages only (not cached - use sparingly)
 pub fn get_catalog_from(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic>> {
-    CatalogBuilder::new().only_packages(packages).build()
+    product_catalog_builder().only_packages(packages).build()
 }
 
 /// Get catalog excluding specific packages (not cached - use sparingly)
 pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic>> {
-    CatalogBuilder::new().exclude_packages(packages).build()
+    product_catalog_builder().exclude_packages(packages).build()
+}
+
+#[cfg(all(test, feature = "package-data", feature = "package-media"))]
+mod catalog_surface_tests {
+    use super::*;
+
+    fn has_node(catalog: &[Arc<dyn NodeLogic>], name: &str) -> bool {
+        catalog.iter().any(|logic| logic.get_node().name == name)
+    }
+
+    #[test]
+    fn raw_builder_keeps_optional_nodes_for_metadata_tooling() {
+        let catalog = CatalogBuilder::new().build();
+
+        for name in [
+            "ai_audio_local_text_to_speech",
+            "ai_audio_local_speech_to_text",
+            "df_register_oracle",
+            "df_register_athena",
+        ] {
+            assert!(has_node(&catalog, name), "raw catalog omitted {name}");
+        }
+    }
+
+    #[cfg(feature = "runtime-catalog")]
+    #[test]
+    fn product_catalog_omits_optional_nodes_without_their_runtime() {
+        let catalog = get_catalog();
+
+        assert_eq!(
+            has_node(&catalog, "ai_audio_local_text_to_speech"),
+            cfg!(feature = "local-tts")
+        );
+        assert_eq!(
+            has_node(&catalog, "ai_audio_local_speech_to_text"),
+            cfg!(feature = "local-stt")
+        );
+        for name in ["df_register_oracle", "df_register_athena"] {
+            assert_eq!(has_node(&catalog, name), cfg!(feature = "odbc"));
+        }
+    }
 }
 
 /// Initialize the catalog runtime systems.
 ///
 /// This should be called once at application startup, before any flow execution.
-/// It initializes:
-/// - ONNX Runtime with the best available execution providers (GPU/NPU acceleration)
+/// With `local-ml` enabled, it initializes ONNX Runtime with the best available
+/// execution providers. Remote-only and metadata-only builds return an empty
+/// status without loading an inference runtime.
 ///
 /// # Returns
 ///
@@ -424,38 +487,53 @@ pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic
 ///
 /// fn main() {
 ///     let info = initialize();
+///     println!("ONNX configured: {}", info.onnx_configured);
 ///     println!("Configured providers: {:?}", info.onnx_providers);
 ///     println!("Acceleration configured: {}", info.onnx_accelerated);
 /// }
 /// ```
-#[cfg(feature = "portable-execute")]
 pub fn initialize() -> InitInfo {
-    let onnx_info = flow_like_catalog_onnx::onnx::initialize_ort();
-    tracing::info!(
-        providers = ?onnx_info.active_providers,
-        accelerated = onnx_info.accelerated,
-        "ONNX Runtime initialized"
-    );
-    InitInfo {
-        onnx_providers: onnx_info.active_providers,
-        onnx_accelerated: onnx_info.accelerated,
-        onnx_warnings: onnx_info.warnings,
+    #[cfg(feature = "local-ml")]
+    {
+        let onnx_info = flow_like_catalog_onnx::onnx::initialize_ort();
+        if onnx_info.configured {
+            tracing::info!(
+                providers = ?onnx_info.active_providers,
+                accelerated = onnx_info.accelerated,
+                "ONNX Runtime initialized"
+            );
+        } else {
+            tracing::warn!(
+                providers = ?onnx_info.active_providers,
+                warnings = ?onnx_info.warnings,
+                "ONNX Runtime configuration is unavailable"
+            );
+        }
+        return InitInfo {
+            onnx_providers: onnx_info.active_providers,
+            onnx_accelerated: onnx_info.accelerated,
+            onnx_configured: onnx_info.configured,
+            onnx_warnings: onnx_info.warnings,
+        };
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    {
+        tracing::debug!("ONNX Runtime initialization skipped because local ML is disabled");
+        InitInfo::default()
     }
 }
 
 /// Information about initialized runtime systems
-#[cfg(feature = "portable-execute")]
 #[derive(Debug, Clone, Default)]
 pub struct InitInfo {
-    /// Configured ONNX execution providers, including CPU fallback
+    /// Configured ONNX execution providers, including CPU fallback.
+    /// Empty when local ML execution is disabled.
     pub onnx_providers: Vec<String>,
     /// Whether ONNX has a GPU/NPU provider configured
     pub onnx_accelerated: bool,
+    /// Whether FlowLike configured the process-wide ONNX Runtime environment
+    pub onnx_configured: bool,
     /// Any warnings during ONNX initialization
     pub onnx_warnings: Vec<String>,
-}
-
-#[cfg(not(feature = "portable-execute"))]
-pub fn initialize() -> () {
-    // No-op when execute feature is not enabled
 }

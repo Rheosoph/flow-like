@@ -152,7 +152,7 @@ async fn wasm_nodes_for_packages(
 }
 
 fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
-    Node {
+    let mut node = Node {
         id: entry.id.clone(),
         name: entry.name.clone(),
         friendly_name: entry
@@ -195,7 +195,9 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         namespace: None,
         alias: None,
         receiver: None,
-    }
+    };
+    node.ensure_flowscript_names();
+    node
 }
 
 pub fn hydrate_board_wasm_metadata(

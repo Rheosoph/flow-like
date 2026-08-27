@@ -30,6 +30,7 @@ use flow_like_types::{Result, bail};
 use flow_like_types::{anyhow, create_id};
 
 use crate::bit::Bit;
+use crate::models::llm::ModelUsageContext;
 use crate::state::FlowLikeState;
 
 #[cfg(feature = "flow-runtime")]
@@ -122,18 +123,22 @@ impl AssistantMemory {
     }
 
     /// Open (or lazily create on first write) the memory table for `profile_id`, embedding with the
-    /// given bit. See [`open_store`](Self::open_store) for how `owner` scopes the table.
+    /// given bit. `access_token` and `usage_context` let a cloud host route a remote-capable Bit
+    /// through the authenticated embedding proxy. See [`open_store`](Self::open_store) for how
+    /// `owner` scopes the table.
     pub async fn open(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
         profile_id: &str,
         embedding_bit: &Bit,
+        access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
     ) -> Result<Self> {
         let embedding = state
             .embedding_factory
             .lock()
             .await
-            .build_text(embedding_bit, state.clone())
+            .build_text_routed(embedding_bit, state.clone(), access_token, usage_context)
             .await?;
         let store = Self::open_store(&state, owner, profile_id).await?;
 
@@ -367,6 +372,8 @@ impl AssistantMemory {
         _owner: Option<&str>,
         _profile_id: &str,
         _embedding_bit: &Bit,
+        _access_token: Option<String>,
+        _usage_context: Option<ModelUsageContext>,
     ) -> Result<Self> {
         Self::unavailable()
     }

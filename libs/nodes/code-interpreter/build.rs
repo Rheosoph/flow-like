@@ -29,6 +29,10 @@ fn main() {
 
 #[cfg(feature = "bundled-python")]
 mod bundled_python {
+    use flow_like_catalog_build_helper::code_interpreter_build::{
+        blake3 as build_blake3, dirs_next as build_dirs_next, ureq as build_ureq,
+        wasmtime as build_wasmtime,
+    };
     use std::path::PathBuf;
 
     /// Pinned CPython WASI release from vmware-labs/webassembly-language-runtimes.

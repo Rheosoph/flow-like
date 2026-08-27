@@ -4,6 +4,7 @@ import {
 	collectCommandEntityIds,
 	createFlowScriptPresencePublisher,
 	createFlowScriptPresenceStore,
+	createFlowScriptViewportPublisher,
 	cursorToWire,
 	deriveClaimedAnchorIds,
 	deriveRemoteEditorsByNode,
@@ -12,11 +13,16 @@ import {
 	peersSharingFlowScriptScope,
 	readPeerFlowScriptClaims,
 	resolveWireCursor,
+	resolveWireViewport,
+	viewportToWire,
 } from "./flowscript-presence";
 import {
 	FLOWSCRIPT_CLAIMS_FIELD,
 	FLOWSCRIPT_CURSOR_FIELD,
 	FLOWSCRIPT_SCOPE_FIELD,
+	FLOWSCRIPT_VIEWPORT_FIELD,
+	MAX_WIRE_DLINE,
+	wireSafetyViolations,
 } from "./flowscript-presence-protocol";
 
 const LAYER_ID = "layeranchor000000001";
@@ -241,7 +247,7 @@ describe("presence store coalescing", () => {
 		store.dispose();
 	});
 
-	test("filters self (clientID and own sub), collects claims and canvas selections", () => {
+	test("filters only this client; own other sessions stay and are flagged self", () => {
 		const awareness = new FakeAwareness();
 		awareness.states.set(1, {
 			sub: "me",
@@ -265,15 +271,111 @@ describe("presence store coalescing", () => {
 			selfSub: "me",
 		});
 		const snapshot = store.getSnapshot();
-		expect(snapshot.cursors).toEqual([]);
+		expect(snapshot.cursors.map((c) => [c.clientId, c.sub, c.self])).toEqual([
+			[3, "me", true],
+		]);
 		expect(snapshot.claims).toEqual([
-			{ clientId: 4, sub: "peer-b", anchorIds: [CONST_ID, IF_ID] },
+			{ clientId: 4, sub: "peer-b", self: false, anchorIds: [CONST_ID, IF_ID] },
 		]);
 		expect(snapshot.canvasSelections[0]?.nodeIds).toEqual([
 			"nodeanchor0000000008",
 			"nodeanchor0000000009",
 		]);
+		expect(snapshot.canvasSelections[0]?.activeNodeId).toBeUndefined();
 		store.dispose();
+	});
+
+	test("a canvas click is fresh from when THIS client first saw it, then times out on its own", () => {
+		const awareness = new FakeAwareness();
+		// Already on the wire when the store comes up: old news, no flash — and
+		// the peer's own clock (far ahead of ours) is never consulted.
+		awareness.states.set(2, {
+			sub: "peer-a",
+			selection: { nodes: [IF_ID, LOG_ID] },
+			activeNodeId: LOG_ID,
+			activeNodeTs: 999_999_999,
+		});
+		const { raf, caf, flushFrame } = fakeRaf();
+		const scheduler = fakeScheduler();
+		let clock = 11_000;
+		const store = createFlowScriptPresenceStore(awareness, {
+			raf,
+			caf,
+			now: () => clock,
+			schedule: scheduler.schedule,
+			cancel: scheduler.cancel,
+		});
+		expect(store.getSnapshot().canvasSelections[0]).toEqual({
+			clientId: 2,
+			sub: "peer-a",
+			self: false,
+			nodeIds: [IF_ID, LOG_ID],
+		});
+
+		// A new click (new timestamp) is fresh for ACTIVE_NODE_FRESH_MS local ms.
+		awareness.states.set(2, {
+			sub: "peer-a",
+			selection: { nodes: [IF_ID, LOG_ID] },
+			activeNodeId: IF_ID,
+			activeNodeTs: 1_000_000_000,
+		});
+		awareness.emitChange();
+		flushFrame();
+		expect(store.getSnapshot().canvasSelections[0]?.activeNodeId).toBe(IF_ID);
+
+		// Nothing else happens on the wire; the store's own expiry timer clears it.
+		clock = 11_000 + 3_500;
+		scheduler.flush();
+		flushFrame();
+		expect(
+			store.getSnapshot().canvasSelections[0]?.activeNodeId,
+		).toBeUndefined();
+		store.dispose();
+	});
+});
+
+describe("text selections name the nodes they span", () => {
+	test("a range covers the statement it starts in through its last anchored line", () => {
+		const index = parseFlowScriptAnchors(TEXT_A);
+		// TEXT_A lines: 3 function, 4 const, 5 if, 6 log, 7 }, 8 }
+		const payload = wireCursorOrThrow(index, {
+			selectionStartLineNumber: 4,
+			selectionStartColumn: 10,
+			positionLineNumber: 7,
+			positionColumn: 2,
+		});
+		expect(payload.sel?.anchorIds).toEqual([CONST_ID, IF_ID, LOG_ID]);
+		// Reverse direction (cursor at the top) yields the same set.
+		const reversed = wireCursorOrThrow(index, {
+			selectionStartLineNumber: 7,
+			selectionStartColumn: 2,
+			positionLineNumber: 4,
+			positionColumn: 10,
+		});
+		expect(reversed.sel?.anchorIds).toEqual([CONST_ID, IF_ID, LOG_ID]);
+	});
+
+	test("a whole-line selection ending at column 1 does not claim the next statement", () => {
+		const index = parseFlowScriptAnchors(TEXT_A);
+		const payload = wireCursorOrThrow(index, {
+			selectionStartLineNumber: 4,
+			selectionStartColumn: 1,
+			positionLineNumber: 5,
+			positionColumn: 1,
+		});
+		expect(payload.sel?.anchorIds).toEqual([CONST_ID]);
+	});
+
+	test("a selection inside one statement names just that statement; a caret names none", () => {
+		const index = parseFlowScriptAnchors(TEXT_A);
+		const inside = wireCursorOrThrow(index, {
+			selectionStartLineNumber: 6,
+			selectionStartColumn: 3,
+			positionLineNumber: 6,
+			positionColumn: 9,
+		});
+		expect(inside.sel?.anchorIds).toEqual([LOG_ID]);
+		expect(wireCursorOrThrow(index, caret(6, 3)).sel).toBeUndefined();
 	});
 });
 
@@ -305,14 +407,51 @@ describe("remote editors by node (canvas projection)", () => {
 			claims: [{ clientId: 2, sub: "peer-a", anchorIds: [LOG_ID, IF_ID] }],
 			canvasSelections: [],
 			scopes: new Map(),
+			viewports: new Map(),
 		});
 		expect(byNode.get(LOG_ID)).toEqual([
-			{ clientId: 2, sub: "peer-a", active: true },
+			{ clientId: 2, sub: "peer-a", active: true, selected: true },
 		]);
 		expect(byNode.get(IF_ID)).toEqual([
-			{ clientId: 2, sub: "peer-a", active: false },
+			{ clientId: 2, sub: "peer-a", active: false, selected: false },
 		]);
 		expect(byNode.has(CONST_ID)).toBe(false);
+	});
+
+	test("a text selection marks every spanned node selected; the caret node stays active", () => {
+		const byNode = deriveRemoteEditorsByNode({
+			cursors: [
+				{
+					clientId: 2,
+					sub: "peer-a",
+					self: true,
+					cursor: {
+						anchor: { id: LOG_ID, kind: "node" },
+						dLine: 0,
+						column: 1,
+						sel: {
+							endAnchorId: CONST_ID,
+							endDLine: 0,
+							endColumn: 1,
+							anchorIds: [CONST_ID, IF_ID, LOG_ID],
+						},
+						ts: 1,
+					},
+				},
+			],
+			claims: [{ clientId: 2, sub: "peer-a", anchorIds: [CONST_ID] }],
+			canvasSelections: [],
+			scopes: new Map(),
+			viewports: new Map(),
+		});
+		expect(byNode.get(LOG_ID)).toEqual([
+			{ clientId: 2, sub: "peer-a", self: true, active: true, selected: true },
+		]);
+		expect(byNode.get(IF_ID)).toEqual([
+			{ clientId: 2, sub: "peer-a", self: true, active: false, selected: true },
+		]);
+		// Selection outranks the claim on the same node for the same user.
+		expect(byNode.get(CONST_ID)?.[0]?.selected).toBe(true);
 	});
 });
 
@@ -392,9 +531,13 @@ describe("presence publisher gating", () => {
 		expect(awareness.published.length).toBe(1);
 	});
 
-	test("cursor publishes only on change and clears on blur", () => {
+	test("cursor publishes only on change and clears on demand", () => {
 		const { awareness, scheduler, publisher } = makePublisher();
 		publisher.publishCursor(caret(6, 7));
+		// Never synchronous: Monaco fires the selection change before React has
+		// committed the edited text, so the flush waits for the next tick.
+		expect(awareness.published.length).toBe(0);
+		scheduler.flush();
 		expect(awareness.published.length).toBe(1);
 		expect(awareness.published[0][0]).toBe(FLOWSCRIPT_CURSOR_FIELD);
 
@@ -417,13 +560,20 @@ describe("presence publisher gating", () => {
 	test("cursor moves are throttled to the trailing edge (≤ 20Hz)", () => {
 		const { awareness, scheduler, publisher, advance } = makePublisher();
 		publisher.publishCursor(caret(4, 2));
+		scheduler.flush();
+		expect(awareness.published.length).toBe(1);
 		advance(10);
 		publisher.publishCursor(caret(6, 7)); // within min interval — deferred
+		publisher.publishCursor(caret(6, 8)); // coalesced onto the same tick
 		expect(awareness.published.length).toBe(1);
 		scheduler.flush();
 		expect(awareness.published.length).toBe(2);
-		const payload = awareness.published[1][1] as { anchor: { id: string } };
+		const payload = awareness.published[1][1] as {
+			anchor: { id: string };
+			column: number;
+		};
 		expect(payload.anchor.id).toBe(LOG_ID);
+		expect(payload.column).toBe(8);
 	});
 
 	test("dispose withdraws published presence from the wire", () => {
@@ -525,7 +675,7 @@ describe("shared scoped sessions (presence store + helpers)", () => {
 		[FLOWSCRIPT_SCOPE_FIELD]: { nodeIds, ts },
 	});
 
-	test("collects peers' scopes into a clientId-keyed map, sanitized, self filtered", () => {
+	test("collects peers' scopes into a clientId-keyed map, sanitized, this client filtered", () => {
 		const awareness = new FakeAwareness();
 		awareness.states.set(1, { sub: "me", ...scopeState([CONST_ID]) });
 		awareness.states.set(2, { sub: "me", ...scopeState([CONST_ID]) });
@@ -544,9 +694,16 @@ describe("shared scoped sessions (presence store + helpers)", () => {
 			selfSub: "me",
 		});
 		const scopes = store.getSnapshot().scopes;
-		expect([...scopes.keys()]).toEqual([3]);
+		// Our own second window (client 2) is a joinable peer like any other.
+		expect([...scopes.keys()]).toEqual([2, 3]);
+		expect(scopes.get(2)).toEqual({
+			sub: "me",
+			self: true,
+			nodeIds: [CONST_ID],
+		});
 		expect(scopes.get(3)).toEqual({
 			sub: "peer-a",
+			self: false,
 			nodeIds: [CONST_ID, IF_ID],
 		});
 		store.dispose();
@@ -632,5 +789,281 @@ describe("shared scoped sessions (presence store + helpers)", () => {
 		expect([...bySub.keys()]).toEqual(["peer-a", "peer-b"]);
 		expect(bySub.get("peer-a")).toEqual([CONST_ID]);
 		expect(bySub.get("peer-b")).toEqual([LOG_ID]);
+	});
+});
+
+function wireViewportOrThrow(
+	index: ReturnType<typeof parseFlowScriptAnchors>,
+	firstVisibleLine: number,
+) {
+	const payload = viewportToWire(index, firstVisibleLine, 1_000);
+	if (!payload) throw new Error("expected a wire viewport payload");
+	return payload;
+}
+
+describe("anchor-relative viewport round-trip (scroll-follow)", () => {
+	test("the first visible line survives the wire onto a render with a different use block", () => {
+		const indexA = parseFlowScriptAnchors(TEXT_A);
+		const indexB = parseFlowScriptAnchors(TEXT_B);
+		// TEXT_A shows the `if` on line 5; TEXT_B renders it on line 7.
+		const payload = wireViewportOrThrow(indexA, 5);
+		expect(payload).toEqual({
+			anchor: { id: IF_ID, kind: "node" },
+			dLine: 0,
+			ts: 1_000,
+		});
+		expect(resolveWireViewport(indexB, payload)).toBe(7);
+	});
+
+	test("an un-anchored top line travels as an offset below its owning anchor", () => {
+		const indexA = parseFlowScriptAnchors(TEXT_A);
+		const indexB = parseFlowScriptAnchors(TEXT_B);
+		// The `}` closing the if-block: line 7 in A, line 9 in B.
+		const payload = wireViewportOrThrow(indexA, 7);
+		expect(payload.anchor.id).toBe(LOG_ID);
+		expect(payload.dLine).toBe(1);
+		expect(resolveWireViewport(indexB, payload)).toBe(9);
+	});
+
+	test("above the first anchor there is nothing to publish", () => {
+		const indexA = parseFlowScriptAnchors(TEXT_A);
+		expect(viewportToWire(indexA, 1, 1_000)).toBeUndefined();
+	});
+
+	test("an unknown anchor resolves to nothing; a known one clamps to the buffer", () => {
+		const indexA = parseFlowScriptAnchors(TEXT_A);
+		const indexB = parseFlowScriptAnchors(TEXT_B);
+		const payload = wireViewportOrThrow(indexA, 7);
+		const foreignIndex = parseFlowScriptAnchors(
+			"const y = 1   //@n:someotheranchor00001",
+		);
+		expect(resolveWireViewport(foreignIndex, payload)).toBeUndefined();
+		expect(resolveWireViewport(indexB, payload, 8)).toBe(8);
+	});
+
+	test("a published viewport is metadata-only (rule 2)", () => {
+		const indexA = parseFlowScriptAnchors(TEXT_A);
+		const payload = wireViewportOrThrow(indexA, 7);
+		expect(wireSafetyViolations(payload)).toEqual([]);
+		expect(Object.keys(payload).sort()).toEqual(["anchor", "dLine", "ts"]);
+	});
+});
+
+function makeViewportPublisher() {
+	const awareness = new FakeAwareness();
+	const index = parseFlowScriptAnchors(TEXT_A);
+	let nowMs = 10_000;
+	const delays: number[] = [];
+	const tasks = new Map<number, () => void>();
+	let nextId = 1;
+	const publisher = createFlowScriptViewportPublisher({
+		awareness,
+		getAnchorIndex: () => index,
+		now: () => nowMs,
+		schedule: (cb, ms) => {
+			delays.push(ms);
+			const id = nextId++;
+			tasks.set(id, cb);
+			return id;
+		},
+		cancel: (handle) => {
+			tasks.delete(handle as number);
+		},
+	});
+	return {
+		awareness,
+		publisher,
+		delays,
+		flush: () => {
+			const pending = [...tasks.values()];
+			tasks.clear();
+			for (const cb of pending) cb();
+		},
+		advance: (ms: number) => {
+			nowMs += ms;
+		},
+	};
+}
+
+describe("viewport publisher (≤ 5Hz, change-gated)", () => {
+	test("publishes on the trailing tick, then only when the anchor-relative top changed", () => {
+		const { awareness, publisher, delays, flush } = makeViewportPublisher();
+		publisher.publish(5);
+		expect(awareness.published.length).toBe(0);
+		expect(delays).toEqual([0]);
+		flush();
+		expect(awareness.published).toEqual([
+			[
+				FLOWSCRIPT_VIEWPORT_FIELD,
+				{ anchor: { id: IF_ID, kind: "node" }, dLine: 0, ts: 10_000 },
+			],
+		]);
+		// Same top line again: throttled to a tick, then key-deduped.
+		publisher.publish(5);
+		flush();
+		expect(awareness.published.length).toBe(1);
+	});
+
+	test("scroll bursts inside the interval collapse onto one ≥200ms-spaced publish", () => {
+		const { awareness, publisher, delays, flush, advance } =
+			makeViewportPublisher();
+		publisher.publish(4);
+		flush();
+		expect(awareness.published.length).toBe(1);
+		advance(50);
+		publisher.publish(6); // within min interval — deferred
+		publisher.publish(7); // coalesced onto the same tick
+		expect(delays).toEqual([0, 150]);
+		expect(awareness.published.length).toBe(1);
+		flush();
+		expect(awareness.published.length).toBe(2);
+		expect(awareness.published[1][1]).toEqual({
+			anchor: { id: LOG_ID, kind: "node" },
+			dLine: 1,
+			ts: 10_050,
+		});
+	});
+
+	test("scrolling above the first anchor clears the field; dispose withdraws a live one", () => {
+		const { awareness, publisher, flush } = makeViewportPublisher();
+		publisher.publish(6);
+		flush();
+		publisher.publish(1);
+		flush();
+		expect(awareness.published[1]).toEqual([
+			FLOWSCRIPT_VIEWPORT_FIELD,
+			undefined,
+		]);
+		// Already cleared: dispose stays silent.
+		publisher.dispose();
+		expect(awareness.published.length).toBe(2);
+
+		const live = makeViewportPublisher();
+		live.publisher.publish(6);
+		live.flush();
+		live.publisher.publish(7); // pending tick is cancelled, never published
+		live.publisher.dispose();
+		expect(live.awareness.published).toEqual([
+			[
+				FLOWSCRIPT_VIEWPORT_FIELD,
+				{ anchor: { id: LOG_ID, kind: "node" }, dLine: 0, ts: 10_000 },
+			],
+			[FLOWSCRIPT_VIEWPORT_FIELD, undefined],
+		]);
+	});
+});
+
+describe("presence store viewports", () => {
+	const viewportState = (dLine: number, ts = 1, id: string = IF_ID) => ({
+		[FLOWSCRIPT_VIEWPORT_FIELD]: { anchor: { id, kind: "node" }, dLine, ts },
+	});
+
+	test("collects peers' viewports keyed by clientId; this client filtered, own sessions flagged self", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(1, { sub: "me", ...viewportState(0) });
+		awareness.states.set(2, { sub: "me", ...viewportState(1) });
+		awareness.states.set(3, { sub: "peer-a", ...viewportState(2, 5, LOG_ID) });
+		awareness.states.set(4, { sub: "peer-b" });
+		const { raf, caf } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, {
+			raf,
+			caf,
+			selfSub: "me",
+		});
+		const viewports = store.getSnapshot().viewports;
+		expect([...viewports.keys()]).toEqual([2, 3]);
+		expect(viewports.get(2)).toEqual({
+			sub: "me",
+			self: true,
+			viewport: { anchor: { id: IF_ID, kind: "node" }, dLine: 1, ts: 1 },
+		});
+		expect(viewports.get(3)).toEqual({
+			sub: "peer-a",
+			self: false,
+			viewport: { anchor: { id: LOG_ID, kind: "node" }, dLine: 2, ts: 5 },
+		});
+		store.dispose();
+	});
+
+	test("viewport heartbeats (ts-only changes) short-circuit; a move notifies once", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(2, { sub: "peer-a", ...viewportState(2, 100) });
+		const { raf, caf, flushFrame } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, { raf, caf });
+		let emissions = 0;
+		store.subscribe(() => emissions++);
+		const before = store.getSnapshot();
+
+		awareness.states.set(2, { sub: "peer-a", ...viewportState(2, 200) });
+		awareness.emitChange();
+		flushFrame();
+		expect(emissions).toBe(0);
+		expect(store.getSnapshot()).toBe(before);
+
+		awareness.states.set(2, { sub: "peer-a", ...viewportState(3, 300) });
+		awareness.emitChange();
+		flushFrame();
+		expect(emissions).toBe(1);
+		expect(store.getSnapshot().viewports.get(2)?.viewport.dLine).toBe(3);
+
+		awareness.states.set(2, { sub: "peer-a" });
+		awareness.emitChange();
+		flushFrame();
+		expect(emissions).toBe(2);
+		expect(store.getSnapshot().viewports.size).toBe(0);
+		store.dispose();
+	});
+
+	test("hostile viewport payloads are rejected or clamped, never passed through", () => {
+		const awareness = new FakeAwareness();
+		awareness.states.set(2, {
+			sub: "peer-a",
+			[FLOWSCRIPT_VIEWPORT_FIELD]: {
+				anchor: { id: "DROP TABLE users; --", kind: "node" },
+				dLine: 0,
+				ts: 1,
+			},
+		});
+		awareness.states.set(3, {
+			sub: "peer-b",
+			[FLOWSCRIPT_VIEWPORT_FIELD]: {
+				anchor: { id: IF_ID, kind: "node", label: "x".repeat(4_096) },
+				dLine: 1e9,
+				ts: -5,
+				text: "const secret = 42",
+			},
+		});
+		awareness.states.set(4, {
+			sub: "peer-c",
+			[FLOWSCRIPT_VIEWPORT_FIELD]: "not an object",
+		});
+		awareness.states.set(5, {
+			sub: "peer-d",
+			[FLOWSCRIPT_VIEWPORT_FIELD]: {
+				anchor: { id: IF_ID, kind: "comment" },
+				dLine: 0,
+				ts: 1,
+			},
+		});
+		awareness.states.set(6, {
+			sub: "peer-e",
+			[FLOWSCRIPT_VIEWPORT_FIELD]: {
+				anchor: { id: IF_ID, kind: "node" },
+				dLine: Number.NaN,
+				ts: 1,
+			},
+		});
+		const { raf, caf } = fakeRaf();
+		const store = createFlowScriptPresenceStore(awareness, { raf, caf });
+		const viewports = store.getSnapshot().viewports;
+		expect([...viewports.keys()]).toEqual([3]);
+		const clamped = viewports.get(3)?.viewport;
+		expect(clamped).toEqual({
+			anchor: { id: IF_ID, kind: "node" },
+			dLine: MAX_WIRE_DLINE,
+			ts: 0,
+		});
+		expect(wireSafetyViolations(clamped)).toEqual([]);
+		store.dispose();
 	});
 });

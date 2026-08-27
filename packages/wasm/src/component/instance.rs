@@ -572,6 +572,7 @@ mod tests {
         parent.model_usage_context = Some(ModelUsageContext {
             app_id: Some("app-1".to_string()),
             run_id: Some("run-1".to_string()),
+            api_base_url: None,
         });
         parent.model_context = Some(ModelContext {
             app_state: Arc::new(FlowLikeState::new(

@@ -87,13 +87,132 @@ spec:
               value: {{ .Values.executor.maxRetries | quote }}
             - name: RUST_LOG
               value: "info"
+            - name: API_BASE_URL
+              value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}
+            # Hosted model providers are configured only on the API. Executors
+            # call this authenticated proxy through their API_BASE_URL.
+            {{- if .Values.llm.openrouter.enabled }}
+            {{- if .Values.llm.openrouter.existingSecret }}
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.openrouter.existingSecret }}
+                  key: OPENROUTER_API_KEY
+            - name: OPENROUTER_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.openrouter.existingSecret }}
+                  key: OPENROUTER_ENDPOINT
+                  optional: true
+            {{- else if .Values.llm.openrouter.apiKey }}
+            - name: OPENROUTER_API_KEY
+              value: {{ .Values.llm.openrouter.apiKey | quote }}
+            - name: OPENROUTER_ENDPOINT
+              value: {{ .Values.llm.openrouter.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.openai.enabled }}
+            {{- if .Values.llm.openai.existingSecret }}
+            - name: HOSTED_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.openai.existingSecret }}
+                  key: HOSTED_OPENAI_API_KEY
+            - name: HOSTED_OPENAI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.openai.existingSecret }}
+                  key: HOSTED_OPENAI_ENDPOINT
+                  optional: true
+            {{- else if .Values.llm.openai.apiKey }}
+            - name: HOSTED_OPENAI_API_KEY
+              value: {{ .Values.llm.openai.apiKey | quote }}
+            - name: HOSTED_OPENAI_ENDPOINT
+              value: {{ .Values.llm.openai.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.anthropic.enabled }}
+            {{- if .Values.llm.anthropic.existingSecret }}
+            - name: HOSTED_ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.anthropic.existingSecret }}
+                  key: HOSTED_ANTHROPIC_API_KEY
+            - name: HOSTED_ANTHROPIC_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.anthropic.existingSecret }}
+                  key: HOSTED_ANTHROPIC_ENDPOINT
+                  optional: true
+            {{- else if .Values.llm.anthropic.apiKey }}
+            - name: HOSTED_ANTHROPIC_API_KEY
+              value: {{ .Values.llm.anthropic.apiKey | quote }}
+            - name: HOSTED_ANTHROPIC_ENDPOINT
+              value: {{ .Values.llm.anthropic.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.azure.enabled }}
+            {{- if .Values.llm.azure.existingSecret }}
+            - name: HOSTED_AZURE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.azure.existingSecret }}
+                  key: HOSTED_AZURE_API_KEY
+            - name: HOSTED_AZURE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.azure.existingSecret }}
+                  key: HOSTED_AZURE_ENDPOINT
+            {{- else if .Values.llm.azure.apiKey }}
+            - name: HOSTED_AZURE_API_KEY
+              value: {{ .Values.llm.azure.apiKey | quote }}
+            - name: HOSTED_AZURE_ENDPOINT
+              value: {{ required "llm.azure.endpoint is required when llm.azure.apiKey is set" .Values.llm.azure.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.bedrock.enabled }}
+            {{- if .Values.llm.bedrock.existingSecret }}
+            - name: HOSTED_BEDROCK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.bedrock.existingSecret }}
+                  key: HOSTED_BEDROCK_API_KEY
+            - name: HOSTED_BEDROCK_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.bedrock.existingSecret }}
+                  key: HOSTED_BEDROCK_ENDPOINT
+            {{- else if .Values.llm.bedrock.apiKey }}
+            - name: HOSTED_BEDROCK_API_KEY
+              value: {{ .Values.llm.bedrock.apiKey | quote }}
+            - name: HOSTED_BEDROCK_ENDPOINT
+              value: {{ required "llm.bedrock.endpoint is required when llm.bedrock.apiKey is set" .Values.llm.bedrock.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.vertex.enabled }}
+            {{- if .Values.llm.vertex.existingSecret }}
+            - name: HOSTED_VERTEX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.vertex.existingSecret }}
+                  key: HOSTED_VERTEX_API_KEY
+            - name: HOSTED_VERTEX_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.vertex.existingSecret }}
+                  key: HOSTED_VERTEX_ENDPOINT
+            {{- else if .Values.llm.vertex.apiKey }}
+            - name: HOSTED_VERTEX_API_KEY
+              value: {{ .Values.llm.vertex.apiKey | quote }}
+            - name: HOSTED_VERTEX_ENDPOINT
+              value: {{ required "llm.vertex.endpoint is required when llm.vertex.apiKey is set" .Values.llm.vertex.endpoint | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.compiler.enabled }}
             - name: COMPILATION_BACKEND
               value: "http"
             - name: COMPILER_URL
               value: {{ printf "http://%s-compiler:%d" (include "flow-like.fullname" .) (int .Values.compiler.service.port) }}
-            - name: API_BASE_URL
-              value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) }}
             {{- end }}
             {{- with .Values.api.env }}
             {{- toYaml . | nindent 12 }}

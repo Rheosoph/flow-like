@@ -14,10 +14,12 @@ pub struct LMStudioModel {
 impl LMStudioModel {
     pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
-        let model_id = params
-            .get("model_id")
-            .cloned()
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let model_id = provider.model_id.clone().or_else(|| {
+            params
+                .get("model_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        });
         let endpoint = params
             .get("endpoint")
             .and_then(|v| v.as_str())

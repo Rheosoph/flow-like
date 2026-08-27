@@ -898,29 +898,10 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let usage_context = store.data().host_state.model_usage_context.clone();
                     #[cfg(feature = "model")]
                     {
-                        let prefers_local_execution =
-                            flow_like::models::embedding_factory::prefers_local_execution(
-                                &bit, &app_state,
-                            )
-                            .await;
-                        let embedding_provider = bit.try_to_embedding();
-                        let use_proxy = access_token.is_some()
-                            && !prefers_local_execution
-                            && embedding_provider
-                                .as_ref()
-                                .is_some_and(|provider| provider.supports_remote());
                         let mut factory = app_state.embedding_factory.lock().await;
-                        let model_result = if use_proxy {
-                            factory
-                                .build_text_proxy(
-                                    &bit,
-                                    access_token.expect("proxy mode requires an access token"),
-                                    usage_context,
-                                )
-                                .await
-                        } else {
-                            factory.build_text(&bit, app_state.clone()).await
-                        };
+                        let model_result = factory
+                            .build_text_routed(&bit, app_state.clone(), access_token, usage_context)
+                            .await;
                         let model = match model_result {
                             Ok(m) => m,
                             Err(_) => return Ok((None,)),

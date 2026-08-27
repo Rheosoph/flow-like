@@ -20,7 +20,6 @@ import {
 	DatabaseIcon,
 	FlaskConicalIcon,
 	MonitorIcon,
-	PencilLineIcon,
 	PlayCircleIcon,
 	ScrollTextIcon,
 	SquareCheckIcon,
@@ -40,7 +39,7 @@ import {
 import PuffLoader from "react-spinners/PuffLoader";
 import { useLogAggregation } from "../..";
 import { useInvalidateInvoke } from "../../hooks";
-import { type PeerUserInfo, colorFromSub } from "../../hooks/use-peer-users";
+import type { PeerUserInfo } from "../../hooks/use-peer-users";
 import {
 	getActivityColorClasses,
 	useRunActivity,
@@ -87,7 +86,6 @@ import { DynamicImage } from "../ui";
 import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
-import { deriveRunCapabilities } from "./flow-run-capabilities";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
 import {
 	FlowNodeEditMenu,
@@ -98,15 +96,19 @@ import { FlowPinAction } from "./flow-node/flow-node-pin-action";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
+import { deriveRunCapabilities } from "./flow-run-capabilities";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
+import { NodePresenceChips, mergePresenceParticipants } from "./node-presence";
 import { typeToColor } from "./utils";
 
 export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
 	sub?: string;
+	/** Another session of the local user. */
+	self?: boolean;
 	/** Whether this user just actively clicked this node */
 	isActive?: boolean;
 }
@@ -257,13 +259,14 @@ const FlowNodeInner = memo(
 		const reactFlow = useReactFlow();
 		const { getNode } = useReactFlow();
 		const flowStore = useStoreApi();
-		const remoteSelections = props.data.remoteSelections ?? [];
-		const displayedRemoteSelections = useMemo(
-			() => remoteSelections.slice(0, 3),
-			[remoteSelections],
+		const presence = useMemo(
+			() =>
+				mergePresenceParticipants(
+					props.data.remoteSelections,
+					props.data.remoteEditors,
+				),
+			[props.data.remoteSelections, props.data.remoteEditors],
 		);
-		const extraRemoteSelections =
-			remoteSelections.length - displayedRemoteSelections.length;
 		const [executed, severity] = useMemo(() => {
 			const severity = ILogLevel.Debug;
 
@@ -940,100 +943,19 @@ const FlowNodeInner = memo(
 									boxShadow:
 										"0 0 12px 2px rgba(59, 130, 246, 0.5), 0 0 4px 1px rgba(59, 130, 246, 0.3)",
 								}
-							: remoteSelections.length > 0
+							: presence.ring
 								? {
-										boxShadow: `0 0 0 2px ${colorFromSub(remoteSelections[0]?.sub)}40, 0 0 12px 0 ${colorFromSub(remoteSelections[0]?.sub)}25`,
+										boxShadow: `0 0 0 2px ${presence.ring.color}${presence.ring.active ? "" : "70"}, 0 0 12px 0 ${presence.ring.color}30`,
 									}
 								: {}
 				}
 			>
-				{remoteSelections.length > 0 && (
-					<div className="pointer-events-none absolute -top-5 left-0 flex items-center gap-0.5 z-10">
-						<div className="flex items-center -space-x-1.5">
-							{displayedRemoteSelections.map((participant) => {
-								const color = colorFromSub(participant.sub);
-								const userInfo = participant.sub
-									? props.data.peerUsers?.get(participant.sub)
-									: undefined;
-								const name = userInfo?.truncatedName ?? "User";
-								return (
-									<div
-										key={`${participant.clientId}-${participant.sub ?? "unknown"}`}
-										className={`flex items-center gap-1 rounded-full border-2 bg-background/95 px-1 py-0.5 text-[0.5625rem] leading-none shadow-md backdrop-blur-sm transition-all duration-200 ${participant.isActive ? "animate-pulse scale-110 ring-2 ring-offset-1" : ""}`}
-										style={{
-											borderColor: color,
-											...(participant.isActive ? { ringColor: color } : {}),
-										}}
-										title={name}
-									>
-										{userInfo?.avatarUrl ? (
-											<img
-												src={userInfo.avatarUrl}
-												alt={name}
-												className="h-3.5 w-3.5 rounded-full object-cover"
-											/>
-										) : (
-											<span
-												className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white"
-												style={{
-													background: `linear-gradient(135deg, ${color}, ${color}dd)`,
-												}}
-											>
-												{name.charAt(0).toUpperCase()}
-											</span>
-										)}
-										{displayedRemoteSelections.length <= 2 && (
-											<span
-												className="font-semibold max-w-14 truncate pr-0.5"
-												style={{ color }}
-											>
-												{name}
-											</span>
-										)}
-									</div>
-								);
-							})}
-						</div>
-						{extraRemoteSelections > 0 && (
-							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${extraRemoteSelections}`}</div>
-						)}
-					</div>
-				)}
+				<NodePresenceChips
+					participants={presence.list}
+					peerUsers={props.data.peerUsers}
+				/>
 				{props.data.remoteExecuting && (
 					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
-				)}
-				{(props.data.remoteEditors?.length ?? 0) > 0 && (
-					<div className="pointer-events-none absolute -bottom-5 left-0 z-10 flex items-center gap-0.5">
-						{props.data.remoteEditors?.slice(0, 2).map((editor) => {
-							const color = colorFromSub(editor.sub);
-							const name =
-								(editor.sub
-									? props.data.peerUsers?.get(editor.sub)?.truncatedName
-									: undefined) ?? "User";
-							return (
-								<div
-									key={`${editor.clientId}-${editor.sub ?? "unknown"}`}
-									className={`flex items-center gap-1 rounded-full border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] leading-none shadow-md backdrop-blur-sm ${editor.active ? "border-2" : ""}`}
-									style={{ borderColor: color }}
-									title={i18next.t("flow:flowscriptBeingEditedBy", {
-										defaultValue: "Being edited by {{name}}",
-										name,
-									})}
-								>
-									<PencilLineIcon className="h-2.5 w-2.5" style={{ color }} />
-									<span
-										className="font-semibold max-w-14 truncate"
-										style={{ color }}
-									>
-										{name}
-									</span>
-								</div>
-							);
-						})}
-						{(props.data.remoteEditors?.length ?? 0) > 2 && (
-							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${(props.data.remoteEditors?.length ?? 0) - 2}`}</div>
-						)}
-					</div>
 				)}
 				{playNode}
 				{props.data.node.long_running && (

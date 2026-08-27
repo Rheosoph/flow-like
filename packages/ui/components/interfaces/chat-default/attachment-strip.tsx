@@ -1,18 +1,16 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	ChevronDownIcon,
-	DownloadIcon,
-	ExternalLinkIcon,
-	FileIcon,
-	GlobeIcon,
-	ImageIcon,
-	MaximizeIcon,
-	PauseIcon,
-	PlayIcon,
-	VideoIcon,
-} from "lucide-react";
+import ChevronDownIcon from "lucide-react/dist/esm/icons/chevron-down.js";
+import DownloadIcon from "lucide-react/dist/esm/icons/download.js";
+import ExternalLinkIcon from "lucide-react/dist/esm/icons/external-link.js";
+import FileIcon from "lucide-react/dist/esm/icons/file.js";
+import GlobeIcon from "lucide-react/dist/esm/icons/globe.js";
+import ImageIcon from "lucide-react/dist/esm/icons/image.js";
+import MaximizeIcon from "lucide-react/dist/esm/icons/maximize.js";
+import PauseIcon from "lucide-react/dist/esm/icons/pause.js";
+import PlayIcon from "lucide-react/dist/esm/icons/play.js";
+import VideoIcon from "lucide-react/dist/esm/icons/video.js";
 import {
 	type ReactNode,
 	useCallback,
@@ -21,7 +19,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { cn, humanFileSize } from "../../../lib";
+import { cn, humanFileSize } from "../../../lib/utils";
 import {
 	type ProcessedAttachment,
 	getAttachmentHost,

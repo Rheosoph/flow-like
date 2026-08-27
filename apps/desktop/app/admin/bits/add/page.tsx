@@ -100,9 +100,12 @@ import {
 
 const HOSTED_PROVIDER_OPTIONS = [
 	"Hosted",
+	"Premium",
+	"Internal",
 	"hosted:openrouter",
 	"hosted:openai",
 	"hosted:anthropic",
+	"hosted:bedrock",
 	"hosted:azure",
 	"hosted:vertex",
 ] as const;
@@ -139,14 +142,19 @@ function createDefaultLlmParameters(providerName = "Local"): ILlmParameters {
 			provider_name: providerName,
 			model_id: null,
 			version: null,
-			params: providerName.toLowerCase().startsWith("hosted") ? {} : undefined,
+			params: isHostedProviderName(providerName) ? {} : undefined,
 		},
 	};
 }
 
 function isHostedProviderName(providerName?: null | string) {
 	const normalized = providerName?.trim().toLowerCase() ?? "";
-	return normalized === "hosted" || normalized.startsWith("hosted:");
+	return (
+		normalized === "premium" ||
+		normalized === "internal" ||
+		normalized === "hosted" ||
+		normalized.startsWith("hosted:")
+	);
 }
 
 const DEFAULT_LLM_PARAMETERS: ILlmParameters = createDefaultLlmParameters();
@@ -292,20 +300,16 @@ function HostedLLMForm({
 	};
 
 	const updateProviderParam = (key: string, value: string) => {
-		setBit((old) => {
-			const current = ((old.parameters as ILlmParameters).provider?.params ??
-				{}) as Record<string, unknown>;
-			return {
-				...old,
-				parameters: {
-					...old.parameters,
-					provider: {
-						...((old.parameters as ILlmParameters).provider ?? {}),
-						params: { ...current, [key]: value },
-					},
+		setBit((old) => ({
+			...old,
+			parameters: {
+				...old.parameters,
+				provider: {
+					...((old.parameters as ILlmParameters).provider ?? {}),
+					params: value.trim() ? { [key]: value.trim() } : {},
 				},
-			};
-		});
+			},
+		}));
 	};
 
 	const updateMeta = (key: keyof IMetadata, value: unknown) => {
@@ -486,23 +490,6 @@ function HostedLLMForm({
 						</div>
 					</div>
 					<div className="grid gap-4 sm:grid-cols-2">
-						<div className="space-y-2">
-							<Label htmlFor="hosted-endpoint">
-								{t("endpoint", "Endpoint")}
-							</Label>
-							<Input
-								id="hosted-endpoint"
-								value={
-									typeof providerParams.endpoint === "string"
-										? providerParams.endpoint
-										: ""
-								}
-								onChange={(e) =>
-									updateProviderParam("endpoint", e.target.value)
-								}
-								placeholder="https://api.example.com/v1"
-							/>
-						</div>
 						<div className="space-y-2">
 							<Label htmlFor="hosted-tier">{t("tier", "Tier")}</Label>
 							<Input

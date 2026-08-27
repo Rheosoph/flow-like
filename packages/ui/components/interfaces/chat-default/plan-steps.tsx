@@ -1,21 +1,19 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	AlertTriangle,
-	CheckCircle2,
-	ChevronDown,
-	ChevronRight,
-	Circle,
-	CircleMinus,
-	DatabaseIcon,
-	History,
-	LayoutIcon,
-	Loader2,
-	WorkflowIcon,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/dist/esm/icons/triangle-alert.js";
+import CheckCircle2 from "lucide-react/dist/esm/icons/circle-check.js";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
+import Circle from "lucide-react/dist/esm/icons/circle.js";
+import CircleMinus from "lucide-react/dist/esm/icons/circle-minus.js";
+import DatabaseIcon from "lucide-react/dist/esm/icons/database.js";
+import History from "lucide-react/dist/esm/icons/history.js";
+import LayoutIcon from "lucide-react/dist/esm/icons/panels-top-left.js";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
+import WorkflowIcon from "lucide-react/dist/esm/icons/workflow.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
 import { formatDuration } from "../../../lib/date";
 import {
 	Collapsible,

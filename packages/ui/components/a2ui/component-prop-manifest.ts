@@ -661,6 +661,7 @@ export const COMPONENT_PROPS = {
 		"appId",
 		"exposedPropValues",
 		"actionBindings",
+		"runtimeChildUpdates",
 		"styleOverride",
 	],
 	microWidgetInstance: [

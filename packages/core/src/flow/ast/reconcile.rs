@@ -31586,6 +31586,74 @@ eventsSimple() {
         );
     }
 
+    /// A package (WASM) node ships only a `category`; its FlowScript spelling is derived from it.
+    /// The rendered `use` line, the editor-facing explicit fields and the reconcile path must all
+    /// agree on that derivation, or the editor rejects text the renderer itself produced.
+    #[test]
+    fn category_only_package_node_renders_and_reconciles_under_derived_namespace() {
+        fn limit_feed_items() -> Node {
+            let mut node = Node::new("limit_feed_items", "Limit Feed Items", "", "RSS/Items");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            node.add_input_pin("items", "Items", "", VariableType::Struct)
+                .default_value = Some(b"{}".to_vec());
+            node.add_input_pin("limit", "Limit", "", VariableType::Integer)
+                .default_value = Some(b"3".to_vec());
+            node.add_output_pin("limited_items", "Limited Items", "", VariableType::Struct);
+            node
+        }
+
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+        let mut limit = limit_feed_items();
+        limit.id = "limit".to_string();
+        let limit_in = limit
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_in")
+            .map(|pin| pin.id.clone())
+            .expect("exec_in");
+        board.nodes.insert(limit.id.clone(), limit);
+        connect(&mut board, "event", &event_out, "limit", &limit_in);
+
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(text.contains("rss::items::limitFeedItems("), "{text}");
+
+        // The registry stamps the derived spelling as explicit fields for the editor.
+        let mut catalog_node = limit_feed_items();
+        catalog_node.ensure_flowscript_names();
+        assert_eq!(catalog_node.namespace.as_deref(), Some("rss.items"));
+        assert_eq!(catalog_node.alias.as_deref(), Some("limitFeedItems"));
+        assert_eq!(catalog_node.receiver, None);
+
+        let mut start = Node::new("events_simple", "Start", "", "events");
+        start.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let catalog = [start, catalog_node]
+            .iter()
+            .map(crate::flow::copilot::node_to_metadata)
+            .collect::<Vec<_>>();
+
+        let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "limit_feed_items").is_some());
+
+        let glob = reconcile_text_with_catalog(
+            &empty_board(),
+            "use rss::items::*\n\neventsSimple() {\n    limitFeedItems({ limit: 3 })\n}\n",
+            &catalog,
+        );
+        assert!(glob.diagnostics.is_empty(), "{:?}", glob.diagnostics);
+        assert!(added_node_ref(&glob, "limit_feed_items").is_some());
+    }
+
     #[test]
     fn unused_use_is_a_correction_note_only() {
         let result = reconcile_text_with_catalog(

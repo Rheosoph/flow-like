@@ -28,7 +28,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCopilotSDK, useInvoke } from "../../hooks";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
-import { IBitTypes, isFreeLlmModel, selectProfileLlmModels } from "../../lib";
+import {
+	IBitTypes,
+	isFreeLlmModel,
+	isHostedLlmModel,
+	selectProfileLlmModels,
+} from "../../lib";
 import {
 	type AskUserAnswerPayload,
 	type AskUserDraft,
@@ -1585,9 +1590,7 @@ function FlowPilotImpl({
 			setSelectedModelId(preferredModel?.id || "");
 		} else {
 			// Bits provider - existing logic
-			const hostedModel = bitsModels.find(
-				(m) => m.parameters?.provider?.provider_name === "Hosted",
-			);
+			const hostedModel = bitsModels.find(isHostedLlmModel);
 			const gpt4o = bitsModels.find((m) => m.id.includes("gpt-4o"));
 			const defaultModel = hostedModel || gpt4o || bitsModels[0];
 			setSelectedModelId(defaultModel?.id || "");

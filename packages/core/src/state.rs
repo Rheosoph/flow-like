@@ -6,28 +6,32 @@ use flow_like_storage::lancedb::connection::ConnectBuilder;
 #[cfg(any(feature = "flow-runtime", test))]
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Ok;
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 use flow_like_types::sync::DashMap;
 use flow_like_types::sync::{Mutex, RwLock};
 #[cfg(feature = "flow-runtime")]
 use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "flow-metadata")]
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+#[cfg(feature = "flow-metadata")]
+use std::sync::Weak;
 #[cfg(feature = "flow-runtime")]
 use std::time::Instant;
 
 #[cfg(feature = "flow-runtime")]
 use crate::flow::event::Event;
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 use crate::flow::execution::ExecutionEnvironment;
 #[cfg(feature = "flow-runtime")]
 use crate::flow::execution::{LogMeta, log::LogMessage};
 
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 use crate::flow::board::Board;
+#[cfg(feature = "flow-metadata")]
 use crate::flow::node::Node;
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 use crate::flow::node::NodeLogic;
 
 #[cfg(feature = "model")]
@@ -165,7 +169,7 @@ impl FlowLikeConfig {
     }
 }
 
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 #[derive(Default, Clone)]
 pub struct FlowNodeRegistryInner {
     pub registry: HashMap<String, (Node, Arc<dyn NodeLogic>)>,
@@ -177,6 +181,7 @@ pub struct FlowNodeRegistryInner {
     nodes_cell: std::sync::OnceLock<Arc<Vec<Node>>>,
 }
 
+#[cfg(feature = "flow-metadata")]
 impl FlowNodeRegistryInner {
     pub fn new(size: usize) -> Self {
         FlowNodeRegistryInner {
@@ -196,7 +201,8 @@ impl FlowNodeRegistryInner {
         }
     }
 
-    pub fn insert(&mut self, node: Node, logic: Arc<dyn NodeLogic>) {
+    pub fn insert(&mut self, mut node: Node, logic: Arc<dyn NodeLogic>) {
+        node.ensure_flowscript_names();
         self.registry.insert(node.name.clone(), (node, logic));
         self.fingerprint_cell = std::sync::OnceLock::new();
         self.nodes_cell = std::sync::OnceLock::new();
@@ -291,20 +297,20 @@ impl FlowNodeRegistryInner {
     }
 }
 
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 pub struct FlowNodeRegistry {
     pub node_registry: Arc<FlowNodeRegistryInner>,
     pub parent: Option<Weak<FlowLikeState>>,
 }
 
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 impl Default for FlowNodeRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "flow")]
+#[cfg(feature = "flow-metadata")]
 impl FlowNodeRegistry {
     pub fn new() -> Self {
         FlowNodeRegistry {
@@ -481,9 +487,9 @@ pub struct FlowLikeState {
     #[cfg(feature = "model")]
     pub embedding_factory: Arc<Mutex<EmbeddingFactory>>,
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub node_registry: Arc<RwLock<FlowNodeRegistry>>,
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub board_registry: Arc<DashMap<String, Arc<Mutex<Board>>>>, // TODO: should board be wrapped in RWLock or Mutex?
     #[cfg(feature = "flow-runtime")]
     pub board_run_registry: Arc<DashMap<String, Arc<RunData>>>,
@@ -502,8 +508,19 @@ pub struct FlowLikeState {
     /// Where this state's process runs. Server-side entry points set
     /// [`ExecutionEnvironment::Server`] so process-level services without a
     /// run context (the model factory) can refuse ambient host credentials.
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub execution_environment: ExecutionEnvironment,
+}
+
+/// Local completion runtimes available to the current host.
+///
+/// The llama-server runtime cannot run on mobile targets. MLX has its own
+/// Apple-silicon platform constraint, so a local Bit store and the `local-ml`
+/// feature do not by themselves make every local completion Bit executable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CompletionModelCapabilities {
+    pub local_server: bool,
+    pub mlx: bool,
 }
 
 impl FlowLikeState {
@@ -513,7 +530,7 @@ impl FlowLikeState {
             http_client: Arc::new(client),
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
             #[cfg(feature = "bit")]
@@ -527,9 +544,9 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
 
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -554,7 +571,7 @@ impl FlowLikeState {
             http_client: Arc::new(client),
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
             #[cfg(feature = "bit")]
@@ -564,9 +581,9 @@ impl FlowLikeState {
             model_factory: Arc::new(Mutex::new(ModelFactory::new())),
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
 
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -644,7 +661,7 @@ impl FlowLikeState {
             http_client: self.http_client.clone(),
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             execution_environment: self.execution_environment,
 
             #[cfg(feature = "bit")]
@@ -657,9 +674,9 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             embedding_factory: self.embedding_factory.clone(),
 
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             node_registry: self.node_registry.clone(),
-            #[cfg(feature = "flow")]
+            #[cfg(feature = "flow-metadata")]
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
@@ -673,17 +690,17 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn node_registry(&self) -> Arc<RwLock<FlowNodeRegistry>> {
         self.node_registry.clone()
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn board_registry(&self) -> Arc<DashMap<String, Arc<Mutex<Board>>>> {
         self.board_registry.clone()
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn get_board(
         &self,
         board_id: &str,
@@ -705,7 +722,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn get_template(
         &self,
         template_id: &str,
@@ -727,7 +744,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn remove_board(
         &self,
         board_id: &str,
@@ -740,7 +757,7 @@ impl FlowLikeState {
         }
     }
 
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     pub fn register_board(
         &self,
         board_id: &str,
@@ -907,6 +924,33 @@ impl FlowLikeState {
             .ok_or(flow_like_types::anyhow!("No bit store"))
     }
 
+    /// Whether this host can execute models whose weights must be loaded from
+    /// the local Bit store.
+    ///
+    /// Feature availability alone is insufficient for a server binary because
+    /// Cargo can unify `local-ml` through another dependency while the runtime
+    /// keeps Bits in object storage. Local model loaders require both compiled
+    /// support and a filesystem-backed Bit store.
+    #[inline]
+    pub async fn can_execute_local_bit_models(state: &Arc<FlowLikeState>) -> bool {
+        let has_local_bit_store = Self::bit_store(state)
+            .await
+            .is_ok_and(|store| matches!(store, FlowLikeStore::Local(_)));
+        local_ml_execution_available(cfg!(feature = "local-ml"), has_local_bit_store)
+    }
+
+    /// Completion runtimes this host can execute without an API proxy.
+    #[cfg(feature = "model")]
+    pub async fn completion_model_capabilities(
+        state: &Arc<FlowLikeState>,
+    ) -> CompletionModelCapabilities {
+        completion_model_capabilities_for_host(
+            Self::can_execute_local_bit_models(state).await,
+            cfg!(any(target_os = "ios", target_os = "android")),
+            crate::bit::can_host_mlx(),
+        )
+    }
+
     #[inline]
     pub async fn user_store(state: &Arc<FlowLikeState>) -> flow_like_types::Result<FlowLikeStore> {
         state
@@ -917,6 +961,21 @@ impl FlowLikeState {
             .user_store
             .clone()
             .ok_or(flow_like_types::anyhow!("No user store"))
+    }
+}
+
+fn local_ml_execution_available(local_ml_enabled: bool, has_local_bit_store: bool) -> bool {
+    local_ml_enabled && has_local_bit_store
+}
+
+fn completion_model_capabilities_for_host(
+    local_bit_models_available: bool,
+    is_mobile: bool,
+    can_host_mlx: bool,
+) -> CompletionModelCapabilities {
+    CompletionModelCapabilities {
+        local_server: local_bit_models_available && !is_mobile,
+        mlx: local_bit_models_available && can_host_mlx,
     }
 }
 
@@ -1139,5 +1198,48 @@ mod tests {
             .unwrap();
         let test_bytes = Bytes::from_static(test_string);
         assert_eq!(read_bytes, test_bytes);
+    }
+
+    #[test]
+    fn local_ml_execution_requires_compiled_support_and_a_local_bit_store() {
+        assert!(local_ml_execution_available(true, true));
+        assert!(!local_ml_execution_available(true, false));
+        assert!(!local_ml_execution_available(false, true));
+        assert!(!local_ml_execution_available(false, false));
+    }
+
+    #[test]
+    fn completion_capabilities_keep_mobile_and_mlx_constraints_separate() {
+        assert_eq!(
+            completion_model_capabilities_for_host(true, true, true),
+            CompletionModelCapabilities {
+                local_server: false,
+                mlx: true,
+            }
+        );
+        assert_eq!(
+            completion_model_capabilities_for_host(true, false, false),
+            CompletionModelCapabilities {
+                local_server: true,
+                mlx: false,
+            }
+        );
+        assert_eq!(
+            completion_model_capabilities_for_host(false, false, true),
+            CompletionModelCapabilities::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn object_backed_bit_store_disables_local_ml_execution() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+
+        assert!(!FlowLikeState::can_execute_local_bit_models(&state).await);
     }
 }

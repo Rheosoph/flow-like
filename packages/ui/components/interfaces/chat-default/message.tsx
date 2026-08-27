@@ -1,25 +1,24 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import {
-	CheckIcon,
-	ChevronDown,
-	ChevronUp,
-	CopyIcon,
-	EditIcon,
-	MessageSquareIcon,
-	ThumbsDownIcon,
-	ThumbsUpIcon,
-	XIcon,
-} from "lucide-react";
+import CheckIcon from "lucide-react/dist/esm/icons/check.js";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
+import CopyIcon from "lucide-react/dist/esm/icons/copy.js";
+import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
+import MessageSquareIcon from "lucide-react/dist/esm/icons/message-square.js";
+import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
+import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
+import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { IRole, cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
+import { IRole } from "../../../lib/schema/llm/history";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
 import {
-	Badge,
-	Button,
 	Dialog,
 	DialogClose,
 	DialogContent,
@@ -27,11 +26,11 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	Label,
-	Switch,
-	TextEditor,
-	Textarea,
-} from "../../ui";
+} from "../../ui/dialog";
+import { Label } from "../../ui/label";
+import { Switch } from "../../ui/switch";
+import { TextEditor } from "../../ui/text-editor";
+import { Textarea } from "../../ui/textarea";
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { AgentDebugReport } from "./agent-debug-report";
 import { AppReferences } from "./app-references";

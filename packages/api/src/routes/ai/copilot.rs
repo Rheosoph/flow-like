@@ -658,6 +658,7 @@ pub async fn copilot_chat(
                     .run_context
                     .as_ref()
                     .map(|context| context.run_id.clone()),
+                api_base_url: None,
             })
         }
         None => None,

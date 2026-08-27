@@ -3520,6 +3520,7 @@ pub async fn copilot_chat(
                     Some(app_id.to_string())
                 },
                 run_id: run_context.as_ref().map(|context| context.run_id.clone()),
+                api_base_url: None,
             })
         }
         None => None,
@@ -4090,30 +4091,43 @@ pub async fn global_chat(
     // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
     // Shared by every backend so recall and the memory tools behave identically regardless of
     // the selected model.
-    let memory = if let (Some(profile_arc), Some(embedding_id)) =
-        (&profile, embedding_model_id.as_ref())
-    {
-        match profile_arc
-            .find_bit(embedding_id, state.0.http_client.clone())
-            .await
-        {
-            Ok(bit) => {
-                match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
-                    Ok(memory) => Some(Arc::new(memory)),
-                    Err(error) => {
-                        eprintln!("[global_chat] memory init failed: {error}");
-                        None
+    let memory =
+        if let (Some(profile_arc), Some(embedding_id)) = (&profile, embedding_model_id.as_ref()) {
+            match profile_arc
+                .find_bit(embedding_id, state.0.http_client.clone())
+                .await
+            {
+                Ok(bit) => {
+                    let usage_context = run_id.as_ref().map(|run_id| ModelUsageContext {
+                        app_id: None,
+                        run_id: Some(run_id.clone()),
+                        api_base_url: None,
+                    });
+                    match AssistantMemory::open(
+                        state.0.clone(),
+                        None,
+                        &profile_arc.id,
+                        &bit,
+                        token.clone(),
+                        usage_context,
+                    )
+                    .await
+                    {
+                        Ok(memory) => Some(Arc::new(memory)),
+                        Err(error) => {
+                            eprintln!("[global_chat] memory init failed: {error}");
+                            None
+                        }
                     }
                 }
+                Err(error) => {
+                    eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
+                    None
+                }
             }
-            Err(error) => {
-                eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     // Register the run (if the frontend gave a run id) and stream through a mirror channel that
     // buffers every chunk + forwards to the live webview channel, so a reload can re-attach and

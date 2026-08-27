@@ -291,6 +291,24 @@ export default {
 	"v5.control.item3": "Redo för EU AI Act",
 	"v5.control.item4": "Observerbarhet från början till slut",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "DEN ÖPPNA UTVECKLARGUIDEN",
+	"v5.book.title": "En utvecklarguide från incident till implementation.",
+	"v5.book.body":
+		"FlowBook är till för utvecklare som bygger med Flow-Like. Följ ett körbart arbetsflöde genom dess typade FlowScript-källtext, visuella arbetsyta och de körningsspår som visar om det lyckades eller misslyckades.",
+	"v5.book.meta": "Öppen utgåva · 2026 · Engelska",
+	"v5.book.read": "Läs FlowBook online",
+	"v5.book.download": "Ladda ner PDF-filen",
+	"v5.book.note": "Gratis att läsa. Ingen registrering krävs.",
+	"v5.book.generalLabel": "ALLMÄNNA GUIDER",
+	"v5.book.generalBody":
+		"För produktintroduktioner och stegvisa handledningar, börja med dokumentationen eller Flow-Likes YouTube-kanal.",
+	"v5.book.docs": "Utforska dokumentationen",
+	"v5.book.youtube": "Titta på YouTube",
+	"v5.book.coverCta": "Ladda ner den öppna utgåvan",
+	"v5.book.aria":
+		"Ladda ner FlowBook, en utvecklarguide till Flow-Like, som PDF",
+
 	"v5.footer.notes.kicker": "Anteckningar från maskinrummet",
 	"v5.footer.notes.title": "Vad vi bygger, och vad vi lärt oss.",
 	"v5.footer.notes.all": "Alla anteckningar →",

@@ -8,6 +8,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -38,7 +39,6 @@ import {
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
 import { notifyLivePageRun } from "./live-page-registry";
-import { collectMicroWidgetValueKeys } from "./micro-widget-host";
 import {
 	type A2UINavigationMessageInterceptor,
 	createNavigateToMessage,
@@ -52,6 +52,15 @@ import type {
 	SurfaceComponent,
 } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
+import {
+	type WidgetElementScope,
+	collectEventRelevantInputValues,
+	elementValueScopeIds,
+	flattenSurfaceComponentsForElements,
+	legacyWidgetValueSurfaceId,
+	mergeStoredElementValues,
+	widgetComponentsForScope,
+} from "./workflow-elements";
 import {
 	buildFrontendContextPayload,
 	compactWorkflowPayload,
@@ -83,114 +92,6 @@ function isSafeStateKey(key: unknown): key is string {
 	return (
 		typeof key === "string" && key.length > 0 && !UNSAFE_STATE_KEYS.has(key)
 	);
-}
-
-function toBoundValue(value: unknown): Record<string, unknown> {
-	if (typeof value === "boolean") return { literalBool: value };
-	if (typeof value === "number") return { literalNumber: value };
-	if (typeof value === "string") return { literalString: value };
-	if (value === undefined) return { literalString: "" };
-	if (value === null || Array.isArray(value) || typeof value === "object") {
-		return { literalJson: JSON.stringify(value) };
-	}
-	return { literalString: String(value) };
-}
-
-/**
- * Flattens surface.components plus widget-instance inline definitions into a
- * single `surfaceId/componentId -> element` map. Widget instances expose their
- * children through `inlineWidgetDef.components`, so a plain Object.entries on
- * surface.components misses them and Get Element nodes can't resolve those ids.
- */
-function flattenSurfaceComponentsForElements(
-	components: Record<string, SurfaceComponent> | undefined,
-	surfaceId: string,
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	if (!components || !surfaceId) return result;
-
-	for (const [id, comp] of Object.entries(components)) {
-		result[`${surfaceId}/${id}`] = comp;
-
-		const compData = (comp as unknown as Record<string, unknown>).component as
-			| Record<string, unknown>
-			| undefined;
-
-		if (compData?.type !== "widgetInstance") continue;
-
-		const inlineDef = compData.inlineWidgetDef as
-			| {
-					components?: Array<{
-						id: string;
-						component: unknown;
-						style?: unknown;
-					}>;
-			  }
-			| undefined;
-
-		for (const inner of inlineDef?.components ?? []) {
-			if (!inner?.id) continue;
-			const key = `${surfaceId}/${inner.id}`;
-			if (result[key] !== undefined) continue;
-			result[key] = {
-				id: inner.id,
-				component: inner.component,
-				style: inner.style,
-			};
-		}
-	}
-
-	return result;
-}
-
-function mergeStoredElementValues(
-	elementsMap: Record<string, unknown>,
-	storedValues: Record<string, unknown>,
-	components: Record<string, SurfaceComponent> | undefined,
-	surfaceId: string,
-): Record<string, unknown> {
-	const flatComponents = flattenSurfaceComponentsForElements(
-		components,
-		surfaceId,
-	);
-	const mergedElements: Record<string, unknown> = { ...flatComponents };
-
-	for (const [elementId, element] of Object.entries(elementsMap)) {
-		mergedElements[elementId] = element;
-	}
-
-	for (const [elementId, element] of Object.entries(mergedElements)) {
-		const storedValue = storedValues[elementId];
-		if (storedValue === undefined) continue;
-		const comp = element as Record<string, unknown>;
-		const componentData = comp.component as Record<string, unknown> | undefined;
-		if (componentData) {
-			mergedElements[elementId] = {
-				...comp,
-				component: {
-					...componentData,
-					value: toBoundValue(storedValue),
-				},
-			};
-		}
-	}
-
-	// Micro widget value mirrors are keyed "{instanceId}/values" (not prefixed
-	// with the surface id), so they need their own allowlist to survive the merge.
-	const microValueKeys = collectMicroWidgetValueKeys(components);
-
-	for (const [elementId, storedValue] of Object.entries(storedValues)) {
-		if (mergedElements[elementId] !== undefined) continue;
-		const isMicroValues = microValueKeys.has(elementId);
-		if (!isMicroValues && !elementId.startsWith(`${surfaceId}/`)) continue;
-
-		mergedElements[elementId] = {
-			id: isMicroValues ? "values" : elementId.slice(`${surfaceId}/`.length),
-			component: { value: toBoundValue(storedValue) },
-		};
-	}
-
-	return mergedElements;
 }
 
 /** Stable empty state for provider-less consumers, so hook deps stay steady. */
@@ -384,6 +285,10 @@ export function ActionProvider({
 	// workflows receive describe the same screen.
 	const elementValuesRef = useRef<Record<string, unknown>>(Object.create(null));
 	const { storeElementValue, restoreSurfaceValues } = useElementStorage(appId);
+	const elementValueScopeKey = useMemo(
+		() => JSON.stringify(elementValueScopeIds(components, surfaceId)),
+		[components, surfaceId],
+	);
 
 	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
 		if (!isSafeStateKey(elementId)) return false;
@@ -394,15 +299,16 @@ export function ActionProvider({
 	useEffect(() => {
 		if (!appId || !surfaceId) return;
 		let cancelled = false;
+		const scopeIds = JSON.parse(elementValueScopeKey) as string[];
 
-		void restoreSurfaceValues(surfaceId)
-			.then((restored) => {
+		void Promise.all(scopeIds.map((scopeId) => restoreSurfaceValues(scopeId)))
+			.then((restoredByScope) => {
 				if (cancelled) return;
 				// Anything the user has already touched on this mount is newer than what was
 				// stored, so restoration fills gaps rather than overwriting.
 				elementValuesRef.current = Object.assign(
 					Object.create(null),
-					restored,
+					...restoredByScope,
 					elementValuesRef.current,
 				);
 			})
@@ -411,7 +317,7 @@ export function ActionProvider({
 		return () => {
 			cancelled = true;
 		};
-	}, [appId, surfaceId, restoreSurfaceValues]);
+	}, [appId, surfaceId, elementValueScopeKey, restoreSurfaceValues]);
 
 	// Getter for element values (used by useExecuteAction)
 	const getElementValues = useCallback(() => {
@@ -830,25 +736,42 @@ export function useAgentActionAccess() {
  * Hook to access element values and components for building _input_values maps.
  * Used by WidgetActionHandler to collect event-relevant input values.
  */
-export function useEventRelevantValues() {
+export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const getElementValues = context?.getElementValues;
 	const components = context?.components;
 	const surfaceId = context?.surfaceId;
+	const widgetInstanceId = widgetScope?.instanceId;
+	const widgetComponents = widgetScope?.components;
 
 	const collectInputValues = useCallback((): Record<string, unknown> => {
 		if (!getElementValues || !components || !surfaceId) return {};
 		const storedValues = getElementValues();
-		const inputValues: Record<string, unknown> = {};
-		for (const [compId, comp] of Object.entries(components)) {
-			if (!comp.eventRelevant) continue;
-			const elementId = `${surfaceId}/${compId}`;
-			if (storedValues[elementId] !== undefined) {
-				inputValues[compId] = storedValues[elementId];
-			}
+		if (!widgetInstanceId) {
+			return collectEventRelevantInputValues(
+				storedValues,
+				Object.values(components),
+				surfaceId,
+			);
 		}
-		return inputValues;
-	}, [getElementValues, components, surfaceId]);
+
+		const scope: WidgetElementScope = {
+			instanceId: widgetInstanceId,
+			components: widgetComponents,
+		};
+		return collectEventRelevantInputValues(
+			storedValues,
+			widgetComponentsForScope(components, scope),
+			widgetInstanceId,
+			legacyWidgetValueSurfaceId(components, surfaceId, scope),
+		);
+	}, [
+		getElementValues,
+		components,
+		surfaceId,
+		widgetInstanceId,
+		widgetComponents,
+	]);
 
 	return collectInputValues;
 }
@@ -878,7 +801,7 @@ export function useMarkComponentTriggering() {
  * Hook to fetch and merge frontend elements for the current surface.
  * Returns a function that produces the `_elements` map sent in workflow payloads.
  */
-export function useCollectEventElements() {
+export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const backend = useBackend();
 	const appId = context?.appId;
@@ -887,10 +810,22 @@ export function useCollectEventElements() {
 	const surfaceId = context?.surfaceId;
 	const components = context?.components;
 	const getElementValues = context?.getElementValues;
+	const widgetInstanceId = widgetScope?.instanceId;
+	const widgetComponents = widgetScope?.components;
 
 	return useCallback(async (): Promise<Record<string, unknown>> => {
+		const activeWidgetScope = widgetInstanceId
+			? {
+					instanceId: widgetInstanceId,
+					components: widgetComponents,
+				}
+			: undefined;
 		const fallbackElements = (): Record<string, unknown> =>
-			flattenSurfaceComponentsForElements(components, surfaceId ?? "");
+			flattenSurfaceComponentsForElements(
+				components,
+				surfaceId ?? "",
+				activeWidgetScope,
+			);
 
 		let elementsMap: Record<string, unknown> | undefined;
 		if (appId && boardId) {
@@ -922,6 +857,7 @@ export function useCollectEventElements() {
 			storedValues,
 			components,
 			surfaceId || "",
+			activeWidgetScope,
 		);
 	}, [
 		appId,
@@ -931,6 +867,8 @@ export function useCollectEventElements() {
 		components,
 		getElementValues,
 		backend.boardState,
+		widgetInstanceId,
+		widgetComponents,
 	]);
 }
 
@@ -1486,6 +1424,13 @@ export function useExecuteAction() {
 							try {
 								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
 								let elementsMap: Record<string, unknown> | undefined;
+								const widgetScope: WidgetElementScope | undefined =
+									widgetInstance?.instanceId
+										? {
+												instanceId: widgetInstance.instanceId,
+												components: widgetInstance.components,
+											}
+										: undefined;
 
 								console.log("[A2UI] workflow_event execution context:", {
 									nodeId,
@@ -1534,6 +1479,7 @@ export function useExecuteAction() {
 										elementsMap = flattenSurfaceComponentsForElements(
 											components,
 											surfaceId ?? "",
+											widgetScope,
 										);
 									}
 								} catch (err) {
@@ -1544,6 +1490,7 @@ export function useExecuteAction() {
 									elementsMap = flattenSurfaceComponentsForElements(
 										components,
 										surfaceId ?? "",
+										widgetScope,
 									);
 								}
 
@@ -1554,25 +1501,29 @@ export function useExecuteAction() {
 									storedValues,
 									components,
 									surfaceId || "",
+									widgetScope,
 								);
 
-								// Build _input_values from event-relevant components
-								const inputValues: Record<string, unknown> = {};
-								if (components && surfaceId) {
-									for (const [compId, comp] of Object.entries(components)) {
-										if (!comp.eventRelevant) continue;
-										const elementId = `${surfaceId}/${compId}`;
-										if (storedValues[elementId] !== undefined) {
-											inputValues[compId] = storedValues[elementId];
-										}
-									}
-								}
+								const inputComponents = widgetScope
+									? widgetComponentsForScope(components, widgetScope)
+									: Object.values(components ?? {});
+								const inputValues = collectEventRelevantInputValues(
+									storedValues,
+									inputComponents,
+									widgetScope?.instanceId ?? surfaceId ?? "",
+									legacyWidgetValueSurfaceId(
+										components,
+										surfaceId ?? "",
+										widgetScope,
+									),
+								);
 
 								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
 										_input_values: inputValues,
+										_widget_instance_id: widgetScope?.instanceId ?? "",
 										_action_context: context,
 										_triggering_component_id: triggeringComponentId ?? "",
 										...buildFrontendContextPayload(
@@ -1757,6 +1708,13 @@ export function useExecuteAction() {
 							try {
 								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
 								let elementsMap: Record<string, unknown> | undefined;
+								const widgetScope: WidgetElementScope | undefined =
+									widgetInstance?.instanceId
+										? {
+												instanceId: widgetInstance.instanceId,
+												components: widgetInstance.components,
+											}
+										: undefined;
 
 								console.log("[A2UI] widget_event execution context:", {
 									effectiveAppId,
@@ -1780,6 +1738,7 @@ export function useExecuteAction() {
 										elementsMap = flattenSurfaceComponentsForElements(
 											components,
 											surfaceId ?? "",
+											widgetScope,
 										);
 									}
 								} catch (err) {
@@ -1790,6 +1749,7 @@ export function useExecuteAction() {
 									elementsMap = flattenSurfaceComponentsForElements(
 										components,
 										surfaceId ?? "",
+										widgetScope,
 									);
 								}
 
@@ -1799,19 +1759,22 @@ export function useExecuteAction() {
 									storedValues,
 									components,
 									surfaceId || "",
+									widgetScope,
 								);
 
-								// Build _input_values from event-relevant components
-								const inputValues: Record<string, unknown> = {};
-								if (components && surfaceId) {
-									for (const [compId, comp] of Object.entries(components)) {
-										if (!comp.eventRelevant) continue;
-										const elementId = `${surfaceId}/${compId}`;
-										if (storedValues[elementId] !== undefined) {
-											inputValues[compId] = storedValues[elementId];
-										}
-									}
-								}
+								const inputComponents = widgetScope
+									? widgetComponentsForScope(components, widgetScope)
+									: Object.values(components ?? {});
+								const inputValues = collectEventRelevantInputValues(
+									storedValues,
+									inputComponents,
+									widgetScope?.instanceId ?? surfaceId ?? "",
+									legacyWidgetValueSurfaceId(
+										components,
+										surfaceId ?? "",
+										widgetScope,
+									),
+								);
 
 								const basePayload = compactWorkflowPayload({
 									id: nodeId,

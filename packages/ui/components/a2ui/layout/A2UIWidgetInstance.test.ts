@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Action, ActionBinding } from "../types";
 import {
 	type WidgetInstanceContextValue,
+	applyRuntimeChildUpdates,
 	resolveWidgetInstanceEventRoute,
 } from "./A2UIWidgetInstance";
 
@@ -95,5 +96,54 @@ describe("resolveWidgetInstanceEventRoute", () => {
 		expect(resolveWidgetInstanceEventRoute(widgetInstance(), "submit")).toEqual(
 			{ kind: "diagnostic" },
 		);
+	});
+});
+
+describe("applyRuntimeChildUpdates", () => {
+	test("replays ordered updates against an externally resolved widget child", () => {
+		const original = [
+			{
+				id: "shared-field",
+				component: { type: "textField", text: "Before" },
+			},
+		];
+		const updated = applyRuntimeChildUpdates(original, {
+			"shared-field": [
+				{ type: "setText", text: "After" },
+				{ type: "setVisibility", visible: false },
+			],
+		});
+
+		expect(updated).not.toBe(original);
+		expect(original[0].component).toEqual({
+			type: "textField",
+			text: "Before",
+		});
+		expect(updated[0].component).toMatchObject({
+			type: "textField",
+			text: "After",
+			hidden: { literalBool: true },
+		});
+	});
+
+	test("prefers an exact child id and preserves slash-containing ids", () => {
+		const updated = applyRuntimeChildUpdates(
+			[
+				{ id: "prefix-field", component: { type: "text", text: "Prefix" } },
+				{ id: "field", component: { type: "text", text: "Exact" } },
+				{
+					id: "section/field",
+					component: { type: "text", text: "Nested" },
+				},
+			],
+			{
+				field: [{ type: "setText", text: "Exact updated" }],
+				"section/field": [{ type: "setText", text: "Nested updated" }],
+			},
+		);
+
+		expect(updated[0].component?.text).toBe("Prefix");
+		expect(updated[1].component?.text).toBe("Exact updated");
+		expect(updated[2].component?.text).toBe("Nested updated");
 	});
 });

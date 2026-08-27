@@ -1,8 +1,5 @@
 pub mod api;
-#[cfg(all(
-    feature = "execute",
-    not(all(feature = "remote", not(feature = "local")))
-))]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) mod auth;
 pub mod camera;
 pub(crate) mod http_runtime;

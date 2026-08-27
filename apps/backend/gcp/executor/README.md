@@ -80,13 +80,14 @@ this platform can never honour.
 | `GCP_REQUIRE_OTEL` | `true` makes a missing endpoint fatal — the same knob, with the same meaning, as on the GCP API image |
 | `RUST_LOG` | `info` in the image |
 
-### Accepted and unused
+### API proxy routing
 
 The root's `worker_common_gcp_env` (`GCP_PROJECT_ID`, the bucket names and
-`*_PROVIDER` selectors, `EXECUTION_STATE_BACKEND`, `FIRESTORE_*`) and
-`API_BASE_URL` reach this service and are read by nothing in it. Storage is
-built from the `credentials` block of each request; execution state is the
-API's concern. They are neither validated nor rejected.
+`*_PROVIDER` selectors, `EXECUTION_STATE_BACKEND`, `FIRESTORE_*`) remains
+unused. Hosted completion and remote embedding calls use the signed callback
+URL from each execution as their API proxy base. `API_BASE_URL` is the fallback
+for model calls created without a run context. Provider credentials stay on the
+API service.
 
 ### Forbidden environment
 
@@ -166,10 +167,10 @@ binary into `debian:bookworm-slim` with `ca-certificates` and `libssl3`, uid
 10001, `STOPSIGNAL SIGTERM`. No configuration secret is embedded; only the api
 and queue-worker images carry `flow-like.config.json`.
 
-Feature set: `flow-like-catalog = ["server-execute", "remote-ml", "remote"]`,
-`flow-like-executor = ["all-server-execute"]` — the Azure/GCP queue-worker's,
-not the Kubernetes executor's `all-execute` + `local-ml`. No ONNX runtime and
-no local model weights ship in this image; ML nodes reach a remote endpoint.
+The catalog and executor both use the remote-only `server` bundle, matching the
+Azure and GCP queue workers. ONNX metadata, ONNX Runtime and local model weights
+are excluded from this image. Text embedding models with remote execution
+configuration call the authenticated API proxy.
 
 ## Differences from the Kubernetes executor
 

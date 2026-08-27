@@ -78,6 +78,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import {
 	Button,
 	Dialog,
@@ -171,8 +172,15 @@ import { useKeyboardShortcuts } from "../../hooks/use-keyboard-shortcuts";
 import { useLayerNavigation } from "../../hooks/use-layer-navigation";
 import { useMediaUpload } from "../../hooks/use-media-upload";
 import { usePeerUserInfo } from "../../hooks/use-peer-users";
+import { usePresenceCommands } from "../../hooks/use-presence-commands";
 import { useRealtimeChat } from "../../hooks/use-realtime-chat";
 import { useRealtimeCollaboration } from "../../hooks/use-realtime-collaboration";
+import {
+	type PeerPresenceEvent,
+	type PeerRun,
+	type PeerSummon,
+	useRealtimeSignals,
+} from "../../hooks/use-realtime-signals";
 import { useViewportManager } from "../../hooks/use-viewport-manager";
 import {
 	type IGenericCommand,
@@ -217,6 +225,7 @@ import {
 } from "../../lib/flow-board-utils";
 import {
 	FLOWSCRIPT_KEYWORDS,
+	MAIN_FILE_ID,
 	MAIN_FILE_LABEL,
 	MODULE_FILE_EXTENSION,
 	activeModuleId,
@@ -230,6 +239,12 @@ import { onFlowScriptNamesTableLoaded } from "../../lib/flowscript/names";
 import { toastError, toastSuccess, toastWarning } from "../../lib/messages";
 import { plainTextFromRichContent } from "../../lib/plate-text";
 import { isWebkitLite } from "../../lib/platform";
+import {
+	nodeWatchers,
+	presenceByFile,
+	presenceByLayer,
+} from "../../lib/realtime/presence-locations";
+import type { PingEmoji } from "../../lib/realtime/presence-signals";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IBit } from "../../lib/schema/bit/bit";
@@ -269,11 +284,13 @@ import { FlowCopilot } from "./flow-copilot";
 import type { FlowScriptApplyOptions } from "./flow-copilot/types";
 import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
+import { FlowDragGhostsLayer } from "./flow-drag-ghosts";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
 import { FlowModuleTabs } from "./flow-module-tabs";
 import { PinEditModal } from "./flow-pin/edit-modal";
+import { FlowPingsLayer } from "./flow-pings";
 import { FlowPresenceBar } from "./flow-presence-bar";
 import { FlowRuns } from "./flow-runs";
 import { FlowSearch } from "./flow-search";
@@ -332,6 +349,8 @@ interface FlowCanvasProps {
 	onEdgesChange: ReactFlowProps["onEdgesChange"];
 	onNodeDragStop: ReactFlowProps["onNodeDragStop"];
 	onNodeDrag: ReactFlowProps["onNodeDrag"];
+	onNodeDragStart: ReactFlowProps["onNodeDragStart"];
+	onPaneClick: ReactFlowProps["onPaneClick"];
 	isValidConnection: ReactFlowProps["isValidConnection"];
 	onConnect: ReactFlowProps["onConnect"];
 	onSelectionChange: ReactFlowProps["onSelectionChange"];
@@ -364,6 +383,8 @@ const FlowCanvas = memo(function FlowCanvas({
 	onEdgesChange,
 	onNodeDragStop,
 	onNodeDrag,
+	onNodeDragStart,
+	onPaneClick,
 	isValidConnection,
 	onConnect,
 	onSelectionChange,
@@ -398,6 +419,8 @@ const FlowCanvas = memo(function FlowCanvas({
 			onEdgesChange={onEdgesChange}
 			onNodeDragStop={onNodeDragStop}
 			onNodeDrag={onNodeDrag}
+			onNodeDragStart={onNodeDragStart}
+			onPaneClick={onPaneClick}
 			isValidConnection={isValidConnection}
 			onConnect={onConnect}
 			onSelectionChange={onSelectionChange}
@@ -1101,6 +1124,10 @@ export function FlowBoard({
 		cursorStore,
 		reconnect,
 		broadcastActiveNode,
+		getPeerLastActiveAt,
+		isPeerTypingInEditor,
+		isPeerTypingInChat,
+		isPeerAway,
 	} = useRealtimeCollaboration({
 		appId,
 		boardId,
@@ -1115,6 +1142,9 @@ export function FlowBoard({
 		commandAwarenessRef,
 		setNodes,
 	});
+	// Latest peer list for callbacks that must not re-create on every presence tick.
+	const peerStatesRef = useRef(peerStates);
+	peerStatesRef.current = peerStates;
 
 	// Cache peer user info to avoid repeated API calls
 	const peerSubs = useMemo(
@@ -1233,6 +1263,13 @@ export function FlowBoard({
 		],
 	);
 
+	// The presence popover names the node a peer's text cursor sits on; reading
+	// through the ref keeps the callback stable across board edits.
+	const resolveNodeForPresence = useCallback(
+		(nodeId: string) => boardRef.current?.nodes?.[nodeId]?.friendly_name,
+		[],
+	);
+
 	// Jump to a specific layer path
 	const jumpToLayer = useCallback(
 		(targetLayerPath: string) => {
@@ -1261,6 +1298,8 @@ export function FlowBoard({
 		sendMessage,
 		unreadCount,
 		setIsOpen: setChatIsOpen,
+		notifyTyping: notifyChatTyping,
+		clearTyping: clearChatTyping,
 	} = useRealtimeChat({ awareness, sub });
 
 	// Sync chat open state for unread tracking
@@ -1268,14 +1307,70 @@ export function FlowBoard({
 		setChatIsOpen(chatOpen);
 	}, [chatOpen, setChatIsOpen]);
 
+	// "Discuss in chat" on a node: open the chat with a node reference queued
+	// for the composer (the chat appends it, never replaces typed text).
+	const [chatDraft, setChatDraft] = useState<
+		{ text: string; token: number } | undefined
+	>(undefined);
+	const openChatWithNode = useCallback((nodeId: string) => {
+		setChatDraft({ text: `[[node:${nodeId}]] `, token: Date.now() });
+		setChatOpen(true);
+	}, []);
+	// Who is typing in the chat — a local-clock predicate, polled while open.
+	const [chatTypingSubs, setChatTypingSubs] = useState<string[]>([]);
+	useEffect(() => {
+		if (!chatOpen) {
+			setChatTypingSubs([]);
+			return;
+		}
+		const read = () => {
+			const subs = [
+				...new Set(
+					peerStatesRef.current
+						.map((peer) => peer.sub)
+						.filter((peerSub): peerSub is string => Boolean(peerSub)),
+				),
+			].filter((peerSub) => peerSub !== sub && isPeerTypingInChat(peerSub));
+			setChatTypingSubs((prev) =>
+				prev.length === subs.length && prev.every((s, i) => s === subs[i])
+					? prev
+					: subs,
+			);
+		};
+		read();
+		const id = setInterval(read, 1000);
+		return () => clearInterval(id);
+	}, [chatOpen, sub, isPeerTypingInChat]);
+	const chatOnlineCount = useMemo(
+		() =>
+			new Set(
+				peerStates
+					.map((peer) => peer.sub)
+					.filter((peerSub): peerSub is string => Boolean(peerSub)),
+			).size + 1,
+		[peerStates],
+	);
+
 	// Execution presence
 	const executionRuns = useRunExecutionStore((state) => state.runs);
-	const { remoteExecutingNodeIds, remoteExecutions } = useExecutionPresence({
-		awareness,
-		sub,
-		runs: executionRuns,
-		boardId,
-	});
+	const { remoteExecutingNodeIds, remoteExecutions, broadcastRunOutcome } =
+		useExecutionPresence({
+			awareness,
+			sub,
+			runs: executionRuns,
+			boardId,
+		});
+	// Peers get "Anna's run finished — 1 error": a closed status and a count.
+	const announceRunOutcome = useCallback(
+		(runId: string, status: "ok" | "error") => {
+			if (!runId) return;
+			const executed =
+				useRunExecutionStore.getState().runs.get(runId)
+					?.totalExecutionsCompleted ?? 0;
+			broadcastRunOutcome(runId, status, executed);
+		},
+		[broadcastRunOutcome],
+	);
 
 	// Media upload for images/videos on the board
 	const { handleMediaPaste } = useMediaUpload({
@@ -1366,6 +1461,108 @@ export function FlowBoard({
 	// the four imperative panel handles that used to hand a closing panel's width
 	// to its neighbour instead of back to the canvas.
 	const { surface: shell, actions: surfaceActions } = useBoardSurface(isMobile);
+
+	// Transient canvas signals: live drag ghosts, pings, "bring everyone here",
+	// run outcomes and join/leave — all ephemeral awareness, ids and numbers only.
+	const peerNameOf = useCallback(
+		(peerSub?: string) =>
+			peerSub === sub
+				? t("you", "You")
+				: ((peerSub ? peerUsers.get(peerSub)?.truncatedName : undefined) ??
+					t("common:user", "User")),
+		[peerUsers, sub, t],
+	);
+	const [presenceEvent, setPresenceEvent] = useState<
+		{ sub: string; kind: "joined" | "left"; at: number } | undefined
+	>(undefined);
+	const handlePeerSummon = useCallback(
+		(summon: PeerSummon) => {
+			toast(
+				t("presenceSummonFrom", {
+					defaultValue: "{{name}} asks everyone to look here",
+					name: peerNameOf(summon.sub),
+				}),
+				{
+					duration: 12_000,
+					action: {
+						label: t("go", "Go"),
+						onClick: () => {
+							const release = holdViewport();
+							jumpToLayer(summon.layerPath);
+							setViewport(
+								{ x: summon.x, y: summon.y, zoom: summon.zoom },
+								{ duration: 500 },
+							);
+							setTimeout(release, 600);
+						},
+					},
+				},
+			);
+		},
+		[holdViewport, jumpToLayer, peerNameOf, setViewport, t],
+	);
+	const handlePeerRun = useCallback(
+		(run: PeerRun) => {
+			const message =
+				run.status === "ok"
+					? t("presenceRunFinishedOk", {
+							defaultValue: "{{name}}'s run finished — {{count}} nodes",
+							name: peerNameOf(run.sub),
+							count: run.executed,
+						})
+					: t("presenceRunFinishedError", {
+							defaultValue: "{{name}}'s run failed after {{count}} nodes",
+							name: peerNameOf(run.sub),
+							count: run.executed,
+						});
+			const options = {
+				duration: 8_000,
+				action: {
+					label: t("showRuns", "Show runs"),
+					onClick: () => surfaceActions.openPanel("runs"),
+				},
+			};
+			if (run.status === "ok") toast.success(message, options);
+			else toast.error(message, options);
+		},
+		[peerNameOf, surfaceActions, t],
+	);
+	const handlePeerPresenceEvent = useCallback((event: PeerPresenceEvent) => {
+		setPresenceEvent({ ...event, at: Date.now() });
+	}, []);
+	const {
+		dragStore,
+		pingStore,
+		broadcastDrag,
+		endDrag,
+		sendPing,
+		summonPeers,
+	} = useRealtimeSignals({
+		awareness,
+		sub,
+		layerPath: layerPath ?? "root",
+		onSummon: handlePeerSummon,
+		onPeerRun: handlePeerRun,
+		onPeerPresenceEvent: handlePeerPresenceEvent,
+	});
+	const pingAtScreen = useCallback(
+		(x: number, y: number, emoji?: PingEmoji) => {
+			const point = screenToFlowPosition({ x, y });
+			sendPing(point.x, point.y, emoji);
+		},
+		[screenToFlowPosition, sendPing],
+	);
+	const summonHere = useCallback(() => {
+		summonPeers(getViewport());
+	}, [getViewport, summonPeers]);
+	// Emoji reactions land where the pointer last was on the canvas.
+	const reactAtCursor = useCallback(
+		(emoji: PingEmoji) => {
+			const position = mousePositionRef.current;
+			pingAtScreen(position.x, position.y, emoji);
+		},
+		[pingAtScreen],
+	);
 	const flowScriptPanelVisible = shell.script;
 	const flowScriptSheetOpen = shell.mobile === "script";
 	// Node ids the FlowScript panel is scoped to ("Edit selection as FlowScript").
@@ -1521,6 +1718,26 @@ export function FlowBoard({
 		if (nodeId) {
 			document
 				.querySelector(`.react-flow__node[data-id="${nodeId}"]`)
+				?.classList.add("flowscript-nav-highlight");
+		}
+	}, []);
+
+	// Multi-node variant for the presence popover: hovering a collaborator lights
+	// up everything they have selected or are editing. Shares the class with the
+	// single highlight above and leaves that node alone when the sets overlap.
+	const presenceHighlightRef = useRef<string[]>([]);
+	const highlightNodesOnCanvas = useCallback((nodeIds?: string[]) => {
+		const next = nodeIds ?? [];
+		for (const id of presenceHighlightRef.current) {
+			if (next.includes(id) || id === flowScriptHighlightRef.current) continue;
+			document
+				.querySelector(`.react-flow__node[data-id="${id}"]`)
+				?.classList.remove("flowscript-nav-highlight");
+		}
+		presenceHighlightRef.current = next;
+		for (const id of next) {
+			document
+				.querySelector(`.react-flow__node[data-id="${id}"]`)
 				?.classList.add("flowscript-nav-highlight");
 		}
 	}, []);
@@ -1830,8 +2047,15 @@ export function FlowBoard({
 					errorMessage || t("failedToExecuteBoard", "Failed to execute board"),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
+				announceRunOutcome(runId, "error");
 				return;
 			}
+			announceRunOutcome(
+				runId,
+				typeof meta?.log_level === "number" && meta.log_level >= 3
+					? "error"
+					: "ok",
+			);
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
@@ -1858,6 +2082,7 @@ export function FlowBoard({
 			addRun,
 			removeRun,
 			setCurrentMetadata,
+			announceRunOutcome,
 		],
 	);
 
@@ -1920,8 +2145,15 @@ export function FlowBoard({
 						),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
+				announceRunOutcome(runId, "error");
 				return;
 			}
+			announceRunOutcome(
+				runId,
+				typeof meta?.log_level === "number" && meta.log_level >= 3
+					? "error"
+					: "ok",
+			);
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
@@ -1951,6 +2183,7 @@ export function FlowBoard({
 			addRun,
 			removeRun,
 			setCurrentMetadata,
+			announceRunOutcome,
 		],
 	);
 
@@ -2977,7 +3210,11 @@ export function FlowBoard({
 			if (nds.length === 0) return nds;
 			let changed = false;
 			const next = nds.map((node: any) => {
-				if (node.type !== "node" && node.type !== "callFunctionNode")
+				if (
+					node.type !== "node" &&
+					node.type !== "callFunctionNode" &&
+					node.type !== "layerNode"
+				)
 					return node;
 				if (node.data.peerUsers === peerUsers) return node;
 				changed = true;
@@ -3068,7 +3305,8 @@ export function FlowBoard({
 				.filter(
 					(selectedNode) =>
 						selectedNode.type === "node" ||
-						selectedNode.type === "callFunctionNode",
+						selectedNode.type === "callFunctionNode" ||
+						selectedNode.type === "layerNode",
 				)
 				.map((selectedNode) => selectedNode.id);
 			const movableIds = selectedNodes
@@ -3519,8 +3757,68 @@ export function FlowBoard({
 		setClickPosition({ x: event.clientX, y: event.clientY });
 	}, []);
 
+	// Advisory only (collab rule 3): dragging a node a teammate has selected or
+	// is editing in code proceeds, but names the overlap first. One toast per
+	// drag, rate-limited per node so a jittery drag does not stack them.
+	const collisionToastAtRef = useRef<Map<string, number>>(new Map());
+	const onNodeDragStart = useCallback(
+		(_event: unknown, node: Node, nodes: Node[]) => {
+			if (!awareness) return;
+			const dragged = (nodes.length > 0 ? nodes : [node]).map((n) => n.id);
+			const claims = readPeerFlowScriptClaims(awareness, sub);
+			const peers = peerStatesRef.current.filter((peer) => peer.sub !== sub);
+			const nameOf = (peerSub?: string) =>
+				(peerSub ? peerUsers.get(peerSub)?.truncatedName : undefined) ??
+				t("common:user", "User");
+			const now = Date.now();
+			for (const id of dragged) {
+				if (now - (collisionToastAtRef.current.get(id) ?? 0) < 30_000) continue;
+				const editor = peers.find(
+					(peer) =>
+						peer.editor?.anchorId === id ||
+						peer.editor?.selectedAnchorIds.includes(id),
+				);
+				const claim = claims.find((entry) => entry.anchorIds.includes(id));
+				const selector = peers.find((peer) =>
+					peer.selection.nodes.includes(id),
+				);
+				const editedBy = editor?.sub ?? claim?.sub;
+				if (!editedBy && !selector) continue;
+				collisionToastAtRef.current.set(id, now);
+				const nodeName =
+					boardRef.current?.nodes?.[id]?.friendly_name ?? id.slice(-6);
+				toastWarning(
+					editedBy
+						? t("presenceDragEditedInCode", {
+								defaultValue: "{{name}} is editing “{{node}}” in code",
+								name: nameOf(editedBy),
+								node: nodeName,
+							})
+						: t("presenceDragSelected", {
+								defaultValue: "{{name}} has “{{node}}” selected",
+								name: nameOf(selector?.sub),
+								node: nodeName,
+							}),
+					<Eye className="w-4 h-4" />,
+				);
+				break;
+			}
+		},
+		[awareness, sub, peerUsers, t],
+	);
+
+	// ⌥-click on the empty canvas drops a "look here" ping for teammates.
+	const onPaneClick = useCallback(
+		(event: React.MouseEvent) => {
+			if (!event.altKey || !awareness) return;
+			pingAtScreen(event.clientX, event.clientY);
+		},
+		[awareness, pingAtScreen],
+	);
+
 	const onNodeDragStop = useCallback(
 		async (event: any, node: any, nodes: any) => {
+			endDrag();
 			// Don't execute commands when viewing an old version
 			if (typeof version !== "undefined") {
 				return;
@@ -3537,7 +3835,7 @@ export function FlowBoard({
 			}
 			await executeCommands(commands);
 		},
-		[boardId, executeCommands, currentLayer, version],
+		[boardId, executeCommands, currentLayer, version, endDrag],
 	);
 
 	const isValidConnectionCB = useCallback(
@@ -3674,8 +3972,15 @@ export function FlowBoard({
 					}
 				});
 			}
+			broadcastDrag(
+				nodes.map((dragged) => ({
+					id: dragged.id,
+					x: dragged.position.x,
+					y: dragged.position.y,
+				})),
+			);
 		},
-		[shiftPressed],
+		[shiftPressed, broadcastDrag],
 	);
 
 	const onAcceptSuggestion = useCallback(
@@ -4280,6 +4585,48 @@ export function FlowBoard({
 		[router, appId],
 	);
 
+	// Where teammates are, for the explorer (per file / per layer) and the
+	// inspector (who has the selected node selected or open in code).
+	const presenceFileMarks = useMemo(
+		() => presenceByFile(peerStates, sub),
+		[peerStates, sub],
+	);
+	const presenceLayerMarks = useMemo(
+		() => presenceByLayer(peerStates, sub),
+		[peerStates, sub],
+	);
+	const inspectorWatchers = useMemo(
+		() =>
+			selectedNodeIds.length === 1
+				? nodeWatchers(peerStates, selectedNodeIds[0], sub)
+				: undefined,
+		[peerStates, selectedNodeIds, sub],
+	);
+	const presenceFileLabels = useMemo(() => {
+		const labels = new Map<string, string>([[MAIN_FILE_ID, MAIN_FILE_LABEL]]);
+		for (const module of modules) labels.set(module.id, module.pathLabel);
+		return labels;
+	}, [modules]);
+	const openPeerFile = useCallback(
+		(fileId: string) => {
+			handleSelectModule(fileId === MAIN_FILE_ID ? null : fileId);
+			surfaceActions.openScript();
+		},
+		[handleSelectModule, surfaceActions],
+	);
+	// "Follow Anna" / "Jump to Anna" / "Open Anna's file" in the command palette.
+	usePresenceCommands({
+		peers: peerStates,
+		peerUsers,
+		ownSub: sub,
+		enabled: Boolean(awareness),
+		followingSub,
+		fileLabels: presenceFileLabels,
+		onFollow: toggleFollow,
+		onJumpToUser: jumpToUser,
+		onOpenFile: openPeerFile,
+	});
+
 	const sidebarBody =
 		shell.sidebar === "explorer" ? (
 			<BoardExplorer
@@ -4292,6 +4639,9 @@ export function FlowBoard({
 				executeCommand={executeCommand}
 				readOnly={typeof version !== "undefined"}
 				reservedRoots={moduleReservedRoots}
+				presenceByFile={presenceFileMarks}
+				presenceByLayer={presenceLayerMarks}
+				peerUsers={peerUsers}
 			/>
 		) : shell.sidebar === "search" ? (
 			<FlowSearch
@@ -4491,6 +4841,7 @@ export function FlowBoard({
 				sub={sub}
 				peerUsers={peerUsers}
 				revealRequest={flowScriptRevealRequest}
+				followingSub={followingSub}
 				onRunEventNode={onRunEventNode}
 				runnableEventNodes={runnableEventNodes}
 				remoteExecutions={remoteExecutions}
@@ -4511,6 +4862,8 @@ export function FlowBoard({
 					board={board.data}
 					selectedNodeIds={selectedNodeIds}
 					onRevealNode={focusNode}
+					watchers={inspectorWatchers}
+					peerUsers={peerUsers}
 				/>
 			</BoardPane>
 		) : shell.secondary === "flowpilot" && !externalAssistant ? (
@@ -4720,16 +5073,30 @@ export function FlowBoard({
 									onOpenRecovery={openSyncRecovery}
 								/>
 								<BoardActivityIndicator boardId={boardId} />
-								{awareness && peerStates.length > 0 && (
+								{awareness && (
 									<FlowPresenceBar
 										peers={peerStates}
 										peerUsers={peerUsers}
+										sub={sub}
 										followingSub={followingSub}
 										currentLayerPath={layerPath ?? "root"}
 										layerNames={layerNames}
+										modules={modules}
+										resolveNodeName={resolveNodeForPresence}
+										getLastActiveAt={getPeerLastActiveAt}
 										onToggleFollow={toggleFollow}
+										onStopFollowing={stopFollowing}
 										onJumpToUser={jumpToUser}
 										onJumpToLayer={jumpToLayer}
+										onFocusNode={focusNode}
+										onOpenInCode={openFlowScriptAtNode}
+										onHighlightNodes={highlightNodesOnCanvas}
+										isTypingInEditor={isPeerTypingInEditor}
+										isTypingInChat={isPeerTypingInChat}
+										isAway={isPeerAway}
+										onSummon={summonHere}
+										onReact={reactAtCursor}
+										presenceEvent={presenceEvent}
 										onOpenChat={handleToggleChat}
 										unreadCount={unreadCount}
 										peerScopes={peerScopes}
@@ -4745,9 +5112,14 @@ export function FlowBoard({
 									<BoardStatusItem
 										icon={<Eye />}
 										tone="accent"
+										title={t("stopFollowing", "Stop following")}
 										onClick={() => stopFollowing()}
 									>
-										{t("following", "Following")}
+										{peerUsers.get(followingSub)?.truncatedName
+											? t("followingName", "Following {{name}}", {
+													name: peerUsers.get(followingSub)?.truncatedName,
+												})
+											: t("following", "Following")}
 									</BoardStatusItem>
 								)}
 							</>
@@ -4841,6 +5213,16 @@ export function FlowBoard({
 							onMoveSelectionToModule={
 								typeof version === "undefined"
 									? (target) => void moveSelectionToModule(target)
+									: undefined
+							}
+							onPingHere={
+								awareness
+									? () => pingAtScreen(clickPosition.x, clickPosition.y)
+									: undefined
+							}
+							onDiscussInChat={
+								awareness && selectedNodeIds.length === 1
+									? () => openChatWithNode(selectedNodeIds[0])
 									: undefined
 							}
 							onPlaceholder={async (name) => {
@@ -4946,6 +5328,8 @@ export function FlowBoard({
 									onEdgesChange={onEdgesChange}
 									onNodeDragStop={onNodeDragStop}
 									onNodeDrag={onNodeDrag}
+									onNodeDragStart={onNodeDragStart}
+									onPaneClick={onPaneClick}
 									isValidConnection={isValidConnectionCB}
 									onConnect={onConnect}
 									onSelectionChange={onSelectionChange}
@@ -4961,6 +5345,18 @@ export function FlowBoard({
 									store={cursorStore}
 									currentLayerPath={layerPath ?? "root"}
 									peerUsers={peerUsers}
+								/>
+								<FlowDragGhostsLayer
+									store={dragStore}
+									currentLayerPath={layerPath ?? "root"}
+									peerUsers={peerUsers}
+									sub={sub}
+								/>
+								<FlowPingsLayer
+									store={pingStore}
+									currentLayerPath={layerPath ?? "root"}
+									peerUsers={peerUsers}
+									sub={sub}
 								/>
 								{peerStates.length > 0 && (
 									<FlowLayerIndicators
@@ -5021,6 +5417,15 @@ export function FlowBoard({
 									onClose={() => setChatOpen(false)}
 									peerUsers={peerUsers}
 									sub={sub}
+									resolveNodeName={resolveNodeForPresence}
+									onFocusNode={focusNode}
+									draft={chatDraft?.text}
+									draftToken={chatDraft?.token}
+									typingSubs={chatTypingSubs}
+									onTyping={notifyChatTyping}
+									onStopTyping={clearChatTyping}
+									onlineCount={chatOnlineCount}
+									storageKey={`${appId}:${boardId}`}
 								/>
 							</div>
 						)}

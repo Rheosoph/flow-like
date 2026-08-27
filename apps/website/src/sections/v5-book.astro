@@ -1,0 +1,502 @@
+---
+import { LuArrowUpRight, LuDownload } from "react-icons/lu";
+import { CURRENT_BOOK_EDITION } from "../../../book/src/lib/book-edition";
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props {
+	lang?: Lang;
+}
+
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+	const localized = translations[lang] as Record<string, string>;
+	const english = translations.en as Record<string, string>;
+	return localized?.[key] ?? english[key] ?? key;
+};
+
+const bookUrl = "https://book.flow-like.com/";
+const pdfUrl = "https://book.flow-like.com/flowbook.pdf";
+const docsUrl = "https://docs.flow-like.com/";
+const youtubeUrl = "https://www.youtube.com/@flow-like";
+const edition = CURRENT_BOOK_EDITION;
+const chapterCount = edition.parts.reduce(
+	(count, part) => count + part.chapters.length,
+	0,
+);
+const chapterLabel = `${chapterCount} ${chapterCount === 1 ? "CHAPTER" : "CHAPTERS"}`;
+const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
+---
+
+<section id="flowbook" class="book-section" aria-labelledby="flowbook-title">
+	<div class="book-shell website-content-canvas">
+		<header class="book-label">
+			<span>05 / {t("v5.book.eyebrow")}</span>
+			<b>{t("v5.book.kicker")}</b>
+		</header>
+
+		<div class="book-layout">
+			<div class="book-copy">
+				<h2 id="flowbook-title">{t("v5.book.title")}</h2>
+				<p>{t("v5.book.body")}</p>
+				<p class="book-edition">{t("v5.book.meta")}</p>
+
+				<div class="book-actions">
+					<a class="book-action book-action--primary" href={bookUrl}>
+						<span>{t("v5.book.read")}</span>
+						<LuArrowUpRight aria-hidden="true" />
+					</a>
+					<a
+						class="book-action book-action--secondary"
+						href={pdfUrl}
+						download={pdfFileName}
+						type="application/pdf"
+					>
+						<span>{t("v5.book.download")}</span>
+						<LuDownload aria-hidden="true" />
+					</a>
+				</div>
+				<p class="book-note">{t("v5.book.note")}</p>
+
+				<aside class="book-guidance">
+					<h3>{t("v5.book.generalLabel")}</h3>
+					<p>{t("v5.book.generalBody")}</p>
+					<nav
+						class="book-guidance__links"
+						aria-label={t("v5.book.generalLabel")}
+					>
+						<a href={docsUrl}>
+							{t("v5.book.docs")}
+							<LuArrowUpRight aria-hidden="true" />
+						</a>
+						<a href={youtubeUrl}>
+							{t("v5.book.youtube")}
+							<LuArrowUpRight aria-hidden="true" />
+						</a>
+					</nav>
+				</aside>
+			</div>
+
+			<a
+				class="book-visual"
+				href={pdfUrl}
+				download={pdfFileName}
+				type="application/pdf"
+				aria-label={t("v5.book.aria")}
+			>
+				<div class="book-cover" lang={edition.language}>
+					<div class="book-cover__top">
+						<span>{edition.publisher}</span>
+						<b>{edition.editionLabel}</b>
+					</div>
+					<div class="book-cover__title">
+						<span>One executable Flow</span>
+						<h3>{edition.title}</h3>
+						<p>{edition.subtitle}</p>
+					</div>
+					<div class="book-cover__foot">
+						<span>PDF edition</span>
+						<b>{chapterLabel}</b>
+					</div>
+				</div>
+				<div class="book-visual__meta">
+					<span>{t("v5.book.coverCta")}</span>
+					<LuDownload aria-hidden="true" />
+				</div>
+			</a>
+		</div>
+	</div>
+</section>
+
+<style>
+	.book-section,
+	.book-section * {
+		box-sizing: border-box;
+	}
+
+	.book-section {
+		--book-ink: #18171b;
+		--book-paper: #f1ece8;
+		--book-paper-light: #fcfaf8;
+		--book-orange: #f25535;
+		--book-orange-dark: #a93626;
+		--book-muted: #67646d;
+		--book-rule: #d9cfca;
+		position: relative;
+		isolation: isolate;
+		overflow: hidden;
+		background:
+			radial-gradient(circle at 82% 48%, rgba(242, 85, 53, 0.11), transparent 30rem),
+			var(--book-paper);
+		color: var(--book-ink);
+	}
+
+	.book-section::before {
+		position: absolute;
+		inset: 0;
+		z-index: -1;
+		opacity: 0.32;
+		background-image:
+			linear-gradient(rgba(24, 23, 27, 0.04) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(24, 23, 27, 0.04) 1px, transparent 1px);
+		background-size: 3rem 3rem;
+		-webkit-mask-image: linear-gradient(90deg, transparent 8%, black 48%, black 100%);
+		mask-image: linear-gradient(90deg, transparent 8%, black 48%, black 100%);
+		content: "";
+	}
+
+	.book-shell {
+		padding: clamp(6rem, 9vw, 9rem) var(--website-content-gutter);
+	}
+
+	.book-label {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 2rem;
+		padding-bottom: 1rem;
+		border-bottom: 1px solid var(--book-rule);
+		font: 700 0.58rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+	}
+
+	.book-label span {
+		color: var(--book-orange-dark);
+	}
+
+	.book-label b {
+		font-weight: 650;
+		color: var(--book-muted);
+	}
+
+	.book-layout {
+		display: grid;
+		grid-template-columns: repeat(
+			auto-fit,
+			minmax(min(100%, 26rem), 1fr)
+		);
+		gap: clamp(4rem, 9vw, 10rem);
+		align-items: center;
+		padding-top: clamp(4rem, 7vw, 7rem);
+	}
+
+	.book-copy h2 {
+		max-width: 43rem;
+		margin: 0;
+		font-size: clamp(3rem, 5.4vw, 5.7rem);
+		font-weight: 680;
+		letter-spacing: -0.068em;
+		line-height: 0.94;
+		overflow-wrap: anywhere;
+		color: var(--book-ink);
+	}
+
+	.book-copy > p:not(.book-edition, .book-note) {
+		max-width: 38rem;
+		margin: 2rem 0 0;
+		font-size: clamp(1.05rem, 1.45vw, 1.3rem);
+		line-height: 1.62;
+		color: var(--book-muted);
+	}
+
+	.book-edition {
+		margin: 1.4rem 0 0;
+		font: 700 0.62rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: var(--book-orange-dark);
+	}
+
+	.book-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.8rem;
+		max-width: 32rem;
+		margin-top: 2.5rem;
+	}
+
+	.book-action {
+		flex: 1 1 12rem;
+		min-height: 3.7rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1.5rem;
+		padding: 0 1.2rem;
+		border: 1px solid var(--book-ink);
+		border-radius: 0.7rem;
+		font-size: 0.8rem;
+		font-weight: 740;
+		text-decoration: none;
+		transition: transform 180ms ease, background 180ms ease, color 180ms ease;
+	}
+
+	.book-action :global(svg) {
+		width: 1rem;
+		height: 1rem;
+		flex: 0 0 auto;
+	}
+
+	.book-action--primary {
+		min-width: min(100%, 13rem);
+		background: var(--book-ink);
+		box-shadow: 0 1.25rem 3rem rgba(24, 23, 27, 0.14);
+		color: white;
+	}
+
+	.book-action--primary :global(svg) {
+		color: #ff7658;
+	}
+
+	.book-action--secondary {
+		min-width: min(100%, 12rem);
+		background: color-mix(in srgb, var(--book-paper-light) 72%, transparent);
+		color: var(--book-ink);
+	}
+
+	.book-action--secondary :global(svg) {
+		color: var(--book-orange-dark);
+	}
+
+	.book-note {
+		margin: 1rem 0 0;
+		font-size: 0.78rem;
+		color: var(--book-muted);
+	}
+
+	.book-guidance {
+		max-width: 38rem;
+		margin-top: 1.7rem;
+		padding-top: 1.4rem;
+		border-top: 1px solid var(--book-rule);
+	}
+
+	.book-guidance > h3 {
+		margin: 0;
+		font: 750 0.58rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--book-orange-dark);
+	}
+
+	.book-guidance > p {
+		margin: 0.65rem 0 0;
+		font-size: 0.86rem;
+		line-height: 1.55;
+		color: var(--book-muted);
+	}
+
+	.book-guidance__links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.65rem;
+		margin-top: 1rem;
+	}
+
+	.book-guidance__links a {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.55rem;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid var(--book-rule);
+		border-radius: 0.5rem;
+		background: color-mix(in srgb, var(--book-paper-light) 62%, transparent);
+		font-size: 0.72rem;
+		font-weight: 720;
+		text-decoration: none;
+		color: var(--book-ink);
+		transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+	}
+
+	.book-guidance__links :global(svg) {
+		width: 0.9rem;
+		height: 0.9rem;
+		flex: 0 0 auto;
+		color: var(--book-orange-dark);
+	}
+
+	.book-visual {
+		width: min(calc(100% - 0.85rem), 31rem);
+		justify-self: center;
+		display: block;
+		perspective: 70rem;
+		text-decoration: none;
+		color: var(--book-ink);
+	}
+
+	.book-cover {
+		container-type: inline-size;
+		position: relative;
+		isolation: isolate;
+		aspect-ratio: 1 / 1.414;
+		display: grid;
+		grid-template-rows: auto 1fr auto;
+		padding: clamp(1.7rem, 3.6vw, 3rem);
+		overflow: hidden;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 0.4rem 1rem 1rem 0.4rem;
+		background:
+			radial-gradient(circle at 20% 78%, rgba(242, 64, 42, 0.34), transparent 16rem),
+			linear-gradient(145deg, #11141a, #080a0e);
+		box-shadow:
+			-0.7rem 0 0 #2a2627,
+			-0.85rem 0 0 var(--book-orange),
+			0 3rem 6rem rgba(24, 23, 27, 0.25);
+		color: #f6f1ed;
+		transform: rotateY(-3deg) rotateX(1deg);
+		transform-origin: left center;
+		transition: transform 220ms ease, box-shadow 220ms ease;
+	}
+
+	.book-cover::before {
+		position: absolute;
+		inset: 0;
+		z-index: -2;
+		opacity: 0.32;
+		background-image:
+			linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+		background-size: 3rem 3rem;
+		content: "";
+	}
+
+	.book-cover::after {
+		position: absolute;
+		right: -7rem;
+		bottom: -7rem;
+		z-index: -1;
+		width: 20rem;
+		height: 20rem;
+		border-radius: 50%;
+		background: rgba(241, 60, 46, 0.24);
+		filter: blur(4rem);
+		content: "";
+	}
+
+	.book-cover__top,
+	.book-cover__foot {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		font: 700 0.54rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: rgba(246, 241, 237, 0.64);
+	}
+
+	.book-cover__top span,
+	.book-cover__foot span {
+		color: #ff7658;
+	}
+
+	.book-cover__top b,
+	.book-cover__foot b {
+		font-weight: 600;
+	}
+
+	.book-cover__title {
+		align-self: center;
+	}
+
+	.book-cover__title > span {
+		font: 700 0.55rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: #ff7658;
+	}
+
+	.book-cover__title h3 {
+		margin: 1.1rem 0 0;
+		font-size: clamp(2.75rem, 7vw, 6.3rem);
+		font-weight: 690;
+		letter-spacing: -0.075em;
+		line-height: 0.88;
+		color: #f6f1ed;
+	}
+
+	@supports (font-size: 1cqi) {
+		.book-cover__title h3 {
+			font-size: clamp(2.75rem, 19cqi, 6.3rem);
+		}
+	}
+
+	.book-cover__title p {
+		margin: 1.2rem 0 0;
+		font-family: Georgia, "Times New Roman", serif;
+		font-size: clamp(1.25rem, 2.4vw, 1.8rem);
+		font-style: italic;
+		line-height: 1.2;
+		color: rgba(246, 241, 237, 0.7);
+	}
+
+	.book-visual__meta {
+		height: 3rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 0.15rem;
+		font: 700 0.58rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: var(--book-muted);
+	}
+
+	.book-visual__meta :global(svg) {
+		width: 1rem;
+		height: 1rem;
+		color: var(--book-orange-dark);
+		transition: transform 180ms ease;
+	}
+
+	.book-action:focus-visible,
+	.book-visual:focus-visible,
+	.book-guidance__links a:focus-visible {
+		outline: 3px solid var(--book-orange-dark);
+		outline-offset: 5px;
+	}
+
+	@media (hover: hover) {
+		.book-action:hover {
+			transform: translateY(-3px);
+		}
+
+		.book-action--primary:hover {
+			background: var(--book-orange-dark);
+			color: white;
+		}
+
+		.book-action--secondary:hover {
+			background: var(--book-paper-light);
+			color: var(--book-orange-dark);
+		}
+
+		.book-guidance__links a:hover {
+			border-color: var(--book-orange-dark);
+			background: var(--book-paper-light);
+			color: var(--book-orange-dark);
+		}
+
+		.book-visual:hover .book-cover {
+			transform: rotateY(-1deg) rotateX(0) translateY(-0.4rem);
+			box-shadow:
+				-0.7rem 0 0 #2a2627,
+				-0.85rem 0 0 var(--book-orange),
+				0 3.5rem 7rem rgba(24, 23, 27, 0.31);
+		}
+
+		.book-visual:hover .book-visual__meta :global(svg) {
+			transform: translate(0.12rem, -0.12rem);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.book-action,
+		.book-cover,
+		.book-guidance__links a,
+		.book-visual__meta :global(svg) {
+			transition: none;
+		}
+	}
+</style>

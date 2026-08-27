@@ -1,19 +1,17 @@
 "use client";
 
 import { i18n as i18next } from "@flow-like/locales";
-import {
-	AudioLines,
-	AudioWaveform,
-	CornerDownRight,
-	FileIcon,
-	FolderIcon,
-	MicIcon,
-	Plus,
-	Send,
-	SquareIcon,
-	WrenchIcon,
-	X,
-} from "lucide-react";
+import AudioLines from "lucide-react/dist/esm/icons/audio-lines.js";
+import AudioWaveform from "lucide-react/dist/esm/icons/audio-waveform.js";
+import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right.js";
+import FileIcon from "lucide-react/dist/esm/icons/file.js";
+import FolderIcon from "lucide-react/dist/esm/icons/folder.js";
+import MicIcon from "lucide-react/dist/esm/icons/mic.js";
+import Plus from "lucide-react/dist/esm/icons/plus.js";
+import Send from "lucide-react/dist/esm/icons/send.js";
+import SquareIcon from "lucide-react/dist/esm/icons/square.js";
+import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import {
 	forwardRef,
 	useCallback,
@@ -22,20 +20,13 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { cn, humanFileSize } from "../../../lib";
-import {
-	Button,
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-	Textarea,
-} from "../../ui";
-import {
-	type VoiceInvokeMode,
-	type VoiceMode,
-	useSpeechRecognition,
-	useVoiceRecorder,
-} from "../../voice";
+import { cn, humanFileSize } from "../../../lib/utils";
+import { Button } from "../../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
+import { Textarea } from "../../ui/textarea";
+import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
+import { useSpeechRecognition } from "../../voice/use-speech-recognition";
+import { useVoiceRecorder } from "../../voice/use-voice-recorder";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
 

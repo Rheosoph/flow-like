@@ -11,3 +11,4 @@ PUBLIC_POSTHOG_KEY = "phc_1FOoG85fX0bbcvmmVTqu2RwqVyl6ziT3oCEXiM2UfTX"
 [assets]
 directory = "./dist/client/"
 binding = "ASSETS"
+run_worker_first = true

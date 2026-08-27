@@ -296,6 +296,24 @@ export default {
 	"v5.control.item3": "EU AI Act readiness",
 	"v5.control.item4": "End-to-end observability",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "THE OPEN GUIDE FOR DEVELOPERS",
+	"v5.book.title": "A developer’s guide from incident to implementation.",
+	"v5.book.body":
+		"FlowBook is for developers building with Flow-Like. Follow one executable workflow through its typed FlowScript source, visual canvas, and the runtime evidence left by success or failure.",
+	"v5.book.meta": "Open edition · 2026 · English",
+	"v5.book.read": "Read FlowBook online",
+	"v5.book.download": "Download the PDF",
+	"v5.book.note": "Free to read. No sign-up required.",
+	"v5.book.generalLabel": "GENERAL GUIDES",
+	"v5.book.generalBody":
+		"For product introductions and step-by-step tutorials, start with the documentation or the Flow-Like YouTube channel.",
+	"v5.book.docs": "Explore the docs",
+	"v5.book.youtube": "Watch on YouTube",
+	"v5.book.coverCta": "Download the open edition",
+	"v5.book.aria":
+		"Download FlowBook, A Developer’s Guide to Flow-Like, as a PDF",
+
 	// ── Footer / notes ──────────────────────────────────────────────────
 	"v5.footer.notes.kicker": "Notes from the engine room",
 	"v5.footer.notes.title": "What we are building, and what we learned.",

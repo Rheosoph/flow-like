@@ -3,7 +3,9 @@ import { createId } from "@paralleldrive/cuid2";
 import {
 	FileCode2Icon,
 	FolderInputIcon,
+	LocateFixedIcon,
 	MessageCircleDashedIcon,
+	MessageCircleIcon,
 	PlayCircleIcon,
 	VariableIcon,
 	ZapIcon,
@@ -127,6 +129,8 @@ export function FlowContextMenu({
 	onCreateVariable,
 	onEditSelectionAsFlowScript,
 	onMoveSelectionToModule,
+	onPingHere,
+	onDiscussInChat,
 	onClose,
 }: Readonly<{
 	nodes: INode[];
@@ -147,6 +151,10 @@ export function FlowContextMenu({
 	onEditSelectionAsFlowScript?: () => void;
 	/** Absent while a board version is being viewed — a read-only board takes no edits. */
 	onMoveSelectionToModule?: (target: string | null) => void;
+	/** Drop a transient "look here" marker for peers at the click position; absent offline. */
+	onPingHere?: () => void;
+	/** Open the board chat with a reference to the selected node; absent offline. */
+	onDiscussInChat?: () => void;
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("flow");
@@ -602,6 +610,38 @@ export function FlowContextMenu({
 							>
 								<FileCode2Icon className="w-4 h-4" />
 								{t("editSelectionAsFlowscript", "Edit selection as FlowScript")}
+							</ContextMenuItem>
+						)}
+						{onPingHere && (
+							<ContextMenuItem
+								className="flex flex-row gap-1 items-center"
+								onSelect={(event) => {
+									if (menuBlockedRef.current) {
+										event.preventDefault();
+										return;
+									}
+									onPingHere();
+									onClose();
+								}}
+							>
+								<LocateFixedIcon className="w-4 h-4" />
+								{t("pingHere", "Ping here for teammates")}
+							</ContextMenuItem>
+						)}
+						{onDiscussInChat && selectionCount === 1 && (
+							<ContextMenuItem
+								className="flex flex-row gap-1 items-center"
+								onSelect={(event) => {
+									if (menuBlockedRef.current) {
+										event.preventDefault();
+										return;
+									}
+									onDiscussInChat();
+									onClose();
+								}}
+							>
+								<MessageCircleIcon className="w-4 h-4" />
+								{t("discussInChat", "Discuss in chat")}
 							</ContextMenuItem>
 						)}
 						{/* Which file an event belongs to follows its ENTRY node: moving part of a

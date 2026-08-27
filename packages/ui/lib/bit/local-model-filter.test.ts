@@ -5,6 +5,8 @@ import {
 	getLlmModelTier,
 	isFreeLlmModel,
 	isHostableLlmModel,
+	isHostedLlmModel,
+	isHostedLlmProviderName,
 	isLlamaCppLlmModel,
 	isLocalLlmModel,
 	isMlxLlmModel,
@@ -23,20 +25,21 @@ function bit(providerName?: string): IBit {
 
 describe("isLocalLlmModel", () => {
 	test("matches local provider names case-insensitively", () => {
-		for (const name of [
-			"Local",
-			"local",
-			"Llama.cpp",
-			"LLAMACPP",
-			"Ollama",
-			"MLX",
-		]) {
+		for (const name of ["Local", "local", "MLX"]) {
 			expect(isLocalLlmModel(bit(name))).toBe(true);
 		}
 	});
 
 	test("does not match hosted or remote providers", () => {
-		for (const name of ["Hosted", "OpenAI", "Anthropic", "custom:ollama"]) {
+		for (const name of [
+			"Hosted",
+			"OpenAI",
+			"Anthropic",
+			"custom:ollama",
+			"Llama.cpp",
+			"LLAMACPP",
+			"Ollama",
+		]) {
 			expect(isLocalLlmModel(bit(name))).toBe(false);
 		}
 	});
@@ -84,7 +87,7 @@ describe("filterHostableLlmModels", () => {
 		).toEqual(models);
 	});
 
-	test("keeps only llama.cpp models on a non-Apple desktop", () => {
+	test("keeps embedded llama.cpp and endpoint-backed models on desktop", () => {
 		expect(
 			filterHostableLlmModels(models, {
 				canHostLlamaCPP: true,
@@ -93,22 +96,38 @@ describe("filterHostableLlmModels", () => {
 		).toEqual([bit("Local"), bit("Hosted"), bit("llamacpp"), bit("OpenAI")]);
 	});
 
-	test("keeps only MLX models on iOS", () => {
+	test("keeps MLX and endpoint-backed models on iOS", () => {
 		expect(
 			filterHostableLlmModels(models, {
 				canHostLlamaCPP: false,
 				canHostMLX: true,
 			}),
-		).toEqual([bit("Hosted"), bit("MLX"), bit("OpenAI")]);
+		).toEqual([bit("Hosted"), bit("MLX"), bit("llamacpp"), bit("OpenAI")]);
 	});
 
-	test("drops all local models on a remote-only host", () => {
+	test("drops embedded models on a remote-only host", () => {
 		expect(
 			filterHostableLlmModels(models, {
 				canHostLlamaCPP: false,
 				canHostMLX: false,
 			}),
-		).toEqual([bit("Hosted"), bit("OpenAI")]);
+		).toEqual([bit("Hosted"), bit("llamacpp"), bit("OpenAI")]);
+	});
+});
+
+describe("hosted provider aliases", () => {
+	test("recognizes canonical and legacy hosted names", () => {
+		for (const name of ["Hosted", "hosted:openai", "Premium", " internal "]) {
+			expect(isHostedLlmProviderName(name)).toBe(true);
+			expect(isHostedLlmModel(bit(name))).toBe(true);
+		}
+	});
+
+	test("does not classify endpoint or embedded providers as hosted", () => {
+		for (const name of ["Local", "MLX", "Ollama", "custom:openai"]) {
+			expect(isHostedLlmProviderName(name)).toBe(false);
+			expect(isHostedLlmModel(bit(name))).toBe(false);
+		}
 	});
 });
 

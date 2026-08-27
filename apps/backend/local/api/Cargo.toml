@@ -9,7 +9,7 @@ flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos",
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog = { workspace = true, features = ["all-metadata"] }
+flow-like-catalog = { workspace = true, features = ["executor-local-metadata"] }
 mimalloc.workspace = true
 socket2 = "0.6.0"
 tracing.workspace = true

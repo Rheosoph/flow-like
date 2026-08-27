@@ -1,6 +1,7 @@
 /flowbook.pdf
   X-Robots-Tag: noindex, follow
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Disposition: attachment; filename="FlowBook-Open-Edition-2026.pdf"
 
 /print/*
   X-Robots-Tag: noindex, follow

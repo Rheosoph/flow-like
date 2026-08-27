@@ -70,9 +70,12 @@ const MODEL_BIT_TYPES = [
 const HOSTED_FILTER = "hosted";
 const HOSTED_PROVIDER_OPTIONS = [
 	"Hosted",
+	"Premium",
+	"Internal",
 	"hosted:openrouter",
 	"hosted:openai",
 	"hosted:anthropic",
+	"hosted:bedrock",
 	"hosted:azure",
 	"hosted:vertex",
 ] as const;
@@ -100,7 +103,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function isHostedProviderName(providerName?: null | string) {
 	const normalized = providerName?.trim().toLowerCase() ?? "";
-	return normalized === "hosted" || normalized.startsWith("hosted:");
+	return (
+		normalized === "premium" ||
+		normalized === "internal" ||
+		normalized === "hosted" ||
+		normalized.startsWith("hosted:")
+	);
 }
 
 function isMlxProviderName(providerName?: null | string) {
@@ -111,6 +119,13 @@ function getProviderParams(
 	provider: IModelProvider | Record<string, unknown> | undefined,
 ) {
 	return asRecord(provider?.params);
+}
+
+function getHostedProviderParams(
+	provider: IModelProvider | Record<string, unknown> | undefined,
+) {
+	const tier = getProviderParams(provider).tier;
+	return typeof tier === "string" && tier.trim() ? { tier: tier.trim() } : {};
 }
 
 function normalizeModelParameters(
@@ -138,7 +153,9 @@ function normalizeModelParameters(
 			model_id:
 				typeof provider.model_id === "string" ? provider.model_id : null,
 			version: typeof provider.version === "string" ? provider.version : null,
-			params: getProviderParams(provider),
+			params: isHostedProviderName(providerName)
+				? getHostedProviderParams(provider)
+				: getProviderParams(provider),
 		},
 	} as ILlmParameters | IVlmParameters;
 }
@@ -213,10 +230,6 @@ export default function EditBitsPage() {
 	const [tagsText, setTagsText] = useState("");
 	const [parametersText, setParametersText] = useState("{}");
 	const [parametersError, setParametersError] = useState<string | null>(null);
-	const [providerParamsText, setProviderParamsText] = useState("{}");
-	const [providerParamsError, setProviderParamsError] = useState<string | null>(
-		null,
-	);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [isRepairingTts, setIsRepairingTts] = useState(false);
@@ -276,25 +289,19 @@ export default function EditBitsPage() {
 			...nextDraft.meta,
 			en: getEnglishMeta(nextDraft),
 		};
-		setDraft(nextDraft);
 		setAuthorsText((nextDraft.authors ?? []).join(", "));
 		setDependenciesText((nextDraft.dependencies ?? []).join("\n"));
 		setTagsText((nextDraft.meta.en?.tags ?? []).join(", "));
-		setParametersText(JSON.stringify(nextDraft.parameters ?? {}, null, 2));
 		if (
 			MODEL_BIT_TYPES.includes(
 				nextDraft.type as (typeof MODEL_BIT_TYPES)[number],
 			)
 		) {
-			const modelParameters = normalizeModelParameters(nextDraft.parameters);
-			setProviderParamsText(
-				JSON.stringify(getProviderParams(modelParameters.provider), null, 2),
-			);
-		} else {
-			setProviderParamsText("{}");
+			nextDraft.parameters = normalizeModelParameters(nextDraft.parameters);
 		}
+		setDraft(nextDraft);
+		setParametersText(JSON.stringify(nextDraft.parameters ?? {}, null, 2));
 		setParametersError(null);
-		setProviderParamsError(null);
 	}, [selectedBit.data]);
 
 	useEffect(() => {
@@ -343,30 +350,22 @@ export default function EditBitsPage() {
 		[],
 	);
 
-	const applyParsedParameters = useCallback(
-		(parsed: unknown) => {
-			setDraft((current) => {
-				if (!current) return current;
-				return {
-					...current,
-					parameters: parsed,
-				};
-			});
-			setParametersText(JSON.stringify(parsed ?? {}, null, 2));
-			if (
-				draft &&
-				MODEL_BIT_TYPES.includes(draft.type as (typeof MODEL_BIT_TYPES)[number])
-			) {
-				const modelParameters = normalizeModelParameters(parsed);
-				setProviderParamsText(
-					JSON.stringify(getProviderParams(modelParameters.provider), null, 2),
-				);
-			}
-			setParametersError(null);
-			setProviderParamsError(null);
-		},
-		[draft],
-	);
+	const applyParsedParameters = useCallback((parsed: unknown) => {
+		setDraft((current) => {
+			if (!current) return current;
+			const nextParameters = MODEL_BIT_TYPES.includes(
+				current.type as (typeof MODEL_BIT_TYPES)[number],
+			)
+				? normalizeModelParameters(parsed)
+				: parsed;
+			setParametersText(JSON.stringify(nextParameters ?? {}, null, 2));
+			return {
+				...current,
+				parameters: nextParameters,
+			};
+		});
+		setParametersError(null);
+	}, []);
 
 	const updateStructuredParameters = useCallback(
 		(
@@ -380,11 +379,7 @@ export default function EditBitsPage() {
 					normalizeModelParameters(current.parameters),
 				);
 				setParametersText(JSON.stringify(nextParameters, null, 2));
-				setProviderParamsText(
-					JSON.stringify(getProviderParams(nextParameters.provider), null, 2),
-				);
 				setParametersError(null);
-				setProviderParamsError(null);
 				return {
 					...current,
 					parameters: nextParameters,
@@ -409,33 +404,6 @@ export default function EditBitsPage() {
 		}
 	}, [applyParsedParameters, parametersText]);
 
-	const handleProviderParamsBlur = useCallback(() => {
-		const trimmed = providerParamsText.trim();
-		const textToParse = trimmed || "{}";
-		try {
-			const parsed = JSON.parse(textToParse);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				throw new Error("Provider params must be a JSON object");
-			}
-			updateStructuredParameters((current) => ({
-				...current,
-				provider: {
-					...current.provider,
-					params: parsed as Record<string, unknown>,
-				},
-			}));
-		} catch (error) {
-			setProviderParamsError(
-				error instanceof Error
-					? error.message
-					: t(
-							"providerParamsMustBeValidJson",
-							"Provider params must be valid JSON",
-						),
-			);
-		}
-	}, [providerParamsText, updateStructuredParameters]);
-
 	const setModelHostingMode = useCallback((nextMode: "local" | "hosted") => {
 		setDraft((current) => {
 			if (!current) return current;
@@ -445,13 +413,10 @@ export default function EditBitsPage() {
 				provider_name: nextMode === "hosted" ? "Hosted" : "Local",
 				params:
 					nextMode === "hosted"
-						? getProviderParams(nextParameters.provider)
+						? getHostedProviderParams(nextParameters.provider)
 						: getProviderParams(nextParameters.provider),
 			};
 			setParametersText(JSON.stringify(nextParameters, null, 2));
-			setProviderParamsText(
-				JSON.stringify(getProviderParams(nextParameters.provider), null, 2),
-			);
 			return {
 				...current,
 				parameters: nextParameters,
@@ -461,7 +426,6 @@ export default function EditBitsPage() {
 			};
 		});
 		setParametersError(null);
-		setProviderParamsError(null);
 	}, []);
 
 	const handleRefresh = useCallback(() => {
@@ -502,7 +466,7 @@ export default function EditBitsPage() {
 			...draft,
 			authors: parseDelimitedList(authorsText),
 			dependencies,
-			parameters: parsedParameters,
+			parameters: parsedModelParameters ?? parsedParameters,
 			...(nextIsMlx ? { download_link: null, file_name: null, size: 0 } : {}),
 			meta: {
 				...draft.meta,
@@ -1043,6 +1007,11 @@ export default function EditBitsPage() {
 																	provider: {
 																		...current.provider,
 																		provider_name: value,
+																		params: isHostedProviderName(value)
+																			? getHostedProviderParams(
+																					current.provider,
+																				)
+																			: getProviderParams(current.provider),
 																	},
 																}))
 															}
@@ -1055,9 +1024,6 @@ export default function EditBitsPage() {
 																	{t("local", "Local")}
 																</SelectItem>
 																<SelectItem value="MLX">MLX</SelectItem>
-																<SelectItem value="Premium">
-																	{t("premium", "Premium")}
-																</SelectItem>
 																{HOSTED_PROVIDER_OPTIONS.map((providerName) => (
 																	<SelectItem
 																		key={providerName}
@@ -1106,69 +1072,36 @@ export default function EditBitsPage() {
 														/>
 													</div>
 													{draftIsHosted ? (
-														<>
-															<div className="space-y-2 md:col-span-2">
-																<Label htmlFor="bit-provider-endpoint">
-																	{t("endpoint", "Endpoint")}
-																</Label>
-																<Input
-																	id="bit-provider-endpoint"
-																	value={
-																		typeof getProviderParams(
-																			modelParameters.provider,
-																		).endpoint === "string"
-																			? (getProviderParams(
-																					modelParameters.provider,
-																				).endpoint as string)
-																			: ""
-																	}
-																	onChange={(event) =>
-																		updateStructuredParameters((current) => ({
-																			...current,
-																			provider: {
-																				...current.provider,
-																				params: {
-																					...getProviderParams(
-																						current.provider,
-																					),
-																					endpoint: event.target.value,
-																				},
-																			},
-																		}))
-																	}
-																/>
-															</div>
-															<div className="space-y-2 md:col-span-2">
-																<Label htmlFor="bit-provider-params">
-																	{t(
-																		"providerParamsJson",
-																		"Provider Params JSON",
-																	)}
-																</Label>
-																<Textarea
-																	id="bit-provider-params"
-																	rows={8}
-																	value={providerParamsText}
-																	onChange={(event) => {
-																		setProviderParamsText(event.target.value);
-																		setProviderParamsError(null);
-																	}}
-																	onBlur={handleProviderParamsBlur}
-																/>
-																{providerParamsError ? (
-																	<p className="text-xs text-destructive">
-																		{providerParamsError}
-																	</p>
-																) : (
-																	<p className="text-xs text-muted-foreground">
-																		{t(
-																			"hostedModelsUseProviderParamsForEndpointOverridesAndProviderspecificMetadata",
-																			"Hosted models use provider params for endpoint overrides and provider-specific metadata.",
-																		)}
-																	</p>
+														<div className="space-y-2 md:col-span-2">
+															<Label htmlFor="bit-provider-tier">
+																{t("tier", "Tier")}
+															</Label>
+															<Input
+																id="bit-provider-tier"
+																value={
+																	getHostedProviderParams(
+																		modelParameters.provider,
+																	).tier ?? ""
+																}
+																onChange={(event) =>
+																	updateStructuredParameters((current) => ({
+																		...current,
+																		provider: {
+																			...current.provider,
+																			params: event.target.value.trim()
+																				? { tier: event.target.value.trim() }
+																				: {},
+																		},
+																	}))
+																}
+															/>
+															<p className="text-xs text-muted-foreground">
+																{t(
+																	"hostedTierOnly",
+																	"The API controls upstream endpoints, credentials, and request headers.",
 																)}
-															</div>
-														</>
+															</p>
+														</div>
 													) : null}
 												</>
 											) : null}

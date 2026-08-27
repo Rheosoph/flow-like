@@ -38,6 +38,10 @@ spec:
               value: "9090"
             - name: RUST_LOG
               value: "info"
+            # Hosted model calls are authenticated and proxied by the API.
+            # Provider credentials must never be mounted into executor pods.
+            - name: API_BASE_URL
+              value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}
             {{- if and .Values.monitoring.enabled .Values.monitoring.tracing.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://{{ include "flow-like.fullname" . }}-tempo:4317"
@@ -55,47 +59,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "flow-like.jwtSecretName" . }}
                   key: BACKEND_KID
-            # LLM Provider Configuration
-            {{- if .Values.llm.openrouter.enabled }}
-            {{- if .Values.llm.openrouter.existingSecret }}
-            - name: OPENROUTER_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.llm.openrouter.existingSecret }}
-                  key: OPENROUTER_API_KEY
-            - name: OPENROUTER_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.llm.openrouter.existingSecret }}
-                  key: OPENROUTER_ENDPOINT
-                  optional: true
-            {{- else if .Values.llm.openrouter.apiKey }}
-            - name: OPENROUTER_API_KEY
-              value: {{ .Values.llm.openrouter.apiKey | quote }}
-            - name: OPENROUTER_ENDPOINT
-              value: {{ .Values.llm.openrouter.endpoint | quote }}
-            {{- end }}
-            {{- end }}
-            {{- if .Values.llm.openai.enabled }}
-            {{- if .Values.llm.openai.existingSecret }}
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.llm.openai.existingSecret }}
-                  key: OPENAI_API_KEY
-            - name: OPENAI_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.llm.openai.existingSecret }}
-                  key: OPENAI_ENDPOINT
-                  optional: true
-            {{- else if .Values.llm.openai.apiKey }}
-            - name: OPENAI_API_KEY
-              value: {{ .Values.llm.openai.apiKey | quote }}
-            - name: OPENAI_ENDPOINT
-              value: {{ .Values.llm.openai.endpoint | quote }}
-            {{- end }}
-            {{- end }}
           ports:
             - containerPort: {{ .Values.executorPool.service.port }}
               name: http

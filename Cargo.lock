@@ -8013,6 +8013,12 @@ dependencies = [
 [[package]]
 name = "flow-like-catalog-build-helper"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dirs-next",
+ "ureq",
+ "wasmtime",
+]
 
 [[package]]
 name = "flow-like-catalog-code-interpreter"
@@ -8020,7 +8026,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "blake3",
  "dirs-next",
  "flow-like",
  "flow-like-catalog-build-helper",
@@ -8036,7 +8041,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "ureq",
  "wasmtime",
  "wasmtime-wasi",
  "wat",

@@ -11,7 +11,9 @@ flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp",
 flow-like-secrets = { workspace = true, features = ["aws"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog = { workspace = true, features = ["all-metadata"] }
+# The Lambda executors support the remote catalog plus local ONNX inference.
+# This API advertises the same packages without linking execution runtimes.
+flow-like-catalog = { workspace = true, features = ["server-local-metadata"] }
 mimalloc.workspace = true
 lambda_http.workspace = true
 axum.workspace = true

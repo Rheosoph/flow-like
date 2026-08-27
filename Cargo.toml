@@ -84,7 +84,7 @@ members = [
 ]
 
 [workspace.dependencies]
-flow-like = { path = "packages/core", default-features = false, features = ["flow"] }
+flow-like = { path = "packages/core", default-features = false, features = ["flow-metadata"] }
 flow-like-ast = { path = "packages/ast" }
 flow-like-types = { path = "packages/types", default-features = false }
 flow-like-types-contracts = { path = "packages/types/contracts", default-features = false }
@@ -113,7 +113,7 @@ flow-like-storage = { path = "packages/storage", default-features = false, featu
 flow-like-storage-contracts = { path = "packages/storage/contracts", default-features = false }
 flow-like-storage-files = { path = "packages/storage/files", default-features = false }
 flow-like-sinks = { path = "packages/sinks" }
-flow-like-executor = { path = "packages/executor" }
+flow-like-executor = { path = "packages/executor", default-features = false }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = false }

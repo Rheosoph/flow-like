@@ -1,51 +1,55 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import {
-	CheckIcon,
-	ChevronLeftIcon,
-	Download,
-	ExternalLink,
-	FileText,
-	FilterIcon,
-	GlobeIcon,
-	GridIcon,
-	ImageIcon,
-	ListIcon,
-	MaximizeIcon,
-	MinimizeIcon,
-	Music,
-	SearchIcon,
-	SortAscIcon,
-	VideoIcon,
-	XIcon,
-} from "lucide-react";
+import CheckIcon from "lucide-react/dist/esm/icons/check.js";
+import ChevronLeftIcon from "lucide-react/dist/esm/icons/chevron-left.js";
+import Download from "lucide-react/dist/esm/icons/download.js";
+import ExternalLink from "lucide-react/dist/esm/icons/external-link.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
+import FilterIcon from "lucide-react/dist/esm/icons/funnel.js";
+import GlobeIcon from "lucide-react/dist/esm/icons/globe.js";
+import GridIcon from "lucide-react/dist/esm/icons/grid-3x3.js";
+import ImageIcon from "lucide-react/dist/esm/icons/image.js";
+import ListIcon from "lucide-react/dist/esm/icons/list.js";
+import MaximizeIcon from "lucide-react/dist/esm/icons/maximize.js";
+import MinimizeIcon from "lucide-react/dist/esm/icons/minimize.js";
+import Music from "lucide-react/dist/esm/icons/music.js";
+import SearchIcon from "lucide-react/dist/esm/icons/search.js";
+import SortAscIcon from "lucide-react/dist/esm/icons/arrow-up-narrow-wide.js";
+import VideoIcon from "lucide-react/dist/esm/icons/video.js";
+import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "../../../hooks/use-mobile";
-import { cn, humanFileSize } from "../../../lib";
+import { cn, humanFileSize } from "../../../lib/utils";
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
 import {
-	Badge,
-	Button,
 	Dialog,
 	DialogClose,
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
 	DialogTrigger,
+} from "../../ui/dialog";
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
-	Input,
+} from "../../ui/dropdown-menu";
+import { Input } from "../../ui/input";
+import {
 	ResizableHandle,
 	ResizablePanel,
 	ResizablePanelGroup,
-	Separator,
+} from "../../ui/resizable";
+import { Separator } from "../../ui/separator";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
 	TooltipTrigger,
-} from "../../ui";
+} from "../../ui/tooltip";
 import {
 	FilePreviewer,
 	PdfFrame,

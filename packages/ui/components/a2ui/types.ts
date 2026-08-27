@@ -1727,6 +1727,8 @@ export interface WidgetInstanceComponent extends ComponentBase {
 	exposedPropValues?: Record<string, unknown>;
 	/** Bindings from widget actions to page workflows */
 	actionBindings?: Record<string, unknown>;
+	/** Instance-local element updates awaiting replay against the resolved definition. */
+	runtimeChildUpdates?: Record<string, Record<string, unknown>[]>;
 	/** Style overrides for the widget instance */
 	styleOverride?: Style;
 	style?: Style;

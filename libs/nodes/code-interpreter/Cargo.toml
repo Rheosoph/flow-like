@@ -21,10 +21,7 @@ execute = [
 # Implies `execute` since there's no point bundling without runtime support.
 bundled-python = [
     "execute",
-    "dep:build-wasmtime",
-    "dep:build-dirs-next",
-    "dep:build-ureq",
-    "dep:build-blake3",
+    "flow-like-catalog-build-helper/code-interpreter-build",
 ]
 
 [dependencies]
@@ -57,9 +54,3 @@ tempfile = "3"
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
-# Renamed, optional build dependencies ensure metadata-only and normal execution builds do not
-# compile a second host-side Wasmtime/HTTP stack. The `bundled-python` feature activates them.
-build-wasmtime = { package = "wasmtime", version = "47.0.3", default-features = false, features = ["anyhow", "async", "cranelift", "gc-drc", "parallel-compilation", "pulley", "runtime", "std"], optional = true }
-build-dirs-next = { package = "dirs-next", version = "2", optional = true }
-build-ureq = { package = "ureq", version = "3", optional = true }
-build-blake3 = { package = "blake3", version = "1.8.2", optional = true }

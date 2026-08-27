@@ -1,18 +1,17 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import {
-	Bug,
-	Check,
-	ChevronDown,
-	ChevronRight,
-	Copy,
-	FileText,
-} from "lucide-react";
+import Bug from "lucide-react/dist/esm/icons/bug.js";
+import Check from "lucide-react/dist/esm/icons/check.js";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
+import Copy from "lucide-react/dist/esm/icons/copy.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
 import { useMemo, useState } from "react";
 import { useDeveloperMode } from "../../../hooks/use-developer-mode";
 import { useModelNames } from "../../../hooks/use-model-names";
-import { cn, modelLabel } from "../../../lib";
+import { modelLabel } from "../../../lib/bit/model-display-name";
+import { cn } from "../../../lib/utils";
 import {
 	type IAgentDebugReport,
 	agentDebugReportAsMarkdown,

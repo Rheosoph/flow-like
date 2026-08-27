@@ -7,6 +7,7 @@ use std::{
 use crate::{
     bit::{Bit, BitModelPreference, BitTypes},
     hub::{BitSearchQuery, Hub},
+    state::CompletionModelCapabilities,
     utils::http::HTTPClient,
 };
 use flow_like_types::{Result, Value, anyhow, tokio::task};
@@ -183,7 +184,7 @@ impl Default for Profile {
 }
 
 impl Profile {
-    fn is_local_provider_name(provider_name: &str) -> bool {
+    fn is_self_hosted_provider_name(provider_name: &str) -> bool {
         matches!(
             provider_name.trim().to_ascii_lowercase().as_str(),
             "local"
@@ -207,17 +208,40 @@ impl Profile {
         if let Ok(llm_params) =
             flow_like_types::json::from_value::<crate::bit::LLMParameters>(bit.parameters.clone())
         {
-            if Self::is_local_provider_name(&llm_params.provider.provider_name) {
+            if Self::is_self_hosted_provider_name(&llm_params.provider.provider_name) {
                 return true;
             }
         } else if let Ok(vlm_params) =
             flow_like_types::json::from_value::<crate::bit::VLMParameters>(bit.parameters.clone())
-            && Self::is_local_provider_name(&vlm_params.provider.provider_name)
+            && Self::is_self_hosted_provider_name(&vlm_params.provider.provider_name)
         {
             return true;
         }
 
         false
+    }
+
+    fn can_execute_completion_model(bit: &Bit, capabilities: CompletionModelCapabilities) -> bool {
+        if bit.is_mlx_model() {
+            return capabilities.mlx;
+        }
+
+        let requires_local_server = bit
+            .try_to_provider()
+            .is_some_and(|provider| provider.provider_name.trim().eq_ignore_ascii_case("local"));
+        !requires_local_server || capabilities.local_server
+    }
+
+    fn model_matches_host_filter(
+        bit: &Bit,
+        only_hosted: bool,
+        capabilities: Option<CompletionModelCapabilities>,
+    ) -> bool {
+        if only_hosted && Self::is_local_model(bit) {
+            return false;
+        }
+        capabilities
+            .is_none_or(|capabilities| Self::can_execute_completion_model(bit, capabilities))
     }
 
     /// Gets the best model based on the preference
@@ -235,6 +259,41 @@ impl Profile {
     ) -> Result<Bit> {
         self.get_best_model_filtered(preference, multimodal, remote, false, http_client)
             .await
+    }
+
+    /// Resolve an explicitly selected model or choose the best profile model
+    /// that this host can execute.
+    ///
+    /// `capabilities` applies to both paths. This matters for explicit model
+    /// IDs, which otherwise bypass automatic filtering and can reach an
+    /// unsupported local runtime.
+    pub async fn resolve_completion_model(
+        &self,
+        model_id: Option<&str>,
+        preference: &BitModelPreference,
+        multimodal: bool,
+        capabilities: CompletionModelCapabilities,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
+        if let Some(model_id) = model_id {
+            let bit = self.find_bit(model_id, http_client).await?;
+            if !Self::can_execute_completion_model(&bit, capabilities) {
+                return Err(anyhow!(
+                    "Model {model_id} requires a local completion runtime that this host cannot execute"
+                ));
+            }
+            return Ok(bit);
+        }
+
+        self.get_best_model_filtered_inner(
+            preference,
+            multimodal,
+            false,
+            false,
+            Some(capabilities),
+            http_client,
+        )
+        .await
     }
 
     /// Create a copy of this profile with only hosted models (filters out local models)
@@ -260,10 +319,30 @@ impl Profile {
         only_hosted: bool,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
+        self.get_best_model_filtered_inner(
+            preference,
+            multimodal,
+            remote,
+            only_hosted,
+            None,
+            http_client,
+        )
+        .await
+    }
+
+    async fn get_best_model_filtered_inner(
+        &self,
+        preference: &BitModelPreference,
+        multimodal: bool,
+        remote: bool,
+        only_hosted: bool,
+        capabilities: Option<CompletionModelCapabilities>,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
         let mut best_bit = (0.0, None);
 
         for bit in self.activated_custom_bits() {
-            if only_hosted && Self::is_local_model(bit) {
+            if !Self::model_matches_host_filter(bit, only_hosted, capabilities) {
                 continue;
             }
             if multimodal && !bit.is_multimodal() {
@@ -286,8 +365,7 @@ impl Profile {
                     }
                 };
 
-                // Skip local models if only_hosted is true
-                if only_hosted && Self::is_local_model(&bit) {
+                if !Self::model_matches_host_filter(&bit, only_hosted, capabilities) {
                     continue;
                 }
 
@@ -301,9 +379,7 @@ impl Profile {
                 }
             }
 
-            if let Some(bit) = best_bit.1 {
-                return Ok(bit);
-            }
+            return best_bit.1.ok_or_else(|| anyhow!("No Model found"));
         }
 
         let preference = preference.parse();
@@ -324,8 +400,7 @@ impl Profile {
         }
 
         for (_, bit) in bits {
-            // Skip local models if only_hosted is true
-            if only_hosted && Self::is_local_model(&bit) {
+            if !Self::model_matches_host_filter(&bit, only_hosted, capabilities) {
                 continue;
             }
 
@@ -550,14 +625,44 @@ impl Profile {
 
 #[cfg(test)]
 mod tests {
-    use super::{Profile, split_profile_bit_reference};
+    use super::{Profile, ProfileCustomBit, split_profile_bit_reference};
     use crate::{
-        bit::{BitModelClassification, BitModelPreference, BitTypes, VLMParameters},
+        bit::{
+            Bit, BitModelClassification, BitModelPreference, BitTypes, LLMParameters, VLMParameters,
+        },
+        state::CompletionModelCapabilities,
         utils::http::HTTPClient,
     };
     use flow_like_model_provider::provider::ModelProvider;
     use flow_like_types::tokio;
     use std::sync::Arc;
+
+    fn completion_bit(id: &str, provider_name: &str) -> Bit {
+        Bit {
+            id: id.to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: flow_like_types::json::to_value(LLMParameters {
+                context_length: 20_000,
+                model_classification: BitModelClassification::default(),
+                provider: ModelProvider {
+                    provider_name: provider_name.to_string(),
+                    model_id: Some(id.to_string()),
+                    version: None,
+                    params: None,
+                },
+            })
+            .unwrap(),
+            ..Bit::default()
+        }
+    }
+
+    fn profile_with_models(models: Vec<Bit>) -> Profile {
+        Profile {
+            bits: models.iter().map(|bit| bit.id.clone()).collect(),
+            custom_bits: models.into_iter().map(ProfileCustomBit).collect(),
+            ..Profile::default()
+        }
+    }
 
     #[test]
     fn split_profile_bit_reference_handles_hub_urls() {
@@ -616,6 +721,173 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.to_string(), "No Model found");
+    }
+
+    #[tokio::test]
+    async fn completion_model_selection_skips_local_models_for_hosted_only_hosts() {
+        let profile = profile_with_models(vec![
+            completion_bit("local-model", "Local"),
+            completion_bit("hosted-model", "hosted:openai"),
+        ]);
+
+        let selected = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities::default(),
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "hosted-model");
+    }
+
+    #[tokio::test]
+    async fn completion_model_selection_preserves_local_models_for_capable_hosts() {
+        let profile = profile_with_models(vec![completion_bit("local-model", "Local")]);
+
+        let selected = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities {
+                    local_server: true,
+                    mlx: false,
+                },
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "local-model");
+    }
+
+    #[tokio::test]
+    async fn explicit_embedded_completion_model_is_rejected_on_hosted_only_hosts() {
+        let profile = profile_with_models(vec![
+            completion_bit("local-model", "Local"),
+            completion_bit("hosted-model", "hosted:openai"),
+        ]);
+        let http_client = Arc::new(HTTPClient::new_without_refetch());
+
+        let error = profile
+            .resolve_completion_model(
+                Some("local-model"),
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities::default(),
+                http_client.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires a local completion runtime")
+        );
+
+        let selected = profile
+            .resolve_completion_model(
+                Some("hosted-model"),
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities::default(),
+                http_client,
+            )
+            .await
+            .unwrap();
+        assert_eq!(selected.id, "hosted-model");
+    }
+
+    #[tokio::test]
+    async fn local_only_profile_returns_error_when_host_cannot_execute_it() {
+        let profile = profile_with_models(vec![completion_bit("local-model", "Local")]);
+
+        let error = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities::default(),
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "No Model found");
+    }
+
+    #[tokio::test]
+    async fn endpoint_backed_models_do_not_require_embedded_runtime_capabilities() {
+        for provider_name in ["custom:ollama", "custom:lmstudio"] {
+            let bit = completion_bit(provider_name, provider_name);
+            let profile = profile_with_models(vec![bit]);
+
+            let selected = profile
+                .resolve_completion_model(
+                    Some(provider_name),
+                    &BitModelPreference::default(),
+                    false,
+                    CompletionModelCapabilities::default(),
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(selected.id, provider_name);
+        }
+    }
+
+    #[tokio::test]
+    async fn mobile_capabilities_skip_llama_server_but_allow_mlx() {
+        let profile = profile_with_models(vec![
+            completion_bit("local-model", "Local"),
+            completion_bit("mlx-model", "MLX"),
+            completion_bit("hosted-model", "hosted:openai"),
+        ]);
+
+        let selected = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities {
+                    local_server: false,
+                    mlx: true,
+                },
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "mlx-model");
+    }
+
+    #[tokio::test]
+    async fn unsupported_mlx_is_skipped_when_an_executable_model_exists() {
+        let profile = profile_with_models(vec![
+            completion_bit("mlx-model", "MLX"),
+            completion_bit("hosted-model", "hosted:openai"),
+        ]);
+
+        let selected = profile
+            .resolve_completion_model(
+                None,
+                &BitModelPreference::default(),
+                false,
+                CompletionModelCapabilities {
+                    local_server: true,
+                    mlx: false,
+                },
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "hosted-model");
     }
 
     #[test]

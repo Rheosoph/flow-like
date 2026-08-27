@@ -472,76 +472,108 @@ interface InlineWidgetChildDef {
 /**
  * Apply an element update to a child living inside a widget instance's
  * `inlineWidgetDef.components`. Widget-internal children are not part of
- * `surface.components`, so plain lookups miss them — this bridges element
- * nodes (Set Element Value, Update GeoMap, Push CSV To Chart, …) to widget
- * internals. Returns the next surface, or null when no widget owns the child.
+ * `surface.components`, so plain lookups miss them. This bridges element nodes
+ * such as Set Element Value, Update GeoMap, and Push CSV To Chart to widget
+ * internals. An instance-scoped update whose definition is external is queued
+ * in `runtimeChildUpdates[childId]` for ordered replay after widget resolution.
+ * Returns the next surface, or null when no matching widget instance exists.
  */
 function applyWidgetInternalUpdate(
 	surface: Surface,
 	childId: string,
 	updateValue: Record<string, unknown>,
+	widgetInstanceId?: string,
 ): Surface | null {
 	const suffix = `-${childId}`;
 
 	for (const [hostId, host] of Object.entries(surface.components)) {
 		const hostData = getComponentData(host);
 		if (hostData.type !== "widgetInstance") continue;
+		if (
+			widgetInstanceId !== undefined &&
+			hostData.instanceId !== widgetInstanceId
+		) {
+			continue;
+		}
 
 		const inlineDef = hostData.inlineWidgetDef as
 			| { components?: InlineWidgetChildDef[] }
 			| undefined;
 		const children = inlineDef?.components;
-		if (!children?.length) continue;
+		if (children?.length) {
+			// Exact id first. A suffix hit such as "title-text" for "text" must
+			// never shadow an exact-id child later in the array. createComponent
+			// keeps its create-top-level semantics unless the id is an exact child.
+			let index = children.findIndex((c) => c?.id === childId);
+			if (index < 0 && updateValue.type !== "createComponent") {
+				index = children.findIndex((c) => c?.id?.endsWith(suffix) ?? false);
+			}
+			if (index >= 0) {
+				const child = children[index];
+				let nextChild: InlineWidgetChildDef;
 
-		// Exact id first — a suffix hit (e.g. "title-text" for "text") must
-		// never shadow an exact-id child later in the array. createComponent
-		// keeps HEAD's create-top-level semantics unless the id is an exact
-		// widget child.
-		let index = children.findIndex((c) => c?.id === childId);
-		if (index < 0 && updateValue.type !== "createComponent") {
-			index = children.findIndex((c) => c?.id?.endsWith(suffix) ?? false);
+				if (updateValue.type === "createComponent") {
+					nextChild = {
+						id: child.id,
+						component: updateValue.component as Record<string, unknown>,
+						style:
+							(updateValue.style as SurfaceComponent["style"]) ?? child.style,
+					};
+				} else {
+					const updated = applyElementUpdate(
+						{
+							id: child.id,
+							component:
+								child.component as unknown as SurfaceComponent["component"],
+							style: child.style,
+						},
+						updateValue,
+					);
+					nextChild = {
+						id: child.id,
+						component: updated.component as unknown as Record<string, unknown>,
+						style: updated.style,
+					};
+				}
+
+				const nextChildren = [...children];
+				nextChildren[index] = nextChild;
+
+				return {
+					...surface,
+					components: {
+						...surface.components,
+						[hostId]: withComponentData(host, {
+							...hostData,
+							inlineWidgetDef: { ...inlineDef, components: nextChildren },
+						}),
+					},
+				};
+			}
 		}
-		if (index < 0) continue;
 
-		const child = children[index];
-		let nextChild: InlineWidgetChildDef;
+		if (widgetInstanceId !== undefined) {
+			const currentUpdates = isPlainObject(hostData.runtimeChildUpdates)
+				? hostData.runtimeChildUpdates
+				: {};
+			const childUpdates = Array.isArray(currentUpdates[childId])
+				? currentUpdates[childId]
+				: [];
 
-		if (updateValue.type === "createComponent") {
-			nextChild = {
-				id: child.id,
-				component: updateValue.component as Record<string, unknown>,
-				style: (updateValue.style as SurfaceComponent["style"]) ?? child.style,
-			};
-		} else {
-			const updated = applyElementUpdate(
-				{
-					id: child.id,
-					component:
-						child.component as unknown as SurfaceComponent["component"],
-					style: child.style,
+			return {
+				...surface,
+				components: {
+					...surface.components,
+					[hostId]: withComponentData(host, {
+						...hostData,
+						runtimeChildUpdates: {
+							...currentUpdates,
+							[childId]: [...childUpdates, { ...updateValue }],
+						},
+					}),
 				},
-				updateValue,
-			);
-			nextChild = {
-				id: child.id,
-				component: updated.component as unknown as Record<string, unknown>,
-				style: updated.style,
 			};
 		}
-
-		const nextChildren = [...children];
-		nextChildren[index] = nextChild;
-
-		return {
-			...surface,
-			components: {
-				...surface.components,
-				[hostId]: withComponentData(host, {
-					...hostData,
-					inlineWidgetDef: { ...inlineDef, components: nextChildren },
-				}),
-			},
-		};
 	}
 
 	return null;
@@ -645,12 +677,29 @@ export function applyA2UIMessage(
 		case "upsertElement": {
 			const { element_id, value } = message;
 			if (!element_id) return surface;
-			const [msgSurfaceId, componentId] = element_id.includes("/")
-				? element_id.split("/", 2)
-				: [surface.id, element_id];
-			if (msgSurfaceId !== surface.id) return surface;
+			const separatorIndex = element_id.indexOf("/");
+			const scopeId =
+				separatorIndex >= 0 ? element_id.slice(0, separatorIndex) : surface.id;
+			const componentId =
+				separatorIndex >= 0 ? element_id.slice(separatorIndex + 1) : element_id;
+			if (!componentId) return surface;
 
 			const updateValue = (value ?? {}) as Record<string, unknown>;
+
+			// A non-surface prefix addresses one declarative widget instance. Its
+			// children stay inside the host's inline definition, so resolve the
+			// instance locally and never fall back to another matching widget.
+			if (scopeId !== surface.id) {
+				return (
+					applyWidgetInternalUpdate(
+						surface,
+						componentId,
+						updateValue,
+						scopeId,
+					) ?? surface
+				);
+			}
+
 			const component = surface.components[componentId];
 
 			// The target may live inside a widget instance's inline definition

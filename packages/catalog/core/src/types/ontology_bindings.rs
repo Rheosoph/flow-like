@@ -292,6 +292,9 @@ pub fn ontology_binding_nodes(ontologies: &[GraphOverlay], catalog: &[Node]) -> 
         }
     }
 
+    for binding in &mut bindings {
+        binding.ensure_flowscript_names();
+    }
     bindings
 }
 
@@ -450,6 +453,9 @@ pub fn remote_ontology_binding_nodes(
         }
     }
 
+    for binding in &mut bindings {
+        binding.ensure_flowscript_names();
+    }
     bindings
 }
 

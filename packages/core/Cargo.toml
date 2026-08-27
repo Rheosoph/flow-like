@@ -95,14 +95,19 @@ local-stt-metal = ["local-stt", "any-speech-to-text/metal"]
 local-stt-cuda = ["local-stt", "any-speech-to-text/cuda"]
 local-stt-accelerate = ["local-stt", "any-speech-to-text/accelerate"]
 remote-ml = ["flow-like-model-provider/remote-ml"]
-schema-gen = ["app", "flow"]
-# Flow metadata and editing currently share app/model/profile types. Keep that public surface
-# available while separating the Lance/Arrow/DataFusion implementation behind `flow-runtime`.
-flow = ["app"]
-flow-runtime = ["flow", "flow-like-storage/database-runtime"]
+schema-gen = ["app", "flow-metadata"]
+# Internal metadata consumers use the flow types without pulling in the
+# Lance/Arrow/DataFusion implementation.
+flow-metadata = ["app"]
+# Keep the historical public contract: consumers that enable `flow` receive a
+# working execution runtime, including database-backed log persistence.
+flow = ["flow-runtime"]
+flow-runtime = ["flow-metadata", "flow-like-storage/database-runtime"]
 hub = []
 bit = ["hub"]
-model = ["bit"]
+# Model and Bit APIs expose Flow execution context types, so direct model
+# consumers need the metadata surface as part of the public contract.
+model = ["bit", "flow-metadata"]
 app = ["bit", "model", "hub"]
 app-runtime = ["flow-runtime", "app"]
 openapi = ["dep:utoipa"]

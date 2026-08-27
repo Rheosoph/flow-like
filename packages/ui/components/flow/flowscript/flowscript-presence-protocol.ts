@@ -22,6 +22,12 @@ export const FLOWSCRIPT_CURSOR_FIELD = "flowscriptCursor";
 export const FLOWSCRIPT_CLAIMS_FIELD = "flowscriptClaims";
 /** Awareness field carrying the node ids of a peer's shared "edit selection" scope. */
 export const FLOWSCRIPT_SCOPE_FIELD = "flowscriptScope";
+/** Awareness field carrying which FlowScript file a peer has open in the editor. */
+export const FLOWSCRIPT_VIEW_FIELD = "flowscriptView";
+/** Awareness field carrying the top of a peer's editor viewport (scroll-follow). */
+export const FLOWSCRIPT_VIEWPORT_FIELD = "flowscriptViewport";
+/** The root file's wire id — the only non-id string a view payload may carry. */
+export const FLOWSCRIPT_MAIN_FILE_WIRE = "main";
 
 /** Board entity ids (cuid2-style). Anything else is rejected, never truncated. */
 export const WIRE_ANCHOR_ID_PATTERN = /^[A-Za-z0-9_-]{10,32}$/;
@@ -42,6 +48,8 @@ export const MAX_WIRE_COLUMN = 1000;
 export const MAX_CLAIM_ANCHORS = 64;
 /** Max node ids a shared scope may carry on the wire. */
 export const MAX_SCOPE_NODES = 64;
+/** Max anchors a text selection may cover on the wire (canvas projection). */
+export const MAX_SELECTION_ANCHORS = 64;
 /** Longest string permitted anywhere in a payload (anchor ids are ≤ 32). */
 export const MAX_WIRE_STRING_LENGTH = 32;
 
@@ -56,6 +64,12 @@ export interface FlowScriptCursorSelection {
 	endAnchorId?: string;
 	endDLine: number;
 	endColumn: number;
+	/**
+	 * Every node/layer anchor the range covers (≤ MAX_SELECTION_ANCHORS) — the
+	 * canvas has no text to resolve a range against, so the sender names the
+	 * entities and a selection of code becomes a selection of nodes there.
+	 */
+	anchorIds?: string[];
 }
 
 export interface FlowScriptCursorPayload {
@@ -79,6 +93,20 @@ export interface FlowScriptClaimsPayload {
 export interface FlowScriptScopePayload {
 	/** Node ids the peer's scoped session is editing (≤ MAX_SCOPE_NODES). */
 	nodeIds: string[];
+	ts: number;
+}
+
+export interface FlowScriptViewPayload {
+	/** `"main"` or a module layer id — the file the peer's editor shows. */
+	file: string;
+	ts: number;
+}
+
+export interface FlowScriptViewportPayload {
+	/** Anchor owning the first visible line. */
+	anchor: FlowScriptWireAnchor;
+	/** Lines below that anchor the viewport starts at. */
+	dLine: number;
 	ts: number;
 }
 
@@ -148,6 +176,8 @@ export function sanitizeCursorForWire(
 			const sel: FlowScriptCursorSelection = { endDLine, endColumn };
 			const endAnchorId = wireAnchorId(selRaw.endAnchorId);
 			if (endAnchorId && endAnchorId !== id) sel.endAnchorId = endAnchorId;
+			const anchorIds = boundedIdList(selRaw.anchorIds, MAX_SELECTION_ANCHORS);
+			if (anchorIds) sel.anchorIds = anchorIds;
 			// An id-shaped field that fails validation drops the whole selection —
 			// never a silently different range.
 			if (
@@ -200,6 +230,34 @@ export function sanitizeScopeForWire(
 	return { nodeIds, ts: wireTs(value.ts) };
 }
 
+/**
+ * Validate a view payload for the wire: the file is either the root marker or
+ * a module layer id — never a display name.
+ */
+export function sanitizeViewForWire(
+	value: unknown,
+): FlowScriptViewPayload | undefined {
+	if (!isRecord(value)) return undefined;
+	const file =
+		value.file === FLOWSCRIPT_MAIN_FILE_WIRE
+			? FLOWSCRIPT_MAIN_FILE_WIRE
+			: wireAnchorId(value.file);
+	if (!file) return undefined;
+	return { file, ts: wireTs(value.ts) };
+}
+
+/** Validate a viewport payload: an anchor plus a small line offset. */
+export function sanitizeViewportForWire(
+	value: unknown,
+): FlowScriptViewportPayload | undefined {
+	if (!isRecord(value) || !isRecord(value.anchor)) return undefined;
+	const id = wireAnchorId(value.anchor.id);
+	const kind = wireKind(value.anchor.kind);
+	const dLine = boundedInt(value.dLine, 0, MAX_WIRE_DLINE);
+	if (!id || !kind || typeof dLine === "undefined") return undefined;
+	return { anchor: { id, kind }, dLine, ts: wireTs(value.ts) };
+}
+
 /** Single entry point: sanitize any FlowScript presence field for the wire. */
 export function sanitizeForWire(
 	field: typeof FLOWSCRIPT_CURSOR_FIELD,
@@ -214,16 +272,29 @@ export function sanitizeForWire(
 	value: unknown,
 ): FlowScriptScopePayload | undefined;
 export function sanitizeForWire(
+	field: typeof FLOWSCRIPT_VIEW_FIELD,
+	value: unknown,
+): FlowScriptViewPayload | undefined;
+export function sanitizeForWire(
+	field: typeof FLOWSCRIPT_VIEWPORT_FIELD,
+	value: unknown,
+): FlowScriptViewportPayload | undefined;
+export function sanitizeForWire(
 	field: string,
 	value: unknown,
 ):
 	| FlowScriptCursorPayload
 	| FlowScriptClaimsPayload
 	| FlowScriptScopePayload
+	| FlowScriptViewPayload
+	| FlowScriptViewportPayload
 	| undefined {
 	if (field === FLOWSCRIPT_CURSOR_FIELD) return sanitizeCursorForWire(value);
 	if (field === FLOWSCRIPT_CLAIMS_FIELD) return sanitizeClaimsForWire(value);
 	if (field === FLOWSCRIPT_SCOPE_FIELD) return sanitizeScopeForWire(value);
+	if (field === FLOWSCRIPT_VIEW_FIELD) return sanitizeViewForWire(value);
+	if (field === FLOWSCRIPT_VIEWPORT_FIELD)
+		return sanitizeViewportForWire(value);
 	return undefined;
 }
 
@@ -240,10 +311,15 @@ const WIRE_KEY_ALLOWLIST = new Set([
 	"ts",
 	"anchorIds",
 	"nodeIds",
+	"file",
 ]);
 
 const MAX_WIRE_DEPTH = 4;
-const MAX_WIRE_ARRAY_LENGTH = Math.max(MAX_CLAIM_ANCHORS, MAX_SCOPE_NODES);
+const MAX_WIRE_ARRAY_LENGTH = Math.max(
+	MAX_CLAIM_ANCHORS,
+	MAX_SCOPE_NODES,
+	MAX_SELECTION_ANCHORS,
+);
 
 /**
  * Structural safety walk over a wire payload (rule 2 enforcement, used by the
@@ -270,7 +346,10 @@ function walkWireValue(value: unknown, path: string, depth: number): string[] {
 			return [`${path}: string longer than ${MAX_WIRE_STRING_LENGTH}`];
 		if (
 			!WIRE_ANCHOR_ID_PATTERN.test(value) &&
-			!FLOWSCRIPT_ANCHOR_WIRE_KINDS.includes(value as FlowScriptAnchorWireKind)
+			!FLOWSCRIPT_ANCHOR_WIRE_KINDS.includes(
+				value as FlowScriptAnchorWireKind,
+			) &&
+			value !== FLOWSCRIPT_MAIN_FILE_WIRE
 		)
 			return [`${path}: string is neither an anchor id nor an enum value`];
 		return [];

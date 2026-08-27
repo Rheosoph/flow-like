@@ -1,37 +1,35 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	Archive,
-	ChevronRight,
-	FileText,
-	Files,
-	Folder,
-	FolderMinus,
-	FolderOpen,
-	FolderPlus,
-	Image,
-	Music,
-	Search,
-	Trash2,
-	Video,
-	X,
-} from "lucide-react";
+import Archive from "lucide-react/dist/esm/icons/archive.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
+import Files from "lucide-react/dist/esm/icons/files.js";
+import Folder from "lucide-react/dist/esm/icons/folder.js";
+import FolderMinus from "lucide-react/dist/esm/icons/folder-minus.js";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
+import FolderPlus from "lucide-react/dist/esm/icons/folder-plus.js";
+import Image from "lucide-react/dist/esm/icons/image.js";
+import Music from "lucide-react/dist/esm/icons/music.js";
+import Search from "lucide-react/dist/esm/icons/search.js";
+import Trash2 from "lucide-react/dist/esm/icons/trash-2.js";
+import Video from "lucide-react/dist/esm/icons/video.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import { useMemo, useState } from "react";
-import { humanFileSize } from "../../../../lib";
+import { humanFileSize } from "../../../../lib/utils";
+import { Badge } from "../../../ui/badge";
+import { Button } from "../../../ui/button";
+import { Card } from "../../../ui/card";
+import { Checkbox } from "../../../ui/checkbox";
 import {
-	Badge,
-	Button,
-	Card,
-	Checkbox,
 	Dialog,
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
-	Input,
-	ScrollArea,
-	Separator,
-} from "../../../ui";
+} from "../../../ui/dialog";
+import { Input } from "../../../ui/input";
+import { ScrollArea } from "../../../ui/scroll-area";
+import { Separator } from "../../../ui/separator";
 import { isImageFile, useImagePreviewUrls } from "./image-previews";
 
 interface FileManagerDialogProps {

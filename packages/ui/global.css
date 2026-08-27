@@ -2225,24 +2225,64 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 		center / 100% 100% no-repeat;
 }
 
-/* "Teammate is looking at this on the canvas": very faint full-line wash on
-   the lines of nodes a peer has selected on the board. */
+/* "Teammate has this selected on the canvas": the editor-side twin of the
+   canvas selection ring — a full-line wash plus a bar in the line-decorations
+   gutter (offset past the run-trace/conflict bars, which sit at 2px). */
 .flowscript-peer-canvas-line {
 	background-color: color-mix(
 		in srgb,
-		var(--fs-peer, hsl(0 0% 50%)) 8%,
+		var(--fs-peer, hsl(0 0% 50%)) 16%,
 		transparent
 	);
 }
 
-/* Canvas node outline for the node whose anchor holds a peer's text cursor.
-   Same DOM-class mechanism as .flowscript-nav-highlight above. */
-.react-flow__node.flowscript-peer-outline {
-	outline: 2px solid
-		color-mix(in srgb, var(--fs-peer, hsl(0 0% 50%)) 70%, transparent);
-	outline-offset: 3px;
-	border-radius: 0.5rem;
-	transition: outline-color 150ms ease;
+.flowscript-peer-canvas-gutter {
+	background: var(--fs-peer, hsl(0 0% 50%));
+	width: 3px !important;
+	margin-left: 7px;
+	border-radius: 2px;
+	opacity: 0.85;
+}
+
+/* Name tag at the end of the first line of a peer's canvas selection, so the
+   wash is attributable at a glance (mirrors the caret flag). */
+.flowscript-peer-canvas-flag {
+	color: var(--fs-peer, hsl(0 0% 50%));
+	border: 1px solid
+		color-mix(in srgb, var(--fs-peer, hsl(0 0% 50%)) 55%, transparent);
+	background: color-mix(in srgb, var(--fs-peer, hsl(0 0% 50%)) 12%, transparent);
+	border-radius: 3px;
+	font-size: 0.6rem;
+	line-height: 1.2;
+	padding: 0 4px;
+	margin-left: 8px;
+	pointer-events: none;
+	white-space: nowrap;
+	user-select: none;
+}
+
+/* One-shot flash on the line of the node a peer just clicked on the canvas. */
+.flowscript-peer-line-flash {
+	animation: flowscript-peer-line-flash 1.2s ease-out forwards;
+}
+
+@keyframes flowscript-peer-line-flash {
+	from {
+		background-color: color-mix(
+			in srgb,
+			var(--fs-peer, hsl(0 0% 50%)) 45%,
+			transparent
+		);
+	}
+	to {
+		background-color: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.flowscript-peer-line-flash {
+		animation: none;
+	}
 }
 
 /* ── FlowScript run integration ────────────────────────────────────────── */

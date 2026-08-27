@@ -26,6 +26,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { BoardStatusItem } from "./shell/board-status-bar";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
@@ -77,8 +78,10 @@ export function BoardSyncStatusPill({
 	if (!status?.supported || status.pendingBatches === 0) return null;
 
 	return (
-		<button
-			type="button"
+		<BoardStatusItem
+			icon={<CloudOffIcon />}
+			tone="danger"
+			className="cursor-pointer font-medium"
 			onClick={onOpenRecovery}
 			title={
 				status.ownershipMismatch ??
@@ -87,17 +90,13 @@ export function BoardSyncStatusPill({
 					"These edits have not reached the server yet.",
 				)
 			}
-			className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
 		>
-			<CloudOffIcon className="h-3.5 w-3.5 text-destructive" />
-			<span className="text-xs font-medium text-destructive">
-				{t("countEditSNotSynced", {
-					defaultValue_one: "{{count}} edit not synced",
-					defaultValue_other: "{{count}} edits not synced",
-					count: status.pendingBatches,
-				})}
-			</span>
-		</button>
+			{t("countEditSNotSynced", {
+				defaultValue_one: "{{count}} edit not synced",
+				defaultValue_other: "{{count}} edits not synced",
+				count: status.pendingBatches,
+			})}
+		</BoardStatusItem>
 	);
 }
 

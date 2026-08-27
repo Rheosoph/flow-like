@@ -10,7 +10,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Slider,
-	Textarea,
 	humanFileSize,
 } from "@flow-like/flow-like-ui";
 import {
@@ -23,23 +22,29 @@ import {
 import { Label } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useState } from "react";
 
 const PROVIDER_OPTIONS = [
 	"Local",
 	"MLX",
 	"Premium",
+	"Internal",
 	"Hosted",
 	"hosted:openrouter",
 	"hosted:openai",
 	"hosted:anthropic",
+	"hosted:bedrock",
 	"hosted:azure",
 	"hosted:vertex",
 ] as const;
 
 function isHostedProviderName(providerName?: null | string) {
 	const normalized = providerName?.trim().toLowerCase() ?? "";
-	return normalized === "hosted" || normalized.startsWith("hosted:");
+	return (
+		normalized === "premium" ||
+		normalized === "internal" ||
+		normalized === "hosted" ||
+		normalized.startsWith("hosted:")
+	);
 }
 
 function getProviderParams(provider: IModelProvider | undefined) {
@@ -61,17 +66,6 @@ export function LLMConfiguration({
 	const isHostedProvider = isHostedProviderName(
 		parameters?.provider?.provider_name,
 	);
-	const [providerParamsText, setProviderParamsText] = useState(
-		JSON.stringify(providerParams, null, 2),
-	);
-	const [providerParamsError, setProviderParamsError] = useState<string | null>(
-		null,
-	);
-
-	useEffect(() => {
-		setProviderParamsText(JSON.stringify(providerParams, null, 2));
-		setProviderParamsError(null);
-	}, [parameters?.provider]);
 
 	const updateParameter = (key: keyof ILlmParameters, value: unknown) => {
 		setBit((old) => ({
@@ -105,32 +99,6 @@ export function LLMConfiguration({
 			...parameters.provider,
 			params: nextParams,
 		});
-	};
-
-	const handleProviderParamsBlur = () => {
-		const trimmed = providerParamsText.trim();
-		if (!trimmed) {
-			updateProviderParams({});
-			setProviderParamsError(null);
-			return;
-		}
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				throw new Error("Provider params must be a JSON object");
-			}
-			updateProviderParams(parsed as Record<string, unknown>);
-			setProviderParamsError(null);
-		} catch (error) {
-			setProviderParamsError(
-				error instanceof Error
-					? error.message
-					: t(
-							"providerParamsMustBeValidJson",
-							"Provider params must be valid JSON",
-						),
-			);
-		}
 	};
 
 	return (
@@ -203,7 +171,11 @@ export function LLMConfiguration({
 									updateParameter("provider", {
 										...parameters.provider,
 										provider_name: value,
-										params: getProviderParams(parameters?.provider),
+										params: isHostedProviderName(value)
+											? typeof providerParams.tier === "string"
+												? { tier: providerParams.tier }
+												: {}
+											: getProviderParams(parameters?.provider),
 									})
 								}
 							>
@@ -253,35 +225,6 @@ export function LLMConfiguration({
 					{isHostedProvider ? (
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 							<div className="space-y-2">
-								<Label htmlFor="provider-endpoint">
-									{t("endpoint", "Endpoint")}
-								</Label>
-								<Input
-									id="provider-endpoint"
-									value={
-										typeof providerParams.endpoint === "string"
-											? providerParams.endpoint
-											: ""
-									}
-									onChange={(e) =>
-										updateProviderParams({
-											...providerParams,
-											endpoint: e.target.value.trim(),
-										})
-									}
-									placeholder={t(
-										"optionalCustomApiEndpoint",
-										"Optional custom API endpoint",
-									)}
-								/>
-								<p className="text-xs text-muted-foreground">
-									{t(
-										"hostedProvidersUseProviderMetadataPlusModelIdAndOptionalEndpointOverrides",
-										"Hosted providers use provider metadata plus model id and optional endpoint overrides.",
-									)}
-								</p>
-							</div>
-							<div className="space-y-2">
 								<Label htmlFor="provider-tier">{t("tier", "Tier")}</Label>
 								<Input
 									id="provider-tier"
@@ -291,45 +234,20 @@ export function LLMConfiguration({
 											: ""
 									}
 									onChange={(e) =>
-										updateProviderParams({
-											...providerParams,
-											tier: e.target.value.trim(),
-										})
+										updateProviderParams(
+											e.target.value.trim()
+												? { tier: e.target.value.trim() }
+												: {},
+										)
 									}
 									placeholder={t("optionalAccessTier", "Optional access tier")}
 								/>
 								<p className="text-xs text-muted-foreground">
 									{t(
-										"optionalRoutingOrEntitlementMetadataStoredUnderProviderParams",
-										"Optional routing or entitlement metadata stored under provider params.",
+										"optionalEntitlementMetadataStoredUnderProviderParams",
+										"Optional entitlement metadata stored under provider params. The server controls the upstream endpoint.",
 									)}
 								</p>
-							</div>
-							<div className="space-y-2 md:col-span-2">
-								<Label htmlFor="provider-params-json">
-									{t("providerParamsJson", "Provider Params JSON")}
-								</Label>
-								<Textarea
-									id="provider-params-json"
-									rows={8}
-									value={providerParamsText}
-									onChange={(e) => {
-										setProviderParamsText(e.target.value);
-										setProviderParamsError(null);
-									}}
-									onBlur={handleProviderParamsBlur}
-								/>
-								<p className="text-xs text-muted-foreground">
-									{t(
-										"useThisForProviderspecificOptionsSuchAsHeadersDeploymentNamesOrRoutingMetadata",
-										"Use this for provider-specific options such as headers, deployment names, or routing metadata.",
-									)}
-								</p>
-								{providerParamsError ? (
-									<p className="text-xs text-destructive">
-										{providerParamsError}
-									</p>
-								) : null}
 							</div>
 						</div>
 					) : null}

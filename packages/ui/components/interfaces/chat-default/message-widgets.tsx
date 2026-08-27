@@ -1,9 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Maximize2 } from "lucide-react";
+import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
 import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
 import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
@@ -15,7 +15,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../../a2ui/types";
-import { Dialog, DialogContent, DialogTitle } from "../../ui";
+import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import type { IChatWidget } from "./chat-db";
 
 function buildSurface(widget: IChatWidget): Surface {

@@ -499,6 +499,7 @@ export function A2UIMicroWidget({
 		<WidgetInstanceProvider
 			instanceId={microComponent.instanceId}
 			widgetId={microComponent.widgetId}
+			componentId={componentId}
 			actionBindings={
 				(microComponent.actionBindings ?? {}) as Record<string, ActionBinding>
 			}
