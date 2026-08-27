@@ -91,7 +91,11 @@ impl NodeLogic for LoadModelNode {
         // context.token already exists and is used by LLM hosted execution
         #[cfg(feature = "remote-ml")]
         if let Some(access_token) = &context.token
-            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
+            && !flow_like::models::embedding_factory::prefers_local_execution(
+                &bit,
+                &context.app_state,
+            )
+            .await
         {
             let embedding_provider = bit.try_to_embedding();
             if let Some(provider) = &embedding_provider

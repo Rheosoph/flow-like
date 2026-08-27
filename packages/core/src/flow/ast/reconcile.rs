@@ -1723,6 +1723,7 @@ fn reconcile_inner(
     //    text. Translate those to the same command format the UI already reviews/applies.
     if let Some(catalog) = catalog {
         let mut planner = StructuralPlanner::new(existing, catalog, enricher);
+        planner.lowered_event_names = lowered_event_names(&board_ast);
         planner.moves_authoritative =
             !submitted.module_blocks.is_empty() || opts.base_module().is_some();
         let structural = planner.plan(&submitted, &modules);
@@ -1898,6 +1899,59 @@ fn reconcile_function_caches(
 /// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
 /// Reconcile is atomic, so an ambiguous document must produce diagnostics and zero commands rather
 /// than creating duplicate variables or an orphan Function layer before a later declaration wins.
+/// Index every event block in a LOWERED board by its entry-node anchor, so the rename check can ask
+/// what the live board is already called rather than guessing from the node's friendly name.
+fn lowered_event_names(ast: &BoardAst) -> HashMap<String, String> {
+    fn walk_block(block: &Block, out: &mut HashMap<String, String>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Handler(event) => {
+                    record(event, out);
+                    walk_block(&event.body, out);
+                }
+                Stmt::Branch { arms, .. } => {
+                    for arm in arms {
+                        walk_block(&arm.body, out);
+                    }
+                }
+                Stmt::Loop { body, .. } => walk_block(body, out),
+                _ => {}
+            }
+        }
+    }
+    fn record(event: &EventBlock, out: &mut HashMap<String, String>) {
+        if let Some(anchor) = event.anchor.as_deref() {
+            let name = event.event_name.as_deref().unwrap_or(&event.name);
+            out.insert(anchor.to_string(), name.to_string());
+        }
+    }
+    fn walk_module(module: &ModuleDecl, out: &mut HashMap<String, String>) {
+        for event in &module.events {
+            record(event, out);
+            walk_block(&event.body, out);
+        }
+        for function in &module.functions {
+            walk_block(&function.body, out);
+        }
+        for nested in &module.modules {
+            walk_module(nested, out);
+        }
+    }
+
+    let mut out = HashMap::new();
+    for event in &ast.events {
+        record(event, &mut out);
+        walk_block(&event.body, &mut out);
+    }
+    for function in &ast.functions {
+        walk_block(&function.body, &mut out);
+    }
+    for module in &ast.modules {
+        walk_module(module, &mut out);
+    }
+    out
+}
+
 fn duplicate_ast_declaration_diagnostics(doc: &FlatDocument) -> Vec<String> {
     let ast = &doc.ast;
     fn register_duplicates<'a>(
@@ -6738,6 +6792,10 @@ fn deterministic_catalog_match(matches: &[NodeMetadata]) -> NodeMetadata {
 struct BoardIndex<'a> {
     pin_owner: HashMap<&'a str, (&'a Node, &'a Pin)>,
     boundary_sources: HashMap<&'a str, ValueSource>,
+    /// Boundary pins of PRESENTATIONAL layers (collapsed/macro), which are pure wire-bends: an edge
+    /// entering one continues out the other side to a real producer. Function-layer boundary pins
+    /// are deliberately excluded — those ARE the value (a parameter read), not a bridge to one.
+    boundary_bridges: HashMap<&'a str, &'a Pin>,
 }
 
 impl<'a> BoardIndex<'a> {
@@ -6753,7 +6811,9 @@ impl<'a> BoardIndex<'a> {
         }
         let mut layers = board.layers.values().collect::<Vec<_>>();
         layers.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut boundary_bridges = HashMap::new();
         for layer in layers {
+            let bridges = !matches!(layer.r#type, LayerType::Function);
             let mut pins = layer.pins.values().collect::<Vec<_>>();
             pins.sort_by(|left, right| left.id.cmp(&right.id));
             for pin in pins {
@@ -6764,11 +6824,15 @@ impl<'a> BoardIndex<'a> {
                         output_pin: Some(pin.name.clone()),
                     },
                 );
+                if bridges {
+                    boundary_bridges.insert(pin.id.as_str(), pin);
+                }
             }
         }
         Self {
             pin_owner,
             boundary_sources,
+            boundary_bridges,
         }
     }
 
@@ -6822,11 +6886,25 @@ impl<'a> BoardIndex<'a> {
 
     fn data_source_for_pin_id(&self, source_pin_id: &str) -> Option<ValueSource> {
         let mut source_pin_id = source_pin_id;
-        // Reroutes are pure wire-bends that the renderer collapses; trace through them so the
-        // reuse path sees the real origin node — the one the FlowScript text actually shows.
-        // Otherwise every inline chain behind a reroute is re-created on reconcile.
+        // Reroutes and presentational layer boundaries are both pure wire-bends that the renderer
+        // collapses; trace through them so the reuse path sees the real origin node — the one the
+        // FlowScript text actually shows. Otherwise every inline chain behind one is re-created on
+        // reconcile.
+        //
+        // Stopping at the layer is what made a board with collapsed layers churn forever: lowering
+        // renders the edge as coming from the producer OUTSIDE the layer, reconcile resolved the
+        // same edge to the layer itself, decided it was not wired yet, and planned a connect. Each
+        // apply then routed that connect through a FRESH boundary pin, so the board gained one more
+        // boundary pin per edge on every single Apply and the next pass planned them all again.
         for _ in 0..64 {
             let Some((source_node, source_pin)) = self.pin_owner.get(source_pin_id) else {
+                // A bridge pin carries the edge onward; a function-boundary pin is the value.
+                if let Some(bridge) = self.boundary_bridges.get(source_pin_id)
+                    && let Some(upstream) = bridge.depends_on.iter().next()
+                {
+                    source_pin_id = upstream;
+                    continue;
+                }
                 return self.boundary_sources.get(source_pin_id).cloned();
             };
             if source_node.name != "reroute" {
@@ -6971,9 +7049,29 @@ struct StructuralPlanner<'a> {
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
     enricher: Option<&'a MetadataEnricher>,
+    /// Entry node id -> the event name the LIVE board currently lowers to.
+    ///
+    /// The rename check cannot re-derive this from `friendly_name`: lowering allocates event names
+    /// per scope, so a second entry whose friendly name camelizes onto a taken name renders with a
+    /// disambiguating suffix. Comparing the text against a fresh camelization then saw a rename on
+    /// every pass. Empty for callers that do not lower (the targeted unit tests), which leaves the
+    /// old friendly-name comparison as the fallback.
+    lowered_event_names: HashMap<String, String>,
 }
 
 impl<'a> StructuralPlanner<'a> {
+    /// Whether the live board already renders this entry under `desired`.
+    ///
+    /// The friendly-name comparison alone cannot answer this: lowering allocates event names per
+    /// scope, so a second entry whose friendly name camelizes onto a taken name renders with a
+    /// disambiguating suffix that no re-derivation from `friendly_name` can predict. Without this,
+    /// every pass over such a board planned a rename to a name it already had.
+    fn event_already_named(&self, node_id: &str, desired: &str) -> bool {
+        self.lowered_event_names
+            .get(node_id)
+            .is_some_and(|current| current == desired)
+    }
+
     fn new(
         existing: &'a Board,
         catalog: &[NodeMetadata],
@@ -6992,6 +7090,7 @@ impl<'a> StructuralPlanner<'a> {
             disconnect_commands: Vec::new(),
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
+            lowered_event_names: HashMap::new(),
             symbols: Vec::new(),
             closed_block_symbols: HashMap::new(),
             variable_refs: VariableRefLookup::from_board(existing),
@@ -7400,12 +7499,13 @@ impl<'a> StructuralPlanner<'a> {
                 self.assignment_targets_board_variable(ast, target, &local_variables)
                     || self.expr_contains_impure_call(ast, value, seen)
             }
-            // `base.path = value` plans as an Assign to `base` (struct_set accumulator) — a
-            // board-variable base ends in an impure variable_set node just like a plain Assign.
-            Stmt::FieldAssign { base, value, .. } => {
-                self.assignment_targets_board_variable(ast, base, &local_variables)
-                    || self.expr_contains_impure_call(ast, value, seen)
-            }
+            // `base.path = value` always plans a `struct_set`, and `struct_set` carries exec pins.
+            // Testing the BASE (board variable vs local) was the wrong question: it decided a
+            // function whose whole body is `const s = struct::make()` followed by field writes was
+            // pure, so the layer was created with no exec boundary pins — and reconcile then
+            // refused the very function it had just built, because an impure body has nowhere to
+            // start. The base only decides whether a `variable_set` joins the chain too.
+            Stmt::FieldAssign { .. } => true,
             Stmt::LocalAlias { value, .. } => self.expr_contains_impure_call(ast, value, seen),
             Stmt::Return { values, .. } => values
                 .iter()
@@ -7924,7 +8024,9 @@ impl<'a> StructuralPlanner<'a> {
         let entry_friendly = entry.friendly_name.clone();
         self.claimed_event_entries.insert(entry_id.clone());
         let desired_name = event.event_name.as_deref().unwrap_or(&event.name);
-        if !pin_name_matches(&entry_friendly, desired_name) {
+        if !self.event_already_named(&entry_id, desired_name)
+            && !pin_name_matches(&entry_friendly, desired_name)
+        {
             self.update_commands.push(BoardCommand::RenameNode {
                 node_id: entry_id.clone(),
                 friendly_name: desired_name.to_string(),
@@ -8058,7 +8160,9 @@ impl<'a> StructuralPlanner<'a> {
 
         if let Some(entry) = recovered {
             self.claimed_event_entries.insert(entry.id.clone());
-            if !pin_name_matches(&entry.friendly_name, desired_friendly_name) {
+            if !self.event_already_named(&entry.id, desired_friendly_name)
+                && !pin_name_matches(&entry.friendly_name, desired_friendly_name)
+            {
                 self.update_commands.push(BoardCommand::RenameNode {
                     node_id: entry.id.clone(),
                     friendly_name: desired_friendly_name.to_string(),
@@ -8176,6 +8280,7 @@ impl<'a> StructuralPlanner<'a> {
                             .event_name
                             .as_deref()
                             .filter(|name| !name.trim().is_empty())
+                            && !self.event_already_named(anchor, event_name)
                             && !pin_name_matches(&node.friendly_name, event_name)
                         {
                             self.update_commands.push(BoardCommand::RenameNode {
@@ -13753,6 +13858,16 @@ impl<'a> StructuralPlanner<'a> {
                     many => many
                         .iter()
                         .find(|pin| is_primary_output_name(&pin.name))
+                        // A GENERIC consuming pin (`variable_set.value_in`) accepts every output,
+                        // so "several are compatible" says nothing about which is meant — the
+                        // ambiguity is manufactured by the wildcard, not real. Take the first the
+                        // catalog declares, which is the node's principal result. Returning `None`
+                        // dropped the connection SILENTLY: `acc = set::insert(…)` applied with no
+                        // diagnostic and left `value_in` unwired, so the value was lost and the
+                        // document re-rendered as `acc = null`. `set::make` escaped only by having
+                        // one output. A concretely typed consumer keeps the strict behaviour — two
+                        // equally valid `string` outputs really are ambiguous and are diagnosed.
+                        .or_else(|| input.is_generic.then(|| many.first()).flatten())
                         .map(|pin| pin.name.clone()),
                 }
             }
@@ -15358,7 +15473,19 @@ impl<'a> StructuralPlanner<'a> {
 
     /// The class identity of a struct schema: its `title`, else the declared interface whose
     /// generated schema it is (interface schemas carry no title of their own).
+    ///
+    /// A board stores repeated pin schemas by reference — the pin holds a hash key into
+    /// `Board::refs` rather than the JSON. Parsing that key as a schema yields no title, which made
+    /// every ref-encoded struct receiver dispatch as an UNTITLED struct: `session.info()` on an
+    /// `NodeOnnxSession` then accepted `ml::info` as readily as `onnx::info`, picked the wrong
+    /// overload, and reported the two schemas as incompatible on a wire nobody had touched.
     fn struct_class(&self, schema: &str) -> Option<String> {
+        let schema = self
+            .existing
+            .refs
+            .get(schema)
+            .map(String::as_str)
+            .unwrap_or(schema);
         flow_like_ast::schema_title(schema).or_else(|| {
             flow_like_ast::interface_name_for_schema(&self.interfaces, schema).map(str::to_string)
         })
@@ -17864,30 +17991,98 @@ mod tests {
         )));
     }
 
+    /// Two live variables sharing a name used to render two identical `const apiKey` declarations,
+    /// which reconcile could not tell apart: it refused to guess and derived nothing, so the board
+    /// silently stopped accepting edits. Lowering now allocates declaration names from one set per
+    /// scope, so the second renders as `apiKey2` and each name denotes exactly one variable.
+    ///
+    /// The "matches N live variables" guard below it still stands for an AST that did not come from
+    /// lowering (a model-authored or hand-edited document can still carry duplicates); what changed
+    /// is that the product's own rendering no longer produces that input.
     #[test]
-    fn unavailable_variable_anchor_does_not_guess_between_duplicate_live_names() {
+    fn duplicate_live_variable_names_are_disambiguated_by_lowering() {
         let mut board = empty_board();
         for id in ["var-a", "var-b"] {
             let mut variable = Variable::new("apiKey", VariableType::String, ValueType::Normal);
             variable.id = id.to_string();
             board.variables.insert(variable.id.clone(), variable);
         }
+
+        let lowered = crate::flow::ast::lower_to_ast(&board);
+        let mut names: Vec<&str> = lowered
+            .variables
+            .iter()
+            .map(|var| var.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["apiKey", "apiKey2"],
+            "both variables must be reachable by a distinct name"
+        );
+
+        // With distinct names an unanchored declaration is no longer ambiguous, so it resolves
+        // instead of freezing the document.
         let mut ast = flow_like_ast::parse("const apiKey: string = \"secret\"\n").expect("parse");
         ast.variables[0].anchor = Some("variable-from-another-board".to_string());
-
         for mode in [ReconcileMode::Replace, ReconcileMode::Additive] {
             let result = reconcile_with_catalog_mode(&board, &ast, &[], mode);
-            assert!(result.diagnostics.iter().any(|diagnostic| {
+            assert!(
+                !result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| { diagnostic.contains("matches 2 live variables") }),
+                "{mode:?}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    /// The ambiguity guard itself, on an AST lowering can no longer produce but a model or a
+    /// hand-edit still can.
+    ///
+    /// The declaration is unanchored because that is the state the guard sees: `reconcile_inner`
+    /// runs `normalize_unavailable_anchors` first, which clears an anchor naming nothing on the
+    /// board (a copy-paste from another board) and leaves the name as the only thing to match on.
+    #[test]
+    fn unanchored_variable_matching_duplicate_declarations_is_refused() {
+        let mut existing = flow_like_ast::BoardAst::default();
+        for id in ["var-a", "var-b"] {
+            existing.variables.push(flow_like_ast::VarDecl {
+                name: "apiKey".to_string(),
+                ty: flow_like_ast::TypeRef::new("string", flow_like_ast::Container::Normal),
+                default: None,
+                exposed: false,
+                secret: false,
+                editable: true,
+                runtime_configured: false,
+                category: None,
+                description: None,
+                schema: None,
+                anchor: Some(id.to_string()),
+            });
+        }
+        let mut new = flow_like_ast::parse("const apiKey: string = \"secret\"\n").expect("parse");
+        new.variables[0].anchor = None;
+
+        let result = reconcile_variables(
+            &empty_board(),
+            &existing,
+            &new,
+            ReconcileMode::Replace,
+            true,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
                 diagnostic.contains("unanchored variable `apiKey` matches 2 live variables")
                     && diagnostic.contains("var-a")
                     && diagnostic.contains("var-b")
-            }));
-            assert!(
-                result.commands.is_empty(),
-                "{mode:?}: {:?}",
-                result.commands
-            );
-        }
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
     }
 
     #[test]

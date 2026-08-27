@@ -1251,14 +1251,35 @@ fn sugared_loop_heads_carry_iterable_and_bindings() {
     assert!(element.is_none());
 }
 
+/// `@parallel` settles the head ambiguity rather than being rejected by it.
+///
+/// A `for` head that is a call is ambiguous by construction — `for_stmt` says so itself — because
+/// `controlForEach({ … })` and `links.toArray()` are the same shape and only the resolved node type
+/// tells them apart. Rejecting a call head under `@parallel` therefore rejected the renderer's own
+/// output for any parallel loop over a computed array. The decorator only exists on the sugared
+/// form, so it is taken as the answer, and a head that really is a loop-node call is reconcile's to
+/// diagnose.
 #[test]
-fn parallel_decorator_requires_the_sugared_for_head() {
-    let err = parse(
-        "eventsSimple() {\n    @parallel\n    for (const h of controlForEach({ array: items })) {\n    }\n}\n",
+fn parallel_decorator_takes_a_call_head_as_the_sugared_array() {
+    let ast = parse(
+        "eventsSimple() {\n    @parallel\n    for (const item of links.toArray()) {\n    }\n}\n",
     )
-    .expect_err("explicit call head");
-    assert!(err.message.contains("@parallel"), "{}", err.message);
-    assert_eq!((err.line, err.col), (3, 5));
+    .expect("a computed array head is the sugared form");
+    let flow_like_ast::model::Stmt::Loop {
+        keyword,
+        iterable,
+        element,
+        ..
+    } = &ast.events[0].body.stmts[0]
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(keyword, "forEachParallel");
+    assert_eq!(element.as_deref(), Some("item"));
+    assert!(
+        iterable.is_some(),
+        "the call head is the array, not the node"
+    );
 
     let err =
         parse("eventsSimple() {\n    @parallel(\"x\")\n    for (const h of items) {\n    }\n}\n")

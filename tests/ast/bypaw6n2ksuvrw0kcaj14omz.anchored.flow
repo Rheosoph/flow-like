@@ -390,7 +390,7 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     }
 }
 
-eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
+eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
     loadConfig()   //@n:pnrthxg45xmamey3u4ohy6mn
     filterSources({ hash: widgetInstanceId })   //@n:efukkvhntw0zqzovze5miev6
     saveConfig({ config: userConfiguration })   //@n:zjbodntlzzvdtaujg2nf9j0c

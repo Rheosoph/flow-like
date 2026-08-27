@@ -252,7 +252,15 @@ async fn check_board(
 /// the connection it cannot see, the surviving side accumulates one more dead id per Apply.
 fn dangling_pin_refs(board: &Board) -> Vec<String> {
     let nodes = flowscript_support::all_nodes(board);
-    let known: HashSet<&String> = nodes.iter().flat_map(|node| node.pins.keys()).collect();
+    // Layer BOUNDARY pins are pins too, and an edge crossing a collapsed layer legitimately ends on
+    // one. Scanning only node pins reported every such edge as dangling — 268 false positives on
+    // one fixture, which is worse than no check at all: it invented a defect and buried the real
+    // one underneath it.
+    let known: HashSet<&String> = nodes
+        .iter()
+        .flat_map(|node| node.pins.keys())
+        .chain(board.layers.values().flat_map(|layer| layer.pins.keys()))
+        .collect();
     let mut dangling = Vec::new();
     for node in &nodes {
         for pin in node.pins.values() {
@@ -450,102 +458,18 @@ fn excerpt(text: &str, line: usize) -> String {
 /// **This list may only shrink.** Every test below reports both an unlisted failure and a listed
 /// case that started passing, so a fix cannot land while leaving stale suppression behind.
 const KNOWN_GAPS: &[(&str, Invariant)] = &[
-    // --- the catalog surface ---
-    // An event whose `return` carries no values renders as a bare `return` with a trailing anchor
-    // (`return   //@n:id`) and the parser reads the anchor comment as the start of the returned
-    // expression. Every board with a value-less Return Result node is affected, so this is the
-    // renderer failing on a stock node with no user input involved at all.
-    ("catalog/events_generic_return_result", Invariant::NoParse),
-    // --- committed board fixtures ---
-    // Both real boards fail the same way and NEITHER converges: reconciling a board's own
-    // unchanged document plans commands, applying them changes nothing reconcile can see, and the
-    // next round plans them again. `ttwctnp` is flat at 80 commands per round; `bypaw` settles at
-    // 6 but starts by ADDING 13 nodes, so an Apply of an untouched document grows the graph.
+    // Everything here is a ONE-SHOT repair, not churn: `NonConvergent` is no longer listed for any
+    // case, so applying once settles the board. What is left is that the first Apply of an
+    // untouched document is not a no-op.
     //
-    // Root cause for the connect half (traced 2026-08-27): the pin id resolved for a `ConnectPins`
-    // is minted fresh and belongs to no pin on the board. It is written into the target's
-    // `depends_on` and appended to the source's `connected_to`, so the edge never resolves, and the
-    // source accumulates one more dead id on every Apply — which is what `dangling-pin-ref` sees.
+    // `board/ttwctnp…` — two `node `reroute` is missing required inputs: route_in` diagnostics and
+    // ZERO commands. The document is fine; reconcile objects to reroute nodes whose `route_in` the
+    // board leaves unwired, which is board data, not something the renderer produced.
     ("board/ttwctnp08u18sg2z6nmcqqak", Invariant::NotNoop),
-    ("board/ttwctnp08u18sg2z6nmcqqak", Invariant::NonConvergent),
-    ("board/ttwctnp08u18sg2z6nmcqqak", Invariant::DanglingPinRef),
+    // `board/bypaw…` — one `UpdateNodePin value_in = Null`, plus two `namespace rss::… is unknown`
+    // diagnostics. The `rss` namespace is absent because this test builds the catalog with the
+    // default metadata features; that half is an artefact of the harness, not a product defect.
     ("board/bypaw6n2ksuvrw0kcaj14omz", Invariant::NotNoop),
-    ("board/bypaw6n2ksuvrw0kcaj14omz", Invariant::NonConvergent),
-    ("board/bypaw6n2ksuvrw0kcaj14omz", Invariant::DanglingPinRef),
-    // Two entries in this board lower to the same event name (`widgetActionEvent`), so the document
-    // cannot address either of them.
-    (
-        "board/bypaw6n2ksuvrw0kcaj14omz",
-        Invariant::AmbiguousDeclaration,
-    ),
-    // --- handwritten programs, applied and then round-tripped ---
-    // Three distinct causes, all reached by programs that apply cleanly in the first place:
-    //  * `function X has impure statements but its existing layer has no execution boundary pins`
-    //    — lowering renders a function whose boundary the reconciler then rejects, so the very
-    //    document the engine produced is refused (inbox-triage, github-triage, contract-exceptions).
-    //  * schema drift on a `Struct` argument: source and input are both `Struct/Normal` but their
-    //    schemas differ by title alone, so an unchanged wire reads as a type error (onnx-inference).
-    //  * `UpdateNodePin … value: Null` on `variable_set.value_in` — a null pin default is planned
-    //    as a change against itself on every pass (pr-review-bot).
-    // `t4-scraper-runtime` additionally emits `@parallel` on an explicit loop-node call, a form the
-    // parser rejects outright, so its own rendered document does not parse.
-    ("handwritten/t2-inbox-triage.flow", Invariant::NotNoop),
-    (
-        "handwritten/t2-inbox-triage.flow",
-        Invariant::DanglingPinRef,
-    ),
-    ("handwritten/t3-github-triage.flow", Invariant::NotNoop),
-    (
-        "handwritten/t3-github-triage.flow",
-        Invariant::DanglingPinRef,
-    ),
-    ("handwritten/t3-onnx-inference.flow", Invariant::NotNoop),
-    (
-        "handwritten/t3-onnx-inference.flow",
-        Invariant::DanglingPinRef,
-    ),
-    (
-        "handwritten/t4-contract-exceptions.flow",
-        Invariant::NotNoop,
-    ),
-    (
-        "handwritten/t4-contract-exceptions.flow",
-        Invariant::DanglingPinRef,
-    ),
-    ("handwritten/t4-pr-review-bot.flow", Invariant::NotNoop),
-    (
-        "handwritten/t4-pr-review-bot.flow",
-        Invariant::DanglingPinRef,
-    ),
-    ("handwritten/t4-scraper-runtime.flow", Invariant::NoParse),
-    ("handwritten/t4-scraper-runtime.flow", Invariant::NotNoop),
-    (
-        "handwritten/t4-scraper-runtime.flow",
-        Invariant::DanglingPinRef,
-    ),
-    // --- camelCase name collisions ---
-    // `to_camel_case` has no uniquifier, so any two board names that differ only by separators or
-    // case become one identifier. Every pair here renders two identical `const` declarations.
-    (
-        "collision-variable/space-vs-camel",
-        Invariant::AmbiguousDeclaration,
-    ),
-    (
-        "collision-variable/snake-vs-camel",
-        Invariant::AmbiguousDeclaration,
-    ),
-    (
-        "collision-variable/dash-vs-camel",
-        Invariant::AmbiguousDeclaration,
-    ),
-    (
-        "collision-variable/case-only",
-        Invariant::AmbiguousDeclaration,
-    ),
-    (
-        "collision-variable/punctuation",
-        Invariant::AmbiguousDeclaration,
-    ),
 ];
 
 fn ratchet(kind: &str, findings: Vec<Finding>, exercised: &BTreeSet<String>) {
@@ -799,12 +723,65 @@ const HOSTILE_NAMES: &[(&str, &str)] = &[
     ("empty", ""),
 ];
 
+/// Connect `from_node.from_pin` to `to_node.to_pin`, by pin NAME, writing both endpoints.
+fn connect(board: &mut Board, from_node: &str, from_pin: &str, to_node: &str, to_pin: &str) {
+    let from_id = board
+        .nodes
+        .get(from_node)
+        .and_then(|node| node.pins.values().find(|pin| pin.name == from_pin))
+        .map(|pin| pin.id.clone())
+        .unwrap_or_else(|| panic!("{from_node} has no pin `{from_pin}`"));
+    let to_id = board
+        .nodes
+        .get(to_node)
+        .and_then(|node| node.pins.values().find(|pin| pin.name == to_pin))
+        .map(|pin| pin.id.clone())
+        .unwrap_or_else(|| panic!("{to_node} has no pin `{to_pin}`"));
+    if let Some(node) = board.nodes.get_mut(from_node)
+        && let Some(pin) = node.pins.get_mut(&from_id)
+    {
+        pin.connected_to.insert(to_id.clone());
+    }
+    if let Some(node) = board.nodes.get_mut(to_node)
+        && let Some(pin) = node.pins.get_mut(&to_id)
+    {
+        pin.depends_on.insert(from_id);
+    }
+}
+
+/// Set a pin's stored default by name.
+fn set_pin(board: &mut Board, node_id: &str, pin_name: &str, value: flow_like_types::Value) {
+    let Some(node) = board.nodes.get_mut(node_id) else {
+        return;
+    };
+    let pin_id = node
+        .pins
+        .values()
+        .find(|pin| pin.name == pin_name)
+        .map(|pin| pin.id.clone())
+        .unwrap_or_else(|| panic!("node has no pin `{pin_name}`"));
+    if let Some(pin) = node.pins.get_mut(&pin_id) {
+        pin.default_value = Some(flow_like_types::json::to_vec(&value).unwrap());
+    }
+}
+
+fn catalog_node(node_type: &str) -> Node {
+    flowscript_support::CATALOG
+        .nodes
+        .iter()
+        .find(|node| node.name == node_type)
+        .unwrap_or_else(|| panic!("catalog has no `{node_type}`"))
+        .clone()
+}
+
+/// A board whose variable is named `name` and is both WRITTEN and READ.
+///
+/// The declaration alone is not enough to exercise the contract: `const <name>` parses for almost
+/// any spelling, while the assignment (`<name> = …`, from `variable_set`) and the read (a bare
+/// `Expr::Ref`, from `variable_get`) are the forms a bad name actually breaks. An earlier version
+/// of this corpus only declared the variable and so reported green while both of those were broken.
 fn board_with_hostile_variable(name: &str) -> Board {
     let mut board = Board::new_detached(Some("hostile-variable".to_string()), Path::default());
-    let mut entry = Node::new("events_simple", "Hostile Probe", "", "events");
-    entry.set_start(true);
-    entry.add_output_pin("exec_out", "Out", "", VariableType::Execution);
-    board.nodes.insert(entry.id.clone(), entry);
 
     let mut variable = Variable::new(
         name,
@@ -812,7 +789,30 @@ fn board_with_hostile_variable(name: &str) -> Board {
         flow_like::flow::pin::ValueType::Normal,
     );
     variable.default_value = Some(flow_like_types::json::to_vec(&json!("value")).unwrap());
-    board.variables.insert(variable.id.clone(), variable);
+    let variable_id = variable.id.clone();
+    board.variables.insert(variable_id.clone(), variable);
+
+    let mut entry = Node::new("events_simple", "Hostile Probe", "", "events");
+    entry.set_start(true);
+    entry.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+    let entry_id = entry.id.clone();
+    board.nodes.insert(entry_id.clone(), entry);
+
+    let set = catalog_node("variable_set");
+    let get = catalog_node("variable_get");
+    let log = catalog_node("log_info");
+    let (set_id, get_id, log_id) = (set.id.clone(), get.id.clone(), log.id.clone());
+    for node in [set, get, log] {
+        board.nodes.insert(node.id.clone(), node);
+    }
+
+    set_pin(&mut board, &set_id, "var_ref", json!(variable_id.clone()));
+    set_pin(&mut board, &set_id, "value_in", json!("written"));
+    set_pin(&mut board, &get_id, "var_ref", json!(variable_id));
+
+    connect(&mut board, &entry_id, "exec_out", &set_id, "exec_in");
+    connect(&mut board, &set_id, "exec_out", &log_id, "exec_in");
+    connect(&mut board, &get_id, "value_ref", &log_id, "message");
     board
 }
 
@@ -831,10 +831,78 @@ async fn hostile_board_names_still_round_trip() {
         let case = format!("hostile-variable/{id}");
         exercised.insert(case.clone());
         let board = board_with_hostile_variable(name);
-        findings.extend(check_board(&case, &board, &catalog, &enricher, TEXT_ONLY).await);
+        // FULL, not TEXT_ONLY: a name that camelizes onto `true`/`false`/`null` still parses and is
+        // still a fixed point — it just stops being a variable read. Only reconciling the document
+        // against its own board notices that the wire is gone.
+        findings.extend(check_board(&case, &board, &catalog, &enricher, FULL).await);
     }
 
     ratchet("hostile-name", findings, &exercised);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Corpus: hostile JSON-schema names.
+// ---------------------------------------------------------------------------------------------
+
+/// A struct variable's schema names reach the document as `interface` declarations and as the type
+/// of the variable, neither of which has a quoted form in the grammar. The names come from the
+/// schema's `title`, its `$defs` keys, and its property names — none of which the product
+/// constrains, since a schema can be pasted in or inferred from a sample payload.
+fn board_with_hostile_schema(title: &str, def_name: &str, property: &str) -> Board {
+    let mut board = Board::new_detached(Some("hostile-schema".to_string()), Path::default());
+    let mut entry = Node::new("events_simple", "Schema Probe", "", "events");
+    entry.set_start(true);
+    entry.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+    board.nodes.insert(entry.id.clone(), entry);
+
+    let schema = json!({
+        "type": "object",
+        "title": title,
+        "properties": {
+            property: { "type": "string" },
+            "nested": { "$ref": format!("#/$defs/{def_name}") },
+        },
+        "required": [property],
+        "$defs": {
+            def_name: {
+                "type": "object",
+                "properties": { "inner": { "type": "string" } },
+            },
+        },
+    });
+    let mut variable = Variable::new(
+        "payload",
+        VariableType::Struct,
+        flow_like::flow::pin::ValueType::Normal,
+    );
+    variable.schema = Some(flow_like_types::json::to_string(&schema).unwrap());
+    board.variables.insert(variable.id.clone(), variable);
+    board
+}
+
+/// A schema whose title, `$defs` key or property name is not an identifier must still render a
+/// document the engine can read back.
+///
+/// The `interface` and type-annotation positions have no quoted form, so nothing downstream can
+/// rescue a bad name here — `pascal_case` at the derivation site is the only thing standing between
+/// a pasted schema and an unparseable document. This corpus is what keeps that true.
+#[tokio::test(flavor = "multi_thread")]
+async fn hostile_schema_names_still_round_trip() {
+    let (catalog, enricher) = flowscript_support::catalog();
+    let mut findings = Vec::new();
+    let mut exercised = BTreeSet::new();
+
+    for (id, name) in HOSTILE_NAMES {
+        // `empty` is excluded from the `$defs` slot: a `#/$defs/` reference to an empty key is not
+        // a schema the product can produce, and JSON cannot express the intent unambiguously.
+        let def_name = if name.is_empty() { "Inner" } else { name };
+        let case = format!("hostile-schema/{id}");
+        exercised.insert(case.clone());
+        let board = board_with_hostile_schema(name, def_name, name);
+        findings.extend(check_board(&case, &board, &catalog, &enricher, TEXT_ONLY).await);
+    }
+
+    ratchet("hostile-schema", findings, &exercised);
 }
 
 // ---------------------------------------------------------------------------------------------

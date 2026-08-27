@@ -31,16 +31,44 @@ pub fn is_local_provider(provider_name: &str) -> bool {
 /// proxying it through the API.
 ///
 /// Bits carrying a remote gateway config can still be locally runnable ONNX
-/// models. Proxying those would make an otherwise offline-capable run depend on
-/// the backend, so hosts with `local-ml` always keep them local; the proxy stays
-/// reserved for models that have no local implementation.
-pub fn prefers_local_execution(bit: &Bit) -> bool {
-    if !cfg!(feature = "local-ml") {
+/// models. Local execution also requires a filesystem-backed Bit store because
+/// the ONNX loader reads model files directly. A server may compile `local-ml`
+/// for other nodes while keeping Bits in object storage, so compiled capability
+/// alone is not enough to select this path.
+pub async fn prefers_local_execution(bit: &Bit, app_state: &Arc<FlowLikeState>) -> bool {
+    let local_ml_enabled = cfg!(feature = "local-ml");
+    let has_local_embedding_provider = is_local_embedding_provider(bit);
+    if !local_ml_enabled || !has_local_embedding_provider {
         return false;
     }
 
+    let has_local_bit_store = FlowLikeState::bit_store(app_state)
+        .await
+        .is_ok_and(|store| {
+            matches!(
+                store,
+                flow_like_storage::files::store::FlowLikeStore::Local(_)
+            )
+        });
+
+    should_prefer_local_execution(
+        local_ml_enabled,
+        has_local_embedding_provider,
+        has_local_bit_store,
+    )
+}
+
+fn is_local_embedding_provider(bit: &Bit) -> bool {
     bit.try_to_embedding_provider()
         .is_some_and(|provider| is_local_provider(&provider.provider_name))
+}
+
+fn should_prefer_local_execution(
+    local_ml_enabled: bool,
+    has_local_embedding_provider: bool,
+    has_local_bit_store: bool,
+) -> bool {
+    local_ml_enabled && has_local_embedding_provider && has_local_bit_store
 }
 
 #[cfg(any(feature = "remote-ml", test))]
@@ -232,6 +260,44 @@ impl EmbeddingFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bit::BitTypes;
+    use flow_like_model_provider::provider::{
+        EmbeddingModelProvider, ModelProvider, Pooling, Prefix, RemoteEmbeddingProvider,
+        RemoteExecutionConfig,
+    };
+    use flow_like_storage::files::store::FlowLikeStore;
+    use flow_like_types::{json, tokio};
+
+    fn embedding_bit(provider_name: &str) -> Bit {
+        let parameters = EmbeddingModelProvider {
+            languages: vec!["en".to_string()],
+            vector_length: 384,
+            input_length: 512,
+            prefix: Prefix {
+                query: String::new(),
+                paragraph: String::new(),
+            },
+            pooling: Pooling::Mean,
+            provider: ModelProvider {
+                provider_name: provider_name.to_string(),
+                model_id: Some("embedding-model".to_string()),
+                version: None,
+                params: None,
+            },
+            remote: Some(RemoteExecutionConfig {
+                endpoint: None,
+                secret_name: None,
+                implementation: Some(RemoteEmbeddingProvider::Internal),
+                model_id: Some("embedding-model".to_string()),
+            }),
+        };
+
+        Bit {
+            bit_type: BitTypes::Embedding,
+            parameters: json::to_value(parameters).expect("embedding parameters serialize"),
+            ..Bit::default()
+        }
+    }
 
     fn headers(usage_context: Option<&ModelUsageContext>) -> HashMap<String, String> {
         embedding_usage_headers(usage_context).into_iter().collect()
@@ -264,5 +330,58 @@ mod tests {
     #[test]
     fn missing_embedding_usage_context_adds_no_headers() {
         assert!(headers(None).is_empty());
+    }
+
+    #[test]
+    fn local_embedding_requires_both_compiled_support_and_a_local_bit_store() {
+        let bit = embedding_bit("Local");
+        let has_local_embedding_provider = is_local_embedding_provider(&bit);
+
+        assert!(should_prefer_local_execution(
+            true,
+            has_local_embedding_provider,
+            true
+        ));
+        assert!(!should_prefer_local_execution(
+            true,
+            has_local_embedding_provider,
+            false
+        ));
+        assert!(!should_prefer_local_execution(
+            false,
+            has_local_embedding_provider,
+            true
+        ));
+    }
+
+    #[test]
+    fn non_local_embedding_provider_never_prefers_local_execution() {
+        let bit = embedding_bit("hosted");
+
+        assert!(!should_prefer_local_execution(
+            true,
+            is_local_embedding_provider(&bit),
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn object_backed_bit_store_does_not_prefer_local_embedding_execution() {
+        let bit = embedding_bit("Local");
+        assert!(
+            bit.try_to_embedding()
+                .expect("embedding parameters deserialize")
+                .supports_remote()
+        );
+
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            crate::state::FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+
+        assert!(!prefers_local_execution(&bit, &state).await);
     }
 }

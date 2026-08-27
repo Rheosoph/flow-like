@@ -934,47 +934,36 @@ fn anchors_of(ast: &BoardAst) -> BTreeSet<&String> {
 // The ratchet.
 // ---------------------------------------------------------------------------------------------
 
-/// `position/input/violation` triples that break the contract today.
+/// `position/input/violation` triples where the renderer is not total.
 ///
 /// **This list may only shrink.** A case that starts passing fails `render_contract_matrix` with a
 /// "now passes, remove it" message, so a fix cannot land while leaving stale suppression behind.
 ///
-/// Every `kw-*` entry here is reachable from a board a user can build right now: `to_camel_case`
-/// strips punctuation but has no keyword guard, so a variable named `Return`, a function layer
-/// named `If`, or an event parameter named `True` reaches the renderer as a bare keyword. The
-/// non-keyword entries are positions lowering does not camelize at all (struct field paths,
-/// object keys, interface fields), where the raw string arrives verbatim.
+/// **None of these is reachable from a board.** Every name here is sanitized before the renderer
+/// ever sees it — `flow_like_ast::declared_identifier` for anything lowering declares (variables,
+/// functions, parameters, modules, event headers) and `pascal_case` for schema-derived interface
+/// and type names. What is left is a deliberate design position rather than an unfixed bug:
+/// renaming is a *naming* concern that has to be consistent across the declaration, every
+/// reference, and reconcile's view of both, so exactly one component does it. Adding a second
+/// renamer in the renderer would create two of them, and two renamers that disagree is the bug
+/// class this whole suite exists to prevent.
+///
+/// So these entries are a tripwire, not a backlog: they fail the moment some future path hands the
+/// renderer a name that skipped the sanitizer. The reachability claim itself is not taken on faith
+/// — `hostile_board_names_still_round_trip` and `hostile_schema_names_still_round_trip` in
+/// `flow-like-catalog/tests/render_contract_catalog.rs` build real boards out of these same
+/// strings, and both were checked to go red when their sanitizer is disabled.
 const KNOWN_GAPS: &[(&str, &str, Violation)] = &[
-    // --- statement-call-receiver ---
-    // A call in STATEMENT position renders its receiver first, so a receiver that is not an
-    // identifier makes the line start with a literal — `"payload".sha256()` — and no statement in
-    // the grammar starts that way. Reached by any board with a method-form node whose receiver pin
-    // holds a typed-in value and whose output nobody reads. Fixing it means choosing a different
-    // emission at statement position (the static form, or a parenthesized receiver), not tightening
-    // a predicate, so it is recorded rather than patched here.
-    (
-        "statement-call-receiver",
-        "string-literal",
-        Violation::NoParse,
-    ),
-    ("statement-call-receiver", "int-literal", Violation::NoParse),
-    (
-        "statement-call-receiver",
-        "array-literal",
-        Violation::NoParse,
-    ),
-    ("statement-call-receiver", "template", Violation::NoParse),
     // --- variable-read ---
-    // A bare `Expr::Ref`. WORST of the classes: a variable named `True`/`False`/`Null` camelizes onto
-    // a literal keyword, so the read re-parses as `Literal`, not `Ref`. The document still parses
-    // and is still a fixed point — the wire is just gone, and reconcile then plans commands that
-    // hard-code the value.
+    // A bare `Expr::Ref` spelled `true`/`false`/`null` re-parses as a literal, so the read stops
+    // being a wire — the document still parses and is still a fixed point, it just means something
+    // else. Guarded: `declared_identifier` renders such a variable `true2`.
     ("variable-read", "kw-false", Violation::MeaningChanged),
     ("variable-read", "kw-null", Violation::MeaningChanged),
     ("variable-read", "kw-true", Violation::MeaningChanged),
     // --- variable-assign-target ---
-    // `name = value` from a `variable_set`. The variable name is camelized but not keyword-guarded,
-    // so a board variable named `Return`/`If`/`While` renders a statement the parser rejects.
+    // `name = value` from a `variable_set`, where the name is a keyword (`return = …`). Guarded by
+    // `declared_identifier`; `hostile_board_names_still_round_trip` covers the board path.
     ("variable-assign-target", "kw-const", Violation::NoParse),
     ("variable-assign-target", "kw-for", Violation::NoParse),
     ("variable-assign-target", "kw-if", Violation::NoParse),
@@ -983,17 +972,18 @@ const KNOWN_GAPS: &[(&str, &str, Violation)] = &[
     ("variable-assign-target", "kw-use", Violation::NoParse),
     ("variable-assign-target", "kw-while", Violation::NoParse),
     // --- event-header-name ---
-    // `name() {` — the event block header. Camelized entry-node spelling with no keyword guard.
+    // `name() {` — the event block header. Guarded by `declared_identifier` in `event_alias`.
     ("event-header-name", "kw-const", Violation::NoParse),
     ("event-header-name", "kw-function", Violation::NoParse),
     ("event-header-name", "kw-interface", Violation::NoParse),
     ("event-header-name", "kw-let", Violation::NoParse),
     ("event-header-name", "kw-use", Violation::NoParse),
     // --- call-display ---
-    // The identifier immediately before `(`. For a catalog node this is its FlowScript alias; for a
-    // Function call it is the target layer's name run through `to_camel_case`, which has no
-    // keyword guard. A Function layer named `Return` renders `return({ … })`, which the parser
-    // reads as a return statement — the call node silently disappears.
+    // The identifier immediately before `(`. A Function layer named `Return` would render
+    // `return({ … })`, which the parser reads as a return statement and the call node disappears.
+    // Guarded twice over: `declared_identifier` for Function-layer names, and `check_names` (run
+    // over the committed signature set by `clean_catalog_has_no_collisions`) rejects a catalog
+    // alias that is a keyword or not an identifier.
     ("call-display", "kw-const", Violation::NoParse),
     ("call-display", "kw-false", Violation::NoParse),
     ("call-display", "kw-for", Violation::NoParse),
@@ -1006,8 +996,8 @@ const KNOWN_GAPS: &[(&str, &str, Violation)] = &[
     ("call-display", "kw-use", Violation::NoParse),
     ("call-display", "kw-while", Violation::NoParse),
     // --- call-namespace-path ---
-    // `ns::alias` path segments, from node namespace metadata. A segment that lexes as a keyword
-    // breaks the path.
+    // `ns::alias` path segments, from node namespace metadata. Guarded by `check_names`, which no
+    // catalog node can be added without satisfying.
     ("call-namespace-path", "kw-const", Violation::NoParse),
     ("call-namespace-path", "kw-false", Violation::NoParse),
     ("call-namespace-path", "kw-for", Violation::NoParse),
@@ -1018,13 +1008,11 @@ const KNOWN_GAPS: &[(&str, &str, Violation)] = &[
     ("call-namespace-path", "kw-true", Violation::NoParse),
     ("call-namespace-path", "kw-use", Violation::NoParse),
     ("call-namespace-path", "kw-while", Violation::NoParse),
-    // --- struct-field-assign-path ---
-    // An EMPTY `struct_set` field path renders as `row[""] = 1`, which the parser rejects as an
-    // assignment target. Reachable whenever the `field` pin is left unset.
-    ("struct-field-assign-path", "empty", Violation::NoParse),
     // --- interface-name ---
-    // `interface Name {`. Same provenance and same missing quoted form as `type-base-name`; the two
-    // classes always move together.
+    // `interface Name {`. There is no quoted form for a type name in the grammar, so the guard has
+    // to be at the derivation site: `interfaces_from_schema` runs every title, `$defs` key and
+    // `$ref` target through `pascal_case`, and `interfaces_for_variables` then uniquifies them.
+    // `hostile_schema_names_still_round_trip` covers the board path.
     ("interface-name", "all-digits", Violation::NoParse),
     ("interface-name", "anchor-marker", Violation::NoParse),
     ("interface-name", "backslash", Violation::NoParse),
@@ -1053,11 +1041,9 @@ const KNOWN_GAPS: &[(&str, &str, Violation)] = &[
     ("interface-name", "tab", Violation::NoParse),
     ("interface-name", "whitespace-only", Violation::NoParse),
     // --- type-base-name ---
-    // `const x: Base` / `param: Base`. `TypeRef::base` is written raw. Derived interface names go
-    // through `pascal_case` (which strips punctuation and upper-cases the first letter, so it
-    // cannot land on a lowercase keyword), but a schema `title` or `$defs` key reaches this
-    // position without that pass. There is no quoted form for a type name in the grammar, so the
-    // fix belongs at the name-derivation site, not in the renderer.
+    // `const x: Base` / `param: Base`. `TypeRef::base` is written raw; it is either a primitive
+    // spelling or an interface name resolved through `interface_name_for_schema`, so it inherits
+    // the `pascal_case` guard above and always agrees with the declaration it names.
     ("type-base-name", "all-digits", Violation::NoParse),
     ("type-base-name", "anchor-marker", Violation::AnchorLost),
     ("type-base-name", "anchor-marker", Violation::NotFixedPoint),

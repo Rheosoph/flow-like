@@ -28,9 +28,10 @@ pub use model::*;
 pub use naming::{
     CollisionKind, EffectiveNames, NAME_OVERRIDES, NAMESPACES, NameCollision, NameEntry,
     NameFields, NameOverride, NamespaceSpec, NodeNames, VALUE_TYPE_NAMESPACES, check_names,
-    default_receiver_pin, derive_alias, derive_namespace, effective_names, effective_receiver_pin,
-    effective_spelling, is_keyword, is_value_type_namespace, legacy_display,
-    namespace_accepts_receiver, qualified_name, receiver_class, receiver_class_of, schema_title,
+    declared_identifier, default_receiver_pin, derive_alias, derive_namespace, effective_names,
+    effective_receiver_pin, effective_spelling, is_keyword, is_value_type_namespace,
+    legacy_display, namespace_accepts_receiver, qualified_name, receiver_class, receiver_class_of,
+    schema_title,
 };
 pub use parse::{ParseError, parse};
 pub use redact::{MAX_LITERAL_CHARS, MAX_SOURCE_CHARS, RedactedFlowScript, redact_flowscript};

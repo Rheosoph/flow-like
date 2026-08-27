@@ -1438,13 +1438,18 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 
                     #[cfg(feature = "model")]
                     {
-                        let mut factory = app_state.embedding_factory.lock().await;
+                        let prefers_local_execution =
+                            flow_like::models::embedding_factory::prefers_local_execution(
+                                &bit, &app_state,
+                            )
+                            .await;
                         let embedding_provider = bit.try_to_embedding();
                         let use_proxy = access_token.is_some()
-                            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
+                            && !prefers_local_execution
                             && embedding_provider
                                 .as_ref()
                                 .is_some_and(|provider| provider.supports_remote());
+                        let mut factory = app_state.embedding_factory.lock().await;
                         let model_result = if use_proxy {
                             factory
                                 .build_text_proxy(
