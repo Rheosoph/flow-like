@@ -136,14 +136,18 @@ pub trait VectorStore: Send + Sync {
     /// # Arguments
     ///
     /// * `column`: The column name to build the index on.
-    /// * `fts`: Builds a full-text search index if true, otherwise determines the type of index automatically.
+    /// * `index_type`: The requested index builder. When omitted, the implementation chooses one
+    ///   from the column type.
     ///
     /// # Returns
     ///
     /// A result indicating success or an error.
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()>;
 
-    /// Optimize the vector store (implementation-specific).
+    /// Compact the vector store and update its indexes.
+    ///
+    /// When `keep_versions` is false, implementations may prune versions older than their safe
+    /// retention window after maintenance succeeds. Unverified files must remain untouched.
     ///
     /// # Returns
     ///

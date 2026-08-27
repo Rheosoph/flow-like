@@ -107,6 +107,21 @@ impl UseMember {
     }
 }
 
+impl From<String> for UseMember {
+    fn from(name: String) -> Self {
+        Self { name, alias: None }
+    }
+}
+
+impl From<&str> for UseMember {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            alias: None,
+        }
+    }
+}
+
 /// A TypeScript-like interface declaration used as the readable surface for struct schemas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceDecl {

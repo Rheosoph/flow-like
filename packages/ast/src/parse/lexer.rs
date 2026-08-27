@@ -214,7 +214,6 @@ impl Lexer {
         self.advance();
         self.advance();
         let mut text = String::new();
-        let mut split_at_anchor = false;
         while let Some(&c) = self.chars.get(self.pos) {
             if c == '\n' {
                 break;
@@ -231,19 +230,22 @@ impl Lexer {
                 && matches!(self.chars.get(self.pos + 3).copied(), Some('n' | 'v' | 'l'))
                 && self.chars.get(self.pos + 4) == Some(&':')
             {
-                split_at_anchor = true;
                 break;
             }
             text.push(c);
             self.advance();
         }
         // Drop a single leading space (renderer writes `// text` and `   //@n:id`).
-        let trimmed = text.strip_prefix(' ').unwrap_or(&text);
-        let trimmed = if split_at_anchor {
-            trimmed.trim_end().to_string()
-        } else {
-            trimmed.to_string()
-        };
+        //
+        // Trailing whitespace always goes: a comment carries none deliberately, and an anchor
+        // comment that keeps it produces an anchor id with a trailing space or `\r` that matches
+        // no node on the board — so every anchored node, variable and layer in a CRLF document (or
+        // one a tool has padded) reads as deleted.
+        let trimmed = text
+            .strip_prefix(' ')
+            .unwrap_or(&text)
+            .trim_end()
+            .to_string();
         Token {
             tok: Tok::Comment(trimmed),
             line: token_line,

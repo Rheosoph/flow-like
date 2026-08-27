@@ -96,7 +96,7 @@ Use [Path Exists?](/nodes/data/files/operations/path-exists/) before an optional
 | Retry-safe single write | [Upsert](/nodes/data/database/insert/upsert-local-db/) |
 | Retry-safe collection write | [Batch Upsert](/nodes/data/database/insert/batch-upsert-local-db/) |
 
-Build a stable key before using upsert. After a large write, [Flush Database](/nodes/data/database/optimization/flush-local-db/) can make the persistence boundary explicit. Use [Build Index](/nodes/data/database/optimization/index-local-db/) for fields that support repeated filters or searches. [Choosing a Lance index](/topics/datascience/lance-indexes/) explains the current Flow-Like choices, the latest stable upstream options, and the vector-distance constraint to check before building one.
+Build a stable key before using upsert. After a large write, [Flush Database](/nodes/data/database/optimization/flush-local-db/) can make the persistence boundary explicit. Use [Build Index](/nodes/data/database/optimization/index-local-db/) for fields that support repeated filters or searches. [Choosing a Lance index](/topics/datascience/lance-indexes/) explains the current Flow-Like choices, the latest stable upstream options, and when a legacy vector index needs a one-time rebuild for cosine distance.
 
 Query local records with [(SQL) Filter Database](/nodes/data/database/search/filter-local-db/). Keep result limits and selected fields bounded for interactive workflows.
 

@@ -357,29 +357,27 @@ pub async fn list_flowscript_failures(
 
     let rows = filtered(&q, cutoff)
         .select_only()
-        .columns([
-            Column::Id,
-            Column::UserId,
-            Column::AppId,
-            Column::BoardId,
-            Column::LayerId,
-            Column::Source,
-            Column::Origin,
-            Column::Outcome,
-            Column::Cause,
-            Column::ErrorMessage,
-            Column::Diagnostics,
-            Column::CommandCount,
-            Column::AllowDeletions,
-            Column::FlowscriptChars,
-            Column::DroppedValues,
-            Column::RedactedLiterals,
-            Column::Truncated,
-            Column::AppVersion,
-            Column::Platform,
-            Column::TraceId,
-            Column::CreatedAt,
-        ])
+        .column_as(Column::Id, "id")
+        .column_as(Column::UserId, "user_id")
+        .column_as(Column::AppId, "app_id")
+        .column_as(Column::BoardId, "board_id")
+        .column_as(Column::LayerId, "layer_id")
+        .column_as(Column::Source, "source")
+        .column_as(Column::Origin, "origin")
+        .column_as(Column::Outcome, "outcome")
+        .column_as(Column::Cause, "cause")
+        .column_as(Column::ErrorMessage, "error_message")
+        .column_as(Column::Diagnostics, "diagnostics")
+        .column_as(Column::CommandCount, "command_count")
+        .column_as(Column::AllowDeletions, "allow_deletions")
+        .column_as(Column::FlowscriptChars, "flowscript_chars")
+        .column_as(Column::DroppedValues, "dropped_values")
+        .column_as(Column::RedactedLiterals, "redacted_literals")
+        .column_as(Column::Truncated, "truncated")
+        .column_as(Column::AppVersion, "app_version")
+        .column_as(Column::Platform, "platform")
+        .column_as(Column::TraceId, "trace_id")
+        .column_as(Column::CreatedAt, "created_at")
         .order_by_desc(Column::CreatedAt)
         .limit(page_size)
         .offset(page * page_size)

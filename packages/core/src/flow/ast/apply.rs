@@ -2817,6 +2817,57 @@ mod tests {
     }
 
     #[test]
+    fn setup_renames_a_function_layer_without_replacing_its_identity_or_contents() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Old Helper".to_string(),
+            LayerType::Function,
+        );
+        layer.parent_id = Some("module-layer".to_string());
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "stable".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        });
+        let mut boundary = Node::new("boundary", "Boundary", "", "test");
+        let parameter = boundary
+            .add_input_pin("ticket", "Ticket", "", VariableType::String)
+            .clone();
+        layer.pins.insert(parameter.id.clone(), parameter);
+        let mut body = Node::new("log_info", "Log Info", "", "debug");
+        body.id = "body-node".to_string();
+        layer.nodes.insert(body.id.clone(), body);
+        let original = layer.clone();
+        board.layers.insert(layer.id.clone(), layer);
+
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::RenameLayer {
+            layer_id: "function-layer".to_string(),
+            name: "newHelper".to_string(),
+            summary: None,
+        }];
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("Function rename should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+
+        assert_eq!(command.layer.id, original.id);
+        assert_eq!(command.layer.name, "newHelper");
+        assert_eq!(command.layer.parent_id, original.parent_id);
+        assert_eq!(command.current_layer, original.parent_id);
+        assert_eq!(command.layer.cache.as_ref(), original.cache.as_ref());
+        assert_eq!(command.layer.pins.len(), original.pins.len());
+        assert_eq!(
+            command.layer.nodes.keys().collect::<HashSet<_>>(),
+            original.nodes.keys().collect::<HashSet<_>>()
+        );
+    }
+
+    #[test]
     fn setup_applies_cache_to_new_function_layer() {
         let board = empty_board();
         let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);

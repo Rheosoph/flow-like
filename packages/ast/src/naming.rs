@@ -1199,7 +1199,8 @@ mod tests {
         assert_eq!(receiver_class("Struct", "HashMap"), Some("map"));
         assert_eq!(receiver_class("Integer", "HashSet"), Some("set"));
         assert_eq!(receiver_class("Struct", "Normal"), Some("struct"));
-        assert_eq!(receiver_class("Byte", "Normal"), Some("bytes"));
+        assert_eq!(receiver_class("Byte", "Array"), Some("bytes"));
+        assert_eq!(receiver_class("Byte", "Normal"), Some("byte"));
         assert_eq!(receiver_class("PathBuf", "Normal"), Some("path"));
         assert_eq!(receiver_class("Date", "Normal"), Some("datetime"));
         assert_eq!(receiver_class("Generic", "Normal"), None);

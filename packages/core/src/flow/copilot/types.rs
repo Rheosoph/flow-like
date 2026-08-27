@@ -408,7 +408,7 @@ pub enum BoardCommand {
         summary: Option<String>,
     },
     /// Rename an existing layer without touching its contents or position. FlowScript emits this
-    /// when an anchored `module` block is written with a new name.
+    /// when an anchored module or Function declaration is written with a new name.
     RenameLayer {
         layer_id: String,
         name: String,

@@ -23762,7 +23762,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "llm",
     "name": "memory_optimize",
     "friendlyName": "Optimize Memory",
-    "description": "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, prune old versions, and rebuild indices. Run periodically or after bulk writes.",
+    "description": "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, and update indices. Optional cleanup prunes versions older than seven days after maintenance.",
     "category": "AI/Memory",
     "categoryPath": [
       "AI",
@@ -23804,11 +23804,11 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "keep_versions",
         "friendlyName": "Keep Versions",
-        "description": "Whether to keep old row versions (false = prune for disk savings)",
+        "description": "Retain all versions. Disable only to prune versions older than seven days after maintenance.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",
-        "defaultValue": false,
+        "defaultValue": true,
         "index": 3
       },
       {
@@ -51609,8 +51609,8 @@ export const catalogNodes: CatalogNode[] = [
     "slug": "nodes/data/datafusion/databases/df-register-athena",
     "packageName": "data",
     "name": "df_register_athena",
-    "friendlyName": "Register Athena Table",
-    "description": "Register an AWS Athena table in DataFusion. Query S3 data via Athena's catalog. Supports explicit credentials or environment variables (including Lambda IAM roles).",
+    "friendlyName": "Register AWS Athena",
+    "description": "Register an AWS Athena table for federated queries via ODBC. Query data in S3 using serverless SQL.",
     "category": "Data/DataFusion/Databases",
     "categoryPath": [
       "Data",
@@ -51622,10 +51622,10 @@ export const catalogNodes: CatalogNode[] = [
     "scores": {
       "privacy": 5,
       "security": 6,
-      "performance": 6,
-      "governance": 7,
-      "reliability": 8,
-      "cost": 4
+      "performance": 7,
+      "governance": 8,
+      "reliability": 7,
+      "cost": 5
     },
     "pins": [
       {
@@ -51640,7 +51640,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "session",
         "friendlyName": "Session",
-        "description": "DataFusion session to register the table in",
+        "description": "DataFusion session",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -51649,8 +51649,8 @@ export const catalogNodes: CatalogNode[] = [
       },
       {
         "name": "region",
-        "friendlyName": "Region",
-        "description": "AWS region where Athena is configured",
+        "friendlyName": "AWS Region",
+        "description": "AWS region (e.g., us-east-1)",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -51658,98 +51658,93 @@ export const catalogNodes: CatalogNode[] = [
         "index": 3
       },
       {
-        "name": "credential_mode",
-        "friendlyName": "Credential Mode",
-        "description": "How to authenticate: 'explicit' (access keys), 'environment' (env vars/Lambda IAM role/profile via AWS_PROFILE env var)",
+        "name": "access_key_id",
+        "friendlyName": "Access Key ID",
+        "description": "AWS Access Key ID",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
-        "defaultValue": "explicit",
-        "index": 4,
-        "options": {
-          "validValues": [
-            "explicit",
-            "environment"
-          ]
-        }
+        "index": 4
       },
       {
-        "name": "access_key_id",
-        "friendlyName": "Access Key ID",
-        "description": "AWS access key ID (only used when credential_mode is 'explicit')",
+        "name": "secret_access_key",
+        "friendlyName": "Secret Access Key",
+        "description": "AWS Secret Access Key",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
         "index": 5
       },
       {
-        "name": "secret_access_key",
-        "friendlyName": "Secret Access Key",
-        "description": "AWS secret access key (only used when credential_mode is 'explicit')",
+        "name": "s3_output_location",
+        "friendlyName": "S3 Output",
+        "description": "S3 path for query results (e.g., s3://my-bucket/athena-results/)",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
         "index": 6
       },
       {
-        "name": "session_token",
-        "friendlyName": "Session Token",
-        "description": "Optional AWS session token for temporary credentials",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "index": 7
-      },
-      {
         "name": "catalog",
         "friendlyName": "Catalog",
-        "description": "Athena data catalog name (default: AwsDataCatalog)",
+        "description": "Athena data catalog name",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "AwsDataCatalog",
+        "index": 7
+      },
+      {
+        "name": "database",
+        "friendlyName": "Database",
+        "description": "Athena/Glue database name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
         "index": 8
       },
       {
-        "name": "athena_database",
-        "friendlyName": "Athena Database",
-        "description": "Database name in Athena",
+        "name": "source_table",
+        "friendlyName": "Source Table",
+        "description": "Name of the table in Athena",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
         "index": 9
       },
       {
-        "name": "athena_table",
-        "friendlyName": "Athena Table",
-        "description": "Table name in Athena to query",
+        "name": "table_name",
+        "friendlyName": "Table Name",
+        "description": "Name to register in DataFusion",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
         "index": 10
       },
       {
-        "name": "output_location",
-        "friendlyName": "Output Location",
-        "description": "S3 location for query results (e.g., s3://my-bucket/athena-results/)",
+        "name": "workgroup",
+        "friendlyName": "Workgroup",
+        "description": "Athena workgroup (optional)",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
+        "defaultValue": "primary",
         "index": 11
       },
       {
-        "name": "table_name",
-        "friendlyName": "Table Name",
-        "description": "Name to register the table as in DataFusion",
+        "name": "odbc_driver",
+        "friendlyName": "ODBC Driver",
+        "description": "Simba Athena ODBC driver name/path",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
+        "defaultValue": "Simba Athena ODBC Driver",
         "index": 12
       },
       {
         "name": "exec_out",
         "friendlyName": "Done",
-        "description": "Table registered successfully",
+        "description": "Table registered",
         "pinType": "Output",
         "dataType": "Execution",
         "valueType": "Normal",
@@ -51758,18 +51753,26 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "session_out",
         "friendlyName": "Session",
-        "description": "DataFusion session with registered table",
+        "description": "DataFusion session",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DataFusionSession\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}",
         "index": 2
+      },
+      {
+        "name": "connection_info",
+        "friendlyName": "Connection Info",
+        "description": "Connection details (without secrets)",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 3
       }
     ],
     "inputCount": 12,
-    "outputCount": 2,
+    "outputCount": 3,
     "flags": [],
-    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -57205,7 +57208,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Array",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigDto\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"IndexConfigMetadata\",\"description\":\"Stable metadata shape for Lance index descriptions. The execution result\\nuses the storage DTO with the same serialized fields, while metadata builds\\navoid compiling the LanceDB implementation merely to describe this pin.\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"index_type\":{\"type\":\"string\"},\"columns\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"index_type\",\"columns\"]}",
         "index": 2
       }
     ],
@@ -57537,11 +57540,11 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "keep_versions",
         "friendlyName": "Keep Versions?",
-        "description": "Otherwise deletes old versions",
+        "description": "Retain all versions. Disable only to prune versions older than seven days after maintenance.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",
-        "defaultValue": false,
+        "defaultValue": true,
         "index": 3
       },
       {
@@ -110453,6 +110456,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
+        "defaultValue": 0.0,
         "index": 3
       },
       {
@@ -110468,6 +110472,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 3,
     "outputCount": 1,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -110612,6 +110617,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
+        "defaultValue": 0.0,
         "index": 3
       },
       {
@@ -110627,6 +110633,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 3,
     "outputCount": 1,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -141119,6 +141126,85 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/utils/testing/flow-assert",
+    "packageName": "std",
+    "name": "flow_assert",
+    "friendlyName": "Assert",
+    "description": "Asserts a condition inside a flow. On pass it logs `ASSERT_OK {label}` (Info) and continues; on fail it logs `ASSERT_FAIL {label} {details}` (Error) and halts the run with an error. Test runners grep these stable marker prefixes. Name test events with a `test` prefix so they are discoverable by test tooling.",
+    "category": "Utils/Testing",
+    "categoryPath": [
+      "Utils",
+      "Testing"
+    ],
+    "categorySlug": "nodes/utils/testing",
+    "icon": "/flow/icons/shield.svg",
+    "scores": {
+      "privacy": 10,
+      "security": 10,
+      "performance": 10,
+      "governance": 8,
+      "reliability": 9,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Trigger Pin",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "condition",
+        "friendlyName": "Condition",
+        "description": "The condition that must hold.",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 2
+      },
+      {
+        "name": "label",
+        "friendlyName": "Label",
+        "description": "Stable name for this assertion, echoed in the ASSERT_OK/ASSERT_FAIL log markers.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "assertion",
+        "index": 3
+      },
+      {
+        "name": "details",
+        "friendlyName": "Details",
+        "description": "Optional context logged when the assertion fails.",
+        "pinType": "Input",
+        "dataType": "Generic",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Pass",
+        "description": "Continues only when the assertion holds.",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 1,
+    "flags": [],
+    "version": 1,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/utils/types/utils-types-fallback",
     "packageName": "std",
     "name": "utils_types_fallback",
@@ -154332,8 +154418,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Utils",
     "slug": "nodes/utils",
     "depth": 1,
-    "count": 318,
-    "description": "Browse 318 generated Flow-Like node references in Utils with pin details and available schema, package, and risk-rating metadata."
+    "count": 319,
+    "description": "Browse 319 generated Flow-Like node references in Utils with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Array",
@@ -154614,6 +154700,14 @@ export const catalogCategories: CatalogCategory[] = [
     "depth": 3,
     "count": 7,
     "description": "Browse 7 generated Flow-Like node references in Utils/String/Similarity with pin details and available schema, package, and risk-rating metadata."
+  },
+  {
+    "label": "Testing",
+    "path": "Utils/Testing",
+    "slug": "nodes/utils/testing",
+    "depth": 2,
+    "count": 1,
+    "description": "Browse 1 generated Flow-Like node reference in Utils/Testing with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Types",

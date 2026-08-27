@@ -1769,14 +1769,19 @@ const DatabaseActionsDropdown: React.FC<{
 							<Zap className="h-4 w-4 mr-2" />
 							{optimizing
 								? "Optimizing..."
-								: t("optimizeKeepVersions", "Optimize (Keep Versions)")}
+								: t("optimizeKeepVersions", "Optimize and Keep Versions")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() => handleOptimize(false)}
 							disabled={optimizing}
 						>
 							<Zap className="h-4 w-4 mr-2" />
-							{optimizing ? "Optimizing..." : "Optimize (Compact)"}
+							{optimizing
+								? "Optimizing..."
+								: t(
+										"optimizePruneOldVersions",
+										"Optimize and Prune Old Versions",
+									)}
 						</DropdownMenuItem>
 					</>
 				)}

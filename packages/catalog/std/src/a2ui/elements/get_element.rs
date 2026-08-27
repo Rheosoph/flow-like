@@ -180,9 +180,7 @@ async fn find_component_in_board(board: &Board, element_id: &str) -> Option<Surf
     // runtime's page-retargeting of element refs.
     for page in &loaded.pages {
         for component in &page.components {
-            if component.id == element_id
-                || element_id == format!("{}/{}", page.id, component.id)
-            {
+            if component.id == element_id || element_id == format!("{}/{}", page.id, component.id) {
                 return Some(component.clone());
             }
         }

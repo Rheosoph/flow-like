@@ -410,7 +410,7 @@ export class DatabaseState implements IDatabaseState {
 				),
 				{
 					method: "POST",
-					body: JSON.stringify({ keep_versions: keepVersions ?? false }),
+					body: JSON.stringify({ keep_versions: keepVersions ?? true }),
 				},
 				this.backend.auth,
 			);
@@ -419,7 +419,7 @@ export class DatabaseState implements IDatabaseState {
 		return await invoke("db_optimize", {
 			appId,
 			tableName,
-			keepVersions: keepVersions ?? false,
+			keepVersions: keepVersions ?? true,
 			userScoped: userScoped ?? false,
 		});
 	}

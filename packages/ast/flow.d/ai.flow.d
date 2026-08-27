@@ -613,10 +613,10 @@ declare namespace ai {
         function createConfig({ database: Struct, embeddingModel: Struct, maxContextTokens?: int, recallStrategy?: string, recallTopK?: int, autoCompress?: bool, compressThreshold?: int }): Struct;
 
         /**
-         * Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, prune old versions, and rebuild indices. Run periodically or after bulk writes.
+         * Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, and update indices. Optional cleanup prunes versions older than seven days after maintenance.
          * @node memory_optimize @receiver memory_config @alias memoryOptimize
          * @param memoryConfig — MemoryConfig from Create Memory Config node (receiver: `this` in `x.optimize(...)`)
-         * @param keepVersions (optional) — Whether to keep old row versions (false = prune for disk savings)
+         * @param keepVersions (optional) — Retain all versions. Disable only to prune versions older than seven days after maintenance.
          * @impure has side effects / drives control flow
          */
         function optimize(this: MemoryConfig, { memoryConfig: Struct, keepVersions?: bool }): void;

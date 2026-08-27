@@ -1608,7 +1608,7 @@ export function useFrontendRuntimeToolExecutor(
 							await backend.dbState.optimize(
 								toolAppId,
 								tableName,
-								getArgBool(args, "keep_versions", "keepVersions", false),
+								getArgBool(args, "keep_versions", "keepVersions", true),
 								userScoped,
 							);
 							return { status: "ok", table_name: tableName };

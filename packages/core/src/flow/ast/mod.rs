@@ -37,10 +37,11 @@ pub use lower::{
 };
 pub use reconcile::{
     MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileOptions, ReconcileResult,
-    reconcile, reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
-    reconcile_text_with_catalog_enriched_opts, reconcile_text_with_catalog_enriched_scoped,
-    reconcile_text_with_catalog_opts, reconcile_text_with_catalog_scoped, reconcile_with_catalog,
-    reconcile_with_catalog_mode, reconcile_with_catalog_scoped,
+    binary_operator_rows, reconcile, reconcile_text, reconcile_text_with_catalog,
+    reconcile_text_with_catalog_enriched, reconcile_text_with_catalog_enriched_opts,
+    reconcile_text_with_catalog_enriched_scoped, reconcile_text_with_catalog_opts,
+    reconcile_text_with_catalog_scoped, reconcile_with_catalog, reconcile_with_catalog_mode,
+    reconcile_with_catalog_scoped,
 };
 pub(crate) use reconcile::{catalog_names, parse_pin_occurrence_ref, pin_occurrence_ref};
 pub(crate) use reconcile::{
@@ -266,18 +267,20 @@ mod generate_flowscript {
     /// be a no-op — no commands, no diagnostics. This exercises the full lower→parse→reconcile
     /// pipeline on real boards, including functions/layers, loops, and streaming handlers.
     ///
-    /// Known remaining gap (2026-07-16, run manually with `--ignored` while closing it). The
-    /// 2026-07-05 list (anchored Assign ConnectPins re-emission, variable.field reader reuse,
-    /// event-level `return`, conflicting board-derived declarations, boundary/variable schema
-    /// projection drift, duplicate multi-exec arm labels, composite-literal pin writes, node
-    /// budget on pre-existing overfull layers) is fixed with targeted regression tests. What is
-    /// left is one lowering-expressiveness class:
-    /// - boards with DUPLICATED tool-handler subgraphs / cross-handler reads render a bare local
-    ///   name (e.g. the current handler's `url` param) for an edge that actually originates from
-    ///   a DIFFERENT same-named entry or sibling subtree, so reconcile re-wires the consumer to
-    ///   the local producer (ConnectPins churn) and expression calls inside those subtrees can
-    ///   still hit "matched conflicting catalog declarations".
-    #[ignore = "documents the remaining lower→reconcile roundtrip gap: cross-handler/duplicated-subgraph name collapse"]
+    /// **This is not the gate.** It is `#[ignore]`d, so it never runs in CI, and it stands in for
+    /// the real board round-trip suite:
+    /// `flow-like-catalog/tests/render_contract_catalog.rs::board_fixtures_round_trip_without_changing_the_board`,
+    /// which runs the same corpus against the REAL catalog, checks convergence and dangling pin
+    /// references on top of the no-op, and keeps its remaining gaps in a ratcheting `KNOWN_GAPS`
+    /// list instead of behind an `#[ignore]`. Keep this one for the catalog-free view of the same
+    /// fixtures; add new coverage there.
+    ///
+    /// Known remaining gap (2026-08-27): `ttwctnp08u18sg2z6nmcqqak.board` plans 66 `ConnectPins`
+    /// for an unchanged document and NEVER converges — applying them and re-reconciling plans the
+    /// same 66 again, forever. Each apply writes a freshly minted pin id into the target's
+    /// `depends_on` that belongs to no pin on the board, while the source's `connected_to` keeps
+    /// every previous dead id, so the edge never resolves and the board grows on every Apply.
+    #[ignore = "superseded as a gate by render_contract_catalog.rs; documents the non-convergent 66-command churn on ttwctnp…board"]
     #[tokio::test]
     async fn anchored_roundtrip_is_noop() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

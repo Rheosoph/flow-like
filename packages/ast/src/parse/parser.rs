@@ -2108,10 +2108,16 @@ fn lvalue_to_field_path(expr: &Expr) -> Option<(String, String)> {
     }
 }
 
-/// True when `s` is a camelCase fixed point (no separators), so a `.s` access renders the same
-/// whether treated as an output-pin selection or a struct field.
+/// True when `s` is a camelCase fixed point, so a `.s` access renders the same whether it is
+/// treated as an output-pin selection or a struct field.
+///
+/// This has to be the actual transform, not an approximation of it. "All alphanumeric" accepted
+/// `DisplayName` and `ID`, which are not fixed points: read as `Expr::Field` they re-render
+/// camelized, so `row.DisplayName` became `row.displayName` on the second render and the struct key
+/// silently changed. A pin name in rendered text is always already camelCase, so nothing that is
+/// genuinely a pin selection is lost by requiring it.
 fn is_camel_fixed_point(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+    !s.is_empty() && crate::text::to_camel_case(s) == s
 }
 
 /// Find the byte offset just past the balanced `{…}`/`[…]` span starting at `start`, skipping

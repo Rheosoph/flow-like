@@ -501,10 +501,7 @@ fn renders_use_declarations_before_interfaces() {
             },
             UseDecl {
                 path: vec!["ui".to_string()],
-                kind: UseKind::Members(vec![
-                    "setElementText".to_string(),
-                    "navigateTo".to_string(),
-                ]),
+                kind: UseKind::Members(vec!["setElementText".into(), "navigateTo".into()]),
             },
         ],
         interfaces: vec![InterfaceDecl {

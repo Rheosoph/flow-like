@@ -15,7 +15,9 @@ This guide was checked on 27 August 2026 against [Lance 10.0.0](https://github.c
 Flow-Like still pins Lance 4.0.0 and LanceDB 0.27.2. Options marked **Requires an update** describe the stable upstream capability to target when those dependencies and Flow-Like's index controls are updated.
 :::
 
-![A decision tree that starts with the repeated query and routes similar vectors to a flat scan or tuned vector index, token search to Full Text, raw substring search to FM, scalar filters to BTree or Bitmap, list membership to Label List, and coarse pruning or geometry to upstream Lance 10 indexes](../../../../assets/LanceIndexDecisionGuide.svg)
+An FM-index is a compressed index for finding an exact substring in raw strings or bytes. It does not tokenize text for relevance ranking.
+
+![A Lance index decision tree for vectors, text, scalar values, lists, and lower-level pruning. The following table provides the full text equivalent.](../../../../assets/LanceIndexDecisionGuide.svg)
 
 ## Choose from the query
 
@@ -25,22 +27,22 @@ The table is the text equivalent of the decision tree and includes the less comm
 |----------------|------------|---------------------------|
 | None, or the current scan is already fast | No index | Available |
 | Exact nearest vectors on a manageable table | Flat vector scan | Available |
-| Approximate nearest vectors at scale | A vector index chosen by recall, latency, memory, and storage tests | **Requires an update** for an explicit metric and algorithm |
+| Approximate nearest vectors at scale | A vector index chosen by recall, latency, memory, and storage tests | Cosine IVF-PQ is available; other algorithms and tuning controls **require an update** |
 | Words, phrases, or BM25-ranked text | `FULL TEXT` | Available |
-| Arbitrary substring, prefix, suffix, regex, or byte search | `FM` | **Requires an update** |
-| Repeated `contains` or `LIKE` filters on text | `NGRAM` | Direct Lance 10 only |
+| Arbitrary substring filters through `contains` on string or binary data | `FM` | **Requires an update** |
+| Repeated `contains` or `LIKE` filters with a usable three-character literal | `NGRAM` | Lower-level Lance API only |
 | Point, range, `IN`, or null filters on mostly distinct scalar values | `BTREE` | Available |
-| Equality or small `IN` filters on a few distinct scalar values | `BITMAP`; fewer than about 1,000 unique values is the upstream starting heuristic | Available |
-| Any or all membership tests inside a list column | `LABEL LIST` | Available |
-| Skip pages using coarse minimum and maximum bounds | `ZONEMAP` | Direct Lance 10 only |
-| Skip pages using approximate membership with possible false positives | `BLOOMFILTER` | Direct Lance 10 only |
-| Prune two-dimensional bounding-box searches | `RTREE` | Direct Lance 10 only |
+| Point, range, `IN`, or null filters on a few distinct scalar values | `BITMAP`; fewer than about 1,000 unique values is the upstream starting heuristic | Available |
+| Any or all membership tests inside a `List<T>` or `LargeList<T>` of primitive, low-cardinality values | `LABEL LIST` | Available |
+| Skip zones using coarse minimum and maximum bounds | `ZONEMAP` | Lower-level Lance API only |
+| Skip zones using approximate membership with possible false positives | `BLOOMFILTER` | Lower-level Lance API only |
+| Prune two-dimensional bounding-box searches | `RTREE` | Lower-level Lance API only |
 
-`NGRAM`, `ZONEMAP`, `BLOOMFILTER`, and `RTREE` are available in the Lance 10.0.0 format engine and lower-level API. LanceDB Rust 0.37.1 does not expose them through its regular `create_index` builder, so a Flow-Like dependency update alone will not add those choices.
+`NGRAM`, `ZONEMAP`, `BLOOMFILTER`, and `RTREE` already exist in Flow-Like's pinned Lance 4 crates and remain in Lance 10.0.0. LanceDB Rust 0.37.1 does not expose them through its regular `create_index` builder, so a dependency update alone will not add those choices. Flow-Like needs lower-level integration for them.
 
 ## What Build Index does today
 
-The [Build Index](/nodes/data/database/optimization/index-local-db/) workflow node flushes buffered writes, then builds one index on one column. It exposes the builders below without algorithm, distance-metric, partition, quantization, or text-tokenizer settings.
+The [Build Index](/nodes/data/database/optimization/index-local-db/) workflow node flushes buffered writes, then builds one index on one column. It exposes the builders below without algorithm, distance-metric, partition, quantization, or text-tokenizer settings. LanceDB 0.37.1 still does not support a composite index across several columns.
 
 | Selection | Current behavior |
 |-----------|------------------|
@@ -48,22 +50,20 @@ The [Build Index](/nodes/data/database/optimization/index-local-db/) workflow no
 | `BITMAP` | Builds a bitmap index |
 | `LABEL LIST` | Builds a label-list index |
 | `FULL TEXT` | Builds a full-text inverted index |
-| `VECTOR` | Delegates to LanceDB `Auto` |
-| `AUTO` | Chooses IVF-PQ with L2 distance for a fixed-size vector column; otherwise chooses B-tree for a supported scalar column |
+| `VECTOR` | Builds an IVF-PQ index with cosine distance |
+| `AUTO` | Builds the same cosine IVF-PQ index for a supported vector column; otherwise delegates to LanceDB `Auto`, which chooses B-tree for a supported scalar column |
 
-`AUTO` does not inspect scalar cardinality. Choose `BITMAP` or `LABEL LIST` yourself when the query shape calls for one. `VECTOR` and `AUTO` currently take the same implementation path.
+`AUTO` does not inspect scalar cardinality. Choose `BITMAP` or `LABEL LIST` yourself when the query shape calls for one. On a vector column, `VECTOR` and `AUTO` take the same cosine IVF-PQ path.
 
 The HTTP and Data Studio builder omits the `VECTOR` selection. Its automatic vector route is `AUTO`.
 
-:::danger[Do not use the current automatic vector index for cosine search]
-Flow-Like's Vector Search and Hybrid Search request cosine distance. LanceDB's current `Auto` builder creates an IVF-PQ vector index with L2 distance, and LanceDB requires the index and query distance metrics to match. This mismatch can produce invalid nearest-neighbor results.
-
-Until Flow-Like exposes a cosine-aware vector builder, keep cosine retrieval on a flat scan or rebuild the index through an integration that sets cosine explicitly. Compare any indexed result with a flat-search baseline before relying on it.
+:::caution[Rebuild vector indexes created before this fix]
+Flow-Like's Vector Search and Hybrid Search request cosine distance, and new `VECTOR` and vector `AUTO` indexes now use cosine as well. An existing index keeps the metric it was trained with. Run Build Index again on each affected vector column to replace a legacy L2 index, then compare recall with the flat-search baseline.
 :::
 
 ## Choose a vector index after the update
 
-An approximate nearest-neighbor (ANN) index trades some recall for lower latency. Current stable LanceDB combines inverted-file (IVF) partitions with full vectors, scalar quantization (SQ), product quantization (PQ), residual quantization (RQ), or a hierarchical navigable small-world (HNSW) graph.
+An approximate nearest-neighbor (ANN) index trades some recall for lower latency. Current stable LanceDB combines inverted-file (IVF) partitions with full vectors, scalar quantization (SQ), product quantization (PQ), RaBitQ quantization (RQ), or a hierarchical navigable small-world (HNSW) graph.
 
 | Workload goal | Starting candidate | Practical consequence |
 |---------------|--------------------|-----------------------|
@@ -75,40 +75,52 @@ An approximate nearest-neighbor (ANN) index trades some recall for lower latency
 
 LanceDB 0.37.1 also exposes `IVF_FLAT`, `IVF_SQ`, and `IVF_HNSW_PQ`. An IVF index still searches selected partitions, so `IVF_FLAT` is approximate unless the query probes every partition. HNSW variants can show more latency variation under heavy filtering. Benchmark at least two plausible candidates.
 
+An incremental update adds appended rows using the existing IVF partitions and, when applicable, the existing quantization model. It does not retrain IVF centroids or codebooks. Rebuild a vector index after major growth or a distribution shift, then measure recall again.
+
 Build and query with the same distance metric. Record recall against the flat baseline, p50 and p95 latency, index size, build time, and write cost. The fastest result is useful only if its recall meets the product requirement.
 
-## New scalar choices in Lance 10
+## Additional scalar indexes
 
-The latest stable Lance release widens the set of physical indexes, but each one accelerates a specific predicate.
+FM is new relative to Flow-Like's pinned high-level LanceDB stack. The other indexes in this section need lower-level plumbing even though their implementations already exist in the pinned Lance crates.
 
 | Index | Use it for | Boundary |
 |-------|------------|----------|
-| `FM` | Exact raw substring, prefix, suffix, regex, or byte search | LanceDB 0.37.1 exposes it; Flow-Like does not yet |
-| `NGRAM` | Repeated text `contains` and `LIKE` predicates | Lower-level Lance API only |
-| `ZONEMAP` | Cheap page pruning when values cluster into useful min/max ranges | Lower-level Lance API only |
-| `BLOOMFILTER` | Cheap page pruning for equality or membership tests | May return false positives, which the query must verify |
+| `FM` | Exact raw substring filters through `contains` on string or binary data | LanceDB 0.37.1 exposes it; Flow-Like does not yet |
+| `NGRAM` | Repeated text `contains` and `LIKE` predicates | ASCII-folded, lower-case trigrams; short patterns fall back to row checks |
+| `ZONEMAP` | Cheap zone pruning when values cluster into useful min/max ranges | Lower-level Lance API only |
+| `BLOOMFILTER` | Cheap zone pruning for equality or membership tests | May return false positives, which the query verifies against rows |
 | `RTREE` | Static two-dimensional bounding-box pruning for GeoArrow geometry | Lower-level Lance API only |
 
-Full-text search has a different purpose from `FM` and `NGRAM`. It tokenizes documents and supports term, phrase, and BM25-ranked retrieval. Use it when the meaning of a match is based on tokens rather than a raw substring.
+The high-level LanceDB FM builder documents `contains` as its supported predicate. The lower-level Lance implementation can plan additional prefix, suffix, and regex operations. FM works on raw bytes and remaps `0x00` and `0xFF` to spaces, so it is unsuitable when those byte values must remain distinct.
+
+Full-text search has a different purpose from FM and N-gram indexes. It tokenizes documents and supports term, phrase, and BM25-ranked retrieval. Use it when the meaning of a match is based on tokens rather than a raw substring.
 
 ## Build and maintain the index
+
+:::caution[Version cleanup is explicit]
+**Optimize and Update** now defaults **Keep Versions?** to true. In that mode it compacts fragments and updates indexes without pruning version history.
+
+Disabling **Keep Versions?** runs the same maintenance first, then prunes versions older than seven days. Cleanup leaves unverified files untouched, which protects files that may belong to another process's in-progress operation. A tag that references an old version blocks pruning, and a pruned version cannot be checked out or restored. Flow-Like does not currently expose a different retention period.
+:::
 
 1. Capture the real filter or search and measure its unindexed latency.
 2. Inspect the column type, cardinality, selectivity, and update pattern.
 3. Pick the narrowest supported index from the decision table. Build it after the bulk load.
 4. Use [List Indices](/nodes/data/database/meta/list-indices-db/) to record the generated index name, type, and column.
-5. After substantial appends, run [Optimize and Update](/nodes/data/database/optimization/optimize-local-db/) to compact fragments and update existing indexes.
+5. After substantial appends, run [Optimize and Update](/nodes/data/database/optimization/optimize-local-db/) with **Keep Versions?** enabled. Disable it only when the seven-day cleanup policy fits the database's retention requirements.
 6. Repeat the same workload. Keep the index only when the latency gain justifies its build, write, and storage costs.
 
-LanceDB queries scan rows that are newer than the indexed data and merge them with indexed results. The results remain complete, while latency can rise as uncovered rows accumulate. Upstream APIs expose index statistics for checking coverage. Flow-Like's maintenance path is **Optimize and Update**.
+LanceDB queries scan rows that are newer than the indexed data and merge them with indexed results. The results remain complete, while latency can rise as uncovered rows accumulate. Upstream APIs expose index statistics for checking coverage. Flow-Like currently bundles index maintenance into **Optimize and Update**.
 
 Use [Drop Index](/nodes/data/database/optimization/drop-index-db/) with the name returned by List Indices when an index is ineffective, obsolete, or built with the wrong vector metric.
 
 ## Upstream references
 
 - [LanceDB indexing guide](https://docs.lancedb.com/indexing)
+- [LanceDB scalar index choices](https://docs.lancedb.com/indexing/scalar-index)
 - [LanceDB vector index choices](https://docs.lancedb.com/indexing/vector-index)
 - [LanceDB reindexing and index coverage](https://docs.lancedb.com/indexing/reindexing)
-- [Index format and index taxonomy in Lance 10.0.0](https://lance.org/format/index/)
+- [Current Lance index-format specification](https://lance.org/format/index/)
+- [Scalar index types in the tagged Lance 10.0.0 source](https://github.com/lance-format/lance/blob/v10.0.0/rust/lance-index-core/src/scalar.rs#L39-L70)
 - [Lance 10.0.0 release](https://github.com/lance-format/lance/releases/tag/v10.0.0)
 - [LanceDB 0.37.1 release](https://github.com/lancedb/lancedb/releases/tag/v0.37.1)

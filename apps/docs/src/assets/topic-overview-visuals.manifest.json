@@ -48,7 +48,7 @@
 		},
 		{
 			"file": "LanceIndexDecisionGuide.svg",
-			"dimensions": "1440x720",
+			"dimensions": "720x1070",
 			"source": "deterministic SVG composition",
 			"page": "topics/datascience/lance-indexes.md"
 		},

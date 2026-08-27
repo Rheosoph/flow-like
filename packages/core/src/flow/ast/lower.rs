@@ -4176,7 +4176,7 @@ fn is_materialized_return_name(variable_name: &str, fn_name: &str, pin_name: &st
 /// An impure node with no execution input is accepted as a trigger even without the flag: the two
 /// properties coincide across the catalog, and taking the shape too keeps a board snapshot that
 /// predates a node's `start` metadata rendering as the event it is.
-fn is_trigger_entry(node: &Node) -> bool {
+pub(crate) fn is_trigger_entry(node: &Node) -> bool {
     node.start == Some(true) || (is_impure(node) && !has_exec_input(node))
 }
 
