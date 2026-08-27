@@ -783,8 +783,9 @@ destructive intent explicit.
 ### 15.1 Identity is not the same as spelling
 
 Show why renaming a local variable or call display must not accidentally replace the wrong
-node, function layer, or event entry. State the current gap: an anchored Function name should be
-renamable in place, but FlowScript still rejects that edit while the Board editor can perform it.
+node, function layer, or event entry. Show an anchored Function rename producing one
+`RenameLayer` under the stable layer ID. Keep Function signature migration outside the current
+guarantee.
 
 ### 15.2 `//@n`, `//@v`, and `//@l`
 
@@ -798,7 +799,14 @@ the graph.
 
 ### 15.4 Corrections and diagnostics
 
-Distinguish safe canonical corrections from ambiguous changes that fail closed.
+Distinguish safe canonical corrections from ambiguous changes that fail closed. Explain that one
+anchor assigned to two distinct entities fails during raw-source preflight, before Board lookup.
+The Event header and immediate first arm-routing Branch may repeat an anchor because they represent
+one entity. Ordinary node, variable, Function, and module anchor IDs absent from the current Board
+are then reported as unavailable and reconciled as unanchored entities. Absent Event anchors retain
+their specialized recovery path. It re-anchors one compatible entry or creates a fresh entry when
+zero or several candidates remain. Invalid Event metadata, incompatible live anchors, and ambiguous
+ordinary recovery still stop the plan.
 
 ### 15.5 Deletions require explicit intent
 

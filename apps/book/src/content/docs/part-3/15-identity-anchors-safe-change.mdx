@@ -34,12 +34,11 @@ belong to the App boundary described in Chapter 13.
 > batches, request separate approval for recognized deletions, and support selection-scoped
 > editing. Studio/Desktop can show the authoritative command plan before Apply; Web performs the
 > same reconciliation at Apply. Anchored Board-global variables, Events, and modules support
-> in-place renames, and anchored Functions can move between modules without changing identity. A
-> true anchored Function rename is intended to preserve identity but is currently rejected by
-> FlowScript, as is a Function signature change. Board command execution is rollback-backed and a
-> successful Apply is atomic at the authoring layer. A successful mutating Apply is normally
-> recorded as one local undo batch. Rollback, persistence, and history-bookkeeping failures remain
-> visible.
+> in-place renames. Anchored Functions can be renamed or moved between modules without changing
+> their layer IDs. Function signature changes remain rejected. Board command execution is
+> rollback-backed and a successful Apply is atomic at the authoring layer. A successful mutating
+> Apply is normally recorded as one local undo batch. Rollback, persistence, and
+> history-bookkeeping failures remain visible.
 
 ## 15.1 Identity is not the same as spelling
 
@@ -54,11 +53,11 @@ For an author, the practical identity rule is:
 > to do the same job.
 
 The reconciler cannot infer purpose from prose. It tests properties the Board can verify: entity
-kind, containing module, Function, or Event, resolved target, and boundary contract. An anchored
-String Contains call cannot silently become an IMAP connection, and a call to one Function cannot
-keep its node identity while targeting another Function. Both edits fail those checks. An explicit
-move can change the containing module while preserving identity because the retained anchor makes
-the move itself part of the proposal.
+kind, containing module or Function, resolved target, and boundary contract. Event recovery also
+checks the handler scope. An anchored String Contains call cannot silently become an IMAP
+connection, and a call to one Function cannot keep its node identity while targeting another
+Function. Both edits fail those checks. An explicit move can change the containing module while
+preserving identity because the retained anchor makes the move itself part of the proposal.
 
 Current behavior makes the boundary concrete:
 
@@ -67,18 +66,16 @@ Current behavior makes the boundary concrete:
 | Rename an anchored Board variable | Updates the existing variable |
 | Rename an anchored Event entry | Renames the existing entry node |
 | Rename or reparent an anchored module | Updates the existing module layer |
+| Rename an anchored Function | Renames the existing Function layer under its current ID |
 | Move an anchored Function or Event to another module | Moves the existing entities under their current IDs |
 | Change the catalog operation while keeping its node anchor | Blocks because the anchor and operation disagree |
-| Copy Board content | Mints new node, pin, and layer IDs and translates internal references |
+| Copy Board content on the canvas | Mints new node, pin, and layer IDs and translates internal references |
 | Move Board content | Retains IDs and changes its containing layer |
 
-Function names should follow the same rule as Event and module names. The Function layer is the
-durable callable entity, and its anchor supplies the identity needed for an in-place rename.
-
-The current FlowScript reconciler still treats a changed Function name as a possible retarget and
-rejects it. Rename the Function from the Board, choose a name unique within its module, and
-re-render source until the FlowScript path adds the required collision and call-resolution checks.
-Anchored Function signatures also remain fixed because changing parameters or returns requires
+The Function layer is the durable callable entity, and its anchor supplies the identity for an
+in-place rename. FlowScript emits `RenameLayer` when an anchored declaration receives a new name
+that is available in its module. Existing Call Function nodes continue to target the stable layer
+ID. Anchored Function signatures remain fixed because changing parameters or returns requires
 migrating every caller and boundary wire.
 
 This distinction keeps familiar source syntax useful without asking names to carry more certainty
@@ -127,8 +124,11 @@ renders, source-to-Board navigation, and statement-level merges carry the same r
 Leave anchors in place during ordinary edits. Studio can dim them without deleting them. When
 copying source to create another entity, leave the anchor on the original statement. Remove it
 from the pasted copy before Apply, then rename the copy as needed so declarations remain unique.
-Duplicating or inventing an anchor is unsafe: duplicate anchors produce a diagnostic before the
-reconciler derives any Board commands.
+Do not invent anchors. An ordinary anchor ID that is absent from the current Board is reported as
+unavailable and ignored, so it cannot force an association with live work. The entity then follows
+ordinary unanchored reconciliation. An absent Event anchor stays attached for the specialized
+recovery described in Section 15.4. One anchor assigned to two distinct entities produces a
+diagnostic before the reconciler looks it up or derives any Board commands.
 
 During a merge, combine competing edits to an anchored statement into one surviving statement.
 If both versions must remain, only the continuation keeps the anchor. The other version becomes a
@@ -147,9 +147,13 @@ Rename the Incident Desk Event while preserving its anchor:
 ```
 
 The current plan contains one `RenameNode` for `triage-entry`. The Event body, entry pins, wires,
-coordinates, and App Event references retain their existing identity. A module rename similarly
-uses one `RenameLayer`, while moving an anchored Function to another module uses `MoveToLayer`
-without recreating that Function.
+coordinates, and App Event references retain their existing identity. Renaming an anchored
+Function or module similarly uses one `RenameLayer`. The Function keeps its layer ID, body,
+boundary pins, cache settings, and existing call targets. Moving an anchored Function to another
+module uses `MoveToLayer` without recreating it.
+
+Written callers in the same revision must use the Function's final name. Planning retires its old
+spelling. Qualified calls likewise use the module's final path after a rename or move.
 
 Changing a literal is smaller still:
 
@@ -169,26 +173,58 @@ a one-character update and a new branch comparable during review.
 ## 15.4 Corrections automate only proven repairs
 
 A **correction** is a deterministic repair that does not require the system to choose among
-plausible meanings. A **diagnostic** says the proposal cannot be represented safely or
-unambiguously. Corrections allow Apply to continue; diagnostics execute zero commands.
+plausible meanings. A correction can accompany a valid plan. A **diagnostic** says the proposal
+cannot be represented safely or unambiguously. When any diagnostic exists, Apply executes zero
+commands.
 
-Event recovery shows the boundary. If an Event carries a stale anchor and the current Board has
-one compatible, unclaimed entry in the same scope, the reconciler can bind the source to that
-entry and report the correction. When the source names an exact catalog Event type and no live
-entry matches, the reconciler can recreate that Event under a new identity and canonicalize the
-source. Two compatible live entries make the choice ambiguous, so the edit stops and names the
-candidates. For this repair, compatible means that the Event kind, scope, and parameter contract
-still fit the source declaration.
+Duplicate-anchor preflight runs against the submitted source before any Board lookup. One anchor
+assigned to two distinct entities is ambiguous even when the ID is absent from this Board. A
+multi-output Event header and its immediate first arm-routing Branch may repeat the same node
+anchor because both source forms represent one Event entry. Any distinct reuse stops before the
+reconciler derives commands.
 
-Recovery is narrower for other entities today. A stale call, variable, Function, or module anchor
-generally blocks rather than rebinding by a friendly name. This asymmetry is a current
-implementation boundary. It prevents a repair rule proven for Event entries from becoming an
-unsafe general guess.
+After preflight, an anchor ID absent from the current Board is unavailable for an ordinary node,
+variable, Function, or module. The reconciler reports a correction, ignores that ID, and handles
+the entity as unanchored. Ordinary resolution may create a new entity or reuse one unique
+compatible live target. It cannot use an absent ID to preserve identity.
+
+A live Function or module layer named by an anchored declaration is reserved for that declaration
+throughout the revision. If the same source revision renames `legacyHelper` to `currentHelper` and
+also declares a new unanchored `legacyHelper`, the new declaration receives another layer. Source
+order does not let it capture the layer being renamed. The same rule applies when a Function moves
+out of a module and its old location receives a new Function with the same name.
+
+Availability does not prove compatibility. An anchor that resolves on the current Board remains
+authoritative. If its live entity has the wrong operation, layer kind, Function target, or
+boundary contract, reconciliation fails closed. A variable anchor that exists in another Function
+or in the Board globals is also incompatible with the declaration's scope. It remains live and is
+not cleared as unavailable. Unanchored resolution stops when several live entities are equally
+plausible, including duplicate Function layers or same-named variables in one scope.
+
+Event recovery shows the boundary. For an absent Event anchor, the reconciler collects unclaimed,
+registered entries that fit the written type, name or alias, scope, and parameter contract. If
+several entries fit, exactly one entry that still drives the first still-live execution body node
+can settle the choice. One remaining candidate is re-anchored.
+
+With zero or several compatible candidates after that check, recovery does not guess. It uses the
+normal entry-creation path and assigns a new Board identity. An exact catalog type stays exact. An
+alias-only header uses the standard Simple or Generic fallback according to its declared
+parameters. Valid Event metadata is still required, but an absent anchor and an empty copied
+handler do not by themselves block recreation.
+
+Absent Event anchors keep this specialized recovery path instead of being cleared during the
+unavailable-anchor pass. That distinction lets Event recovery consider kind, scope, and parameter
+contract before it chooses a unique entry or creates a replacement.
+
+Unavailable anchors do not turn a whole-Board replacement draft into an import. In replacement
+mode, omitting existing target content can still propose deletions. Use additive or explicitly
+scoped authoring for a partial cross-Board paste, then review the resulting command plan.
 
 Other blocking cases include:
 
-- one anchor attached to several entities;
-- an anchor whose entity kind disagrees with the written operation;
+- one anchor attached to several distinct entities;
+- a live anchor whose entity kind or operation disagrees with the written entity;
+- an ordinary unanchored declaration with several compatible live targets;
 - a Function call anchor that now names a different Function;
 - an anchored Function boundary with changed parameters or returns; and
 - an unresolved or incompatible catalog call.
@@ -198,8 +234,9 @@ reload canonical FlowScript even when no Board mutation was needed, so the repai
 appears in the next source projection. The current editor does not explain the correction in a
 separate message.
 
-Apply a correction only when the evidence identifies one compatible result. Otherwise return a
-diagnostic.
+Re-anchor only when the evidence identifies one compatible live entity. When a new entity is a
+valid representation of the source, recreation avoids choosing among live candidates. Return a
+diagnostic when neither a safe update nor a valid creation represents the proposal.
 
 ## 15.5 Deletions require explicit intent
 

@@ -696,13 +696,22 @@ Anchors should remain in editable source. The code check confirms that trailing 
 and `//@l` comments are the current identity transport across parse/render, navigation, scoped
 editing, statement merge, and Apply. Authors should leave them alone during ordinary edits. When
 copying source to create another entity, keep the original anchor and remove only the copy's
-anchor. Duplicate or fabricated anchors fail closed.
+anchor. One anchor assigned to two distinct entities fails during raw-source preflight, including
+when the ID is absent from the current Board. A multi-output Event header and its immediate first
+arm-routing Branch may repeat the anchor because they represent one entry. An ordinary node,
+variable, Function, or module ID absent from the current Board is then reported as unavailable and
+the entity follows ordinary unanchored reconciliation.
 
-The founder wants deterministic correction to be as automatic as possible. Current recovery is
-strongest for Events: one compatible live entry can replace a stale anchor, and an exact typed
-Event can be recreated when no compatible entry exists. Ambiguous Events and stale anchors on
-ordinary calls, variables, Functions, and modules remain blocking. The chapter presents this as
-the current proof boundary rather than a universal rebind guarantee. Corrections trigger canonical
+The founder wants deterministic correction to be as automatic as possible. Ordinary node,
+variable, Function, and module anchors absent from the current Board are cleared after
+duplicate-anchor preflight. Their unanchored resolvers may reuse one unique compatible live entity
+or create a new one. Absent Event anchors keep a specialized recovery path. One compatible live
+entry can replace the stale anchor, and the first still-live execution-body connection can narrow
+several candidates to one. If zero or several candidates remain, the normal entry-creation path
+creates a fresh identity instead of guessing. It recreates an exact typed entry or uses the
+standard Simple/Generic fallback for an alias-only header. Valid Event metadata remains required.
+Anchors that resolve to incompatible live state fail closed. The chapter presents this as the
+current proof boundary rather than a universal rebind guarantee. Corrections trigger canonical
 reload but are not yet explained in the editor UI.
 
 The code-backed deletion drill removes `//@n:contains-report` from an otherwise unchanged Incident
@@ -724,11 +733,11 @@ interfaces as visible shared context, and carries the rendered section anchors b
 Unrendered Event and Function sections are outside the deletion diff; an in-scope deletion and a
 visible variable deletion remain guarded.
 
-The intended Function rule and current code disagree. An anchored Function rename should preserve
-the layer identity. Current FlowScript reconciliation rejects a true name change, while the
-Function editor can rename the layer from the Board. FlowScript also rejects signature changes.
-Chapter 15 records in-place Function rename as intended behavior and a current implementation
-follow-up, not a present guarantee.
+The Function rule now matches the identity doctrine. Renaming an anchored Function emits
+`RenameLayer` for the same layer ID, subject to final-name collision and call-resolution checks.
+Written callers use the final Function name and final module path in that revision. FlowScript
+still rejects Function signature changes. Chapter 15 presents the rename as current behavior and
+keeps boundary migration outside the guarantee.
 
 ### Remaining questions
 

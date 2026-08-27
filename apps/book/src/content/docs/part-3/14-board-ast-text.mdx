@@ -39,8 +39,9 @@ FlowScript editors author the same Flow model.
 > **Release check:** FlowScript stays a draft until Apply. Studio can show a semantic command
 > preview; Web receives authoritative diagnostics and the command outcome during Apply. Any
 > diagnostic or unapproved destructive change blocks the batch, and failure rolls it back. Success
-> reloads canonical source while preserving hidden secret values. FlowScript cannot yet change an
-> existing anchored Function name or signature safely.
+> reloads canonical source while preserving hidden secret values. FlowScript can rename an
+> anchored Function in place while preserving the Function layer ID. It cannot yet change an
+> existing anchored Function signature safely.
 
 ## 14.1 One program, three representations
 
@@ -380,10 +381,10 @@ pixel-identical recovery.
 > FlowScript preserves supported program meaning and untouched Board identity. It does not preserve
 > arbitrary author formatting or provide byte-for-byte or pixel-for-pixel serialization.
 
-Existing Function name and signature migration remain unsupported in FlowScript. The Board's
-Function editor can rename the layer while preserving its identity. Whole-Board round trips also
-have known difficult cases involving duplicate handler names and cross-handler references. Report
-them with the Flow-Like version, a minimal Board, and the text before and after Apply.
+An anchored Function rename emits `RenameLayer` and preserves the Function layer ID. Function
+signature migration remains unsupported in FlowScript. Whole-Board round trips also have known
+difficult cases involving duplicate handler names and cross-handler references. Report them with
+the Flow-Like version, a minimal Board, and the text before and after Apply.
 
 ## 14.9 The mental model to keep
 
