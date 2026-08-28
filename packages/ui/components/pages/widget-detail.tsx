@@ -203,6 +203,12 @@ export function WidgetDetail({
 
 	const handleSaveMeta = useCallback(
 		async (next: EditState) => {
+			// The rename runs first so the sidecar write below stays authoritative
+			// for the fields it edits; renaming only the sidecar would leave the
+			// widget record carrying the old name.
+			if (next.name !== name) {
+				await backend.widgetState.renameWidget(appId, widgetId, next.name);
+			}
 			await backend.widgetState.pushWidgetMeta(appId, widgetId, {
 				...((metadata.data ?? {
 					created_at: nowSystemTime(),
@@ -214,11 +220,11 @@ export function WidgetDetail({
 				tags: next.tags,
 				updated_at: nowSystemTime(),
 			});
-			await metadata.refetch();
+			await Promise.all([metadata.refetch(), widget.refetch()]);
 			setIsEditOpen(false);
 			toast.success("Widget details saved");
 		},
-		[appId, widgetId, backend.widgetState, metadata],
+		[appId, widgetId, backend.widgetState, metadata, widget, name],
 	);
 
 	if (widget.isLoading || metadata.isLoading) {
@@ -470,7 +476,10 @@ export function WidgetDetail({
 										{t("noPropertiesExposedYet", "No properties exposed yet")}
 									</p>
 									<p className="max-w-[30ch] text-[11.5px]">
-										{`Expose a property in the builder to let pages configure this widget without duplicating it.`}
+										{t(
+											"widgetExposeHint",
+											"Expose a property in the builder to let pages configure this widget without duplicating it.",
+										)}
 									</p>
 									<Button variant="link" size="sm" onClick={openBuilder}>
 										{t("openTheBuilder", "Open the builder")}

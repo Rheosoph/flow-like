@@ -1,6 +1,7 @@
 import {
 	type IMetadata,
 	type IWidgetState,
+	applyWidgetRename,
 	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
 import type {
@@ -83,6 +84,15 @@ export class WebWidgetState implements IWidgetState {
 			{ widget: normalizedWidget },
 			this.backend.auth,
 		);
+	}
+
+	async renameWidget(
+		appId: string,
+		widgetId: string,
+		name: string,
+		language?: string,
+	): Promise<void> {
+		await applyWidgetRename(this, appId, widgetId, name, language);
 	}
 
 	async deleteWidget(appId: string, widgetId: string): Promise<void> {

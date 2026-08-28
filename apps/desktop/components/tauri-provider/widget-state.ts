@@ -5,6 +5,7 @@ import {
 	type IWidgetState,
 	type Version,
 	type VersionType,
+	applyWidgetRename,
 	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
@@ -328,6 +329,15 @@ export class WidgetState implements IWidgetState {
 				throw e;
 			}
 		}
+	}
+
+	async renameWidget(
+		appId: string,
+		widgetId: string,
+		name: string,
+		language?: string,
+	): Promise<void> {
+		await applyWidgetRename(this, appId, widgetId, name, language);
 	}
 
 	async deleteWidget(appId: string, widgetId: string): Promise<void> {

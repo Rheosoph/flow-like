@@ -34,7 +34,6 @@ import {
 	useBackendStore,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
-import { setWidgetQueryResponder } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
@@ -269,13 +268,7 @@ export function WebProvider({
 				});
 		}, queryClient);
 
-		setWidgetQueryResponder((requestId, response) =>
-			backend.boardState.respondWidgetQuery
-				? backend.boardState.respondWidgetQuery(requestId, response)
-				: Promise.resolve(false),
-		);
 		setBackend(backend);
-		return () => setWidgetQueryResponder(null);
 	}, [queryClient, setBackend]);
 
 	if (!backend) {

@@ -69,7 +69,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 /**
  * Turns capture segments into provider attachments. Desktop keeps the bytes local and sends
  * bounded base64 through Tauri. Web deployments retain remote temporary URLs so large binary
- * payloads do not pass through the web tool-result endpoint.
+ * payloads do not pass through the tool result channel push.
  */
 export async function uploadPageSnapshots(
 	backend: { helperState: IHelperState },

@@ -76,6 +76,7 @@ async fn test_context(current: Arc<InternalNode>) -> ExecutionContext {
         None,
         None,
         Arc::new(AHashMap::new()),
+        None,
     )
     .await
 }

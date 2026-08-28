@@ -771,6 +771,7 @@ pub async fn trigger_event(
         user_context: None, // Sink triggers don't have user context
         profile: hydrated_sink_profile(state, &sink).await,
         wasm_packages,
+        channel: None,
     };
 
     // Create run record
@@ -1077,6 +1078,7 @@ pub async fn trigger_http(
         user_context: None, // HTTP sink triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
     };
 
     // Create run record
@@ -1479,6 +1481,7 @@ pub async fn trigger_telegram(
         user_context: None, // Telegram webhook triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
     };
 
     // Create run record
@@ -1816,6 +1819,7 @@ pub async fn trigger_discord(
         user_context: None, // Discord webhook triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
     };
 
     // Create run record

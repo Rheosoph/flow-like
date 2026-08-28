@@ -369,6 +369,15 @@ async fn execute_inner(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
+    let channel = crate::channel::build_run_channel(
+        request.channel.as_ref(),
+        run_id,
+        callback_url,
+        context_token.as_deref(),
+    )
+    .await
+    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
     let mut run = InternalRun::from_template(
         &request.app_id,
         template.clone(),
@@ -382,6 +391,7 @@ async fn execute_inner(
         context_token,
         oauth_tokens,
         Some(run_id.to_string()),
+        Some(channel.clone()),
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
@@ -402,6 +412,7 @@ async fn execute_inner(
         run.execute(state.clone()).await
     })
     .await;
+    channel.close().await;
 
     // Flush any remaining buffered events
     tracing::debug!("Flushing remaining buffered intercom events");

@@ -50,6 +50,20 @@ impl Modify for SecurityAddon {
             )])),
         );
 
+        // Channel responder JWT (clients answering a run through /channels/{id}/push)
+        components.add_security_scheme(
+            "channel_responder_jwt",
+            SecurityScheme::Http(
+                Http::builder()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .description(Some(
+                        "Channel responder token minted with the run's channel grant",
+                    ))
+                    .build(),
+            ),
+        );
+
         // Executor JWT (for backend execution services)
         components.add_security_scheme(
             "executor_jwt",
@@ -87,6 +101,7 @@ impl Modify for SecurityAddon {
         (name = "pages", description = "Page management"),
         (name = "routes", description = "Route mapping management"),
         (name = "execution", description = "Workflow execution"),
+        (name = "channels", description = "Run ⇄ client reply channels"),
         (name = "events", description = "Event management"),
         (name = "widgets", description = "Widget management"),
         (name = "templates", description = "Template management"),
@@ -449,6 +464,15 @@ impl Modify for SecurityAddon {
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
         crate::routes::execution::public_key::get_execution_jwks,
+        // Channel routes
+        crate::routes::channel::register_message,
+        crate::routes::channel::poll_message,
+        crate::routes::channel::remove_message,
+        crate::routes::channel::drain_inbound,
+        crate::routes::channel::channel_status,
+        crate::routes::channel::close_channel,
+        crate::routes::channel::push_channel,
+        crate::routes::channel::grant_channel,
         // Registry routes
         crate::routes::registry::publish::publish,
         crate::routes::registry::search::search,
@@ -595,6 +619,14 @@ impl Modify for SecurityAddon {
         // Health schemas
         crate::routes::health::HealthResponse,
         crate::routes::health::DbHealthResponse,
+        // Channel schemas
+        crate::routes::channel::RegisterMessageBody,
+        crate::routes::channel::RegisterMessageResponse,
+        crate::routes::channel::PollMessageBody,
+        crate::routes::channel::DrainInboundBody,
+        crate::routes::channel::ChannelStatusBody,
+        crate::routes::channel::PushResponse,
+        crate::routes::channel::GrantSide,
         // Cache schemas
         crate::routes::app::cache::ReadCacheResponse,
         crate::routes::app::cache::ExistsCacheResponse,

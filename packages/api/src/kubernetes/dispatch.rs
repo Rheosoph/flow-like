@@ -67,6 +67,9 @@ pub struct ExecutionContext {
     pub jwt: String,
     /// Base URL of the API for callbacks (e.g., "https://api.flow-like.io")
     pub callback_url: String,
+    /// Channel grant the run waits on client replies through
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<flow_like_types::channel::ChannelGrant>,
 }
 
 /// Response from job submission
@@ -160,6 +163,7 @@ impl JobDispatcher {
             "credentials": request.execution_context.credentials_json,
             "jwt": request.execution_context.jwt,
             "callback_url": request.execution_context.callback_url,
+            "channel": request.execution_context.channel,
         });
 
         let client = reqwest::Client::new();
@@ -273,6 +277,16 @@ impl JobDispatcher {
             env_vars.push(EnvVar {
                 name: "PAYLOAD".to_string(),
                 value: Some(payload.to_string()),
+                ..Default::default()
+            });
+        }
+
+        if let Some(channel) = &request.execution_context.channel
+            && let Ok(grant) = serde_json::to_string(channel)
+        {
+            env_vars.push(EnvVar {
+                name: "FLOW_LIKE_CHANNEL".to_string(),
+                value: Some(grant),
                 ..Default::default()
             });
         }
@@ -445,6 +459,22 @@ mod tests {
                 credentials_json: "{}".to_string(),
                 jwt: "token".to_string(),
                 callback_url: "https://api.example.test".to_string(),
+                channel: Some(flow_like_types::channel::ChannelGrant {
+                    channel_id: "run-1".to_string(),
+                    expires_at: 1,
+                    executor: flow_like_types::channel::ChannelExecutorGrant::Http {},
+                    client: flow_like_types::channel::ChannelHandle {
+                        channel_id: "run-1".to_string(),
+                        request_id: None,
+                        expires_at: 1,
+                        transport: flow_like_types::channel::ChannelClientDescriptor::Http {
+                            push_url: "https://api.example.test/api/v1/channels/run-1/push"
+                                .to_string(),
+                            token: "t".to_string(),
+                        },
+                        fallback: None,
+                    },
+                }),
             },
         };
 
@@ -461,5 +491,13 @@ mod tests {
             .and_then(|variable| variable.value.as_deref());
 
         assert_eq!(api_base_url, Some("https://api.example.test"));
+
+        let channel = env
+            .iter()
+            .find(|variable| variable.name == "FLOW_LIKE_CHANNEL")
+            .and_then(|variable| variable.value.as_deref())
+            .expect("channel grant env");
+        let grant: flow_like_types::channel::ChannelGrant = serde_json::from_str(channel).unwrap();
+        assert_eq!(grant.channel_id, "run-1");
     }
 }

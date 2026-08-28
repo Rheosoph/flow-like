@@ -20,6 +20,7 @@ use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Value;
+use flow_like_types::channel::{Channel, ChannelOutcome};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{
@@ -230,6 +231,8 @@ pub struct ExecutionContext {
     pub context_pin_overrides: Option<BTreeMap<String, Value>>,
     pub result: Option<Value>,
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+    /// Reply conduit to the run's client; `None` only for contexts built without a run.
+    pub channel: Option<Arc<dyn Channel>>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
     nodes_executed: Arc<AtomicU64>,
@@ -263,6 +266,7 @@ impl ExecutionContext {
         credentials: Option<Arc<SharedCredentials>>,
         token: Option<String>,
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+        channel: Option<Arc<dyn Channel>>,
     ) -> Self {
         // Use cached node_id instead of locking
         let id = node.shared_node_id();
@@ -323,6 +327,7 @@ impl ExecutionContext {
             result: None,
             delegated: false,
             oauth_tokens,
+            channel,
             cancellation_token: None,
             user_context: None,
             nodes_executed,
@@ -386,6 +391,7 @@ impl ExecutionContext {
         credentials: Option<Arc<SharedCredentials>>,
         token: Option<String>,
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+        channel: Option<Arc<dyn Channel>>,
     ) -> Self {
         // Use cached node_id instead of locking
         let id = node.shared_node_id();
@@ -426,6 +432,7 @@ impl ExecutionContext {
             result: None,
             delegated: false,
             oauth_tokens,
+            channel,
             cancellation_token: None,
             user_context: None,
             nodes_executed: run_meta.nodes_executed.clone(),
@@ -591,6 +598,7 @@ impl ExecutionContext {
             context_pin_overrides: self.context_pin_overrides.clone(),
             result: None,
             oauth_tokens: self.oauth_tokens.clone(),
+            channel: self.channel.clone(),
             user_context: self.user_context.clone(),
             nodes_executed: self.nodes_executed.clone(),
             represented_trace_nodes: AHashSet::new(),
@@ -1379,12 +1387,26 @@ impl ExecutionContext {
         self.stream_a2ui_update(message).await
     }
 
+    pub fn cancellation_token(&self) -> Option<CancellationToken> {
+        self.cancellation_token.clone()
+    }
+
+    /// The run's reply conduit. Every run built through `InternalRun` has one; contexts
+    /// assembled by hand (tests, tooling) may not.
+    pub fn channel(&self) -> flow_like_types::Result<Arc<dyn Channel>> {
+        self.channel.clone().ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "No channel attached to run '{}': the client cannot be asked for input here",
+                self.run_id
+            )
+        })
+    }
+
     /// Live round-trip to the rendered frontend: run a contract query against
     /// a micro widget instance and await its `query:result`. The request rides
-    /// the a2ui stream; the host delivers the response through
-    /// [`flow_like_types::frontend_request::resolve_frontend_request`] (Tauri
-    /// command on desktop, `/widget-query/{id}/respond` API route on web).
-    /// Returns the raw response envelope `{ "ok": bool, "value"?: …, "error"?: … }`.
+    /// the a2ui stream carrying a channel handle; the surface answers through
+    /// the run's channel. Returns the raw response envelope
+    /// `{ "ok": bool, "value"?: …, "error"?: … }`.
     pub async fn query_widget(
         &mut self,
         instance_id: &str,
@@ -1392,44 +1414,42 @@ impl ExecutionContext {
         args: Option<Value>,
         timeout: std::time::Duration,
     ) -> flow_like_types::Result<Value> {
-        use flow_like_types::frontend_request::{
-            abandon_frontend_request, register_frontend_request,
-        };
-
-        let request_id = flow_like_types::create_id();
-        let receiver = register_frontend_request(&request_id).await;
-
+        let channel = self.channel()?;
+        let ticket = channel.open(timeout).await?;
         let message = crate::a2ui::A2UIServerMessage::widget_query(
-            &request_id,
+            &ticket.request_id,
             instance_id,
             query,
             args,
             timeout.as_millis() as u64,
+            Some(ticket.handle.clone()),
         );
         if let Err(err) = self.stream_a2ui_update(message).await {
-            abandon_frontend_request(&request_id).await;
+            channel.abandon(&ticket).await;
             return Err(err);
         }
 
-        match flow_like_types::tokio::time::timeout(timeout, receiver).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => {
-                abandon_frontend_request(&request_id).await;
-                Err(flow_like_types::anyhow!(
-                    "Widget query '{}' on instance '{}' was dropped without a response",
-                    query,
-                    instance_id
-                ))
-            }
-            Err(_) => {
-                abandon_frontend_request(&request_id).await;
-                Err(flow_like_types::anyhow!(
-                    "Widget query '{}' on instance '{}' timed out after {}ms — no live surface answered",
-                    query,
-                    instance_id,
-                    timeout.as_millis()
-                ))
-            }
+        match channel
+            .wait(&ticket, self.cancellation_token.clone())
+            .await?
+        {
+            ChannelOutcome::Responded(response) => Ok(response),
+            ChannelOutcome::Expired => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' timed out after {}ms — no live surface answered",
+                query,
+                instance_id,
+                timeout.as_millis()
+            )),
+            ChannelOutcome::Cancelled => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' was cancelled",
+                query,
+                instance_id
+            )),
+            ChannelOutcome::Closed => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' was dropped without a response",
+                query,
+                instance_id
+            )),
         }
     }
 

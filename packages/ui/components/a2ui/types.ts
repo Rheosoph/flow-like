@@ -1,6 +1,7 @@
 // A2UI runtime JSON definitions. Deprecated fields keep older Rust payloads readable.
 
 import type { WidgetContract } from "@flow-like/widget-sdk";
+import type { IChannelHandle } from "../../lib/schema/channel";
 
 export interface SelectOption {
 	value: string;
@@ -1902,6 +1903,8 @@ export type A2UIServerMessage =
 			query: string;
 			args?: unknown;
 			timeoutMs: number;
+			/** Where the answer goes (snake_case on the wire). */
+			channel?: IChannelHandle;
 	  }
 	| {
 			type: "showScreen";

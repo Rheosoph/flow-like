@@ -363,6 +363,7 @@ pub async fn invoke_event_async(
         user_context: Some(permission.to_user_context()),
         profile,
         wasm_packages,
+        channel: None,
     };
 
     let response = match state.dispatcher.dispatch_async(request).await {

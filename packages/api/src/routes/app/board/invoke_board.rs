@@ -359,6 +359,7 @@ pub async fn invoke_board(
         user_context: Some(permission.to_user_context()),
         profile,
         wasm_packages,
+        channel: None,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async

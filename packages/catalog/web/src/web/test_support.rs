@@ -108,6 +108,7 @@ pub(crate) async fn test_context(
         None,
         None,
         Arc::new(AHashMap::new()),
+        None,
     )
     .await
 }

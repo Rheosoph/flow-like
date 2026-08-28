@@ -1402,3 +1402,38 @@ export async function handlePaste(
 		return;
 	} catch (error) {}
 }
+
+/**
+ * Drop a ready-made group of nodes onto the canvas without going through the clipboard.
+ *
+ * The paste command is what knows how to re-id a fragment and re-base its coordinates, so
+ * a drag that mints nodes reuses it rather than growing a second, subtly different path.
+ * With no `old_mouse` the command re-bases on the first node, which is why the fragment's
+ * own coordinates only have to be right *relative to each other*.
+ */
+export async function placeNodeFragment({
+	nodes,
+	position,
+	currentLayer,
+	executeCommand,
+}: {
+	nodes: INode[];
+	position: { x: number; y: number };
+	currentLayer?: string;
+	executeCommand: (command: IGenericCommand, append?: boolean) => Promise<any>;
+}) {
+	if (nodes.length === 0) return;
+	const command = copyPasteCommand({
+		original_comments: [],
+		original_nodes: nodes,
+		original_layers: [],
+		original_variables: [],
+		original_refs: {},
+		new_comments: [],
+		new_nodes: [],
+		new_layers: [],
+		current_layer: currentLayer,
+		offset: [position.x, position.y, 0],
+	});
+	await executeCommand(command);
+}

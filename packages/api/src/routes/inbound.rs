@@ -1933,6 +1933,7 @@ async fn dispatch_event_collect(
             profile
         },
         wasm_packages,
+        channel: None,
     };
 
     let now = chrono::Utc::now().naive_utc();

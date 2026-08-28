@@ -17,3 +17,4 @@ export * from "./use-user-lookup";
 export * from "./use-theme-gradient";
 export * from "./use-search-index";
 export * from "./use-model-names";
+export * from "./use-storage-tree";

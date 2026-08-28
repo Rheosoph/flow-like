@@ -11,7 +11,7 @@ base64.workspace = true
 # ONNX metadata, ONNX Runtime, local model weights and desktop automation nodes.
 # Remote-capable text model nodes reach the authenticated API proxy.
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
-flow-like-executor = { workspace = true, features = ["server"] }
+flow-like-executor = { workspace = true, features = ["server", "channel-azure"] }
 # Startup validates BACKEND_PUB with the exact decoder the executor uses per
 # request, so a bad key fails the revision instead of every run.
 jsonwebtoken.workspace = true

@@ -148,6 +148,8 @@ export type {
 	VersionType,
 } from "./backend-state/widget-state";
 
+export { applyWidgetRename } from "./backend-state/widget-state";
+
 export type { IMediaItem } from "./backend-state/app-state";
 
 export type {

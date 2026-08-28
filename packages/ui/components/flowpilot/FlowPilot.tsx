@@ -42,12 +42,9 @@ import {
 	initialAskUserDrafts,
 	parseAskUserArguments,
 } from "../../lib/ask-user";
+import { replyToChannel } from "../../lib/channel";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
-import {
-	type FrontendToolApprovalScope,
-	resolveFrontendToolApprovalScope,
-} from "../../lib/frontend-tool-approval-scope";
 import {
 	type IFlowPilotConversation,
 	addMessage,
@@ -68,6 +65,11 @@ import {
 	deliverBoardEditJobReceipt,
 	isDirectFlowPilotBoardEditJob,
 } from "../../lib/flowpilot/board-edit-job-delivery";
+import {
+	type FrontendToolApprovalScope,
+	resolveFrontendToolApprovalScope,
+} from "../../lib/frontend-tool-approval-scope";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
@@ -408,6 +410,8 @@ interface FrontendToolRequest {
 	approval?: FrontendToolApproval;
 	deadlineAtMs?: number;
 	deadline_at_ms?: number;
+	/** How to answer; every request Rust emits carries one. */
+	channel?: IChannelHandle;
 }
 
 interface FrontendToolResponse {
@@ -436,13 +440,6 @@ interface FrontendToolQueuedDialog {
 	resolve: (value: any) => void;
 }
 
-type TauriCoreModule = {
-	invoke: <T = unknown>(
-		command: string,
-		args?: Record<string, unknown>,
-	) => Promise<T>;
-};
-
 type TauriEventModule = {
 	listen: <T = unknown>(
 		event: string,
@@ -457,10 +454,6 @@ function isTauriRuntime(): boolean {
 	if (typeof window === "undefined") return false;
 	const w = window as unknown as Record<string, unknown>;
 	return Boolean(w.__TAURI__ || w.__TAURI_IPC__ || w.__TAURI_INTERNALS__);
-}
-
-async function importTauriCore(): Promise<TauriCoreModule> {
-	return import("@tauri-apps/api/core") as Promise<TauriCoreModule>;
 }
 
 async function importTauriEvent(): Promise<TauriEventModule> {
@@ -1370,10 +1363,7 @@ function FlowPilotImpl({
 
 		async function installListener() {
 			try {
-				const [eventApi, coreApi] = await Promise.all([
-					importTauriEvent(),
-					importTauriCore(),
-				]);
+				const eventApi = await importTauriEvent();
 
 				const [stop, stopCancellation] = await Promise.all([
 					eventApi.listen<FrontendToolRequest>(
@@ -1382,6 +1372,14 @@ function FlowPilotImpl({
 							if (disposed) return;
 							const request = event.payload;
 							if (!request?.requestId || !request.toolName) return;
+							const channel = request.channel;
+							if (!channel) {
+								console.warn(
+									"FlowPilot frontend tool request carries no channel; it cannot be answered:",
+									request.requestId,
+								);
+								return;
+							}
 							const lease = frontendToolRequestGuardRef.current.begin({
 								requestId: request.requestId,
 								deadlineAtMs: resolveFrontendToolExecutionDeadline({
@@ -1403,9 +1401,7 @@ function FlowPilotImpl({
 								if (disposed || !lease.isActive()) return;
 								lease.assertActive("frontend response delivery");
 								try {
-									await coreApi.invoke("flowpilot_frontend_tool_result", {
-										response,
-									});
+									await replyToChannel(channel, response);
 								} catch (error) {
 									if (!disposed) {
 										console.warn(

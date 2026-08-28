@@ -12,7 +12,9 @@ use axum::{
 };
 use flow_like::a2ui::widget::Widget;
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -20,6 +22,52 @@ use utoipa::ToSchema;
 pub struct WidgetUpsert {
     #[schema(value_type = Object)]
     pub widget: Widget,
+}
+
+/// Mirrors the widget's name onto its English meta row so a rename made through
+/// the widget record alone still shows up in every listing that reads names from
+/// metadata. `PUT /apps/{app_id}/meta` owns the remaining descriptive fields, so
+/// `seed_description` is only written when the row has to be created — mirroring
+/// it on every save would let a builder autosave wipe a description entered in
+/// the app store sheet.
+async fn upsert_widget_meta(
+    db: &DatabaseConnection,
+    widget_id: &str,
+    name: &str,
+    seed_description: Option<&str>,
+) -> Result<(), ApiError> {
+    let now = chrono::Utc::now().naive_utc();
+    let existing = meta::Entity::find()
+        .filter(meta::Column::WidgetId.eq(widget_id))
+        .filter(meta::Column::Lang.eq("en"))
+        .one(db)
+        .await?;
+
+    if let Some(existing) = existing {
+        if existing.name == name {
+            return Ok(());
+        }
+        let mut model: meta::ActiveModel = existing.into();
+        model.name = Set(name.to_string());
+        model.updated_at = Set(now);
+        model.update(db).await?;
+        return Ok(());
+    }
+
+    meta::ActiveModel {
+        id: Set(create_id()),
+        lang: Set("en".to_string()),
+        name: Set(name.to_string()),
+        description: Set(seed_description.map(str::to_string)),
+        widget_id: Set(Some(widget_id.to_string())),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?;
+
+    Ok(())
 }
 
 #[utoipa::path(
@@ -93,19 +141,13 @@ pub async fn upsert_widget(
             .exec_with_returning(&state.db)
             .await?;
 
-        // Create default meta
-        let meta_model = meta::ActiveModel {
-            id: Set(create_id()),
-            lang: Set("en".to_string()),
-            name: Set(widget.name.clone()),
-            description: Set(widget.description.clone()),
-            widget_id: Set(Some(widget_id.clone())),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
-            ..Default::default()
-        };
-
-        meta::Entity::insert(meta_model).exec(&state.db).await?;
+        upsert_widget_meta(
+            &state.db,
+            &widget_id,
+            &widget.name,
+            widget.description.as_deref(),
+        )
+        .await?;
 
         if !app.widget_ids.contains(&widget_id) {
             app.widget_ids.push(widget_id);
@@ -122,6 +164,14 @@ pub async fn upsert_widget(
         };
 
         update_widget.update(&state.db).await?;
+
+        upsert_widget_meta(
+            &state.db,
+            &widget_id,
+            &widget.name,
+            widget.description.as_deref(),
+        )
+        .await?;
     }
 
     Ok(Json(widget))

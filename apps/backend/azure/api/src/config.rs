@@ -95,6 +95,7 @@ impl Config {
         }
 
         validate_acs_email_settings()?;
+        validate_channel_settings()?;
 
         let cors_allowed_origins = parse_allowed_origins(&required_env("CORS_ALLOWED_ORIGINS")?)?;
 
@@ -339,6 +340,77 @@ fn validate_acs_email_settings() -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// `CHANNEL_TRANSPORT` may only name a transport this image carries, and the Web PubSub
+/// transport needs its endpoint up front. The access key lives in Key Vault and is checked once
+/// the secret store is up (see `validate_security_prerequisites` in main.rs).
+fn validate_channel_settings() -> Result<(), ConfigError> {
+    let transport = optional_nonempty_env("CHANNEL_TRANSPORT")?;
+    let backend =
+        flow_like_api::channel::ChannelBackend::parse(transport.as_deref()).map_err(|_| {
+            ConfigError::invalid(
+                "CHANNEL_TRANSPORT",
+                "must be 'http' or 'azure_web_pubsub' on the Azure API image",
+            )
+        })?;
+    if backend.is_http() {
+        return Ok(());
+    }
+
+    let endpoint = required_env("CHANNEL_WEBPUBSUB_ENDPOINT")?;
+    validate_webpubsub_endpoint(&endpoint)?;
+    if let Some(hub) = optional_nonempty_env("CHANNEL_WEBPUBSUB_HUB")? {
+        validate_webpubsub_hub(&hub)?;
+    }
+
+    Ok(())
+}
+
+fn validate_webpubsub_endpoint(value: &str) -> Result<(), ConfigError> {
+    let endpoint = Url::parse(value)
+        .map_err(|_| ConfigError::invalid("CHANNEL_WEBPUBSUB_ENDPOINT", "must be a valid URL"))?;
+    let valid_host = endpoint
+        .host_str()
+        .is_some_and(|host| host.to_ascii_lowercase().ends_with(".webpubsub.azure.com"));
+    let valid_path = endpoint.path().is_empty() || endpoint.path() == "/";
+
+    if endpoint.scheme() != "https"
+        || !valid_host
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.port().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+        || !valid_path
+    {
+        return Err(ConfigError::invalid(
+            "CHANNEL_WEBPUBSUB_ENDPOINT",
+            "must be a public-cloud Web PubSub HTTPS origin without credentials, port, path, query, or fragment",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_webpubsub_hub(value: &str) -> Result<(), ConfigError> {
+    let valid = (1..=127).contains(&value.len())
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+
+    if !valid {
+        return Err(ConfigError::invalid(
+            "CHANNEL_WEBPUBSUB_HUB",
+            "must start with a letter and contain only letters, digits, or underscores (1-127 characters)",
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_acs_email_endpoint(value: &str) -> Result<(), ConfigError> {
     let endpoint = Url::parse(value)
         .map_err(|_| ConfigError::invalid("ACS_EMAIL_ENDPOINT", "must be a valid URL"))?;
@@ -549,6 +621,22 @@ mod tests {
         assert!(
             validate_acs_email_endpoint("https://flowlike.communication.azure.com/path").is_err()
         );
+    }
+
+    #[test]
+    fn validates_webpubsub_settings() {
+        assert!(validate_webpubsub_endpoint("https://flowlike.webpubsub.azure.com").is_ok());
+        assert!(validate_webpubsub_endpoint("https://flowlike.webpubsub.azure.com/").is_ok());
+        assert!(validate_webpubsub_endpoint("http://flowlike.webpubsub.azure.com").is_err());
+        assert!(
+            validate_webpubsub_endpoint("https://webpubsub.azure.com.attacker.example").is_err()
+        );
+        assert!(validate_webpubsub_endpoint("https://flowlike.webpubsub.azure.com/hub").is_err());
+        assert!(validate_webpubsub_hub("channels").is_ok());
+        assert!(validate_webpubsub_hub("run_channels2").is_ok());
+        assert!(validate_webpubsub_hub("1channels").is_err());
+        assert!(validate_webpubsub_hub("chan-nels").is_err());
+        assert!(validate_webpubsub_hub("").is_err());
     }
 
     #[test]

@@ -21,8 +21,7 @@ export type IBoardMobileSurface =
 	| IBoardSidebarView
 	| IBoardPanelTab
 	| IBoardSecondaryView
-	| "script"
-	| "pages";
+	| "script";
 
 export interface IBoardSurfaceState {
 	sidebar: IBoardSidebarView | null;

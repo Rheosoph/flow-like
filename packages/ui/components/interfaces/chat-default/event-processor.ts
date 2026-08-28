@@ -548,8 +548,8 @@ export function processChatEvents(
 				interaction.status,
 				"expires_at:",
 				interaction.expires_at,
-				"has_jwt:",
-				!!interaction.responder_jwt,
+				"has_channel:",
+				!!interaction.channel,
 			);
 			interactions.push(interaction);
 			shouldUpdate = true;

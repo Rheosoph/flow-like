@@ -356,6 +356,7 @@ pub(crate) async fn run_event_setup(
         user_context: Some(user_context),
         profile,
         wasm_packages,
+        channel: None,
     };
 
     let backend = state.dispatcher.backend();

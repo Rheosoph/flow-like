@@ -4,6 +4,8 @@ use std::any::Any;
 
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "channel")]
+pub mod channel;
 #[cfg(feature = "dispatch")]
 pub mod dispatch;
 #[cfg(feature = "maintenance")]

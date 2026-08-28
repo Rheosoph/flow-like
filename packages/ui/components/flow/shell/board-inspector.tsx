@@ -18,7 +18,7 @@ import {
 } from "../../../lib/schema/flow/pin";
 import { cn } from "../../../lib/utils";
 import { typeToColor } from "../utils";
-import { PresenceDots } from "./board-explorer";
+import { PresenceDots } from "./explorer/explorer-primitives";
 
 const SCORE_KEYS = [
 	"privacy",

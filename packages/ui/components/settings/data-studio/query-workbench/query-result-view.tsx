@@ -77,6 +77,7 @@ export function QueryResultView({
 	loading,
 	error,
 	vizConfig,
+	appId,
 	onVizConfigChange,
 	onRun,
 }: Readonly<{
@@ -84,6 +85,8 @@ export function QueryResultView({
 	loading: boolean;
 	error: string | null;
 	vizConfig: VizConfig;
+	/** Lets cells holding storage paths open as the files they point at. */
+	appId?: string;
 	onVizConfigChange: (config: VizConfig) => void;
 	onRun?: () => void;
 }>) {
@@ -309,7 +312,11 @@ export function QueryResultView({
 							</div>
 						</div>
 					) : (
-						<QueryResultTable columns={columns} rows={filteredRows} />
+						<QueryResultTable
+							columns={columns}
+							rows={filteredRows}
+							appId={appId}
+						/>
 					)}
 				</TabsContent>
 

@@ -16,6 +16,7 @@ import {
 	Calendar,
 	ChevronsUpDown,
 	Copy,
+	FileIcon,
 	Hash,
 	MoreHorizontal,
 	ToggleLeft,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
 import { accountIdFromValue } from "../../../../state/backend-state/user-state";
@@ -37,6 +39,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
 import { RelativeTime } from "../../../ui/relative-time";
+import { StorageFileCell } from "../../../ui/storage-file-cell";
 import { UserInlineTag } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
@@ -63,12 +66,14 @@ const KIND_ICON: Record<ColumnKind, typeof Hash> = {
 	boolean: ToggleLeft,
 	json: Braces,
 	user: UserRound,
+	file: FileIcon,
 	text: Type,
 };
 
 function sizeForKind(kind: ColumnKind): number {
 	if (kind === "number" || kind === "boolean") return 130;
 	if (kind === "temporal" || kind === "user") return 190;
+	if (kind === "file") return 240;
 	return 200;
 }
 
@@ -80,7 +85,14 @@ function copyText(value: string, label: string): void {
 function CellContent({
 	value,
 	kind,
-}: Readonly<{ value: unknown; kind: ColumnKind }>) {
+	name,
+	appId,
+}: Readonly<{
+	value: unknown;
+	kind: ColumnKind;
+	name: string;
+	appId?: string;
+}>) {
 	const { t } = useTranslation("settings");
 	if (isNullish(value)) {
 		return (
@@ -112,6 +124,12 @@ function CellContent({
 	if (kind === "user") {
 		const userId = accountIdFromValue(value);
 		if (userId) return <UserInlineTag userId={userId} />;
+	}
+	// Same story for files: the column holds paths, but a row may hold a path that
+	// points nowhere this app can open, and that row stays text.
+	if (kind === "file") {
+		const file = resolveStorageFile(name, value, appId);
+		if (file && appId) return <StorageFileCell appId={appId} file={file} />;
 	}
 	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
 }
@@ -206,9 +224,11 @@ function HeaderCell({
 export function QueryResultTable({
 	columns,
 	rows,
+	appId,
 }: Readonly<{
 	columns: QueryColumn[];
 	rows: ResultRow[];
+	appId?: string;
 }>) {
 	const { t } = useTranslation("settings");
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -219,16 +239,16 @@ export function QueryResultTable({
 		const map = new Map<string, ColumnMeta>();
 		for (const column of columns)
 			map.set(column.name, {
-				kind: classifyResultColumn(column, rows),
+				kind: classifyResultColumn(column, rows, appId),
 				typeName: column.type_name,
 			});
 		return map;
-	}, [columns, rows]);
+	}, [columns, rows, appId]);
 
 	const columnDefs = useMemo<ColumnDef<ResultRow>[]>(
 		() =>
 			columns.map((column) => {
-				const kind = classifyResultColumn(column, rows);
+				const kind = classifyResultColumn(column, rows, appId);
 				return {
 					id: column.name,
 					// Map SQL NULL (JS null) to undefined so `sortUndefined: "last"`
@@ -254,7 +274,7 @@ export function QueryResultTable({
 							: "alphanumeric",
 				};
 			}),
-		[columns, rows],
+		[columns, rows, appId],
 	);
 
 	const table = useReactTable({
@@ -408,7 +428,12 @@ export function QueryResultTable({
 														meta.kind === "number" && "justify-end",
 													)}
 												>
-													<CellContent value={value} kind={meta.kind} />
+													<CellContent
+														value={value}
+														kind={meta.kind}
+														name={cell.column.id}
+														appId={appId}
+													/>
 												</div>
 												{!isNullish(value) && (
 													<button
@@ -439,6 +464,7 @@ export function QueryResultTable({
 			<RowInspectorSheet
 				row={inspect}
 				columns={columns}
+				appId={appId}
 				onOpenChange={(open) => {
 					if (!open) setInspect(null);
 				}}

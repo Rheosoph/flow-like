@@ -884,8 +884,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[backend.apiState],
 	);
 
-	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
-	// workflow (respond_to_interaction / hub API) while the outer tool call is still awaiting.
+	// Answer an app-chat dialog raised during a call_app_chat run. Replying on the interaction's
+	// channel unblocks the app's workflow while the outer tool call is still awaiting.
 	const handleRespondToInteraction = useCallback(
 		async (interactionId: string, value: unknown) => {
 			const interaction = useGlobalChatStore
@@ -893,7 +893,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				.activeInteractions.find((i) => i.id === interactionId);
 			if (!interaction) return;
 			try {
-				await submitInteractionResponse(interaction, value, backend.profile);
+				await submitInteractionResponse(interaction, value);
 				setInteractionResponded(interactionId, value);
 			} catch (error) {
 				toast.error(
@@ -903,7 +903,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				);
 			}
 		},
-		[backend.profile, setInteractionResponded],
+		[setInteractionResponded],
 	);
 
 	// Queue drain. Installed as a module-level hook (not just an effect) because the run that frees

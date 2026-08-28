@@ -3426,16 +3426,6 @@ export class BoardState implements IBoardState {
 		);
 	}
 
-	async respondWidgetQuery(
-		requestId: string,
-		response: { ok: boolean; value?: unknown; error?: string },
-	): Promise<boolean> {
-		return await invoke<boolean>("respond_widget_query", {
-			requestId,
-			response,
-		});
-	}
-
 	async getExecutionElements(
 		appId: string,
 		boardId: string,

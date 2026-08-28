@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
 };
 use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
+use flow_like_api::channel::{ChannelSweeperConfig, spawn_channel_sweeper};
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_api::telemetry::{
     TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
@@ -77,6 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _channel_sweeper_handle =
+        spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
 
     // Only spawns for backends without native expiry; the others no-op and log why.
     let _cache_sweeper_handle = state

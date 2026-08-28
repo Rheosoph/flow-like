@@ -217,6 +217,8 @@ pub enum A2UIServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         args: Option<Value>,
         timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<flow_like_types::channel::ChannelHandle>,
     },
     ShowScreen,
     UpsertElement {
@@ -328,6 +330,7 @@ impl A2UIServerMessage {
         query: &str,
         args: Option<Value>,
         timeout_ms: u64,
+        channel: Option<flow_like_types::channel::ChannelHandle>,
     ) -> Self {
         Self::WidgetQuery {
             request_id: request_id.to_string(),
@@ -335,6 +338,7 @@ impl A2UIServerMessage {
             query: query.to_string(),
             args,
             timeout_ms,
+            channel,
         }
     }
 

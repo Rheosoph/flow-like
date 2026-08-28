@@ -8,6 +8,7 @@ import {
 	formatRelativeTime,
 	parseTemporalValue,
 } from "../../../../lib/date";
+import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
 import { accountIdFromValue } from "../../../../state/backend-state/user-state";
@@ -20,6 +21,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../../../ui/sheet";
+import { StorageFileCell } from "../../../ui/storage-file-cell";
 import { UserIdentityCard } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
@@ -46,20 +48,34 @@ function TemporalValue({ value }: Readonly<{ value: unknown }>) {
 /** Everything the temporal path does not claim, read for what it holds. */
 function RowValue({
 	kind,
+	name,
 	value,
-}: Readonly<{ kind: ColumnKind; value: unknown }>) {
+	appId,
+}: Readonly<{
+	kind: ColumnKind;
+	name: string;
+	value: unknown;
+	appId?: string;
+}>) {
 	const userId = kind === "user" ? accountIdFromValue(value) : null;
 	if (userId) return <UserIdentityCard userId={userId} className="mt-1" />;
+
+	const file = appId ? resolveStorageFile(name, value, appId) : null;
+	if (file && appId)
+		return <StorageFileCell appId={appId} file={file} className="-ml-2 mt-1" />;
+
 	return <>{cellToString(value)}</>;
 }
 
 export function RowInspectorSheet({
 	row,
 	columns,
+	appId,
 	onOpenChange,
 }: Readonly<{
 	row: Record<string, unknown> | null;
 	columns: QueryColumn[];
+	appId?: string;
 	onOpenChange: (open: boolean) => void;
 }>) {
 	const { t } = useTranslation("settings");
@@ -120,7 +136,12 @@ export function RowInspectorSheet({
 												) : kind === "temporal" ? (
 													<TemporalValue value={value} />
 												) : (
-													<RowValue kind={kind} value={value} />
+													<RowValue
+														kind={kind}
+														name={column.name}
+														value={value}
+														appId={appId}
+													/>
 												)}
 											</dd>
 										</div>

@@ -40,6 +40,14 @@ export {
 	createDefaultComponent,
 } from "./WidgetBuilder";
 export {
+	WidgetBuilderSurface,
+	type WidgetBuilderSurfaceProps,
+} from "./widget-builder-surface";
+export {
+	PageBuilderSurface,
+	type PageBuilderSurfaceProps,
+} from "./page-builder-surface";
+export {
 	WidgetSelector,
 	type WidgetSelectorProps,
 } from "./WidgetSelector";

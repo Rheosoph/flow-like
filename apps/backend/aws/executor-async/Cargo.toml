@@ -8,7 +8,7 @@ aws_lambda_events = { version = "0.16.0", default-features = false, features = [
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
 flow-like-types.workspace = true
-flow-like-executor = { workspace = true, features = ["server-local-ml"] }
+flow-like-executor = { workspace = true, features = ["server-local-ml", "channel-aws"] }
 mimalloc.workspace = true
 lambda_runtime = {version="0.14.1", features = ["anyhow"]}
 tracing.workspace = true

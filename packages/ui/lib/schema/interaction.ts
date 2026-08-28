@@ -1,3 +1,5 @@
+import type { IChannelHandle } from "./channel";
+
 export interface IChoiceOption {
 	id: string;
 	label: string;
@@ -57,7 +59,8 @@ export interface IInteractionRequest {
 	expires_at: number;
 	run_id?: string;
 	app_id?: string;
-	responder_jwt?: string;
+	/** How to answer; present once the run has registered the request on its channel. */
+	channel?: IChannelHandle;
 	response_value?: any;
 }
 

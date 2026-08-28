@@ -31,6 +31,7 @@ tokio-util = "0.7.15"
 cuid2 = { git = "https://github.com/Rheosoph/cuid-rust.git", package = "cuid2" }
 jsonschema = { workspace = true, optional = true }
 regex.workspace = true
+tracing.workspace = true
 
 [features]
 # Preserve the former public dependency re-exports for direct/default users.

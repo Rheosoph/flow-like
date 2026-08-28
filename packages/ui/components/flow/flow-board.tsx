@@ -143,12 +143,21 @@ import {
 	BoardStatusBar,
 	BoardStatusItem,
 } from "../../components/flow/shell/board-status-bar";
+import { EditorDocumentView } from "../../components/flow/shell/documents/editor-document-view";
 import {
-	fileAfterClose,
-	withFileClosed,
-	withFileOpen,
-	withMissingFilesDropped,
-} from "../../components/flow/shell/open-files";
+	type IEditorDocument,
+	type IEditorScope,
+	type IEditorTab,
+	deserializeTabs,
+	documentKey,
+	serializeTabs,
+	tabAfterClose,
+	tabByKey,
+	withDocumentOpened,
+	withMissingTabsDropped,
+	withTabClosed,
+	withTabLayerPath,
+} from "../../components/flow/shell/editor-documents";
 import type { IBoardCommand } from "../../components/flow/shell/use-board-commands";
 import {
 	commandsFor,
@@ -221,6 +230,7 @@ import {
 	hexToRgba,
 	isValidConnection,
 	parseBoard,
+	placeNodeFragment,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import {
@@ -259,8 +269,10 @@ import {
 import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
+import { buildStoragePathNodes } from "../../lib/storage-path-nodes";
 import { buildTemplateCopyPasteCommand } from "../../lib/template-copy-paste";
 import { convertJsonToUint8Array } from "../../lib/uint8";
+import { cn } from "../../lib/utils";
 import {
 	type AssistantBoardSurface,
 	useAssistantSurface,
@@ -285,10 +297,10 @@ import type { FlowScriptApplyOptions } from "./flow-copilot/types";
 import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowDragGhostsLayer } from "./flow-drag-ghosts";
+import { FlowEditorTabs, boardTabLabel } from "./flow-editor-tabs";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
-import { FlowModuleTabs } from "./flow-module-tabs";
 import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowPingsLayer } from "./flow-pings";
 import { FlowPresenceBar } from "./flow-presence-bar";
@@ -309,6 +321,40 @@ import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
+
+/**
+ * A catalog node with one pin default filled in, as a copy.
+ *
+ * The catalog is a shared query result: writing a default straight onto it left the last
+ * dragged variable's id baked into the palette's own `variable_get` for the rest of the
+ * session.
+ */
+function withPinDefault(
+	template: INode | undefined,
+	pinName: string,
+	value: unknown,
+): INode | undefined {
+	if (!template) return undefined;
+	const target = Object.values(template.pins).find(
+		(pin) => pin.name === pinName,
+	);
+	if (!target) return undefined;
+	return {
+		...template,
+		pins: {
+			...template.pins,
+			[target.id]: {
+				...target,
+				default_value: convertJsonToUint8Array(value),
+			},
+		},
+	};
+}
+
+/** The board root. Always open, because the canvas is always showing something. */
+const MAIN_DOCUMENT: IEditorDocument = { kind: "board", fileId: MAIN_FILE_ID };
+const MAIN_TAB_KEY = documentKey(MAIN_DOCUMENT);
+const OPEN_TABS_STORAGE_PREFIX = "flow-board-tabs";
 
 /**
  * Canvas node types a "move to module" carries: nodes and comments. A layer keeps its
@@ -820,6 +866,8 @@ export function FlowBoard({
 	>(new Map());
 	const [currentLayer, setCurrentLayer] = useState<string | undefined>();
 	const [layerPath, setLayerPath] = useState<string | undefined>();
+	const layerPathRef = useRef(layerPath);
+	layerPathRef.current = layerPath;
 	// The file the canvas is in: a module open on screen, or the module owning whatever layer
 	// is. Null is main — the board root, which is not a layer.
 	const currentModuleId = useMemo(
@@ -844,22 +892,43 @@ export function FlowBoard({
 	const currentModuleIdRef = useRef(currentModuleId);
 	currentModuleIdRef.current = currentModuleId;
 
-	// Reaching a module any other way — entering it on canvas, following a peer,
-	// a deep link — opens its tab as well, or the strip would disagree with the
-	// canvas about what is open.
+	// Reaching a module any other way — entering it on canvas, following a peer, a deep
+	// link — moves the active tab onto it, or the strip would disagree with the canvas
+	// about what is open. Only the graph can do this, so a document tab is left alone.
 	useEffect(() => {
-		if (!currentModuleId) return;
-		setOpenFileIds((old) =>
-			old.includes(currentModuleId) ? old : [...old, currentModuleId],
-		);
+		if (activeDocumentKindRef.current !== "board") return;
+		const fileId = moduleFileId(currentModuleId);
+		setOpenTabs((old) => {
+			const active = tabByKey(old, activeTabKeyRef.current);
+			if (!active || active.doc.kind !== "board") return old;
+			if (active.doc.fileId === fileId) return old;
+			return old.map((tab) =>
+				tab.key === active.key ? { ...tab, doc: { ...tab.doc, fileId } } : tab,
+			);
+		});
 	}, [currentModuleId]);
 
-	// A module that no longer exists cannot keep a tab.
+	// Where the canvas is, mirrored onto the tab showing it, so switching away and back
+	// returns to the same layer rather than the file root.
+	useEffect(() => {
+		if (activeDocumentKindRef.current !== "board") return;
+		setOpenTabs((old) =>
+			withTabLayerPath(old, activeTabKeyRef.current, layerPath),
+		);
+	}, [layerPath]);
+
+	// A module deleted anywhere — here, by a peer, by the assistant — cannot keep a tab.
+	// Only `.flow` files can be checked from the board; the other kinds are owned by
+	// services this component does not read, so their views report a document that is gone.
 	useEffect(() => {
 		const layers = board.data?.layers;
 		if (!layers) return;
-		setOpenFileIds((old) => {
-			const next = withMissingFilesDropped(old, (id) => Boolean(layers[id]));
+		setOpenTabs((old) => {
+			const next = withMissingTabsDropped(old, (doc) =>
+				doc.kind === "board"
+					? doc.fileId === MAIN_FILE_ID || Boolean(layers[doc.fileId])
+					: true,
+			);
 			return next.length === old.length ? old : next;
 		});
 	}, [board.data?.layers]);
@@ -1082,31 +1151,184 @@ export function FlowBoard({
 		[board.data?.layers, currentLayer, pushLayer, saveViewport],
 	);
 
-	// Which files have a tab. `main` is the board itself and is always open; every
-	// other entry is a module the user opened, so the strip lists what is open
-	// while the explorer lists what exists.
-	const [openFileIds, setOpenFileIds] = useState<string[]>([]);
-	const openFileIdsRef = useRef(openFileIds);
-	openFileIdsRef.current = openFileIds;
+	// What the editor has open. The strip lists this; the explorer lists what exists.
+	// A `.flow` tab is a position as much as a file — `layerPath` on the tab is where it
+	// is parked, which is how one file can be open twice at different depths.
+	const [openTabs, setOpenTabs] = useState<IEditorTab[]>(() => [
+		{ key: documentKey(MAIN_DOCUMENT), doc: MAIN_DOCUMENT },
+	]);
+	const [activeTabKey, setActiveTabKey] = useState<string>(MAIN_TAB_KEY);
+	const openTabsRef = useRef(openTabs);
+	openTabsRef.current = openTabs;
+	const activeTabKeyRef = useRef(activeTabKey);
+	activeTabKeyRef.current = activeTabKey;
 
+	const activeTab = useMemo(
+		() => tabByKey(openTabs, activeTabKey) ?? openTabs[0],
+		[activeTabKey, openTabs],
+	);
+	const activeDocument: IEditorDocument = activeTab?.doc ?? MAIN_DOCUMENT;
+	/** Anything that is not the graph renders over the canvas, which stays mounted. */
+	const documentTab = activeDocument.kind === "board" ? undefined : activeTab;
+
+	// Restoring a parked path needs `jumpToLayer`, which is defined further down; the refs
+	// keep every tab handler stable rather than re-creating them on each board edit.
+	const restoreTabPositionRef = useRef<(tab: IEditorTab | undefined) => void>(
+		() => {},
+	);
+	const jumpToLayerRef = useRef<(layerPath: string) => void>(() => {});
+	const selectModuleRef = useRef(selectModule);
+	selectModuleRef.current = selectModule;
+
+	const selectTab = useCallback((key: string) => {
+		if (key === activeTabKeyRef.current) return;
+		const tab = tabByKey(openTabsRef.current, key);
+		if (!tab) return;
+		setActiveTabKey(key);
+		restoreTabPositionRef.current(tab);
+	}, []);
+
+	const openDocument = useCallback(
+		(doc: IEditorDocument, options?: { newTab?: boolean }) => {
+			const result = withDocumentOpened(openTabsRef.current, doc, {
+				newTab: options?.newTab,
+				after: activeTabKeyRef.current,
+			});
+			setOpenTabs(result.tabs);
+			setActiveTabKey(result.key);
+			restoreTabPositionRef.current(tabByKey(result.tabs, result.key));
+		},
+		[],
+	);
+
+	/** Open a `.flow` file; `null` is `main`. Reuses its tab unless a split was asked for. */
 	const handleSelectModule = useCallback(
-		(moduleId: string | null) => {
-			if (moduleId) setOpenFileIds((old) => withFileOpen(old, moduleId));
-			void selectModule(moduleId);
+		(moduleId: string | null, options?: { newTab?: boolean }) => {
+			openDocument({ kind: "board", fileId: moduleFileId(moduleId) }, options);
 		},
-		[selectModule],
+		[openDocument],
 	);
 
-	const handleCloseFile = useCallback(
-		(moduleId: string) => {
-			// Closing the file on screen moves to its neighbour; `null` is main.flow.
-			if (currentModuleIdRef.current === moduleId) {
-				void selectModule(fileAfterClose(openFileIdsRef.current, moduleId));
+	const handleCloseTab = useCallback((key: string) => {
+		const tabs = openTabsRef.current;
+		if (activeTabKeyRef.current === key) {
+			const next = tabAfterClose(tabs, key);
+			if (next) {
+				setActiveTabKey(next);
+				restoreTabPositionRef.current(tabByKey(tabs, next));
 			}
-			setOpenFileIds((old) => withFileClosed(old, moduleId));
-		},
-		[selectModule],
+		}
+		setOpenTabs(withTabClosed(tabs, key));
+	}, []);
+
+	/** A second view of one file, so a function body and its caller can sit side by side. */
+	const handleSplitTab = useCallback((key: string) => {
+		const tab = tabByKey(openTabsRef.current, key);
+		if (!tab || tab.doc.kind !== "board") return;
+		const result = withDocumentOpened(openTabsRef.current, tab.doc, {
+			newTab: true,
+			layerPath: tab.layerPath,
+			after: key,
+		});
+		setOpenTabs(result.tabs);
+		setActiveTabKey(result.key);
+	}, []);
+
+	const activeDocumentKindRef = useRef(activeDocument.kind);
+	activeDocumentKindRef.current = activeDocument.kind;
+
+	// Only the board can name a `.flow` file. Everything else is named by whoever listed
+	// it — the explorer knows a page's name, the strip would have to fetch it — so names
+	// are reported in rather than fetched twice.
+	const [documentTitles, setDocumentTitles] = useState<Record<string, string>>(
+		{},
 	);
+	const reportDocumentTitle = useCallback(
+		(doc: IEditorDocument, title: string) => {
+			const key = documentKey(doc);
+			setDocumentTitles((old) =>
+				old[key] === title ? old : { ...old, [key]: title },
+			);
+		},
+		[],
+	);
+
+	const resolveTabLabel = useCallback(
+		(tab: IEditorTab) => {
+			if (tab.doc.kind === "board") {
+				return boardTabLabel(board.data, tab.doc.fileId, tab.layerPath);
+			}
+			const known = documentTitles[documentKey(tab.doc)];
+			if (known) return known;
+			switch (tab.doc.kind) {
+				case "storage":
+					return (
+						tab.doc.location.split("/").filter(Boolean).pop() ??
+						tab.doc.location
+					);
+				case "table":
+					return tab.doc.table;
+				case "page":
+					return t("page", "Page");
+				case "widget":
+					return t("widget", "Widget");
+			}
+		},
+		[board.data, documentTitles, t],
+	);
+
+	// A tab remembers a path; putting the canvas back on it goes through the same two
+	// entry points every other navigation uses, so the viewport and the layer trail are
+	// handled exactly once, here as everywhere else.
+	restoreTabPositionRef.current = (tab: IEditorTab | undefined) => {
+		if (!tab || tab.doc.kind !== "board") return;
+		if (tab.layerPath) {
+			jumpToLayerRef.current(tab.layerPath);
+			return;
+		}
+		void selectModuleRef.current(fileModuleId(tab.doc.fileId) ?? null);
+	};
+
+	// The active tab going away leaves the strip with nothing selected; fall back to the
+	// board rather than rendering an empty editor.
+	useEffect(() => {
+		if (openTabs.some((tab) => tab.key === activeTabKey)) return;
+		setActiveTabKey(openTabs[0]?.key ?? MAIN_TAB_KEY);
+	}, [activeTabKey, openTabs]);
+
+	// Open tabs outlive a reload, per board. A restored tab is only a claim that its
+	// document existed — the prune above and the document views handle one that is gone.
+	const tabsStorageKey = `${OPEN_TABS_STORAGE_PREFIX}:${appId}:${boardId}`;
+	const tabsHydratedRef = useRef(false);
+	useEffect(() => {
+		tabsHydratedRef.current = false;
+		let restored: ReturnType<typeof deserializeTabs>;
+		try {
+			restored = deserializeTabs(window.localStorage.getItem(tabsStorageKey));
+		} catch {
+			restored = { tabs: [], activeKey: null };
+		}
+		const withMain = restored.tabs.some((tab) => tab.key === MAIN_TAB_KEY)
+			? restored.tabs
+			: [{ key: MAIN_TAB_KEY, doc: MAIN_DOCUMENT }, ...restored.tabs];
+		setOpenTabs(withMain);
+		const active = restored.activeKey ?? MAIN_TAB_KEY;
+		setActiveTabKey(active);
+		tabsHydratedRef.current = true;
+		restoreTabPositionRef.current(tabByKey(withMain, active));
+	}, [tabsStorageKey]);
+
+	useEffect(() => {
+		if (!tabsHydratedRef.current) return;
+		try {
+			window.localStorage.setItem(
+				tabsStorageKey,
+				serializeTabs(openTabs, activeTabKey),
+			);
+		} catch {
+			// A full or blocked store costs the tab strip its memory, nothing more.
+		}
+	}, [activeTabKey, openTabs, tabsStorageKey]);
 
 	const {
 		executeCommand,
@@ -1279,20 +1501,24 @@ export function FlowBoard({
 		[],
 	);
 
-	// Jump to a specific layer path
+	// Jump to a specific layer path. Leaving a layer discards what is on screen, so its
+	// viewport is banked first — `pushLayer` and `focusNode` both do this, and skipping it
+	// here is what dropped the outgoing layer's viewport on every jump. No hold is taken:
+	// unlike a go-to-node, arriving here *wants* the destination's saved viewport back.
 	const jumpToLayer = useCallback(
 		(targetLayerPath: string) => {
-			if (targetLayerPath === "root" || !targetLayerPath) {
-				setLayerPath(undefined);
-				setCurrentLayer(undefined);
-			} else {
-				setLayerPath(targetLayerPath);
-				const segments = targetLayerPath.split("/");
-				setCurrentLayer(segments[segments.length - 1]);
-			}
+			const target =
+				targetLayerPath === "root" || !targetLayerPath
+					? undefined
+					: targetLayerPath;
+			if (target === layerPathRef.current) return;
+			void saveViewport();
+			setLayerPath(target);
+			setCurrentLayer(target?.split("/").pop());
 		},
-		[setLayerPath, setCurrentLayer],
+		[saveViewport, setLayerPath, setCurrentLayer],
 	);
+	jumpToLayerRef.current = jumpToLayer;
 
 	// Undelivered board edits: the only exit when the outbox cannot drain.
 	const [syncRecoveryOpen, setSyncRecoveryOpen] = useState(false);
@@ -2955,18 +3181,15 @@ export function FlowBoard({
 			// Function layer drop -> place a CallFunction node
 			if (type === "function-layer") {
 				const layerId: string = event.detail.layerId;
-				const callFnNode = catalog.data?.find(
+				const template = catalog.data?.find(
 					(node) => node.name === "control_call_function",
 				);
-				if (!callFnNode) return;
-
-				const layerPin = Object.values(callFnNode.pins).find(
-					(pin) => pin.name === "function_layer_id",
+				const callFnNode = withPinDefault(
+					template,
+					"function_layer_id",
+					layerId,
 				);
-				if (!layerPin) return;
-
-				layerPin.default_value = convertJsonToUint8Array(layerId);
-				callFnNode.pins[layerPin.id] = layerPin;
+				if (!callFnNode) return;
 
 				placeNode(callFnNode, {
 					x: screenPosition.x,
@@ -2975,28 +3198,59 @@ export function FlowBoard({
 				return;
 			}
 
+			// Stored file drop -> plant the pair that addresses it. A FlowPath cannot be a
+			// pin literal (its `store_ref` is minted at run time), so the path has to be
+			// built by nodes rather than written into one.
+			if (type === "storage-path") {
+				const fragment = buildStoragePathNodes({
+					catalog: catalog.data,
+					scope: event.detail.scope,
+					path: event.detail.path,
+				});
+				if (!fragment) {
+					toast.error(
+						t("pathNodesMissingFromCatalog", "Path nodes are not available"),
+					);
+					return;
+				}
+				await placeNodeFragment({
+					nodes: fragment.nodes,
+					position: screenToFlowPosition({
+						x: screenPosition.x,
+						y: screenPosition.y,
+					}),
+					currentLayer,
+					executeCommand,
+				});
+				return;
+			}
+
 			// Variable drop -> place a Get/Set variable node
 			const variable: IVariable = event.detail.variable;
 			const operation: "set" | "get" = event.detail.operation;
-			const getVarNode = catalog.data?.find(
-				(node) => node.name === `variable_${operation}`,
+			const getVarNode = withPinDefault(
+				catalog.data?.find((node) => node.name === `variable_${operation}`),
+				"var_ref",
+				variable.id,
 			);
 			if (!getVarNode) return;
-
-			const varRefPin = Object.values(getVarNode.pins).find(
-				(pin) => pin.name === "var_ref",
-			);
-			if (!varRefPin) return;
-
-			varRefPin.default_value = convertJsonToUint8Array(variable.id);
-			getVarNode.pins[varRefPin.id] = varRefPin;
 
 			placeNode(getVarNode, {
 				x: screenPosition.x,
 				y: screenPosition.y,
 			});
 		},
-		[catalog.data, clickPosition, boardId, droppedPin, placeNode],
+		[
+			catalog.data,
+			clickPosition,
+			boardId,
+			droppedPin,
+			placeNode,
+			currentLayer,
+			executeCommand,
+			screenToFlowPosition,
+			t,
+		],
 	);
 
 	const handleCopyRef = useRef(handleCopyCB);
@@ -4637,11 +4891,47 @@ export function FlowBoard({
 		[board.data?.comments],
 	);
 
-	const openPageInBuilder = useCallback(
-		(pageId: string, bId: string) => {
-			router.push(`/page-builder?id=${pageId}&app=${appId}&board=${bId}`);
+	// Pages, widgets, stored files and tables all open as editor tabs rather than a route
+	// push. A published version is read-only for the *board*, not for things that are not
+	// versioned with it, so none of these are gated on `version`.
+	const openPageDocument = useCallback(
+		(pageId: string) => openDocument({ kind: "page", pageId }),
+		[openDocument],
+	);
+	const openWidgetDocument = useCallback(
+		(widgetId: string) => openDocument({ kind: "widget", widgetId }),
+		[openDocument],
+	);
+	const openStorageDocument = useCallback(
+		(scope: IEditorScope, location: string) =>
+			openDocument({ kind: "storage", scope, location }),
+		[openDocument],
+	);
+	const openTableDocument = useCallback(
+		(scope: IEditorScope, table: string) =>
+			openDocument({ kind: "table", scope, table }),
+		[openDocument],
+	);
+	const reportWidgetName = useCallback(
+		(widgetId: string, name: string) =>
+			reportDocumentTitle({ kind: "widget", widgetId }, name),
+		[reportDocumentTitle],
+	);
+	const reportPageName = useCallback(
+		(pageId: string, name: string) =>
+			reportDocumentTitle({ kind: "page", pageId }, name),
+		[reportDocumentTitle],
+	);
+
+	// The page builder carries its own page switcher, so the tab has to follow the
+	// document rather than the document being pinned to the tab.
+	const changeTabDocument = useCallback(
+		(key: string, doc: IEditorDocument) => {
+			setOpenTabs((old) =>
+				old.map((tab) => (tab.key === key ? { ...tab, doc } : tab)),
+			);
 		},
-		[router, appId],
+		[],
 	);
 
 	// Where teammates are, for the explorer (per file / per layer) and the
@@ -4694,7 +4984,12 @@ export function FlowBoard({
 				board={board.data}
 				currentFileId={currentFileId}
 				onSelectFile={handleSelectModule}
-				onOpenPage={openPageInBuilder}
+				onOpenPage={openPageDocument}
+				onOpenWidget={openWidgetDocument}
+				onOpenStorageFile={openStorageDocument}
+				onOpenTable={openTableDocument}
+				onWidgetName={reportWidgetName}
+				onPageName={reportPageName}
 				executeCommand={executeCommand}
 				readOnly={typeof version !== "undefined"}
 				reservedRoots={moduleReservedRoots}
@@ -5005,14 +5300,16 @@ export function FlowBoard({
 					) : undefined
 				}
 				tabs={
-					board.data &&
-					(modules.length > 0 || typeof version === "undefined") ? (
-						<FlowModuleTabs
+					board.data ? (
+						<FlowEditorTabs
 							board={board.data}
+							tabs={openTabs}
+							activeKey={activeTabKey}
 							activeModuleId={currentModuleId}
-							openFileIds={openFileIds}
-							onSelect={handleSelectModule}
-							onCloseFile={handleCloseFile}
+							resolveLabel={resolveTabLabel}
+							onSelect={selectTab}
+							onClose={handleCloseTab}
+							onSplit={handleSplitTab}
 							executeCommand={executeCommand}
 							readOnly={typeof version !== "undefined"}
 							reservedRoots={moduleReservedRoots}
@@ -5252,213 +5549,237 @@ export function FlowBoard({
 					/>
 				}
 				canvas={
-					<>
-						<FlowContextMenu
-							board={board.data}
-							droppedPin={droppedPin}
-							currentLayerId={currentLayer}
-							onCommentPlace={onCommentPlace}
-							refs={board.data?.refs || {}}
-							onClose={() => setDroppedPin(undefined)}
-							nodes={catalog.data ?? []}
-							selectionCount={selectedNodeIds.length}
-							movableSelectionCount={selectedMovableIds.length}
-							onEditSelectionAsFlowScript={
-								backend.boardState.getFlowScriptScoped &&
-								typeof version === "undefined"
-									? openFlowScriptForSelection
-									: undefined
-							}
-							onMoveSelectionToModule={
-								typeof version === "undefined"
-									? (target) => void moveSelectionToModule(target)
-									: undefined
-							}
-							onPingHere={
-								awareness
-									? () => pingAtScreen(clickPosition.x, clickPosition.y)
-									: undefined
-							}
-							onDiscussInChat={
-								awareness && selectedNodeIds.length === 1
-									? () => openChatWithNode(selectedNodeIds[0])
-									: undefined
-							}
-							onPlaceholder={async (name) => {
-								await placePlaceholder(name);
-								setDroppedPin(undefined);
-							}}
-							onNodePlace={async (node) => {
-								await placeNode(node);
-							}}
-							onCreateVariable={async (variable) => {
-								const command = upsertVariableCommand({ variable });
-								await executeCommand(command, false);
-								setDroppedPin(undefined);
-							}}
+					// The graph stays mounted under every other document. Unmounting it loses
+					// the xyflow store and makes the next `saveViewport` write a stale viewport
+					// under the old key; `display:none` collapses it to zero and breaks the
+					// restore on the way back. `visibility` keeps it measured and inert.
+					<div className="relative flex h-full min-h-0 flex-col">
+						<div
+							className={cn(
+								"flex h-full min-h-0 flex-col",
+								documentTab && "invisible",
+							)}
+							aria-hidden={documentTab ? true : undefined}
 						>
-							<div
-								className={`w-full flex-1 min-h-0 relative select-none touch-none ${isOver && "border-green-400 border-2 z-10"}`}
-								ref={setNodeRef}
-								style={{
-									WebkitUserSelect: "none",
-									WebkitTouchCallout: "none",
-									touchAction: "none",
+							<FlowContextMenu
+								board={board.data}
+								droppedPin={droppedPin}
+								currentLayerId={currentLayer}
+								onCommentPlace={onCommentPlace}
+								refs={board.data?.refs || {}}
+								onClose={() => setDroppedPin(undefined)}
+								nodes={catalog.data ?? []}
+								selectionCount={selectedNodeIds.length}
+								movableSelectionCount={selectedMovableIds.length}
+								onEditSelectionAsFlowScript={
+									backend.boardState.getFlowScriptScoped &&
+									typeof version === "undefined"
+										? openFlowScriptForSelection
+										: undefined
+								}
+								onMoveSelectionToModule={
+									typeof version === "undefined"
+										? (target) => void moveSelectionToModule(target)
+										: undefined
+								}
+								onPingHere={
+									awareness
+										? () => pingAtScreen(clickPosition.x, clickPosition.y)
+										: undefined
+								}
+								onDiscussInChat={
+									awareness && selectedNodeIds.length === 1
+										? () => openChatWithNode(selectedNodeIds[0])
+										: undefined
+								}
+								onPlaceholder={async (name) => {
+									await placePlaceholder(name);
+									setDroppedPin(undefined);
 								}}
-								onTouchStart={(e) => {
-									const t = e.touches[0];
-									if (!t) return;
-									const target = e.currentTarget;
-									const startX = t.clientX;
-									const startY = t.clientY;
-									let moved = false;
-									const onMove = (me: TouchEvent) => {
-										const tt = me.touches[0];
-										if (!tt) return;
-										if (
-											Math.hypot(tt.clientX - startX, tt.clientY - startY) > 10
-										)
-											moved = true;
-									};
-									const timer = setTimeout(() => {
-										if (moved) return;
-										// Synthesize a contextmenu-like event for long-press
-										const evt = new MouseEvent("contextmenu", {
-											clientX: startX,
-											clientY: startY,
-											bubbles: true,
-											cancelable: true,
-										});
-										target.dispatchEvent(evt);
-									}, 450);
-									const onEnd = () => {
-										clearTimeout(timer);
-										document.removeEventListener("touchmove", onMove, {
-											capture: true,
-										} as any);
-										document.removeEventListener("touchend", onEnd, {
-											capture: true,
-										} as any);
-										document.removeEventListener("touchcancel", onEnd, {
-											capture: true,
-										} as any);
-									};
-									document.addEventListener("touchmove", onMove, {
-										passive: true,
-										capture: true,
-									} as any);
-									document.addEventListener("touchend", onEnd, {
-										passive: true,
-										capture: true,
-									} as any);
-									document.addEventListener("touchcancel", onEnd, {
-										passive: true,
-										capture: true,
-									} as any);
+								onNodePlace={async (node) => {
+									await placeNode(node);
+								}}
+								onCreateVariable={async (variable) => {
+									const command = upsertVariableCommand({ variable });
+									await executeCommand(command, false);
+									setDroppedPin(undefined);
 								}}
 							>
-								{currentLayer && (
-									<h2 className="absolute bottom-0 left-0 z-10 ml-16 mb-10 text-muted pointer-events-none select-none">
-										{insideModule
-											? modulePathLabel(board.data?.layers, currentLayer)
-											: board.data?.layers[currentLayer]?.name}
-									</h2>
-								)}
-								{version && (
-									<h3 className="absolute top-0 mr-2 mt-2 right-0 z-10 text-muted pointer-events-none select-none">
-										{t("version", "Version")} {version[0]}.{version[1]}.
-										{version[2]} {t("readonly", "- Read-Only")}
-									</h3>
-								)}
-								<FlowCanvas
-									flowRef={flowRef}
-									nodes={nodes}
-									edges={edges}
-									nodeTypes={nodeTypes}
-									edgeTypes={edgeTypes}
-									colorMode={colorMode}
-									nodesInteractive={typeof version === "undefined"}
-									onlyRenderVisible={nodes.length > 65}
-									insideLayer={Boolean(currentLayer) && !insideModule}
-									onContextMenu={onContextMenuCB}
-									onInit={initializeFlow}
-									onNodeDoubleClick={onNodeDoubleClick}
-									onNodesChange={onNodesChangeIntercept}
-									onEdgesChange={onEdgesChange}
-									onNodeDragStop={onNodeDragStop}
-									onNodeDrag={onNodeDrag}
-									onNodeDragStart={onNodeDragStart}
-									onPaneClick={onPaneClick}
-									isValidConnection={isValidConnectionCB}
-									onConnect={onConnect}
-									onSelectionChange={onSelectionChange}
-									onReconnect={onReconnect}
-									onReconnectStart={onReconnectStart}
-									onMoveEnd={onMoveEnd}
-									onReconnectEnd={onReconnectEnd}
-									onConnectEnd={onConnectEnd}
-									onScreenshot={onScreenshot}
-									miniMapNodeColor={miniMapNodeColor}
-								/>
-								<FlowCursorsLayer
-									store={cursorStore}
-									currentLayerPath={layerPath ?? "root"}
-									peerUsers={peerUsers}
-								/>
-								<FlowDragGhostsLayer
-									store={dragStore}
-									currentLayerPath={layerPath ?? "root"}
-									peerUsers={peerUsers}
-									sub={sub}
-								/>
-								<FlowPingsLayer
-									store={pingStore}
-									currentLayerPath={layerPath ?? "root"}
-									peerUsers={peerUsers}
-									sub={sub}
-								/>
-								{peerStates.length > 0 && (
-									<FlowLayerIndicators
-										peers={peerStates}
-										currentLayerPath={layerPath ?? "root"}
-										nodes={nodes}
-										peerUsers={peerUsers}
-										onJumpToLayer={jumpToLayer}
-									/>
-								)}
-								<DragOverlay
-									dropAnimation={{
-										duration: 500,
-										easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+								<div
+									className={`w-full flex-1 min-h-0 relative select-none touch-none ${isOver && "border-green-400 border-2 z-10"}`}
+									ref={setNodeRef}
+									style={{
+										WebkitUserSelect: "none",
+										WebkitTouchCallout: "none",
+										touchAction: "none",
+									}}
+									onTouchStart={(e) => {
+										const t = e.touches[0];
+										if (!t) return;
+										const target = e.currentTarget;
+										const startX = t.clientX;
+										const startY = t.clientY;
+										let moved = false;
+										const onMove = (me: TouchEvent) => {
+											const tt = me.touches[0];
+											if (!tt) return;
+											if (
+												Math.hypot(tt.clientX - startX, tt.clientY - startY) >
+												10
+											)
+												moved = true;
+										};
+										const timer = setTimeout(() => {
+											if (moved) return;
+											// Synthesize a contextmenu-like event for long-press
+											const evt = new MouseEvent("contextmenu", {
+												clientX: startX,
+												clientY: startY,
+												bubbles: true,
+												cancelable: true,
+											});
+											target.dispatchEvent(evt);
+										}, 450);
+										const onEnd = () => {
+											clearTimeout(timer);
+											document.removeEventListener("touchmove", onMove, {
+												capture: true,
+											} as any);
+											document.removeEventListener("touchend", onEnd, {
+												capture: true,
+											} as any);
+											document.removeEventListener("touchcancel", onEnd, {
+												capture: true,
+											} as any);
+										};
+										document.addEventListener("touchmove", onMove, {
+											passive: true,
+											capture: true,
+										} as any);
+										document.addEventListener("touchend", onEnd, {
+											passive: true,
+											capture: true,
+										} as any);
+										document.addEventListener("touchcancel", onEnd, {
+											passive: true,
+											capture: true,
+										} as any);
 									}}
 								>
-									{active?.data?.current?.type === "function-layer" ? (
-										<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
-											<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
-											<span className="text-sm font-medium">
-												{board.data?.layers?.[active.data.current.layerId]
-													?.name ?? "Function"}
-											</span>
-										</div>
-									) : (active?.data?.current as IVariable)?.id ? (
-										<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
-											<span
-												className="h-2 w-4 rounded-full"
-												style={{
-													backgroundColor: typeToColor(
-														(active?.data?.current as IVariable).data_type,
-													),
-												}}
-											/>
-											<span className="font-mono text-sm font-medium">
-												{(active?.data?.current as IVariable).name}
-											</span>
-										</div>
-									) : null}
-								</DragOverlay>
+									{currentLayer && (
+										<h2 className="absolute bottom-0 left-0 z-10 ml-16 mb-10 text-muted pointer-events-none select-none">
+											{insideModule
+												? modulePathLabel(board.data?.layers, currentLayer)
+												: board.data?.layers[currentLayer]?.name}
+										</h2>
+									)}
+									{version && (
+										<h3 className="absolute top-0 mr-2 mt-2 right-0 z-10 text-muted pointer-events-none select-none">
+											{t("version", "Version")} {version[0]}.{version[1]}.
+											{version[2]} {t("readonly", "- Read-Only")}
+										</h3>
+									)}
+									<FlowCanvas
+										flowRef={flowRef}
+										nodes={nodes}
+										edges={edges}
+										nodeTypes={nodeTypes}
+										edgeTypes={edgeTypes}
+										colorMode={colorMode}
+										nodesInteractive={typeof version === "undefined"}
+										onlyRenderVisible={nodes.length > 65}
+										insideLayer={Boolean(currentLayer) && !insideModule}
+										onContextMenu={onContextMenuCB}
+										onInit={initializeFlow}
+										onNodeDoubleClick={onNodeDoubleClick}
+										onNodesChange={onNodesChangeIntercept}
+										onEdgesChange={onEdgesChange}
+										onNodeDragStop={onNodeDragStop}
+										onNodeDrag={onNodeDrag}
+										onNodeDragStart={onNodeDragStart}
+										onPaneClick={onPaneClick}
+										isValidConnection={isValidConnectionCB}
+										onConnect={onConnect}
+										onSelectionChange={onSelectionChange}
+										onReconnect={onReconnect}
+										onReconnectStart={onReconnectStart}
+										onMoveEnd={onMoveEnd}
+										onReconnectEnd={onReconnectEnd}
+										onConnectEnd={onConnectEnd}
+										onScreenshot={onScreenshot}
+										miniMapNodeColor={miniMapNodeColor}
+									/>
+									<FlowCursorsLayer
+										store={cursorStore}
+										currentLayerPath={layerPath ?? "root"}
+										peerUsers={peerUsers}
+									/>
+									<FlowDragGhostsLayer
+										store={dragStore}
+										currentLayerPath={layerPath ?? "root"}
+										peerUsers={peerUsers}
+										sub={sub}
+									/>
+									<FlowPingsLayer
+										store={pingStore}
+										currentLayerPath={layerPath ?? "root"}
+										peerUsers={peerUsers}
+										sub={sub}
+									/>
+									{peerStates.length > 0 && (
+										<FlowLayerIndicators
+											peers={peerStates}
+											currentLayerPath={layerPath ?? "root"}
+											nodes={nodes}
+											peerUsers={peerUsers}
+											onJumpToLayer={jumpToLayer}
+										/>
+									)}
+									<DragOverlay
+										dropAnimation={{
+											duration: 500,
+											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+										}}
+									>
+										{active?.data?.current?.type === "function-layer" ? (
+											<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
+												<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
+												<span className="text-sm font-medium">
+													{board.data?.layers?.[active.data.current.layerId]
+														?.name ?? "Function"}
+												</span>
+											</div>
+										) : (active?.data?.current as IVariable)?.id ? (
+											<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
+												<span
+													className="h-2 w-4 rounded-full"
+													style={{
+														backgroundColor: typeToColor(
+															(active?.data?.current as IVariable).data_type,
+														),
+													}}
+												/>
+												<span className="font-mono text-sm font-medium">
+													{(active?.data?.current as IVariable).name}
+												</span>
+											</div>
+										) : null}
+									</DragOverlay>
+								</div>
+							</FlowContextMenu>
+						</div>
+						{documentTab && (
+							<div className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
+								<EditorDocumentView
+									appId={appId}
+									boardId={boardId}
+									tab={documentTab}
+									onClose={() => handleCloseTab(documentTab.key)}
+									onDocumentChange={changeTabDocument}
+								/>
 							</div>
-						</FlowContextMenu>
-					</>
+						)}
+					</div>
 				}
 				overlays={
 					<>

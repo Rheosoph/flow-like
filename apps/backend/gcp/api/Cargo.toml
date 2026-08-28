@@ -14,7 +14,7 @@ description = "Flow-Like GCP API Service"
 # credentials through the AWS provider and mint scoped credentials against the
 # wrong cloud, failing at request time rather than at startup. Removing the AWS
 # surface from the build makes "gcp" the only default that can be selected.
-flow-like-api = { workspace = true, default-features = false, features = ["gcp", "secrets-gcp", "firestore", "pubsub", "smtp", "sentry"] }
+flow-like-api = { workspace = true, default-features = false, features = ["gcp", "secrets-gcp", "firestore", "pubsub", "smtp", "sentry", "channel-gcp"] }
 flow-like-secrets.workspace = true
 flow-like-gcp-data.workspace = true
 flow-like-storage.workspace = true

@@ -15,10 +15,10 @@ import {
 	Trash2Icon,
 	TriangleAlertIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
-import { type PeerUserInfo, colorFromSub } from "../../../hooks/use-peer-users";
+import type { PeerUserInfo } from "../../../hooks/use-peer-users";
 import type { IGenericCommand } from "../../../lib";
 import {
 	FLOWSCRIPT_KEYWORDS,
@@ -38,10 +38,8 @@ import {
 	type ILayer,
 	ILayerType,
 } from "../../../lib/schema/flow/board";
-import { userInitials } from "../../../lib/user-display";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
-import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import { Button } from "../../ui/button";
 import {
 	ContextMenu,
@@ -55,6 +53,19 @@ import {
 } from "../../ui/context-menu";
 import { Input } from "../../ui/input";
 import { useModuleCommands } from "../use-module-commands";
+import type { IEditorScope } from "./editor-documents";
+import {
+	EmptyRow,
+	NO_MARKS,
+	NameField,
+	PresenceDots,
+	SectionHeader,
+	TreeRow,
+	withPresence,
+} from "./explorer/explorer-primitives";
+import { StorageRoot } from "./explorer/storage-root";
+import { TablesRoot } from "./explorer/tables-root";
+import { WidgetsRoot } from "./explorer/widgets-root";
 
 interface ModuleNode {
 	layer: ILayer;
@@ -92,189 +103,18 @@ function buildModuleTree(layers: Record<string, ILayer> | undefined): {
 	return { roots, all: modules };
 }
 
-// Extra props (and ref) must reach the root div so `ContextMenuTrigger asChild`
-// can attach its right-click handler.
-function TreeRow({
-	depth,
-	icon,
-	label,
-	active,
-	muted,
-	trailing,
-	expander,
-	onSelect,
-	className,
-	...rest
-}: Readonly<{
-	depth: number;
-	icon: React.ReactNode;
-	label: string;
-	active?: boolean;
-	muted?: boolean;
-	trailing?: React.ReactNode;
-	expander?: React.ReactNode;
-	onSelect?: () => void;
-}> &
-	Omit<React.ComponentProps<"div">, "children">) {
-	return (
-		<div
-			{...rest}
-			className={cn(
-				"group/row flex items-center gap-1 rounded-sm pr-1 text-xs",
-				active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-				className,
-			)}
-			style={{ paddingLeft: `${depth * 12 + 4}px` }}
-		>
-			<span className="flex size-4 shrink-0 items-center justify-center">
-				{expander}
-			</span>
-			<button
-				type="button"
-				onClick={onSelect}
-				className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-			>
-				<span
-					className={cn(
-						"shrink-0 [&>svg]:size-3.5",
-						active
-							? "text-accent-foreground"
-							: muted
-								? "text-muted-foreground"
-								: "text-primary",
-					)}
-				>
-					{icon}
-				</span>
-				<span className="truncate font-mono">{label}</span>
-			</button>
-			{trailing}
-		</div>
-	);
-}
-
-const MAX_PRESENCE_DOTS = 3;
-const NO_MARKS: PresenceMark[] = [];
-
 /**
- * Who is at a place — a file, a layer, a node — as a facepile small enough to
- * sit in a tree row. Shared with the inspector so the same person looks the
- * same in both rails.
- */
-export const PresenceDots = memo(function PresenceDots({
-	marks,
-	peerUsers,
-	className,
-}: Readonly<{
-	marks: readonly PresenceMark[];
-	peerUsers?: Map<string, PeerUserInfo>;
-	className?: string;
-}>) {
-	const { t } = useTranslation("flow");
-	if (marks.length === 0) return null;
-	const shown = marks.slice(0, MAX_PRESENCE_DOTS);
-	const overflow = marks.length - shown.length;
-	const names = marks
-		.map((mark) =>
-			mark.self
-				? t("you", "You")
-				: (peerUsers?.get(mark.sub)?.name ?? mark.sub.slice(-8)),
-		)
-		.join(", ");
-	return (
-		<span
-			className={cn("flex shrink-0 items-center -space-x-1", className)}
-			aria-label={t("presenceOpenBy", {
-				defaultValue: "Open by {{names}}",
-				names,
-			})}
-		>
-			{shown.map((mark) => {
-				const info = peerUsers?.get(mark.sub);
-				const color = info?.color ?? colorFromSub(mark.sub);
-				const displayName = info?.name ?? mark.sub.slice(-8);
-				const label = mark.self ? t("you", "You") : displayName;
-				return (
-					<Avatar
-						key={mark.sub}
-						className="size-4 rounded-full ring-1 ring-background"
-						style={{ boxShadow: `0 0 0 1px ${color}` }}
-						title={mark.sessions > 1 ? `${label} ×${mark.sessions}` : label}
-						aria-hidden="true"
-					>
-						{info?.avatarUrl && (
-							<AvatarImage
-								src={info.avatarUrl}
-								alt=""
-								className="object-cover"
-							/>
-						)}
-						<AvatarFallback
-							className="rounded-full text-[8px] font-semibold leading-none text-white"
-							style={{ background: color }}
-						>
-							{userInitials(displayName).charAt(0)}
-						</AvatarFallback>
-					</Avatar>
-				);
-			})}
-			{overflow > 0 && (
-				<span
-					className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[7px] font-semibold leading-none text-muted-foreground ring-1 ring-background"
-					title={marks
-						.slice(MAX_PRESENCE_DOTS)
-						.map((mark) =>
-							mark.self
-								? t("you", "You")
-								: (peerUsers?.get(mark.sub)?.name ?? mark.sub.slice(-8)),
-						)
-						.join(", ")}
-				>
-					+{overflow}
-				</span>
-			)}
-		</span>
-	);
-});
-
-/** A row's trailing slot with presence in front of whatever control it already had. */
-function withPresence(
-	dots: React.ReactNode,
-	control: React.ReactNode,
-): React.ReactNode {
-	if (!dots) return control;
-	if (!control) return dots;
-	return (
-		<span className="flex shrink-0 items-center gap-1">
-			{dots}
-			{control}
-		</span>
-	);
-}
-
-function SectionHeader({
-	label,
-	action,
-}: Readonly<{ label: string; action?: React.ReactNode }>) {
-	return (
-		<div className="flex items-center gap-1 px-1 pb-0.5 pt-2">
-			<h3 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-				{label}
-			</h3>
-			<span className="flex-1" />
-			{action}
-		</div>
-	);
-}
-
-/**
- * The board's two trees.
+ * Everything the editor can open, in one tree.
  *
  * `Flow` is the files the canvas and FlowScript open — `main.flow` plus one node
  * per module layer, nested by module, which is what makes a module a folder.
- * `UI` is the pages the board actually has, each a jump into the page builder.
- * Everything the tab strip can do to a file it can do here too, and here it can
- * also be reparented.
+ * `UI` is the pages the board has. Everything the tab strip can do to a file it
+ * can do here too, and here it can also be reparented.
+ *
+ * The roots below `UI` are **not** board-scoped and say so in their headings:
+ * widgets hang off `App.widget_ids`, storage and tables off the app. They live
+ * here because this is where you reach for them while building a flow, not
+ * because the board owns them.
  */
 export function BoardExplorer({
 	appId,
@@ -283,6 +123,11 @@ export function BoardExplorer({
 	currentFileId,
 	onSelectFile,
 	onOpenPage,
+	onOpenWidget,
+	onOpenStorageFile,
+	onOpenTable,
+	onWidgetName,
+	onPageName,
 	executeCommand,
 	readOnly,
 	reservedRoots = FLOWSCRIPT_KEYWORDS,
@@ -297,6 +142,13 @@ export function BoardExplorer({
 	currentFileId: string;
 	onSelectFile: (moduleId: string | null) => void;
 	onOpenPage: (pageId: string, boardId: string) => void;
+	onOpenWidget: (widgetId: string) => void;
+	onOpenStorageFile: (scope: IEditorScope, path: string) => void;
+	onOpenTable: (scope: IEditorScope, table: string) => void;
+	/** Reports a widget's name so the tab strip can label it without fetching again. */
+	onWidgetName?: (widgetId: string, name: string) => void;
+	/** Same for pages, which the explorer already lists. */
+	onPageName?: (pageId: string, name: string) => void;
 	executeCommand: (
 		command: IGenericCommand,
 		append: boolean,
@@ -331,6 +183,13 @@ export function BoardExplorer({
 		Boolean(appId && boardId),
 		[appId, boardId],
 	);
+
+	// Reported from an effect rather than from a row: naming a tab writes into the host's
+	// state, and doing that while rendering is a render-phase update on another component.
+	useEffect(() => {
+		if (!onPageName) return;
+		for (const page of pages.data ?? []) onPageName(page.pageId, page.name);
+	}, [onPageName, pages.data]);
 
 	const nameErrorText = useCallback(
 		(error: IModuleNameError | null) => {
@@ -685,10 +544,8 @@ export function BoardExplorer({
 					onCancel={() => setDraftingPage(false)}
 				/>
 			)}
-			{(pages.data?.length ?? 0) === 0 && !draftingPage && (
-				<p className="px-2 py-1 text-[11px] text-muted-foreground">
-					{t("noPagesYet", "No pages yet")}
-				</p>
+			{!pages.isLoading && (pages.data?.length ?? 0) === 0 && !draftingPage && (
+				<EmptyRow label={t("noPagesYet", "No pages yet")} />
 			)}
 			{pages.data?.map((page) => {
 				const row = (
@@ -739,6 +596,28 @@ export function BoardExplorer({
 					</ContextMenu>
 				);
 			})}
+
+			<WidgetsRoot
+				appId={appId}
+				readOnly={readOnly}
+				onOpenWidget={onOpenWidget}
+				onWidgetName={onWidgetName}
+			/>
+
+			<StorageRoot
+				appId={appId}
+				scope="app"
+				label={t("appStorage", "App Storage")}
+				onOpenFile={onOpenStorageFile}
+			/>
+			<StorageRoot
+				appId={appId}
+				scope="user"
+				label={t("userStorage", "User Storage")}
+				onOpenFile={onOpenStorageFile}
+			/>
+
+			<TablesRoot appId={appId} onOpenTable={onOpenTable} />
 		</div>
 	);
 }
@@ -755,45 +634,6 @@ function isDescendant(
 		current = owningModuleId(layers, current);
 	}
 	return false;
-}
-
-function NameField({
-	initial,
-	depth,
-	validate,
-	onSubmit,
-	onCancel,
-}: Readonly<{
-	initial: string;
-	depth: number;
-	validate: (value: string) => string | null;
-	onSubmit: (name: string) => void;
-	onCancel: () => void;
-}>) {
-	const [value, setValue] = useState(initial);
-	const error = value.trim() ? validate(value) : null;
-	const canSubmit = Boolean(value.trim()) && !error;
-
-	return (
-		<div
-			className="flex flex-col gap-0.5 py-0.5"
-			style={{ paddingLeft: `${depth * 12 + 24}px` }}
-		>
-			<Input
-				autoFocus
-				value={value}
-				aria-invalid={Boolean(error)}
-				className="h-6 px-1.5 font-mono text-xs"
-				onChange={(event) => setValue(event.target.value)}
-				onBlur={() => canSubmit && onSubmit(value.trim())}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && canSubmit) onSubmit(value.trim());
-					if (event.key === "Escape") onCancel();
-				}}
-			/>
-			{error && <span className="text-[10px] text-destructive">{error}</span>}
-		</div>
-	);
 }
 
 /** `Incident desk` -> `/incident-desk`; the default route until one is typed. */

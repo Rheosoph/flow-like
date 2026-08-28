@@ -621,7 +621,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			}
 
 			try {
-				await submitInteractionResponse(interaction, value, backend.profile);
+				await submitInteractionResponse(interaction, value);
 
 				setActiveInteractions((prev) =>
 					prev.map((i) =>
@@ -633,13 +633,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			} catch (err) {
 				console.error("[Chat] Failed to respond to interaction:", err);
 				Sentry.captureException(err, {
-					tags: { component: "chat", action: "respond_to_interaction" },
+					tags: { component: "chat", action: "submit_interaction_response" },
 					extra: { interactionId, appId },
 				});
 				toast.error(`Failed to submit response: ${extractErrorMessage(err)}`);
 			}
 		},
-		[backend.profile],
+		[appId],
 	);
 
 	const buildUseNavigationUrl = useCallback(

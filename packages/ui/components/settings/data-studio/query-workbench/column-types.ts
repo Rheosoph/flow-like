@@ -1,4 +1,5 @@
 import { looksLikeTemporalName } from "../../../../lib/date";
+import { resolveStorageFile } from "../../../../lib/storage-file";
 import { looksLikeUserColumnName } from "../../../../lib/user-display";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
 import { accountIdFromValue } from "../../../../state/backend-state/user-state";
@@ -9,6 +10,7 @@ export type ColumnKind =
 	| "boolean"
 	| "json"
 	| "user"
+	| "file"
 	| "text";
 
 export function classifyColumn(column: QueryColumn): ColumnKind {
@@ -27,27 +29,42 @@ export function classifyColumn(column: QueryColumn): ColumnKind {
 }
 
 /** How many rows are enough to tell a column of people from a column of words. */
-const USER_COLUMN_SAMPLE = 100;
+const VALUE_SAMPLE = 100;
 
 /**
  * The kind a column reads as in this particular result set.
  *
- * Only the user kind differs from `classifyColumn`: a name is a promise, not
+ * The user and file kinds can only be settled here: a name is a promise, not
  * proof, so a `created_by` that holds job names stays text rather than putting a
- * person icon over a column where no cell will ever resolve.
+ * person icon over a column where no cell will ever resolve, and a stored path is
+ * a file only once a value proves it points into this app's storage.
  */
 export function classifyResultColumn(
 	column: QueryColumn,
 	rows: readonly Record<string, unknown>[],
+	appId?: string,
 ): ColumnKind {
 	const kind = classifyColumn(column);
-	if (kind !== "user" || rows.length === 0) return kind;
+	if (rows.length === 0) return kind;
+	const sample = rows.slice(0, VALUE_SAMPLE);
 
-	return rows
-		.slice(0, USER_COLUMN_SAMPLE)
-		.some((row) => accountIdFromValue(row[column.name]))
-		? "user"
-		: "text";
+	if (kind === "user") {
+		return sample.some((row) => accountIdFromValue(row[column.name]))
+			? "user"
+			: "text";
+	}
+
+	if (
+		kind === "text" &&
+		appId &&
+		sample.some((row) =>
+			resolveStorageFile(column.name, row[column.name], appId),
+		)
+	) {
+		return "file";
+	}
+
+	return kind;
 }
 
 export function isNumericColumn(column: QueryColumn): boolean {

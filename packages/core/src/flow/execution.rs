@@ -26,6 +26,7 @@ use flow_like_storage::serde_arrow;
 use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use flow_like_types::channel::{Channel, InProcessChannel, MAX_TTL};
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
 #[cfg(feature = "flow-runtime")]
@@ -953,6 +954,8 @@ pub struct InternalRun {
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     /// User context for this execution
     pub user_context: Option<UserExecutionContext>,
+    /// Reply conduit to the run's client, shared by every context of this run.
+    pub channel: Arc<dyn Channel>,
 
     stack: Arc<RunStack>,
     concurrency_limit: u64,
@@ -1083,6 +1086,7 @@ impl InternalRun {
             token,
             oauth_tokens,
             run_id,
+            None,
         )
         .await
     }
@@ -1104,12 +1108,19 @@ impl InternalRun {
         token: Option<String>,
         oauth_tokens: std::collections::HashMap<String, OAuthToken>,
         run_id: Option<String>,
+        channel: Option<Arc<dyn Channel>>,
     ) -> flow_like_types::Result<Self> {
         let board = template.board.clone();
         let oauth_tokens: AHashMap<String, OAuthToken> = oauth_tokens.into_iter().collect();
 
         let before = Instant::now();
         let run_id = run_id.unwrap_or_else(create_id);
+        // Local hosts (desktop, tests) answer in-process; remote executors pass the transport
+        // channel built from their grant.
+        let channel: Arc<dyn Channel> = match channel {
+            Some(channel) => channel,
+            None => InProcessChannel::register(run_id.clone(), MAX_TTL).await,
+        };
         let execution_mode = ExecutionMode::from_event(event.as_ref());
 
         #[cfg(feature = "flow-runtime")]
@@ -1308,6 +1319,7 @@ impl InternalRun {
             profile: Arc::new(profile.clone()),
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
+            channel,
             has_node_errors: Arc::new(AtomicBool::new(false)),
             log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
             cancellation_token: None,
@@ -1522,6 +1534,7 @@ impl InternalRun {
                 let token = self.token.clone();
                 let nodes = self.nodes.clone();
                 let oauth_tokens = self.oauth_tokens.clone();
+                let channel = self.channel.clone();
                 let user_context = user_context.clone();
                 let has_node_errors = has_node_errors.clone();
                 let cancellation_token = cancellation_token.clone();
@@ -1546,6 +1559,7 @@ impl InternalRun {
                         credentials,
                         token,
                         oauth_tokens,
+                        channel,
                         user_context,
                         cancellation_token,
                         cancellation_log_level,
@@ -1611,6 +1625,7 @@ impl InternalRun {
             self.credentials.clone(),
             self.token.clone(),
             self.oauth_tokens.clone(),
+            self.channel.clone(),
             self.user_context.clone(),
             self.cancellation_token.clone(),
             self.cancellation_log_level,
@@ -2019,6 +2034,7 @@ async fn step_core(
     credentials: Option<Arc<SharedCredentials>>,
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+    channel: Arc<dyn Channel>,
     user_context: Option<UserExecutionContext>,
     cancellation_token: Option<CancellationToken>,
     cancellation_log_level: LogLevel,
@@ -2051,6 +2067,7 @@ async fn step_core(
         credentials,
         token,
         oauth_tokens,
+        Some(channel),
     )
     .await;
     context.user_context = user_context;

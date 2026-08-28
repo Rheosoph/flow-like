@@ -581,6 +581,7 @@ export function StorageSystem({
 	const renderFile = useCallback(
 		(file: IStorageItem, clearPreviewOnNavigate: boolean) => (
 			<FileOrFolder
+				appId={appId}
 				highlight={preview.file === file.location}
 				file={file}
 				changePrefix={(newPrefix) => {

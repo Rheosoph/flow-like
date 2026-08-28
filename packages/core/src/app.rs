@@ -1014,6 +1014,31 @@ impl App {
             .try_collect::<Vec<Path>>()
             .await?;
 
+        // The sidecar lives on the storage store, in its own per-language folder.
+        // `save_widget` only seeds one when absent, so leaving it behind lets a
+        // widget recreated under the same id resurrect the deleted name.
+        let meta_store = FlowLikeState::project_storage_store(&state)
+            .await?
+            .as_generic();
+        let meta_path = Path::from("apps")
+            .child(self.id.clone())
+            .child("metadata")
+            .child("widgets")
+            .child(widget_id);
+        let meta_locations = meta_store
+            .list(Some(&meta_path))
+            .map_ok(|m| m.location)
+            .boxed();
+        // A widget that never had a sidecar has no directory at all, which a
+        // filesystem store reports as an error rather than an empty listing.
+        if let Err(error) = meta_store
+            .delete_stream(meta_locations)
+            .try_collect::<Vec<Path>>()
+            .await
+        {
+            tracing::warn!("sweeping metadata of widget {}: {}", widget_id, error);
+        }
+
         // Remove widget ID from the list
         self.widget_ids.retain(|id| id != widget_id);
         self.save().await?;

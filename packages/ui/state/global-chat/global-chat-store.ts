@@ -326,7 +326,7 @@ interface GlobalChatState {
 	inlineAppSurfaces: InlineAppSurface[];
 	/**
 	 * Interactions (single/multiple choice, form) raised by a nested app-chat run (call_app_chat).
-	 * Rendered by the chat body and answered via respond_to_interaction, unblocking the app workflow
+	 * Rendered by the chat body and answered on the interaction's channel, unblocking the app workflow
 	 * while the outer call_app_chat tool call is still in flight. Deliberately conversation-scoped
 	 * rather than run-scoped: these are independent cards keyed by their own ids, so interleaving
 	 * them across concurrent runs is correct.

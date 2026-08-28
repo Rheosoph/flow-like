@@ -5,7 +5,7 @@ edition = "2024"
 description = "Flow-Like Azure API Service"
 
 [dependencies]
-flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email"] }
+flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email", "channel-azure"] }
 flow-like-secrets.workspace = true
 flow-like-azure-data.workspace = true
 flow-like-storage.workspace = true

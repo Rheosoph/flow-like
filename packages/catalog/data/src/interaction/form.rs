@@ -190,7 +190,7 @@ fn parse_form_node_inputs(
         expires_at: now + ttl_seconds,
         run_id: None,
         app_id: None,
-        responder_jwt: None,
+        channel: None,
     };
 
     (request, interaction_id)
