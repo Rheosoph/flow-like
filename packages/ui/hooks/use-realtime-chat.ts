@@ -11,6 +11,34 @@ export interface ChatMessage {
 	timestamp: number;
 }
 
+export const CHAT_MESSAGE_MAX_LENGTH = 500;
+
+/** Peers are untrusted: a malformed entry is dropped, an oversized text cut. */
+export function sanitizeChatMessage(value: unknown): ChatMessage | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return undefined;
+	const raw = value as Record<string, unknown>;
+	if (
+		typeof raw.id !== "string" ||
+		raw.id.length === 0 ||
+		raw.id.length > 64 ||
+		typeof raw.sub !== "string" ||
+		raw.sub.length === 0 ||
+		raw.sub.length > 128 ||
+		typeof raw.text !== "string" ||
+		typeof raw.timestamp !== "number" ||
+		!Number.isFinite(raw.timestamp) ||
+		raw.timestamp < 0
+	)
+		return undefined;
+	return {
+		id: raw.id,
+		sub: raw.sub,
+		text: raw.text.slice(0, CHAT_MESSAGE_MAX_LENGTH),
+		timestamp: Math.floor(raw.timestamp),
+	};
+}
+
 interface UseRealtimeChatProps {
 	// biome-ignore lint/suspicious/noExplicitAny: Yjs awareness is untyped
 	awareness: any | undefined;
@@ -47,10 +75,12 @@ export function useRealtimeChat({ awareness, sub }: UseRealtimeChatProps) {
 			let changed = false;
 
 			for (const [_clientId, state] of states) {
-				const peerMessages = state?.chatMessages as ChatMessage[] | undefined;
-				if (!peerMessages?.length) continue;
+				const peerMessages = state?.chatMessages;
+				if (!Array.isArray(peerMessages) || peerMessages.length === 0) continue;
 
-				for (const msg of peerMessages) {
+				for (const entry of peerMessages) {
+					const msg = sanitizeChatMessage(entry);
+					if (!msg) continue;
 					if (!messagesRef.current.has(msg.id)) {
 						messagesRef.current.set(msg.id, msg);
 						changed = true;
@@ -131,7 +161,12 @@ export function useRealtimeChat({ awareness, sub }: UseRealtimeChatProps) {
 			messagesRef.current.set(msg.id, msg);
 
 			const currentState = awareness.getLocalState();
-			const existing = (currentState?.chatMessages as ChatMessage[]) ?? [];
+			const buffered: unknown[] = Array.isArray(currentState?.chatMessages)
+				? currentState.chatMessages
+				: [];
+			const existing = buffered
+				.map(sanitizeChatMessage)
+				.filter((entry): entry is ChatMessage => Boolean(entry));
 			awareness.setLocalStateField(
 				"chatMessages",
 				[...existing, msg].slice(-PEER_BUFFER),

@@ -7,6 +7,7 @@ import {
 	flattenSurfaceComponentsForElements,
 	legacyWidgetValueSurfaceId,
 	mergeStoredElementValues,
+	surfaceElementsForPayload,
 } from "./workflow-elements";
 
 function component(
@@ -240,5 +241,80 @@ describe("widget-scoped workflow elements", () => {
 		expect(merged["instance-b/values"]).toBeDefined();
 		expect(merged["page-1/micro-a"]).toBeUndefined();
 		expect(merged["page-1/micro-b"]).toBeDefined();
+	});
+});
+
+describe("payload style compaction", () => {
+	const nullStyle = {
+		className: "row",
+		background: null,
+		padding: null,
+		responsiveOverrides: { sm: { opacity: null, width: "1rem" } },
+	};
+	const styled = (
+		surfaceComponent: SurfaceComponent,
+		style: unknown,
+	): SurfaceComponent =>
+		({ ...surfaceComponent, style }) as unknown as SurfaceComponent;
+
+	test("drops null style fields from components, widget definitions and flattened children", () => {
+		const child = { ...field("field", "x"), style: nullStyle };
+		const components = {
+			host: styled(widgetHost("host", "instance", [child]), nullStyle),
+			text: styled(component("text", { type: "text", hidden: null }), null),
+		};
+
+		const merged = mergeStoredElementValues({}, {}, components, "page-1");
+
+		const compactedStyle = {
+			className: "row",
+			responsiveOverrides: { sm: { width: "1rem" } },
+		};
+		const host = merged["page-1/host"] as Record<string, unknown>;
+		expect(host.style).toEqual(compactedStyle);
+		const definition = (host.component as Record<string, unknown>)
+			.inlineWidgetDef as { components: Record<string, unknown>[] };
+		expect(definition.components[0].style).toEqual(compactedStyle);
+		const flattenedChild = merged["instance/field"] as Record<string, unknown>;
+		expect(flattenedChild.style).toEqual(compactedStyle);
+
+		const text = merged["page-1/text"] as Record<string, unknown>;
+		expect("style" in text).toBe(false);
+		expect((text.component as Record<string, unknown>).hidden).toBeNull();
+	});
+
+	test("leaves the surface components untouched", () => {
+		const host = styled(
+			widgetHost("host", "instance", [
+				{ ...field("field", "x"), style: nullStyle },
+			]),
+			nullStyle,
+		);
+
+		mergeStoredElementValues({}, {}, { host }, "page-1");
+
+		const untouched = host as unknown as Record<string, unknown>;
+		expect(untouched.style).toEqual(nullStyle);
+		const definition = (untouched.component as Record<string, unknown>)
+			.inlineWidgetDef as { components: Record<string, unknown>[] };
+		expect(definition.components[0].style).toEqual(nullStyle);
+	});
+
+	test("surfaceElementsForPayload keys every component and compacts styles", () => {
+		const components = {
+			text: styled(component("text", { type: "text" }), nullStyle),
+		};
+
+		const elements = surfaceElementsForPayload(
+			"page-1",
+			Object.entries(components),
+		);
+
+		const text = elements["page-1/text"] as Record<string, unknown>;
+		expect(text.__element_id).toBe("page-1/text");
+		expect(text.style).toEqual({
+			className: "row",
+			responsiveOverrides: { sm: { width: "1rem" } },
+		});
 	});
 });

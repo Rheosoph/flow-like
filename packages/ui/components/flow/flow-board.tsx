@@ -322,6 +322,15 @@ const MOVABLE_SELECTION_TYPES = new Set([
 	"mediaNode",
 ]);
 
+/** Error/Fatal (≥ 3) on the first metadata that carries a level; `ok` otherwise. */
+function runStatusOf(...metas: (ILogMetadata | undefined)[]): "ok" | "error" {
+	for (const candidate of metas) {
+		if (typeof candidate?.log_level === "number")
+			return candidate.log_level >= 3 ? "error" : "ok";
+	}
+	return "ok";
+}
+
 /** Same ids, order-insensitive — keeps a re-selection from re-rendering half the board. */
 const sameIds = (previous: string[], next: string[]): boolean => {
 	if (previous.length !== next.length) return false;
@@ -1346,9 +1355,11 @@ export function FlowBoard({
 			new Set(
 				peerStates
 					.map((peer) => peer.sub)
-					.filter((peerSub): peerSub is string => Boolean(peerSub)),
+					.filter(
+						(peerSub): peerSub is string => Boolean(peerSub) && peerSub !== sub,
+					),
 			).size + 1,
-		[peerStates],
+		[peerStates, sub],
 	);
 
 	// Execution presence
@@ -1361,15 +1372,18 @@ export function FlowBoard({
 			boardId,
 		});
 	// Peers get "Anna's run finished — 1 error": a closed status and a count.
+	const runExecutedCount = useCallback(
+		(runId: string) =>
+			useRunExecutionStore.getState().runs.get(runId)
+				?.totalExecutionsCompleted ?? 0,
+		[],
+	);
 	const announceRunOutcome = useCallback(
-		(runId: string, status: "ok" | "error") => {
+		(runId: string, status: "ok" | "error", executed?: number) => {
 			if (!runId) return;
-			const executed =
-				useRunExecutionStore.getState().runs.get(runId)
-					?.totalExecutionsCompleted ?? 0;
-			broadcastRunOutcome(runId, status, executed);
+			broadcastRunOutcome(runId, status, executed ?? runExecutedCount(runId));
 		},
-		[broadcastRunOutcome],
+		[broadcastRunOutcome, runExecutedCount],
 	);
 
 	// Media upload for images/videos on the board
@@ -1477,6 +1491,7 @@ export function FlowBoard({
 	>(undefined);
 	const handlePeerSummon = useCallback(
 		(summon: PeerSummon) => {
+			if (summon.sub === sub) return;
 			toast(
 				t("presenceSummonFrom", {
 					defaultValue: "{{name}} asks everyone to look here",
@@ -1499,19 +1514,22 @@ export function FlowBoard({
 				},
 			);
 		},
-		[holdViewport, jumpToLayer, peerNameOf, setViewport, t],
+		[holdViewport, jumpToLayer, peerNameOf, setViewport, sub, t],
 	);
 	const handlePeerRun = useCallback(
 		(run: PeerRun) => {
+			if (run.sub === sub) return;
 			const message =
 				run.status === "ok"
 					? t("presenceRunFinishedOk", {
-							defaultValue: "{{name}}'s run finished — {{count}} nodes",
+							defaultValue_one: "{{name}}'s run finished — {{count}} node",
+							defaultValue_other: "{{name}}'s run finished — {{count}} nodes",
 							name: peerNameOf(run.sub),
 							count: run.executed,
 						})
 					: t("presenceRunFinishedError", {
-							defaultValue: "{{name}}'s run failed after {{count}} nodes",
+							defaultValue_one: "{{name}}'s run failed after {{count}} node",
+							defaultValue_other: "{{name}}'s run failed after {{count}} nodes",
 							name: peerNameOf(run.sub),
 							count: run.executed,
 						});
@@ -1525,7 +1543,7 @@ export function FlowBoard({
 			if (run.status === "ok") toast.success(message, options);
 			else toast.error(message, options);
 		},
-		[peerNameOf, surfaceActions, t],
+		[peerNameOf, sub, surfaceActions, t],
 	);
 	const handlePeerPresenceEvent = useCallback((event: PeerPresenceEvent) => {
 		setPresenceEvent({ ...event, at: Date.now() });
@@ -1555,11 +1573,27 @@ export function FlowBoard({
 	const summonHere = useCallback(() => {
 		summonPeers(getViewport());
 	}, [getViewport, summonPeers]);
-	// Emoji reactions land where the pointer last was on the canvas.
+	// Emoji reactions land where the pointer last was over the canvas; when it
+	// is elsewhere (the popover, another pane) they land at the viewport centre.
 	const reactAtCursor = useCallback(
 		(emoji: PingEmoji) => {
-			const position = mousePositionRef.current;
-			pingAtScreen(position.x, position.y, emoji);
+			const rect = (
+				flowRef.current as HTMLElement | null
+			)?.getBoundingClientRect?.();
+			const pointer = mousePositionRef.current;
+			const inside =
+				rect &&
+				pointer.x >= rect.left &&
+				pointer.x <= rect.right &&
+				pointer.y >= rect.top &&
+				pointer.y <= rect.bottom;
+			if (inside) pingAtScreen(pointer.x, pointer.y, emoji);
+			else if (rect)
+				pingAtScreen(
+					rect.left + rect.width / 2,
+					rect.top + rect.height / 2,
+					emoji,
+				);
 		},
 		[pingAtScreen],
 	);
@@ -1727,7 +1761,9 @@ export function FlowBoard({
 	// single highlight above and leaves that node alone when the sets overlap.
 	const presenceHighlightRef = useRef<string[]>([]);
 	const highlightNodesOnCanvas = useCallback((nodeIds?: string[]) => {
-		const next = nodeIds ?? [];
+		const next = (nodeIds ?? []).filter((id) =>
+			/^[A-Za-z0-9_-]{10,32}$/.test(id),
+		);
 		for (const id of presenceHighlightRef.current) {
 			if (next.includes(id) || id === flowScriptHighlightRef.current) continue;
 			document
@@ -2050,12 +2086,9 @@ export function FlowBoard({
 				announceRunOutcome(runId, "error");
 				return;
 			}
-			announceRunOutcome(
-				runId,
-				typeof meta?.log_level === "number" && meta.log_level >= 3
-					? "error"
-					: "ok",
-			);
+			// Read the count now — removeRun drops it — but announce only once the
+			// full log metadata is in (a remote run's inline meta has no level).
+			const executedCount = runExecutedCount(runId);
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
@@ -2072,6 +2105,11 @@ export function FlowBoard({
 				.getState()
 				.currentLogs.find((log) => log.run_id === targetRunId);
 			if (fullMeta) setCurrentMetadata(fullMeta);
+			announceRunOutcome(
+				targetRunId,
+				runStatusOf(fullMeta, meta),
+				executedCount,
+			);
 		},
 		[
 			appId,
@@ -2083,6 +2121,7 @@ export function FlowBoard({
 			removeRun,
 			setCurrentMetadata,
 			announceRunOutcome,
+			runExecutedCount,
 		],
 	);
 
@@ -2148,12 +2187,9 @@ export function FlowBoard({
 				announceRunOutcome(runId, "error");
 				return;
 			}
-			announceRunOutcome(
-				runId,
-				typeof meta?.log_level === "number" && meta.log_level >= 3
-					? "error"
-					: "ok",
-			);
+			// Read the count now — removeRun drops it — but announce only once the
+			// full log metadata is in (a remote run's inline meta has no level).
+			const executedCount = runExecutedCount(runId);
 			removeRun(runId);
 			if (!meta && !runId) {
 				toastError(
@@ -2173,6 +2209,11 @@ export function FlowBoard({
 				.getState()
 				.currentLogs.find((log) => log.run_id === targetRunId);
 			if (fullMeta) setCurrentMetadata(fullMeta);
+			announceRunOutcome(
+				targetRunId,
+				runStatusOf(fullMeta, meta),
+				executedCount,
+			);
 		},
 		[
 			appId,
@@ -2184,6 +2225,7 @@ export function FlowBoard({
 			removeRun,
 			setCurrentMetadata,
 			announceRunOutcome,
+			runExecutedCount,
 		],
 	);
 
@@ -3807,13 +3849,30 @@ export function FlowBoard({
 		[awareness, sub, peerUsers, t],
 	);
 
-	// ⌥-click on the empty canvas drops a "look here" ping for teammates.
+	// ⌥-click on the empty canvas drops a "look here" ping for teammates. React
+	// Flow clears the selection right after this handler; a ping is not a
+	// deselect, so the selection is put back on the next frame.
 	const onPaneClick = useCallback(
 		(event: React.MouseEvent) => {
 			if (!event.altKey || !awareness) return;
+			const selectedIds = new Set(
+				getNodes()
+					.filter((node) => node.selected)
+					.map((node) => node.id),
+			);
 			pingAtScreen(event.clientX, event.clientY);
+			if (selectedIds.size === 0) return;
+			requestAnimationFrame(() => {
+				setNodes((nds) =>
+					nds.map((node) =>
+						selectedIds.has(node.id) && !node.selected
+							? { ...node, selected: true }
+							: node,
+					),
+				);
+			});
 		},
-		[awareness, pingAtScreen],
+		[awareness, getNodes, pingAtScreen, setNodes],
 	);
 
 	const onNodeDragStop = useCallback(
@@ -5425,7 +5484,7 @@ export function FlowBoard({
 									onTyping={notifyChatTyping}
 									onStopTyping={clearChatTyping}
 									onlineCount={chatOnlineCount}
-									storageKey={`${appId}:${boardId}`}
+									storageKey={sub ? `${sub}:${appId}:${boardId}` : undefined}
 								/>
 							</div>
 						)}

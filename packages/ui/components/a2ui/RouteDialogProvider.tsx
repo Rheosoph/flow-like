@@ -33,6 +33,7 @@ import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
+import { surfaceElementsForPayload } from "./workflow-elements";
 
 interface DialogState {
 	id: string;
@@ -325,17 +326,10 @@ function RouteDialogRenderer({
 	const getElementsFromSurface = useCallback(() => {
 		const currentSurface = surfaceRef.current;
 		if (!currentSurface) return {};
-		const elements: Record<string, unknown> = {};
-		for (const [componentId, surfaceComponent] of Object.entries(
-			currentSurface.components,
-		)) {
-			const elementId = `${currentSurface.id}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
+		return surfaceElementsForPayload(
+			currentSurface.id,
+			Object.entries(currentSurface.components),
+		);
 	}, []); // No dependencies - uses ref
 
 	// Save surface to cache after onLoad completes

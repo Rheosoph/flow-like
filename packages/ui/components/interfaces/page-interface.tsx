@@ -52,6 +52,7 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
+import { surfaceElementsForPayload } from "../a2ui/workflow-elements";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
@@ -507,17 +508,10 @@ function PageInterfaceInner({
 	const getElementsFromSurface = useCallback(() => {
 		const currentSurface = surfaceRef.current;
 		if (!currentSurface) return {};
-		const elements: Record<string, unknown> = {};
-		for (const [componentId, surfaceComponent] of Object.entries(
-			currentSurface.components,
-		)) {
-			const elementId = `${currentSurface.id}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
+		return surfaceElementsForPayload(
+			currentSurface.id,
+			Object.entries(currentSurface.components),
+		);
 	}, []); // No dependencies - uses ref
 
 	const prepareLocalWidgetDefinitions = useCallback(async () => {

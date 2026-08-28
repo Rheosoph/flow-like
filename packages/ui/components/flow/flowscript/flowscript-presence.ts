@@ -594,6 +594,7 @@ export function createFlowScriptPresenceStore(
 	// its timestamp change — peers' wall clocks are never compared to ours, and
 	// whatever was already there when the store came up is old news, not a flash.
 	const activeClicks = new Map<number, { ts: number; seenAt: number }>();
+	const observedClients = new Set<number>();
 	let seeded = false;
 	let expiryTimer: unknown | null = null;
 
@@ -613,6 +614,8 @@ export function createFlowScriptPresenceStore(
 			if (clientId === awareness.clientID) return;
 			if (invalidPeers?.has(clientId)) return;
 			liveClients.add(clientId);
+			const wasKnown = observedClients.has(clientId);
+			observedClients.add(clientId);
 			const sub = typeof state?.sub === "string" ? state.sub : undefined;
 			const self = Boolean(options?.selfSub && sub === options.selfSub);
 			const cursor = sanitizeCursorForWire(state?.[FLOWSCRIPT_CURSOR_FIELD]);
@@ -634,7 +637,7 @@ export function createFlowScriptPresenceStore(
 					if (!known || known.ts !== activeNodeTs) {
 						activeClicks.set(clientId, {
 							ts: activeNodeTs,
-							seenAt: seeded ? at : Number.NEGATIVE_INFINITY,
+							seenAt: seeded && wasKnown ? at : Number.NEGATIVE_INFINITY,
 						});
 					}
 					const seenAt = activeClicks.get(clientId)?.seenAt ?? 0;
@@ -674,6 +677,9 @@ export function createFlowScriptPresenceStore(
 		seeded = true;
 		for (const clientId of activeClicks.keys()) {
 			if (!liveClients.has(clientId)) activeClicks.delete(clientId);
+		}
+		for (const clientId of observedClients) {
+			if (!liveClients.has(clientId)) observedClients.delete(clientId);
 		}
 		// Nothing on the wire changes when a click merely ages out, so the store
 		// wakes itself up to drop the flag.

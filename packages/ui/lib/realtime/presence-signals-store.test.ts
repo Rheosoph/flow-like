@@ -7,6 +7,7 @@ import {
 	SUMMON_FIELD,
 } from "./presence-signals";
 import {
+	PRESENCE_ROSTER_GRACE_MS,
 	type PeerPresenceEvent,
 	type PeerRun,
 	type PeerSummon,
@@ -62,20 +63,27 @@ function fakeRaf() {
 
 function fakeScheduler() {
 	let nextId = 1;
-	const tasks = new Map<number, () => void>();
+	const tasks = new Map<number, { cb: () => void; ms: number }>();
 	return {
-		schedule: (cb: () => void, _ms: number) => {
+		schedule: (cb: () => void, ms: number) => {
 			const id = nextId++;
-			tasks.set(id, cb);
+			tasks.set(id, { cb, ms });
 			return id;
 		},
 		cancel: (handle: unknown) => {
 			tasks.delete(handle as number);
 		},
+		// Shorter timers fire first, as they would on a real clock; a callback
+		// may cancel a still-pending sibling, which then never runs.
 		flush: () => {
-			const pending = [...tasks.values()];
-			tasks.clear();
-			for (const cb of pending) cb();
+			const pending = [...tasks.entries()].sort(
+				(a, b) => a[1].ms - b[1].ms || a[0] - b[0],
+			);
+			for (const [id, task] of pending) {
+				if (!tasks.has(id)) continue;
+				tasks.delete(id);
+				task.cb();
+			}
 		},
 		size: () => tasks.size,
 	};
@@ -233,15 +241,23 @@ describe("drag ghosts", () => {
 		expect(
 			(awareness.published[1][1] as { nodes: { x: number }[] }).nodes[0]?.x,
 		).toBe(3);
+		// The publish re-armed the watchdog; with no further drag it withdraws
+		// the field (a drag XYFlow aborted must not stick on the wire).
+		scheduler.flush();
+		expect(awareness.published.length).toBe(3);
+		expect(awareness.published[2]).toEqual([DRAG_FIELD, undefined]);
 
+		clock += 100;
 		publisher.publish([{ id: NODE_A, x: 4, y: 4 }]);
+		// Immediate publish plus its armed watchdog.
+		expect(awareness.published.length).toBe(4);
 		expect(scheduler.size()).toBe(1);
 		publisher.clear();
 		expect(scheduler.size()).toBe(0);
-		expect(awareness.published[2]).toEqual([DRAG_FIELD, undefined]);
+		expect(awareness.published[4]).toEqual([DRAG_FIELD, undefined]);
 		// Nothing on the wire: a second clear is silent.
 		publisher.clear();
-		expect(awareness.published.length).toBe(3);
+		expect(awareness.published.length).toBe(5);
 	});
 });
 
@@ -295,6 +311,9 @@ describe("pings", () => {
 		expect(h.scheduler.size()).toBe(1);
 
 		h.advance(PING_TTL_MS - 1);
+		// A session we already know pings: that is a new ping.
+		h.awareness.states.set(3, { sub: "peer-a" });
+		h.tick();
 		h.awareness.states.set(3, { sub: "peer-a", ...ping(9) });
 		h.tick();
 		expect(observer.pingStore.getSnapshot().map((p) => p.key)).toEqual([
@@ -339,9 +358,36 @@ describe("summon and last run (first-sight)", () => {
 		observer.dispose();
 	});
 
+	test("a session that shows up AFTER subscription carries history: its summon and ping never fire", () => {
+		const summons: PeerSummon[] = [];
+		const h = harness({ onSummon: (s) => summons.push(s) });
+		const observer = h.start();
+		// Late joiner (or a WebRTC peer whose state arrives after ours was seeded)
+		// with a summon and a ping already on the wire.
+		h.awareness.states.set(3, {
+			sub: "late",
+			[SUMMON_FIELD]: { x: 1, y: 2, zoom: 1, layerPath: "root", seq: 7, ts: 1 },
+			[PING_FIELD]: { x: 5, y: 5, layerPath: "root", seq: 3, ts: 1 },
+		});
+		h.tick();
+		expect(summons).toEqual([]);
+		expect(observer.pingStore.getSnapshot()).toEqual([]);
+		// Its NEXT summon/ping is a real event.
+		h.awareness.states.set(3, {
+			sub: "late",
+			[SUMMON_FIELD]: { x: 1, y: 2, zoom: 1, layerPath: "root", seq: 8, ts: 2 },
+			[PING_FIELD]: { x: 5, y: 5, layerPath: "root", seq: 4, ts: 2 },
+		});
+		h.tick();
+		expect(summons.length).toBe(1);
+		expect(observer.pingStore.getSnapshot().map((p) => p.key)).toEqual(["3:4"]);
+		observer.dispose();
+	});
+
 	test("run outcomes fire once per runId+ts", () => {
 		const runs: PeerRun[] = [];
 		const h = harness({ onPeerRun: (r) => runs.push(r) });
+		h.awareness.states.set(2, { sub: "peer-a" });
 		const observer = h.start();
 		const run = (ts: number, status = "ok") => ({
 			[LAST_RUN_FIELD]: { runId: RUN_ID, status, executed: 12, ts },
@@ -373,6 +419,13 @@ describe("join / leave", () => {
 		h.scheduler.flush();
 		expect(events).toEqual([]);
 
+		// Peers still connecting right after we joined are the roster, not joins.
+		h.awareness.states.set(7, { sub: "peer-c" });
+		h.tick();
+		h.scheduler.flush();
+		expect(events).toEqual([]);
+
+		h.advance(PRESENCE_ROSTER_GRACE_MS);
 		h.awareness.states.set(3, { sub: "peer-b" });
 		h.tick();
 		expect(events).toEqual([]);
@@ -394,6 +447,7 @@ describe("join / leave", () => {
 		});
 		h.awareness.states.set(2, { sub: "peer-a" });
 		const observer = h.start();
+		h.advance(PRESENCE_ROSTER_GRACE_MS);
 
 		// Flap: gone and back before the debounce elapses.
 		h.awareness.states.delete(2);
@@ -428,6 +482,7 @@ describe("join / leave", () => {
 			onPeerPresenceEvent: (e) => events.push(e),
 		});
 		const observer = h.start();
+		h.advance(PRESENCE_ROSTER_GRACE_MS);
 		h.awareness.states.set(1, { sub: "me" });
 		h.awareness.states.set(9, { sub: "me" });
 		h.tick();
@@ -450,6 +505,7 @@ describe("lifecycle", () => {
 		const h = harness({ onPeerPresenceEvent: (e) => events.push(e) });
 		h.awareness.states.set(2, { sub: "peer-a" });
 		const observer = h.start();
+		h.advance(PRESENCE_ROSTER_GRACE_MS);
 		// One ping expiry timer plus one pending "joined" for peer-b.
 		h.awareness.states.set(2, { sub: "peer-a", ...ping(1) });
 		h.tick();

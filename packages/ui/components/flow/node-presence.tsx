@@ -103,7 +103,7 @@ export const NodePresenceChips = memo(function NodePresenceChips({
 						: undefined;
 					const name = participant.self
 						? i18next.t("flow:you", "You")
-						: (userInfo?.truncatedName ?? "User");
+						: (userInfo?.truncatedName ?? i18next.t("common:user", "User"));
 					const title = participant.inCode
 						? i18next.t("flow:flowscriptBeingEditedBy", {
 								defaultValue: "Being edited by {{name}}",

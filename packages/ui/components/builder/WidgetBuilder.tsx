@@ -47,6 +47,7 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
+import { surfaceElementsForPayload } from "../a2ui/workflow-elements";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import { Button } from "../ui/button";
 import {
@@ -1294,16 +1295,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	// Convert components map to elements object for the workflow payload
 	// Uses componentsRef to avoid dependency on components changing (which would cause infinite loops)
 	const getElementsFromComponents = useCallback(() => {
-		const elements: Record<string, unknown> = {};
-		const currentComponents = componentsRef.current;
-		for (const [componentId, surfaceComponent] of currentComponents.entries()) {
-			const elementId = `${effectiveSurfaceId}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
+		return surfaceElementsForPayload(
+			effectiveSurfaceId,
+			componentsRef.current.entries(),
+		);
 	}, [effectiveSurfaceId]); // Only depends on the stable preview surface id
 
 	// Execute onLoad event when entering preview mode

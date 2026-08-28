@@ -80,9 +80,13 @@ export async function createRealtimeSession(args: {
 		const reconnect = async () => {
 			if (onStatusChange) onStatusChange("reconnecting");
 			try {
+				// y-webrtc's Room.disconnect() removes OUR awareness entry and
+				// connect() never restores it — and setLocalStateField is a no-op
+				// on a null local state. Re-seed it, or nothing publishes again.
+				const snapshot = awareness.getLocalState() ?? {};
 				existing.provider.disconnect();
 				existing.provider.connect();
-				awareness.setLocalStateField("sub", sub);
+				awareness.setLocalState({ ...snapshot, sub });
 			} catch (e) {
 				console.error("[WebRTC] Reconnection failed:", e);
 				if (onStatusChange) onStatusChange("disconnected");
@@ -207,12 +211,19 @@ export async function createRealtimeSession(args: {
 		if (onStatusChange) onStatusChange("reconnecting");
 		try {
 			// Actually drive the transport: drop the signaling sockets and the
-			// room, then rejoin. Awareness fields survive (the local state is
-			// re-announced on join), so peers keep the clicker's selection.
+			// room, then rejoin. y-webrtc's Room.disconnect() removes OUR
+			// awareness entry and connect() never restores it (and every
+			// setLocalStateField is a no-op on a null local state), so the
+			// fields are snapshotted and re-seeded — peers keep the clicker's
+			// selection and everything publishes again afterwards.
+			const snapshot = awareness.getLocalState() ?? {};
 			provider.disconnect();
 			provider.connect();
-			awareness.setLocalStateField("sub", sub);
-			awareness.setLocalStateField("reconnected", Date.now());
+			awareness.setLocalState({
+				...snapshot,
+				sub,
+				reconnected: Date.now(),
+			});
 			// The status is whatever the sockets say once they settle — never
 			// asserted here.
 			lastStatus = undefined;

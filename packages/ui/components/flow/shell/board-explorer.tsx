@@ -174,8 +174,21 @@ export const PresenceDots = memo(function PresenceDots({
 	if (marks.length === 0) return null;
 	const shown = marks.slice(0, MAX_PRESENCE_DOTS);
 	const overflow = marks.length - shown.length;
+	const names = marks
+		.map((mark) =>
+			mark.self
+				? t("you", "You")
+				: (peerUsers?.get(mark.sub)?.name ?? mark.sub.slice(-8)),
+		)
+		.join(", ");
 	return (
-		<span className={cn("flex shrink-0 items-center -space-x-1", className)}>
+		<span
+			className={cn("flex shrink-0 items-center -space-x-1", className)}
+			aria-label={t("presenceOpenBy", {
+				defaultValue: "Open by {{names}}",
+				names,
+			})}
+		>
 			{shown.map((mark) => {
 				const info = peerUsers?.get(mark.sub);
 				const color = info?.color ?? colorFromSub(mark.sub);
@@ -184,9 +197,10 @@ export const PresenceDots = memo(function PresenceDots({
 				return (
 					<Avatar
 						key={mark.sub}
-						className="size-3.5 rounded-full ring-1 ring-background"
+						className="size-4 rounded-full ring-1 ring-background"
 						style={{ boxShadow: `0 0 0 1px ${color}` }}
 						title={mark.sessions > 1 ? `${label} ×${mark.sessions}` : label}
+						aria-hidden="true"
 					>
 						{info?.avatarUrl && (
 							<AvatarImage
@@ -196,7 +210,7 @@ export const PresenceDots = memo(function PresenceDots({
 							/>
 						)}
 						<AvatarFallback
-							className="rounded-full text-[7px] font-semibold leading-none text-white"
+							className="rounded-full text-[8px] font-semibold leading-none text-white"
 							style={{ background: color }}
 						>
 							{userInitials(displayName).charAt(0)}

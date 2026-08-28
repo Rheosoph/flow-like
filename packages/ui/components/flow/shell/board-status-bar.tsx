@@ -16,6 +16,7 @@ export const BoardStatusItem = memo(function BoardStatusItem({
 	children,
 	tone = "default",
 	title,
+	ariaLabel,
 	onClick,
 	className,
 	popover,
@@ -26,6 +27,8 @@ export const BoardStatusItem = memo(function BoardStatusItem({
 	children?: ReactNode;
 	tone?: "default" | "muted" | "warning" | "danger" | "accent";
 	title?: string;
+	/** Accessible name when the visible content is icons/counts only. */
+	ariaLabel?: string;
 	onClick?: () => void;
 	className?: string;
 	/** Rendered in a popover anchored to this item; makes the item a trigger. */
@@ -57,7 +60,12 @@ export const BoardStatusItem = memo(function BoardStatusItem({
 		return (
 			<Popover>
 				<PopoverTrigger asChild>
-					<button type="button" title={title} className={classes}>
+					<button
+						type="button"
+						title={title}
+						aria-label={ariaLabel}
+						className={classes}
+					>
 						{content}
 					</button>
 				</PopoverTrigger>
@@ -80,7 +88,13 @@ export const BoardStatusItem = memo(function BoardStatusItem({
 		);
 	}
 	return (
-		<button type="button" title={title} onClick={onClick} className={classes}>
+		<button
+			type="button"
+			title={title}
+			aria-label={ariaLabel}
+			onClick={onClick}
+			className={classes}
+		>
 			{content}
 		</button>
 	);
