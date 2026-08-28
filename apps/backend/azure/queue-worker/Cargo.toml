@@ -18,7 +18,7 @@ flow-like-azure-data.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-compiler.workspace = true
-flow-like-executor = { workspace = true, features = ["server"] }
+flow-like-executor = { workspace = true, features = ["server", "channel-azure"] }
 flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
 image.workspace = true
 mimalloc.workspace = true

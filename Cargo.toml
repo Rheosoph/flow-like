@@ -75,6 +75,7 @@ members = [
     "packages/sinks",
     "packages/secrets",
     "packages/executor",
+    "packages/channels",
     "packages/compiler",
     "packages/wasm",
     "packages/wasm/schema",
@@ -114,6 +115,7 @@ flow-like-storage-contracts = { path = "packages/storage/contracts", default-fea
 flow-like-storage-files = { path = "packages/storage/files", default-features = false }
 flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor", default-features = false }
+flow-like-channels = { path = "packages/channels", default-features = false }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = false }
@@ -152,7 +154,7 @@ moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
 lambda_runtime = "0.14.2"
-aws-config = "1.8.16"
+aws-config = "1.11.0"
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1.120", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "1.93.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a", "http-1x"] }

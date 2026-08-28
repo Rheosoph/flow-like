@@ -204,8 +204,14 @@ pub enum A2UIServerMessage {
     DeleteSurface {
         surface_id: String,
     },
+    /// Live run→frontend request for elements the run needs but did not receive with its
+    /// payload. The frontend materializes the selectors and answers through the channel.
     RequestElements {
-        element_ids: Vec<String>,
+        request_id: String,
+        selectors: Vec<String>,
+        timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<flow_like_types::channel::ChannelHandle>,
     },
     /// Live run→frontend request: execute a contract query against a rendered
     /// micro widget instance. The frontend answers out-of-band through the
@@ -217,6 +223,8 @@ pub enum A2UIServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         args: Option<Value>,
         timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<flow_like_types::channel::ChannelHandle>,
     },
     ShowScreen,
     UpsertElement {
@@ -318,8 +326,18 @@ impl A2UIServerMessage {
         }
     }
 
-    pub fn request_elements(element_ids: Vec<String>) -> Self {
-        Self::RequestElements { element_ids }
+    pub fn request_elements(
+        request_id: &str,
+        selectors: Vec<String>,
+        timeout_ms: u64,
+        channel: Option<flow_like_types::channel::ChannelHandle>,
+    ) -> Self {
+        Self::RequestElements {
+            request_id: request_id.to_string(),
+            selectors,
+            timeout_ms,
+            channel,
+        }
     }
 
     pub fn widget_query(
@@ -328,6 +346,7 @@ impl A2UIServerMessage {
         query: &str,
         args: Option<Value>,
         timeout_ms: u64,
+        channel: Option<flow_like_types::channel::ChannelHandle>,
     ) -> Self {
         Self::WidgetQuery {
             request_id: request_id.to_string(),
@@ -335,6 +354,7 @@ impl A2UIServerMessage {
             query: query.to_string(),
             args,
             timeout_ms,
+            channel,
         }
     }
 

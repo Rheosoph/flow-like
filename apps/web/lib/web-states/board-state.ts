@@ -38,12 +38,12 @@ import type {
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
-import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	BoardSyncClient,
 	type IBoardSyncRequest,
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
+import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -53,6 +53,7 @@ import type {
 	UnifiedCopilotResponse,
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
@@ -204,23 +205,6 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/variables`,
 			this.backend.auth,
 		);
-	}
-
-	async respondWidgetQuery(
-		requestId: string,
-		response: { ok: boolean; value?: unknown; error?: string },
-	): Promise<boolean> {
-		try {
-			const result = await apiPost<{ accepted: boolean }>(
-				`widget-query/${requestId}/respond`,
-				response,
-				this.backend.auth,
-			);
-			return result.accepted;
-		} catch (error) {
-			console.warn("[WebBoardState] respondWidgetQuery failed", error);
-			return false;
-		}
 	}
 
 	async getCatalog(appId: string): Promise<INode[]> {
@@ -985,6 +969,18 @@ export class WebBoardState implements IBoardState {
 		}
 	}
 
+	async getElementDemand(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand> {
+		const query = version ? `?version=${version.join("_")}` : "";
+		return await apiGet<IElementDemand>(
+			`apps/${appId}/board/${boardId}/element-demand${query}`,
+			this.backend.auth,
+		);
+	}
+
 	async copilot_chat(
 		scope: CopilotScope,
 		board: IBoard | null,
@@ -1094,7 +1090,7 @@ export class WebBoardState implements IBoardState {
 				let streamError: Error | undefined;
 				// A nested Data Studio / Scout specialist runs server-side but owns no tools of its
 				// own: they execute here, exactly like the orchestrator's, and their results go back
-				// over the owning chat run.
+				// on the channel each request carries.
 				const toolDispatches = new Set<Promise<void>>();
 				const seenToolRequests = new Set<string>();
 
@@ -1122,12 +1118,6 @@ export class WebBoardState implements IBoardState {
 					}
 
 					if (eventName === "tool_request") {
-						if (!specialistRunId) {
-							streamError = new Error(
-								"Received a specialist tool request without an owning run id; the result cannot be routed.",
-							);
-							return;
-						}
 						// A redelivered frame must not run a mutating tool twice.
 						const requestId = toolRequestIdOf(data);
 						if (requestId) {
@@ -1135,9 +1125,6 @@ export class WebBoardState implements IBoardState {
 							seenToolRequests.add(requestId);
 						}
 						const dispatch = dispatchSpecialistToolRequest({
-							baseUrl,
-							token: this.backend.auth?.user?.access_token,
-							runId: specialistRunId,
 							data,
 							onToolRequest: runGlobalChatTool,
 						}).catch((error) => {

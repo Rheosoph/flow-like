@@ -76,6 +76,7 @@ import {
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import { createId } from "@paralleldrive/cuid2";
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -3426,16 +3427,6 @@ export class BoardState implements IBoardState {
 		);
 	}
 
-	async respondWidgetQuery(
-		requestId: string,
-		response: { ok: boolean; value?: unknown; error?: string },
-	): Promise<boolean> {
-		return await invoke<boolean>("respond_widget_query", {
-			requestId,
-			response,
-		});
-	}
-
 	async getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -3498,6 +3489,33 @@ export class BoardState implements IBoardState {
 		}
 
 		return localElements;
+	}
+
+	async getElementDemand(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand> {
+		if (
+			(await this.backend.isOffline(appId)) ||
+			!this.backend.profile ||
+			!this.backend.auth
+		) {
+			return await invoke<IElementDemand>("element_demand", {
+				appId,
+				boardId,
+				version,
+			});
+		}
+		// Online apps may execute on the server: the API's answer (or its 404 on an
+		// older deployment, which makes the caller send the full map) is authoritative.
+		const query = version ? `?version=${version.join("_")}` : "";
+		return await fetcher<IElementDemand>(
+			this.backend.profile,
+			`apps/${appId}/board/${boardId}/element-demand${query}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
 	}
 
 	async copilot_chat(

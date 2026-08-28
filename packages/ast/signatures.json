@@ -1829,12 +1829,21 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Array of element IDs to request (e.g., ['main/input-field', 'main/checkbox'])"
+          "doc": "Element selectors, e.g. ['main/input-field', 'type:switch', 'glob:feed-row-*/subscribed', 'children:main/list', 'host:main/feed-row-1']"
+        },
+        {
+          "name": "timeout_ms",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "How long to wait for the page to answer"
         }
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Requests element values from the frontend before processing",
+      "doc": "Fetches elements from the live page in one round-trip so later reads hit the cache",
       "namespace": "ui",
       "alias": "requestElements"
     },

@@ -26,12 +26,17 @@
 pub mod codes;
 pub mod compile;
 pub mod format;
+pub mod prerun;
 pub mod resolver;
 pub mod template;
 pub mod view;
 
 pub use compile::{compile_board, compile_board_with_catalog};
 pub use format::{CompiledBoard, FORMAT_VERSION, MAGIC};
+pub use prerun::{
+    MANIFEST_FORMAT_VERSION, PrerunManifest, PrerunOAuthRequirement, PrerunVariable,
+    decode_manifest, draft_manifest_path, encode_manifest, manifest_path,
+};
 pub use resolver::{TemplateCache, persist_artifact};
 pub use template::CompiledRunTemplate;
 
@@ -48,12 +53,15 @@ const ZSTD_LEVEL: i32 = 3;
 /// from corrupt artifacts before allocating.
 const MAX_DECOMPRESSED_LEN: usize = 512 * 1024 * 1024;
 
+/// Directory holding a board's version artifacts (compiled board + prerun manifest).
+fn version_artifact_dir(board_dir: &Path, board_id: &str) -> Path {
+    board_dir.child("compiled").child(board_id.to_string())
+}
+
 /// Compiled artifact of an immutable board version. Lives beside the version
 /// snapshots inside the app's meta prefix, so deleting the app removes it.
 pub fn artifact_path(board_dir: &Path, board_id: &str, version: (u32, u32, u32)) -> Path {
-    board_dir
-        .child("compiled")
-        .child(board_id.to_string())
+    version_artifact_dir(board_dir, board_id)
         .child(format!("{}_{}_{}.flcb", version.0, version.1, version.2))
 }
 
@@ -70,8 +78,12 @@ pub fn draft_artifact_dir(app_id: &str, board_id: &str) -> Path {
 /// Recreatable at any time — parked under the meta store's `tmp/` prefix so
 /// bucket lifecycle rules may purge stale ones.
 pub fn draft_artifact_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
-    let etag_hash = blake3::hash(e_tag.as_bytes()).to_hex();
-    draft_artifact_dir(app_id, board_id).child(format!("{}.flcb", &etag_hash.as_str()[..32]))
+    draft_artifact_dir(app_id, board_id).child(format!("{}.flcb", draft_artifact_stem(e_tag)))
+}
+
+/// File stem shared by every draft artifact of one `.board` etag.
+fn draft_artifact_stem(e_tag: &str) -> String {
+    blake3::hash(e_tag.as_bytes()).to_hex().as_str()[..32].to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

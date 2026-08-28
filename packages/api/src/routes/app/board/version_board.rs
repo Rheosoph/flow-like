@@ -1,13 +1,21 @@
 use crate::{
-    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    audit_branch, ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::prerun_shared::{persist_prerun_manifest, version_manifest_cache_key},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::board::VersionType;
+use flow_like::flow::{
+    board::{Board, VersionType},
+    compiled::{PrerunManifest, manifest_path},
+};
 use serde::Deserialize;
+use std::sync::Arc;
 use utoipa::IntoParams;
 
 #[derive(Clone, Deserialize, IntoParams)]
@@ -51,7 +59,7 @@ pub async fn version_board(
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
-    spawn_compiled_artifact_warmup(&board, published);
+    spawn_compiled_artifact_warmup(&state, &app_id, &board, published);
 
     audit_branch!(
         state,
@@ -68,34 +76,59 @@ pub async fn version_board(
     Ok(Json(version))
 }
 
-/// Eagerly compile the just-published immutable snapshot so the executor's
-/// first run of this version starts from the artifact instead of the proto.
+/// Eagerly persist the prerun manifest and compile the just-published
+/// immutable snapshot so the first prerun and the executor's first run of this
+/// version start from artifacts instead of the proto.
 ///
-/// Boards containing WASM nodes are skipped: their `on_update` runs against a
-/// per-request bundle registry only the executor has, so its lazy compile is
-/// authoritative there. Failures only cost warmth — the executor self-heals.
+/// The manifest is registry-independent and always written. Boards containing
+/// WASM nodes skip the compile: their `on_update` runs against a per-request
+/// bundle registry only the executor has, so its lazy compile is authoritative
+/// there. Failures only cost warmth — both readers self-heal.
 fn spawn_compiled_artifact_warmup(
-    board: &flow_like::flow::board::Board,
+    state: &AppState,
+    app_id: &str,
+    board: &Board,
     published: (u32, u32, u32),
 ) {
     let Some(app_state) = board.app_state.clone() else {
         return;
     };
+    let board_dir = board.board_dir.clone();
+    let board_id = board.id.clone();
+
+    let manifest = Arc::new(PrerunManifest::from_board(board));
+    state.prerun_manifest_cache.insert(
+        version_manifest_cache_key(app_id, &board_id, published),
+        manifest.clone(),
+    );
+
     let has_wasm = board.nodes.values().any(|n| n.wasm.is_some())
         || board
             .layers
             .values()
             .any(|l| l.nodes.values().any(|n| n.wasm.is_some()));
-    if has_wasm {
-        return;
-    }
-
     let mut snapshot = board.clone();
     snapshot.version = published;
-    let board_dir = board.board_dir.clone();
-    let board_id = board.id.clone();
 
     flow_like_types::tokio::spawn(async move {
+        let store = {
+            let guard = app_state.config.read().await;
+            guard.stores.app_meta_store.clone()
+        };
+        let Some(store) = store else {
+            return;
+        };
+        let store = store.as_generic();
+        persist_prerun_manifest(
+            store.as_ref(),
+            &manifest_path(&board_dir, &board_id, published),
+            &manifest,
+        )
+        .await;
+        if has_wasm {
+            return;
+        }
+
         let registry = app_state.node_registry.read().await.node_registry.clone();
         let fingerprint = registry.fingerprint();
         let compiled = match flow_like::flow::compiled::compile::compile_board_with_catalog(
@@ -115,16 +148,9 @@ fn spawn_compiled_artifact_warmup(
                 return;
             }
         };
-        let store = {
-            let guard = app_state.config.read().await;
-            guard.stores.app_meta_store.clone()
-        };
-        let Some(store) = store else {
-            return;
-        };
         let path = flow_like::flow::compiled::artifact_path(&board_dir, &board_id, published);
         let payload = flow_like::flow_like_storage::object_store::PutPayload::from(bytes);
-        match store.as_generic().put(&path, payload).await {
+        match store.put(&path, payload).await {
             Ok(_) => {
                 tracing::debug!(path = %path, "Compiled-board warm-up artifact persisted")
             }

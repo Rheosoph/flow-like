@@ -7,6 +7,7 @@ import {
 	IRole,
 } from "../../../lib/schema/llm/history";
 import type { IResponseMessage } from "../../../lib/schema/llm/response";
+import { handleElementsRequestMessage } from "../../a2ui/elements-request-handler";
 import { handleWidgetQueryMessage } from "../../a2ui/widget-query-handler";
 import type {
 	IAttachment,
@@ -379,6 +380,9 @@ export function processChatEvents(
 			if (handleWidgetQueryMessage(ev.payload)) {
 				continue;
 			}
+			if (handleElementsRequestMessage(ev.payload, () => null)) {
+				continue;
+			}
 			if (attachA2UIUpdate(ev.payload as Record<string, unknown>)) {
 				shouldUpdate = true;
 			}
@@ -548,8 +552,8 @@ export function processChatEvents(
 				interaction.status,
 				"expires_at:",
 				interaction.expires_at,
-				"has_jwt:",
-				!!interaction.responder_jwt,
+				"has_channel:",
+				!!interaction.channel,
 			);
 			interactions.push(interaction);
 			shouldUpdate = true;

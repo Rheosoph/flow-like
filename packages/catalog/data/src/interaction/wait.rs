@@ -1,148 +1,52 @@
 use flow_like::flow::execution::context::ExecutionContext;
+use flow_like_types::channel::ChannelOutcome;
 use flow_like_types::{Value, interaction::InteractionRequest};
+use std::time::Duration;
 
 pub struct InteractionWaitResult {
     pub responded: bool,
     pub value: Value,
 }
 
-#[cfg(all(feature = "remote", not(feature = "local")))]
-fn get_app_id(context: &ExecutionContext) -> String {
-    context
+/// Register the interaction on the run's channel, stream it to the client with its reply handle
+/// attached, and block until the client answers, the TTL elapses, or the run is cancelled.
+pub async fn wait_for_interaction_response(
+    context: &mut ExecutionContext,
+    mut request: InteractionRequest,
+    ttl_seconds: u64,
+) -> flow_like_types::Result<InteractionWaitResult> {
+    let channel = context.channel()?;
+    let ticket = channel.open(Duration::from_secs(ttl_seconds)).await?;
+
+    request.id = ticket.request_id.clone();
+    request.expires_at = ticket.expires_at as u64;
+    request.run_id = Some(context.run_id().to_string());
+    request.app_id = context
         .execution_cache
         .as_ref()
-        .map(|cache| cache.app_id.clone())
-        .unwrap_or_default()
-}
+        .map(|cache| cache.app_id.clone());
+    request.channel = Some(ticket.handle.clone());
 
-/// Wait for an interaction response.
-///
-/// With `local` feature: Uses polling-based interaction handling (desktop app)
-/// With `remote` feature: Uses SSE-based interaction via API endpoint
-#[cfg(all(feature = "local", not(feature = "remote")))]
-pub async fn wait_for_interaction_response(
-    context: &mut ExecutionContext,
-    request: InteractionRequest,
-    ttl_seconds: u64,
-) -> flow_like_types::Result<InteractionWaitResult> {
-    use flow_like_types::interaction::{
-        InteractionPollResult, poll_interaction_response, register_interaction,
-    };
-
-    let interaction_id = request.id.clone();
-
-    register_interaction(request.clone()).await;
-    context
+    if let Err(error) = context
         .stream_response("interaction_request", request)
-        .await?;
+        .await
+    {
+        channel.abandon(&ticket).await;
+        return Err(error);
+    }
 
-    let poll_interval = std::time::Duration::from_millis(500);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(ttl_seconds);
+    let outcome = channel.wait(&ticket, context.cancellation_token()).await?;
 
-    let mut responded = false;
-    let mut response_value = Value::Null;
-
-    while std::time::Instant::now() < deadline {
-        context.check_cancelled()?;
-
-        match poll_interaction_response(&interaction_id).await {
-            InteractionPollResult::Responded { value } => {
-                response_value = value;
-                responded = true;
-                break;
+    Ok(match outcome {
+        ChannelOutcome::Responded(value) => InteractionWaitResult {
+            responded: true,
+            value,
+        },
+        ChannelOutcome::Expired | ChannelOutcome::Cancelled | ChannelOutcome::Closed => {
+            InteractionWaitResult {
+                responded: false,
+                value: Value::Null,
             }
-            InteractionPollResult::Expired | InteractionPollResult::Cancelled => break,
-            InteractionPollResult::Pending => {}
         }
-
-        flow_like_types::tokio::time::sleep(poll_interval).await;
-    }
-
-    Ok(InteractionWaitResult {
-        responded,
-        value: response_value,
     })
-}
-
-/// Cargo features are additive, but an interaction host cannot be local and
-/// remote at the same time. Failing explicitly prevents feature unification
-/// from silently switching a server executor to the local polling path.
-#[cfg(all(feature = "local", feature = "remote"))]
-pub async fn wait_for_interaction_response(
-    _context: &mut ExecutionContext,
-    _request: InteractionRequest,
-    _ttl_seconds: u64,
-) -> flow_like_types::Result<InteractionWaitResult> {
-    Err(flow_like_types::anyhow!(
-        "Interaction execution is ambiguous: features 'local' and 'remote' are both enabled"
-    ))
-}
-
-/// Wait for an interaction response.
-///
-/// With `local` feature: Uses polling-based interaction handling (desktop app)
-/// With `remote` feature: Uses SSE-based interaction via API endpoint
-#[cfg(all(feature = "remote", not(feature = "local")))]
-pub async fn wait_for_interaction_response(
-    context: &mut ExecutionContext,
-    request: InteractionRequest,
-    ttl_seconds: u64,
-) -> flow_like_types::Result<InteractionWaitResult> {
-    use flow_like_types::interaction::{RemoteInteractionParams, create_remote_interaction_stream};
-
-    let hub_url = context.profile.hub.clone();
-    let token = context
-        .token
-        .clone()
-        .ok_or_else(|| flow_like_types::anyhow!("No user token available for remote execution"))?;
-    let app_id = get_app_id(context);
-
-    if hub_url.is_empty() {
-        return Err(flow_like_types::anyhow!(
-            "No hub URL configured for remote execution"
-        ));
-    }
-
-    let params = RemoteInteractionParams {
-        hub_url: &hub_url,
-        token: &token,
-        app_id: &app_id,
-        ttl_seconds,
-        request,
-    };
-
-    let result = create_remote_interaction_stream(params, |request_with_jwt| {
-        let context_weak = context.run.clone();
-        let callback = context.callback().clone();
-        Box::pin(async move {
-            if let Some(_run) = context_weak.upgrade() {
-                let event = flow_like_types::intercom::InterComEvent::with_type(
-                    "interaction_request",
-                    request_with_jwt,
-                );
-                if let Some(cb) = &callback {
-                    let _ = cb(event).await;
-                }
-            }
-        })
-    })
-    .await?;
-
-    Ok(InteractionWaitResult {
-        responded: result.responded,
-        value: result.value,
-    })
-}
-
-/// Fallback when neither local nor remote feature is enabled.
-/// This should not happen in practice - one of the features should always be enabled.
-#[cfg(not(any(feature = "local", feature = "remote")))]
-pub async fn wait_for_interaction_response(
-    _context: &mut ExecutionContext,
-    _request: InteractionRequest,
-    _ttl_seconds: u64,
-) -> flow_like_types::Result<InteractionWaitResult> {
-    Err(flow_like_types::anyhow!(
-        "Either 'local' or 'remote' feature must be enabled for interaction support"
-    ))
 }

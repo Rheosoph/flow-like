@@ -303,6 +303,7 @@ pub async fn invoke_board_async(
         user_context: Some(permission.to_user_context()),
         profile,
         wasm_packages,
+        channel: None,
     };
 
     let response = state

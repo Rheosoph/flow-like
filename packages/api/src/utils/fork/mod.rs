@@ -2891,9 +2891,9 @@ fn lookup_id(src: &str, maps: &ForkIdMap) -> Option<String> {
 /// UI element references are composite: the element picker stores
 /// `"{page_id}/{component_id}"` in the `element_ref` pin default (see
 /// `ElementSelect`), and the runtime keys its `_elements` payload the
-/// same way — `Board::get_execution_elements` prefetches only refs
-/// whose head matches the surface's page id, and `find_element` falls
-/// back to suffix matching *only* for refs without a `/`.
+/// same way — the prerun manifest lists the refs a board reads, and
+/// `ExecutionContext::read_element` resolves them by exact key first,
+/// then by `/{component_id}` suffix on the shipped map.
 ///
 /// Component ids are page-scoped and survive a fork unchanged, but the
 /// page head does not, so `lookup_id` never matches the composite

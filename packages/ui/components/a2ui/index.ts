@@ -37,8 +37,6 @@ export {
 export {
 	handleWidgetQueryMessage,
 	parseWidgetQueryMessage,
-	setWidgetQueryResponder,
-	type WidgetQueryResponder,
 	type WidgetQueryResponse,
 } from "./widget-query-handler";
 export {

@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	PING_FIELD,
+	PING_TTL_MS,
 	type PingEmoji,
 	SUMMON_FIELD,
+	SUMMON_TTL_MS,
 	sanitizePing,
 	sanitizeSummon,
 } from "../lib/realtime/presence-signals";
@@ -134,6 +136,17 @@ export function useRealtimeSignals({
 		dragPublisherRef.current?.clear();
 	}, []);
 
+	// Pings and summons are moments, not state: withdraw them after their TTL
+	// so a late joiner's first sight of us carries neither.
+	const pingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const summonClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(
+		() => () => {
+			if (pingClearRef.current) clearTimeout(pingClearRef.current);
+			if (summonClearRef.current) clearTimeout(summonClearRef.current);
+		},
+		[],
+	);
 	const sendPing = useCallback((x: number, y: number, emoji?: PingEmoji) => {
 		const live = awarenessRef.current;
 		if (!live) return;
@@ -145,7 +158,13 @@ export function useRealtimeSignals({
 			seq: ++pingSeqRef.current,
 			ts: Date.now(),
 		});
-		if (payload) live.setLocalStateField(PING_FIELD, payload);
+		if (!payload) return;
+		live.setLocalStateField(PING_FIELD, payload);
+		if (pingClearRef.current) clearTimeout(pingClearRef.current);
+		pingClearRef.current = setTimeout(() => {
+			pingClearRef.current = null;
+			awarenessRef.current?.setLocalStateField(PING_FIELD, undefined);
+		}, PING_TTL_MS);
 	}, []);
 
 	const summonPeers = useCallback(
@@ -160,7 +179,13 @@ export function useRealtimeSignals({
 				seq: ++summonSeqRef.current,
 				ts: Date.now(),
 			});
-			if (payload) live.setLocalStateField(SUMMON_FIELD, payload);
+			if (!payload) return;
+			live.setLocalStateField(SUMMON_FIELD, payload);
+			if (summonClearRef.current) clearTimeout(summonClearRef.current);
+			summonClearRef.current = setTimeout(() => {
+				summonClearRef.current = null;
+				awarenessRef.current?.setLocalStateField(SUMMON_FIELD, undefined);
+			}, SUMMON_TTL_MS);
 		},
 		[],
 	);

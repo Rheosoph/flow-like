@@ -42,7 +42,7 @@ pub use async_stream;
 pub mod cache {
     pub use flow_like_types_contracts::cache::*;
 }
-pub mod frontend_request;
+pub mod channel;
 pub mod interaction;
 pub mod intercom;
 pub mod maintenance {

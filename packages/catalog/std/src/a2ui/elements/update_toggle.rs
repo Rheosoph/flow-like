@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id, find_element};
+use super::element_utils::extract_element_id;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -103,9 +103,9 @@ impl NodeLogic for UpdateToggle {
                 context.set_pin_value("state", json!(checked)).await?;
             }
             "Toggle" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let current = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("checked").or_else(|| c.get("value")))
@@ -120,9 +120,9 @@ impl NodeLogic for UpdateToggle {
                 context.set_pin_value("state", json!(new_state)).await?;
             }
             "Get" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let checked = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("checked").or_else(|| c.get("value")))

@@ -1,4 +1,5 @@
-import { isTauri } from "../../lib/platform";
+import { isChannelHandle, replyToChannel } from "../../lib/channel";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import {
 	MICRO_WIDGET_QUERY_TIMEOUT_MS,
 	microWidgetHasInstance,
@@ -15,6 +16,8 @@ export interface WidgetQueryRequest {
 	query: string;
 	args: unknown;
 	timeoutMs: number;
+	/** Where the answer goes; a query without one cannot be answered. */
+	channel: IChannelHandle | null;
 }
 
 export function parseWidgetQueryMessage(
@@ -47,6 +50,7 @@ export function parseWidgetQueryMessage(
 		query,
 		args: record.args ?? null,
 		timeoutMs,
+		channel: isChannelHandle(record.channel) ? record.channel : null,
 	};
 }
 
@@ -54,44 +58,6 @@ export interface WidgetQueryResponse {
 	ok: boolean;
 	value?: unknown;
 	error?: string;
-}
-
-export type WidgetQueryResponder = (
-	requestId: string,
-	response: WidgetQueryResponse,
-) => Promise<boolean>;
-
-let registeredResponder: WidgetQueryResponder | null = null;
-
-/**
- * Install the platform transport delivering query responses to the run.
- * Web providers register `backend.boardState.respondWidgetQuery` (POST
- * `widget-query/{id}/respond`); desktop needs no registration — the default
- * uses the `respond_widget_query` Tauri command.
- */
-export function setWidgetQueryResponder(
-	responder: WidgetQueryResponder | null,
-): void {
-	registeredResponder = responder;
-}
-
-async function respondWidgetQuery(
-	requestId: string,
-	response: WidgetQueryResponse,
-): Promise<void> {
-	if (registeredResponder) {
-		await registeredResponder(requestId, response);
-		return;
-	}
-	if (isTauri()) {
-		const { invoke } = await import("@tauri-apps/api/core");
-		await invoke("respond_widget_query", { requestId, response });
-		return;
-	}
-	console.warn(
-		"[a2ui] widgetQuery response dropped: no responder registered on this platform",
-		requestId,
-	);
 }
 
 const inFlight = new Set<string>();
@@ -112,10 +78,18 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 	) {
 		return true;
 	}
+	const channel = request.channel;
+	if (!channel) {
+		console.warn(
+			"[a2ui] widgetQuery cannot be answered: the message carries no channel",
+			request.requestId,
+		);
+		return true;
+	}
 	inFlight.add(request.requestId);
 
 	void (async () => {
-		let response: { ok: boolean; value?: unknown; error?: string };
+		let response: WidgetQueryResponse;
 		try {
 			const value = await microWidgetQuery(
 				request.instanceId,
@@ -131,7 +105,7 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 			};
 		}
 		try {
-			await respondWidgetQuery(request.requestId, response);
+			await replyToChannel(channel, response);
 		} catch (error) {
 			console.warn("[a2ui] failed to deliver widgetQuery response", error);
 		} finally {

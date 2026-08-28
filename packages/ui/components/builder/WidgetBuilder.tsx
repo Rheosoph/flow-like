@@ -38,6 +38,9 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
+import { collectRunElements } from "../a2ui/collect-run-elements";
+import type { ElementSource } from "../a2ui/element-materializer";
+import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -1291,20 +1294,30 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		[effectiveSurfaceId],
 	);
 
-	// Convert components map to elements object for the workflow payload
-	// Uses componentsRef to avoid dependency on components changing (which would cause infinite loops)
-	const getElementsFromComponents = useCallback(() => {
-		const elements: Record<string, unknown> = {};
-		const currentComponents = componentsRef.current;
-		for (const [componentId, surfaceComponent] of currentComponents.entries()) {
-			const elementId = `${effectiveSurfaceId}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
-	}, [effectiveSurfaceId]); // Only depends on the stable preview surface id
+	// Reads componentsRef so live builder edits never re-trigger the lifecycle effects.
+	// The preview always refreshes the demand: the flow graph changes without a signal.
+	const collectPreviewElements = useCallback(
+		(appId: string, boardId: string) =>
+			collectRunElements({
+				backend,
+				appId,
+				boardId,
+				surfaceId: effectiveSurfaceId,
+				components: Object.fromEntries(componentsRef.current),
+				storedValues: {},
+				refresh: true,
+			}),
+		[backend, effectiveSurfaceId],
+	);
+
+	const elementSource = useCallback(
+		(): ElementSource => ({
+			surfaceId: effectiveSurfaceId,
+			components: Object.fromEntries(componentsRef.current),
+			storedValues: {},
+		}),
+		[effectiveSurfaceId],
+	);
 
 	// Execute onLoad event when entering preview mode
 	useEffect(() => {
@@ -1319,13 +1332,13 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			loadEventExecutedRef.current = executionKey;
 
 			try {
-				// Get elements from current components (for GetElement to work)
-				const builderElements = getElementsFromComponents();
+				const builderElements = await collectPreviewElements(appId, boardId);
 
 				const payload = {
 					id: onLoadEventId,
 					payload: {
 						_elements: builderElements,
+						_elements_mode: "demand",
 						_route: "/preview",
 						_query_params: {},
 						_page_id: pageId,
@@ -1343,6 +1356,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							if (handleWidgetQueryMessage(evt.payload)) {
 								continue;
 							}
+							if (handleElementsRequestMessage(evt.payload, elementSource)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}
@@ -1358,7 +1374,8 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		backend.boardState,
 		executionService,
 		handleA2UIMessage,
-		getElementsFromComponents,
+		collectPreviewElements,
+		elementSource,
 	]);
 
 	// Execute onInterval event at configured time intervals (preview mode)
@@ -1379,12 +1396,13 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 		const intervalId = setInterval(async () => {
 			try {
-				const builderElements = getElementsFromComponents();
+				const builderElements = await collectPreviewElements(appId, boardId);
 
 				const payload = {
 					id: onIntervalEventId,
 					payload: {
 						_elements: builderElements,
+						_elements_mode: "demand",
 						_route: "/preview",
 						_query_params: {},
 						_page_id: pageId,
@@ -1401,6 +1419,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
 							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
+							if (handleElementsRequestMessage(evt.payload, elementSource)) {
 								continue;
 							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
@@ -1421,7 +1442,8 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		backend.boardState,
 		executionService,
 		handleA2UIMessage,
-		getElementsFromComponents,
+		collectPreviewElements,
+		elementSource,
 	]);
 
 	return (

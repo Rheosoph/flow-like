@@ -195,6 +195,10 @@ pub struct DispatchPayload {
     pub profile: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_packages: Option<HashMap<String, WasmPackageRef>>,
+    /// Channel credentials for this run: how the executor waits for client replies and the
+    /// client handle it forwards inside every request. Absent for runs with no attached client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<crate::channel::ChannelGrant>,
 }
 
 /// Reference to a dispatch payload that may be either embedded inline or

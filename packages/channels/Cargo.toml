@@ -1,0 +1,57 @@
+[package]
+name = "flow-like-channels"
+version = "0.1.0"
+edition = "2024"
+description = "Cloud transports for Flow-Like channels (run ⇄ client replies)"
+
+[features]
+default = []
+aws = [
+    "dep:aws-credential-types",
+    "dep:aws-sdk-iotdataplane",
+    "dep:aws-sigv4",
+    "dep:aws-smithy-runtime-api",
+    "dep:http",
+    "dep:percent-encoding",
+    "dep:rumqttc",
+    "dep:rustls",
+    "dep:webpki-roots",
+]
+azure = ["dep:jsonwebtoken", "dep:tokio-tungstenite", "dep:percent-encoding"]
+gcp = ["dep:jsonwebtoken", "dep:eventsource-stream"]
+
+[dependencies]
+flow-like-types.workspace = true
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+chrono.workspace = true
+
+# ---- aws ----
+aws-credential-types = { version = "1", optional = true }
+aws-sdk-iotdataplane = { version = "1.109", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-sigv4 = { version = "1", optional = true }
+aws-smithy-runtime-api = { version = "1", features = ["client"], optional = true }
+http = { version = "1", optional = true }
+percent-encoding = { workspace = true, optional = true }
+rumqttc = { workspace = true, features = ["websocket", "use-rustls"], optional = true }
+rustls = { version = "0.23", optional = true }
+webpki-roots = { version = "1", optional = true }
+
+# ---- azure ----
+tokio-tungstenite = { workspace = true, optional = true }
+
+# ---- shared azure/gcp ----
+jsonwebtoken = { workspace = true, optional = true }
+
+# ---- gcp ----
+eventsource-stream = { version = "0.2", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "pem"] }
+rand = "0.8"

@@ -1,0 +1,37 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "channels": {
+      "$channel_id": {
+        ".write": "auth != null && auth.token.role === 'server' && auth.token.run_id === $channel_id && !newData.exists()",
+        "inbox": {
+          ".read": "auth != null && auth.token.role === 'server' && auth.token.run_id === $channel_id",
+          "$request_id": {
+            ".write": "auth != null && auth.token.role === 'client' && auth.token.run_id === $channel_id && !data.exists() && newData.exists()",
+            ".validate": "newData.hasChildren(['payload']) && newData.child('payload').isString() && newData.child('payload').val().length <= 16384",
+            "payload": {
+              ".validate": "newData.isString() && newData.val().length <= 16384"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "inbound": {
+          ".read": "auth != null && auth.token.role === 'server' && auth.token.run_id === $channel_id",
+          "$push_id": {
+            ".write": "auth != null && auth.token.role === 'client' && auth.token.run_id === $channel_id && !data.exists() && newData.exists()",
+            ".validate": "newData.hasChildren(['payload']) && newData.child('payload').isString() && newData.child('payload').val().length <= 16384",
+            "payload": {
+              ".validate": "newData.isString() && newData.val().length <= 16384"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

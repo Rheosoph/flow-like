@@ -16,7 +16,6 @@ import {
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-	IIndexType,
 	Input,
 	Label,
 	Tabs,
@@ -43,7 +42,7 @@ import {
 import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data-studio/query-workbench";
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
-import LanceDBExplorer from "@flow-like/flow-like-ui/components/ui/lance-viewer";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
@@ -84,27 +83,10 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { DEFAULT_TABLE_PAGE_SIZE, TableInspector } from "./table-inspector";
 
 export interface ExploreDataPageProps {
 	appId: string;
-}
-
-const DEFAULT_TABLE_PAGE_SIZE = 25;
-
-function extractErrorMessage(err: unknown): string {
-	if (err instanceof Error) return err.message;
-	if (typeof err === "string") return err;
-	if (err && typeof err === "object") {
-		const obj = err as Record<string, unknown>;
-		if (typeof obj.error === "string") return obj.error;
-		if (typeof obj.message === "string") return obj.message;
-		try {
-			return JSON.stringify(err);
-		} catch {
-			return String(err);
-		}
-	}
-	return String(err);
 }
 
 // Mirrors the server-side cascade matcher: bare name, case sensitive, one
@@ -199,7 +181,6 @@ function TableView({
 	onBack: () => void;
 }>) {
 	const { t } = useTranslation("settings");
-	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -210,25 +191,6 @@ function TableView({
 	const pageSize = pageSizeParam
 		? Number.parseInt(pageSizeParam, 10) || DEFAULT_TABLE_PAGE_SIZE
 		: DEFAULT_TABLE_PAGE_SIZE;
-	const offset = (page - 1) * pageSize;
-
-	const schema = useInvoke(backend.dbState.getSchema, backend.dbState, [
-		appId,
-		table,
-		userScoped,
-	]);
-	const count = useInvoke(backend.dbState.countItems, backend.dbState, [
-		appId,
-		table,
-		userScoped,
-	]);
-	const list = useInvoke(backend.dbState.listItems, backend.dbState, [
-		appId,
-		table,
-		offset,
-		pageSize,
-		userScoped,
-	]);
 
 	// The explorer reports its pagination once on mount, which for a deep link is
 	// already what the URL says. Navigating anyway costs a client-side transition
@@ -254,182 +216,20 @@ function TableView({
 		[router, pathname, searchParams],
 	);
 
-	const handleRefresh = useCallback(() => {
-		schema.refetch();
-		count.refetch();
-		list.refetch();
-	}, [schema, count, list]);
-
-	const handleOptimize = useCallback(
-		async (keepVersions = true) => {
-			try {
-				await backend.dbState.optimize(appId, table, keepVersions, userScoped);
-				toast.success("Optimized table");
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Optimize failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleUpdateItem = useCallback(
-		async (filter: string, updates: Record<string, unknown>) => {
-			try {
-				await backend.dbState.updateItem(
-					appId,
-					table,
-					filter,
-					updates,
-					userScoped,
-				);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Update failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleDropColumns = useCallback(
-		async (columns: string[]) => {
-			try {
-				await backend.dbState.dropColumns(appId, table, columns, userScoped);
-				toast.success(`Dropped column${columns.length > 1 ? "s" : ""}`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Drop column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleAddColumn = useCallback(
-		async (name: string, sqlExpression: string) => {
-			try {
-				await backend.dbState.addColumn(
-					appId,
-					table,
-					{
-						name,
-						sql_expression: sqlExpression,
-					},
-					userScoped,
-				);
-				toast.success(`Added column "${name}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Add column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleAlterColumn = useCallback(
-		async (column: string, nullable: boolean) => {
-			try {
-				await backend.dbState.alterColumn(
-					appId,
-					table,
-					column,
-					nullable,
-					userScoped,
-				);
-				toast.success(`Altered column "${column}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Alter column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleGetIndices = useCallback(async () => {
-		return backend.dbState.getIndices(appId, table, userScoped);
-	}, [backend.dbState, appId, table, userScoped]);
-
-	const handleDropIndex = useCallback(
-		async (indexName: string) => {
-			try {
-				await backend.dbState.dropIndex(appId, table, indexName, userScoped);
-				toast.success(`Dropped index "${indexName}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Drop index failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleBuildIndex = useCallback(
-		async (column: string, indexType: string) => {
-			const typeMap: Record<string, IIndexType> = {
-				fulltext: IIndexType.FullText,
-				btree: IIndexType.BTree,
-				bitmap: IIndexType.Bitmap,
-				labellist: IIndexType.LabelList,
-				auto: IIndexType.Auto,
-			};
-			const enumType = typeMap[indexType.toLowerCase()] ?? IIndexType.Auto;
-			try {
-				await backend.dbState.buildIndex(
-					appId,
-					table,
-					column,
-					enumType,
-					undefined,
-					userScoped,
-				);
-				toast.success(`Built index on "${column}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Build index failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	if (!schema.data || !list.data) {
-		return <TableViewLoadingState onBack={onBack} tableName={table} />;
-	}
-
 	return (
-		<div className="flex flex-col h-full grow max-h-full min-w-0">
-			<LanceDBExplorer
-				total={count.data}
-				tableName={table}
-				arrowSchema={schema.data}
-				rows={list.data}
-				initialPage={page}
-				initialPageSize={pageSize}
-				onPageRequest={(args) => {
-					updateUrlParams(args.page, args.pageSize);
-				}}
-				loading={list.isLoading}
-				error={list.error?.message}
-				onRefresh={handleRefresh}
-				onOptimize={handleOptimize}
-				onUpdateItem={handleUpdateItem}
-				onDropColumns={handleDropColumns}
-				onAddColumn={handleAddColumn}
-				onAlterColumn={handleAlterColumn}
-				onGetIndices={handleGetIndices}
-				onDropIndex={handleDropIndex}
-				onBuildIndex={handleBuildIndex}
-			>
-				<Button variant={"default"} size={"sm"} onClick={onBack}>
-					<ArrowLeftIcon />
-					{t("back", "Back")}
-				</Button>
-			</LanceDBExplorer>
-		</div>
+		<TableInspector
+			appId={appId}
+			table={table}
+			userScoped={userScoped}
+			page={page}
+			pageSize={pageSize}
+			onPageChange={updateUrlParams}
+		>
+			<Button variant={"default"} size={"sm"} onClick={onBack}>
+				<ArrowLeftIcon />
+				{t("back", "Back")}
+			</Button>
+		</TableInspector>
 	);
 }
 
@@ -931,7 +731,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			}
 			closeDeleteDialog();
 		} catch (err) {
-			const message = extractErrorMessage(err);
+			const message = getErrorMessage(err);
 			setDeleteError(message);
 			toast.error(`Delete table failed: ${message}`);
 		} finally {
@@ -1630,17 +1430,6 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 };
 
 const LOADING_CARD_KEYS = ["one", "two", "three", "four", "five", "six"];
-const LOADING_COLUMN_KEYS = ["one", "two", "three", "four", "five"];
-const LOADING_ROW_KEYS = [
-	"one",
-	"two",
-	"three",
-	"four",
-	"five",
-	"six",
-	"seven",
-	"eight",
-];
 
 const LoadingState: React.FC = () => (
 	<div className="p-6">
@@ -1669,63 +1458,6 @@ const LoadingState: React.FC = () => (
 					</div>
 				</Card>
 			))}
-		</div>
-	</div>
-);
-
-const TableViewLoadingState: React.FC<{
-	onBack: () => void;
-	tableName: string;
-}> = ({ onBack, tableName }) => (
-	<div className="flex flex-col h-full grow max-h-full min-w-0 p-4 gap-4">
-		<div className="flex items-center gap-3">
-			<Button variant="default" size="sm" onClick={onBack}>
-				<ArrowLeftIcon />
-				{i18next.t("back", "Back")}
-			</Button>
-			<div className="flex items-center gap-2 min-w-0">
-				<Database className="h-5 w-5 text-muted-foreground animate-pulse shrink-0" />
-				<span className="text-sm font-medium truncate">{tableName}</span>
-			</div>
-		</div>
-		<div className="flex items-center gap-2">
-			<div className="h-9 w-24 bg-muted animate-pulse rounded" />
-			<div className="h-9 flex-1 bg-muted animate-pulse rounded" />
-			<div className="h-9 w-20 bg-muted animate-pulse rounded" />
-		</div>
-		<div className="flex-1 rounded border overflow-hidden">
-			<div className="h-10 bg-muted/60 border-b flex items-center gap-4 px-4">
-				{LOADING_COLUMN_KEYS.map((key, index) => (
-					<div
-						key={key}
-						className="h-4 bg-muted animate-pulse rounded"
-						style={{ width: `${60 + index * 20}px` }}
-					/>
-				))}
-			</div>
-			{LOADING_ROW_KEYS.map((rowKey, rowIndex) => (
-				<div
-					key={rowKey}
-					className="h-10 border-b flex items-center gap-4 px-4"
-				>
-					{LOADING_COLUMN_KEYS.map((columnKey, columnIndex) => (
-						<div
-							key={`${rowKey}-${columnKey}`}
-							className="h-3.5 bg-muted/50 animate-pulse rounded"
-							style={{
-								width: `${40 + ((rowIndex + columnIndex) % 4) * 25}px`,
-							}}
-						/>
-					))}
-				</div>
-			))}
-		</div>
-		<div className="flex items-center justify-between shrink-0">
-			<div className="h-4 w-32 bg-muted animate-pulse rounded" />
-			<div className="flex gap-1">
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-			</div>
 		</div>
 	</div>
 );

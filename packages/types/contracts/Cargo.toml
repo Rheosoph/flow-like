@@ -5,9 +5,10 @@ edition = "2024"
 
 [features]
 default = ["all"]
-all = ["cache", "dispatch", "maintenance"]
+all = ["cache", "channel", "dispatch", "maintenance"]
 cache = ["dep:schemars"]
-dispatch = ["dep:blake3", "dep:serde_json"]
+channel = ["dep:serde_json", "dep:schemars"]
+dispatch = ["dep:blake3", "dep:serde_json", "channel"]
 maintenance = ["cache"]
 
 [dependencies]

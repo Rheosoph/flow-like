@@ -246,6 +246,11 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 			icon={<UsersIcon />}
 			tone={alone ? "muted" : "default"}
 			title={t("showCollaborators", "Show collaborators")}
+			ariaLabel={t("collaboratorsOnline", {
+				defaultValue_one: "{{count}} online — show collaborators",
+				defaultValue_other: "{{count}} online — show collaborators",
+				count: stats.onlineCount,
+			})}
 			popoverAlign="start"
 			popoverClassName="w-80 p-2"
 			popover={
@@ -279,7 +284,7 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 			}
 		>
 			{!alone && (
-				<span className="flex items-center -space-x-1">
+				<span className="flex items-center -space-x-1" aria-hidden="true">
 					{sorted.slice(0, FACEPILE_LIMIT).map((collab) => (
 						<PresenceFace
 							key={collab.sub}
@@ -291,13 +296,20 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 				</span>
 			)}
 			<span className="tabular-nums">{stats.onlineCount}</span>
+			<span className="sr-only" aria-live="polite">
+				{notice && presenceEvent && noticeName
+					? presenceEvent.kind === "joined"
+						? t("presenceJoined", "{{name}} joined", { name: noticeName })
+						: t("presenceLeft", "{{name}} left", { name: noticeName })
+					: ""}
+			</span>
 			{notice && presenceEvent && noticeName && (
 				<span
+					aria-hidden="true"
 					className={cn(
-						"animate-in fade-in text-muted-foreground transition-opacity duration-500",
+						"animate-in fade-in text-muted-foreground transition-opacity duration-500 motion-reduce:animate-none motion-reduce:transition-none",
 						notice.fading && "opacity-0",
 					)}
-					aria-live="polite"
 				>
 					{presenceEvent.kind === "joined"
 						? t("presenceJoined", "{{name}} joined", { name: noticeName })
@@ -315,14 +327,6 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 				>
 					<PencilLineIcon className="size-3" aria-hidden="true" />
 					<span className="tabular-nums">{stats.inCodeEditor}</span>
-				</span>
-			)}
-			{followingSub && (
-				<span
-					className="flex items-center text-primary"
-					title={t("following", "Following")}
-				>
-					<EyeIcon className="size-3" aria-hidden="true" />
 				</span>
 			)}
 			{unread > 0 && (
@@ -371,7 +375,7 @@ const PresenceFace = memo(function PresenceFace({
 			</Avatar>
 			{typing && (
 				<span
-					className="absolute -bottom-0.5 -right-0.5 flex size-2 animate-pulse items-center justify-center rounded-full bg-primary text-primary-foreground ring-1 ring-background"
+					className="absolute -bottom-0.5 -right-0.5 flex size-2 animate-pulse items-center justify-center rounded-full bg-primary text-primary-foreground ring-1 ring-background motion-reduce:animate-none"
 					aria-hidden="true"
 				>
 					<PencilLineIcon className="size-1.5" />
@@ -716,7 +720,9 @@ const CollaboratorRow = memo(function CollaboratorRow({
 					</ActivityChip>
 					{typingInEditor ? (
 						<ActivityChip
-							icon={<PencilLineIcon className="animate-pulse" />}
+							icon={
+								<PencilLineIcon className="animate-pulse motion-reduce:animate-none" />
+							}
 							className="text-primary"
 						>
 							{t("presenceTypingIn", "typing in {{file}}", {
@@ -741,7 +747,9 @@ const CollaboratorRow = memo(function CollaboratorRow({
 					)}
 					{typingInChat && (
 						<ActivityChip
-							icon={<MessageCircleIcon className="animate-pulse" />}
+							icon={
+								<MessageCircleIcon className="animate-pulse motion-reduce:animate-none" />
+							}
 							className="text-primary"
 						>
 							{t("presenceTypingInChat", "typing in chat")}
@@ -766,7 +774,9 @@ const CollaboratorRow = memo(function CollaboratorRow({
 					)}
 					{activity.running && (
 						<ActivityChip
-							icon={<PlayIcon className="animate-pulse" />}
+							icon={
+								<PlayIcon className="animate-pulse motion-reduce:animate-none" />
+							}
 							className="text-primary"
 						>
 							{t("presenceRunning", "running")}

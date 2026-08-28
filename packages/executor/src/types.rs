@@ -5,6 +5,7 @@ use flow_like_types::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub use flow_like_types::channel::ChannelGrant;
 pub use flow_like_types::dispatch::{DispatchPayload, WasmPackageRef};
 
 /// Board version as a tuple (major, minor, patch)
@@ -62,6 +63,9 @@ pub struct ExecutionRequest {
     /// Map of package_id → (version, wasm_hash) pre-resolved by the API from AppPackage records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_packages: Option<HashMap<String, WasmPackageRef>>,
+    /// Channel credentials minted by the API: how this run waits for client replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelGrant>,
 }
 
 /// Result of an execution
@@ -171,6 +175,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             user_context,
             profile: p.profile,
             wasm_packages: p.wasm_packages,
+            channel: p.channel,
         })
     }
 }

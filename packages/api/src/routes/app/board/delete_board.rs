@@ -41,6 +41,11 @@ pub async fn delete_board(
         )
         .await?;
     app.delete_board(&board_id).await?;
+    // A re-created board id must not inherit the deleted board's prerun manifests.
+    let manifest_prefix = format!("{app_id}:{board_id}:");
+    let _ = state
+        .prerun_manifest_cache
+        .invalidate_entries_if(move |key, _| key.starts_with(&manifest_prefix));
     app.save().await?;
 
     if let Err(err) =

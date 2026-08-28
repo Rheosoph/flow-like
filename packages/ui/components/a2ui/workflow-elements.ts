@@ -22,6 +22,68 @@ function isWidgetHost(data: Record<string, unknown>): boolean {
 	return data.type === "widgetInstance" || data.type === "microWidgetInstance";
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * `Style` serializes every unset `Option` as `null`; those nulls are most of a
+ * page payload's bytes and carry no information, so they never go on the wire.
+ */
+function compactStyle(style: unknown): unknown {
+	if (!isRecord(style)) return style;
+	const compacted: JsonRecord = {};
+	for (const [key, value] of Object.entries(style)) {
+		if (value === null) continue;
+		compacted[key] = isRecord(value) ? compactStyle(value) : value;
+	}
+	return compacted;
+}
+
+function compactWidgetDefinition(component: unknown): unknown {
+	if (!isRecord(component)) return component;
+	const definition = component.inlineWidgetDef;
+	if (!isRecord(definition) || !Array.isArray(definition.components)) {
+		return component;
+	}
+	return {
+		...component,
+		inlineWidgetDef: {
+			...definition,
+			components: definition.components.map((child) =>
+				isRecord(child) ? compactElementStyles(child) : child,
+			),
+		},
+	};
+}
+
+/** Element copy without null style fields, including a widget host's inline children. */
+export function compactElementStyles(element: JsonRecord): JsonRecord {
+	const { style, ...rest } = element;
+	const compacted: JsonRecord = { ...rest };
+	if (style !== null && style !== undefined) {
+		compacted.style = compactStyle(style);
+	}
+	if ("component" in element) {
+		compacted.component = compactWidgetDefinition(element.component);
+	}
+	return compacted;
+}
+
+export function compactSurfaceElements(
+	elements: Record<string, unknown>,
+): Record<string, unknown> {
+	const compacted: Record<string, unknown> = {};
+	for (const [elementId, element] of Object.entries(elements)) {
+		compacted[elementId] = isRecord(element)
+			? compactElementStyles(element)
+			: element;
+	}
+	return compacted;
+}
+
 /** Storage prefixes owned by a surface, including each hosted widget instance. */
 export function elementValueScopeIds(
 	components: Record<string, SurfaceComponent> | undefined,
@@ -315,7 +377,7 @@ export function mergeStoredElementValues(
 		};
 	}
 
-	return mergedElements;
+	return compactSurfaceElements(mergedElements);
 }
 
 /** Build `_input_values` for the active surface or widget instance. */

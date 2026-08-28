@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use super::schema_utils::{set_component_schema_by_type, set_generic_element_schema};
 use crate::a2ui::micro_widget_utils::{
     clear_widget_ref_metadata, set_widget_ref_metadata, widget_contract_from_component,
@@ -82,8 +82,7 @@ impl NodeLogic for GetElement {
             LogLevel::Debug,
         );
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         if let Some((found_id, element_value)) = element {
             // Create element with __element_id for use with setter nodes

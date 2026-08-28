@@ -20,6 +20,7 @@ export * from "./runtime-vars-utils";
 export * from "./board-metrics";
 export * from "./board-tests";
 export * from "./observe-resize";
+export * from "./storage-file";
 
 export * from "./bit/bit";
 export * from "./bit/bit-pack";
@@ -31,6 +32,7 @@ export * from "./bit/model-display-name";
 export * from "./bit/tts-asset-repair";
 
 export * from "./schema/index";
+export * from "./channel";
 export * from "./command/generic-command";
 export * from "./permission/global-permission";
 export * from "./permission/role-permission";
@@ -47,6 +49,7 @@ export * from "./builder/KeyboardShortcuts";
 export * from "./flowpilot/index";
 export * from "./presign-assets";
 export * from "./storage-url";
+export * from "./storage-tree";
 export * from "./bulk-upload";
 export * from "./signed-upload";
 export * from "./storage-batching";

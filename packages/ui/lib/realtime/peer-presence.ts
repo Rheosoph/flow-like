@@ -246,6 +246,9 @@ export function createPeerActivityTracker(now: () => number = Date.now) {
 			const at = now();
 			for (const [clientId, state] of states) {
 				if (clientId === selfClientId) continue;
+				// A session seen for the first time (late join, reconnect) carries
+				// history, not activity: only CHANGES on a known session are fresh.
+				const wasKnown = sessions.has(clientId);
 				const key = peerActivityKey(state);
 				const sub = typeof state?.sub === "string" ? state.sub : undefined;
 				const previous = sessions.get(clientId);
@@ -254,19 +257,20 @@ export function createPeerActivityTracker(now: () => number = Date.now) {
 				const editorKey = editorTypingKey(state);
 				const chatTs = sanitizeChatTyping(state?.[CHAT_TYPING_FIELD])?.ts ?? 0;
 				const known = typing.get(clientId);
+				const fresh = seeded && wasKnown;
 				typing.set(clientId, {
 					editorKey,
 					editorAt:
 						known && known.editorKey === editorKey
 							? known.editorAt
-							: seeded && editorKey
+							: fresh && editorKey
 								? at
 								: Number.NEGATIVE_INFINITY,
 					chatTs,
 					chatAt:
 						known && known.chatTs === chatTs
 							? known.chatAt
-							: seeded && chatTs
+							: fresh && chatTs
 								? at
 								: Number.NEGATIVE_INFINITY,
 				});
@@ -279,7 +283,7 @@ export function createPeerActivityTracker(now: () => number = Date.now) {
 				} else if (clicks.get(clientId)?.ts !== ts) {
 					clicks.set(clientId, {
 						ts,
-						seenAt: seeded ? at : Number.NEGATIVE_INFINITY,
+						seenAt: fresh ? at : Number.NEGATIVE_INFINITY,
 					});
 				}
 			}

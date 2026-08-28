@@ -31,6 +31,7 @@ import {
 	type AskUserAnswerPayload,
 	parseAskUserArguments,
 } from "../../lib/ask-user";
+import { replyToChannel } from "../../lib/channel";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
@@ -52,6 +53,7 @@ import {
 	interactWithAppPage,
 	parseInteractActions,
 } from "../../lib/interact-app-page";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
 import {
 	convertJsonToUint8Array,
@@ -263,6 +265,11 @@ export interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	/**
+	 * How to answer. Present on every request the backend sends (Tauri event or SSE frame); absent
+	 * only on bridge-internal synthetic requests that are never replied to.
+	 */
+	channel?: IChannelHandle;
 	approval?: FrontendToolApproval;
 	/** Backend dispatch/deadline metadata used to settle before its receiver disappears. */
 	dispatchedAtMs?: number;
@@ -1272,8 +1279,8 @@ function dialogPromptDebugInput(prompt: GlobalToolPrompt) {
  * Listens for the global FlowPilot assistant's tool requests (a dedicated Tauri event, separate from
  * the board copilot's) and executes them in the app: navigation, app creation, and delegating board
  * work. Mutating/execute tools and ask_user surface an inline prompt card in the chat (via the
- * global-chat store) instead of a modal. The response is returned through the shared
- * `flowpilot_frontend_tool_result` command.
+ * global-chat store) instead of a modal. The response is delivered on the channel handle each
+ * request carries (`replyToChannel`).
  */
 export function GlobalToolBridge() {
 	const router = useRouter();
@@ -6694,7 +6701,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								}
 								publishWidgets();
 								// Surface app-chat dialogs (single/multiple choice, form) inline so the
-								// user can answer — respond_to_interaction unblocks the app workflow
+								// user can answer — replying on the interaction's channel unblocks the app workflow
 								// while this call_app_chat tool call is still awaiting its result.
 								if (result.interactions?.length) {
 									useGlobalChatStore
@@ -7194,10 +7201,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 		void (async () => {
 			try {
-				const [{ listen }, { invoke }] = await Promise.all([
-					import("@tauri-apps/api/event"),
-					import("@tauri-apps/api/core"),
-				]);
+				const { listen } = await import("@tauri-apps/api/event");
 				const [stopRequests, stopCancellation, stopLifecycle] =
 					await Promise.all([
 						listen<FrontendToolRequest>(
@@ -7225,7 +7229,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											arguments_preview: agentDebugPreview(request),
 										});
 									}
-									if (request?.requestId) {
+									if (request?.requestId && request.channel) {
 										const response: FrontendToolResponse = {
 											requestId: request.requestId,
 											approved: true,
@@ -7233,9 +7237,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												"Malformed frontend tool request: missing toolName.",
 										};
 										try {
-											await invoke("flowpilot_frontend_tool_result", {
-												response,
-											});
+											await replyToChannel(request.channel, response);
 										} catch (error) {
 											console.error(
 												"[global-tool-bridge] failed to reject malformed request",
@@ -7243,6 +7245,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 											);
 										}
 									}
+									return;
+								}
+								const channel = request.channel;
+								if (!channel) {
+									recordRequestDebug(request, {
+										id: `frontend:${request.requestId}:delivery`,
+										kind: "bridge",
+										stage: "response_delivery_failed",
+										status: "error",
+										name: request.toolName,
+										ended_at_ms: Date.now(),
+										error:
+											"Tauri emitted a frontend tool request without a channel; the result cannot be delivered.",
+									});
 									return;
 								}
 								flowPilotDebugLog(
@@ -7258,7 +7274,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									{ approved: response.approved, error: response.error },
 								);
 								try {
-									await invoke("flowpilot_frontend_tool_result", { response });
+									await replyToChannel(channel, response);
 									recordRequestDebug(request, {
 										id: `frontend:${request.requestId}:delivery`,
 										kind: "bridge",

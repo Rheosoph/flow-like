@@ -13,7 +13,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::prerun_shared::{
-        OAuthRequirement, PrerunPayload, RuntimeVariable, compute_payload, parse_version,
+        OAuthRequirement, PrerunPayload, RuntimeVariable, load_prerun_manifest, parse_version,
     },
     state::AppState,
 };
@@ -60,17 +60,17 @@ pub struct PrerunBoardResponse {
     pub signature: String,
 }
 
-fn build_response(payload: &PrerunPayload, can_execute_locally: bool) -> PrerunBoardResponse {
+fn build_response(payload: PrerunPayload, can_execute_locally: bool) -> PrerunBoardResponse {
     PrerunBoardResponse {
-        runtime_variables: payload.runtime_variables.clone(),
-        oauth_requirements: payload.oauth_requirements.clone(),
+        runtime_variables: payload.runtime_variables,
+        oauth_requirements: payload.oauth_requirements,
         requires_local_execution: payload.requires_local_execution,
-        execution_mode: payload.execution_mode.clone(),
+        execution_mode: payload.execution_mode,
         can_execute_locally,
         has_wasm_nodes: payload.has_wasm_nodes,
-        wasm_package_ids: payload.wasm_package_ids.clone(),
-        wasm_package_permissions: payload.wasm_package_permissions.clone(),
-        signature: payload.signature.clone(),
+        wasm_package_ids: payload.wasm_package_ids,
+        wasm_package_permissions: payload.wasm_package_permissions,
+        signature: payload.signature,
     }
 }
 
@@ -104,15 +104,17 @@ pub async fn prerun_board(
 ) -> Result<Json<PrerunBoardResponse>, ApiError> {
     super::ensure_connected_app_board_invoke_denied(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteBoards);
-    let sub = permission.sub()?;
+    // Loading the board used to require a caller identity; principals without
+    // one (API keys) stay rejected until that is decided on purpose.
+    permission.sub()?;
 
     let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards);
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
-    let board = state
-        .master_board(&sub, &app_id, &board_id, &state, version)
-        .await?;
-    let payload = compute_payload(&board);
+    let manifest = load_prerun_manifest(&state, &app_id, &board_id, version).await?;
 
-    Ok(Json(build_response(&payload, can_execute_locally)))
+    Ok(Json(build_response(
+        PrerunPayload::from(&*manifest),
+        can_execute_locally,
+    )))
 }

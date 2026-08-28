@@ -124,7 +124,10 @@
 
 use flow_like_storage::Path as StorePath;
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_types::channel::ChannelGrant;
 use flow_like_types::create_id;
+
+use crate::channel::ChannelIssuer;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -338,6 +341,10 @@ pub struct DispatchRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_packages:
         Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
+    /// Channel credentials for this run. Left `None` by callers; the dispatcher mints the grant
+    /// on every entry point (see [`Dispatcher::attach_channel`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelGrant>,
 }
 
 /// Response from dispatch
@@ -392,6 +399,7 @@ pub struct Dispatcher {
     config: Arc<DispatchConfig>,
     staging_bucket: Option<Arc<FlowLikeStore>>,
     artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
+    channels: Option<Arc<ChannelIssuer>>,
     #[cfg(feature = "lambda")]
     lambda_client: Option<aws_sdk_lambda::Client>,
     #[cfg(feature = "sqs")]
@@ -465,6 +473,7 @@ impl Dispatcher {
             config: Arc::new(config),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
+            channels: None,
             #[cfg(feature = "lambda")]
             lambda_client,
             #[cfg(feature = "sqs")]
@@ -479,6 +488,7 @@ impl Dispatcher {
             config: Arc::new(config),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
+            channels: None,
             #[cfg(feature = "lambda")]
             lambda_client: None,
             #[cfg(feature = "sqs")]
@@ -497,6 +507,55 @@ impl Dispatcher {
     /// construction; later calls are ignored.
     pub fn set_artifact_ensurer(&self, ensurer: ArtifactEnsurer) {
         let _ = self.artifact_ensurer.set(ensurer);
+    }
+
+    /// The issuer that mints every dispatched run's channel grant.
+    pub fn with_channel_issuer(mut self, issuer: Arc<ChannelIssuer>) -> Self {
+        self.channels = Some(issuer);
+        self
+    }
+
+    /// Mint the run's channel grant when the caller did not supply one — the single funnel every
+    /// dispatch entry point passes through. The cheap HTTP handle is always minted; cloud
+    /// transport credentials only for runs a client watches (`stream_state`), since a run nobody
+    /// watches has no client to answer. A failed cloud grant degrades to HTTP rather than
+    /// blocking the dispatch.
+    async fn attach_channel(&self, request: &mut DispatchRequest) {
+        if request.channel.is_some() {
+            return;
+        }
+        let Some(issuer) = &self.channels else {
+            return;
+        };
+        let ttl = channel_ttl_from_jwt(&request.jwt);
+        let app_id = Some(request.app_id.as_str());
+        let grant = if request.stream_state && !issuer.backend().is_http() {
+            match issuer
+                .grant(&request.run_id, &request.user_id, app_id, ttl)
+                .await
+            {
+                Ok(grant) => Ok(grant),
+                Err(error) => {
+                    tracing::error!(
+                        run_id = %request.run_id,
+                        transport = issuer.transport(),
+                        %error,
+                        "cloud channel grant failed; falling back to the http transport"
+                    );
+                    issuer.http_grant(&request.run_id, &request.user_id, app_id, ttl)
+                }
+            }
+        } else {
+            issuer.http_grant(&request.run_id, &request.user_id, app_id, ttl)
+        };
+        match grant {
+            Ok(grant) => request.channel = Some(grant),
+            Err(error) => tracing::error!(
+                run_id = %request.run_id,
+                %error,
+                "channel grant failed; the run cannot receive client replies"
+            ),
+        }
     }
 
     /// Best-effort: guarantee the compiled artifact exists before handing the
@@ -550,8 +609,9 @@ impl Dispatcher {
     async fn dispatch_to_backend(
         &self,
         backend: ExecutionBackend,
-        request: DispatchRequest,
+        mut request: DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
+        self.attach_channel(&mut request).await;
         self.ensure_artifact(&request).await;
         let job_id = create_id();
 
@@ -578,8 +638,9 @@ impl Dispatcher {
     #[cfg(feature = "lambda")]
     pub async fn dispatch_streaming(
         &self,
-        request: DispatchRequest,
+        mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
+        self.attach_channel(&mut request).await;
         self.ensure_artifact(&request).await;
         let job_id = create_id();
 
@@ -639,8 +700,9 @@ impl Dispatcher {
     /// Dispatch via HTTP POST to executor SSE endpoint and return streaming response
     pub async fn dispatch_http_sse(
         &self,
-        request: DispatchRequest,
+        mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
+        self.attach_channel(&mut request).await;
         self.ensure_artifact(&request).await;
         let url =
             self.config.executor_url.as_ref().ok_or_else(|| {
@@ -863,6 +925,7 @@ impl Dispatcher {
                 credentials_json: request.credentials_json.clone(),
                 jwt: request.jwt.clone(),
                 callback_url: request.callback_url.clone(),
+                channel: request.channel.clone(),
             },
         };
 
@@ -1387,9 +1450,22 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
             .and_then(|v| serde_json::to_value(v).ok()),
         profile: request.profile.clone(),
         wasm_packages: request.wasm_packages.clone(),
+        channel: request.channel.clone(),
     };
 
     serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
+}
+
+/// A channel outlives nothing: its lifetime is the executor JWT's, read back from the token the
+/// caller already signed so the two never drift.
+const DEFAULT_CHANNEL_TTL_SECS: i64 = 24 * 60 * 60;
+
+fn channel_ttl_from_jwt(jwt: &str) -> i64 {
+    crate::execution::verify_execution_jwt(jwt)
+        .ok()
+        .map(|claims| claims.exp - chrono::Utc::now().timestamp())
+        .filter(|ttl| *ttl > 0)
+        .unwrap_or(DEFAULT_CHANNEL_TTL_SECS)
 }
 
 /// Environment switch for the credential a synchronous executor request must

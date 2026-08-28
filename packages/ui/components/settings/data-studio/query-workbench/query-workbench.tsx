@@ -917,6 +917,7 @@ export function QueryWorkbench({
 
 							<Panel id="qw-results" order={2} minSize={20}>
 								<QueryResultView
+									appId={appId}
 									result={result}
 									loading={running}
 									error={runError}

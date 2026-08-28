@@ -4488,12 +4488,13 @@ declare namespace ui {
     function dataUpdate({ surfaceId?: string, path: string, value: any }): void;
 
     /**
-     * Requests element values from the frontend before processing
+     * Fetches elements from the live page in one round-trip so later reads hit the cache
      * @node a2ui_request_elements @alias a2uiRequestElements
-     * @param elementIds — Array of element IDs to request (e.g., ['main/input-field', 'main/checkbox'])
+     * @param elementIds — Element selectors, e.g. ['main/input-field', 'type:switch', 'glob:feed-row-*/subscribed', 'children:main/list', 'host:main/feed-row-1']
+     * @param timeoutMs — How long to wait for the page to answer
      * @impure has side effects / drives control flow
      */
-    function requestElements({ elementIds: string[] }): void;
+    function requestElements({ elementIds: string[], timeoutMs?: int }): void;
 
     /**
      * Updates or inserts an element value in the frontend

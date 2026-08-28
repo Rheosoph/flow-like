@@ -8,7 +8,7 @@ description = "Flow-Like ECS Executor (EventBridge Pipe → ECS RunTask)"
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
 flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
-flow-like-executor = { workspace = true, features = ["server-local-ml"] }
+flow-like-executor = { workspace = true, features = ["server-local-ml", "channel-aws"] }
 
 mimalloc.workspace = true
 tracing.workspace = true

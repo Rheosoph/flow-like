@@ -2,6 +2,7 @@ use super::{
     EventTrigger, ExecutionEnvironment, ExecutionMode, InternalNode, LogLevel, Run, RunPayload,
     internal_pin::InternalPin, log::LogMessage, trace::Trace,
 };
+use crate::a2ui::ElementCache;
 use crate::models::llm::ModelUsageContext;
 use crate::{
     credentials::SharedCredentials,
@@ -20,7 +21,9 @@ use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Value;
+use flow_like_types::channel::{Channel, ChannelOutcome};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
+use flow_like_types::json::Map;
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{
     Cacheable,
@@ -203,6 +206,9 @@ struct RunUpdateEvent {
     method: RunUpdateEventMethod,
 }
 
+/// How long a run waits for the page to answer an automatic element read.
+const ELEMENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct ExecutionContext {
     pub id: Arc<str>,
@@ -230,6 +236,10 @@ pub struct ExecutionContext {
     pub context_pin_overrides: Option<BTreeMap<String, Value>>,
     pub result: Option<Value>,
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+    /// Reply conduit to the run's client; `None` only for contexts built without a run.
+    pub channel: Option<Arc<dyn Channel>>,
+    /// The run's elements: seeded from `payload._elements`, grown by element requests.
+    pub elements: Arc<RwLock<ElementCache>>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
     nodes_executed: Arc<AtomicU64>,
@@ -263,6 +273,7 @@ impl ExecutionContext {
         credentials: Option<Arc<SharedCredentials>>,
         token: Option<String>,
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+        channel: Option<Arc<dyn Channel>>,
     ) -> Self {
         // Use cached node_id instead of locking
         let id = node.shared_node_id();
@@ -273,29 +284,38 @@ impl ExecutionContext {
             trace.snapshot_variables(variables).await;
         }
 
-        let (run_id, stream_state, log_spill_threshold, log_flush_interval, nodes_executed) =
-            match run.upgrade() {
-                Some(run) => {
-                    let run = run.lock().await;
-                    (
-                        run.id.clone(),
-                        run.stream_state,
-                        run.log_spill_threshold,
-                        super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
-                        run.nodes_executed.clone(),
-                    )
-                }
-                None => (
-                    "".to_string(),
-                    false,
-                    super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+        let (
+            run_id,
+            stream_state,
+            log_spill_threshold,
+            log_flush_interval,
+            nodes_executed,
+            elements,
+        ) = match run.upgrade() {
+            Some(run) => {
+                let run = run.lock().await;
+                (
+                    run.id.clone(),
+                    run.stream_state,
+                    run.log_spill_threshold,
                     super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
-                    Arc::new(AtomicU64::new(0)),
-                ),
-            };
+                    run.nodes_executed.clone(),
+                    run.elements.clone(),
+                )
+            }
+            None => (
+                "".to_string(),
+                false,
+                super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+                super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(RwLock::new(ElementCache::default())),
+            ),
+        };
         ExecutionContext {
             id,
             run_id,
+            elements,
             execution_environment: ExecutionEnvironment::Local,
             execution_mode: ExecutionMode::Sync,
             started_by: None,
@@ -323,6 +343,7 @@ impl ExecutionContext {
             result: None,
             delegated: false,
             oauth_tokens,
+            channel,
             cancellation_token: None,
             user_context: None,
             nodes_executed,
@@ -386,6 +407,7 @@ impl ExecutionContext {
         credentials: Option<Arc<SharedCredentials>>,
         token: Option<String>,
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+        channel: Option<Arc<dyn Channel>>,
     ) -> Self {
         // Use cached node_id instead of locking
         let id = node.shared_node_id();
@@ -399,6 +421,7 @@ impl ExecutionContext {
         ExecutionContext {
             id,
             run_id: run_meta.run_id.clone(),
+            elements: run_meta.elements.clone(),
             execution_environment: run_meta.environment,
             execution_mode: run_meta.execution_mode,
             started_by: None,
@@ -426,6 +449,7 @@ impl ExecutionContext {
             result: None,
             delegated: false,
             oauth_tokens,
+            channel,
             cancellation_token: None,
             user_context: None,
             nodes_executed: run_meta.nodes_executed.clone(),
@@ -569,6 +593,7 @@ impl ExecutionContext {
         ExecutionContext {
             id,
             run: self.run.clone(),
+            elements: self.elements.clone(),
             nodes: self.nodes.clone(),
             profile: self.profile.clone(),
             node: node.clone(),
@@ -591,6 +616,7 @@ impl ExecutionContext {
             context_pin_overrides: self.context_pin_overrides.clone(),
             result: None,
             oauth_tokens: self.oauth_tokens.clone(),
+            channel: self.channel.clone(),
             user_context: self.user_context.clone(),
             nodes_executed: self.nodes_executed.clone(),
             represented_trace_nodes: AHashSet::new(),
@@ -717,20 +743,55 @@ impl ExecutionContext {
         Ok(payload)
     }
 
-    /// Returns the frontend elements map from the run payload.
-    /// This is used by A2UI nodes to access element data passed from the frontend.
-    /// Returns None if no elements are available.
-    pub async fn get_frontend_elements(
+    /// One element the run holds, resolved by the `_elements` key rules (exact, suffix, page
+    /// retarget) or as a widget child inside its host's inline definition. A miss asks the live
+    /// page once per id when the client declared `_elements_mode: "demand"`. Returns the
+    /// resolved key alongside the element.
+    pub async fn read_element(
+        &mut self,
+        element_id: &str,
+    ) -> flow_like_types::Result<Option<(String, Value)>> {
+        if let Some(hit) = self.elements.read().await.resolve_present(element_id) {
+            return Ok(Some(hit));
+        }
+        if self.ensure_elements(&[element_id.to_string()]).await?
+            && let Some(hit) = self.elements.read().await.resolve_present(element_id)
+        {
+            return Ok(Some(hit));
+        }
+        Ok(self.elements.read().await.resolve(element_id))
+    }
+
+    /// Borrow every element the run holds, for type/pattern queries and parent lookups.
+    pub async fn with_elements<R>(
         &self,
-    ) -> flow_like_types::Result<Option<flow_like_types::json::Map<String, Value>>> {
-        let payload = self.get_run_payload().await?;
-        let elements = payload
-            .payload
-            .as_ref()
-            .and_then(|p| p.get("_elements"))
-            .and_then(|e| e.as_object())
-            .cloned();
-        Ok(elements)
+        f: impl FnOnce(&Map<String, Value>) -> R,
+    ) -> flow_like_types::Result<R> {
+        let cache = self.elements.read().await;
+        Ok(f(cache.elements()))
+    }
+
+    /// Ask the live page for the selectors this run has not requested yet. Returns whether a
+    /// request was made; a no-op unless the client declared `_elements_mode: "demand"`.
+    pub async fn ensure_elements(&mut self, selectors: &[String]) -> flow_like_types::Result<bool> {
+        let pending = {
+            let mut cache = self.elements.write().await;
+            if !cache.on_demand() {
+                return Ok(false);
+            }
+            cache.take_unrequested(selectors)
+        };
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        if let Err(err) = self
+            .request_elements(pending.clone(), ELEMENT_REQUEST_TIMEOUT)
+            .await
+        {
+            self.elements.write().await.forget_requested(&pending);
+            return Err(err);
+        }
+        Ok(true)
     }
 
     /// Returns the current route from the run payload.
@@ -1371,20 +1432,97 @@ impl ExecutionContext {
         self.stream_a2ui_update(message).await
     }
 
+    /// Live round-trip to the rendered page: stream a `requestElements` message carrying a
+    /// channel handle, then merge the page's answer (`{ ok, elements }`) into the run's elements.
     pub async fn request_elements(
         &mut self,
-        element_ids: Vec<String>,
-    ) -> flow_like_types::Result<()> {
-        let message = crate::a2ui::A2UIServerMessage::request_elements(element_ids);
-        self.stream_a2ui_update(message).await
+        selectors: Vec<String>,
+        timeout: Duration,
+    ) -> flow_like_types::Result<Map<String, Value>> {
+        let channel = self.channel()?;
+        let ticket = channel.open(timeout).await?;
+        let message = crate::a2ui::A2UIServerMessage::request_elements(
+            &ticket.request_id,
+            selectors.clone(),
+            timeout.as_millis() as u64,
+            Some(ticket.handle.clone()),
+        );
+        if let Err(err) = self.stream_a2ui_update(message).await {
+            channel.abandon(&ticket).await;
+            return Err(err);
+        }
+
+        let described = selectors.join(", ");
+        let reply = match channel
+            .wait(&ticket, self.cancellation_token.clone())
+            .await?
+        {
+            ChannelOutcome::Responded(reply) => reply,
+            ChannelOutcome::Expired => {
+                return Err(flow_like_types::anyhow!(
+                    "Element request [{}] timed out after {}ms — no live surface answered",
+                    described,
+                    timeout.as_millis()
+                ));
+            }
+            ChannelOutcome::Cancelled => {
+                return Err(flow_like_types::anyhow!(
+                    "Element request [{}] was cancelled",
+                    described
+                ));
+            }
+            ChannelOutcome::Closed => {
+                return Err(flow_like_types::anyhow!(
+                    "Element request [{}] was dropped without a response",
+                    described
+                ));
+            }
+        };
+
+        if reply.get("ok").and_then(Value::as_bool) == Some(false) {
+            let error = reply
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            return Err(flow_like_types::anyhow!(
+                "Element request [{}] failed on the page: {}",
+                described,
+                error
+            ));
+        }
+        let elements = reply
+            .get("elements")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        {
+            let mut cache = self.elements.write().await;
+            cache.take_unrequested(&selectors);
+            cache.merge(elements.clone());
+        }
+        Ok(elements)
+    }
+
+    pub fn cancellation_token(&self) -> Option<CancellationToken> {
+        self.cancellation_token.clone()
+    }
+
+    /// The run's reply conduit. Every run built through `InternalRun` has one; contexts
+    /// assembled by hand (tests, tooling) may not.
+    pub fn channel(&self) -> flow_like_types::Result<Arc<dyn Channel>> {
+        self.channel.clone().ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "No channel attached to run '{}': the client cannot be asked for input here",
+                self.run_id
+            )
+        })
     }
 
     /// Live round-trip to the rendered frontend: run a contract query against
     /// a micro widget instance and await its `query:result`. The request rides
-    /// the a2ui stream; the host delivers the response through
-    /// [`flow_like_types::frontend_request::resolve_frontend_request`] (Tauri
-    /// command on desktop, `/widget-query/{id}/respond` API route on web).
-    /// Returns the raw response envelope `{ "ok": bool, "value"?: …, "error"?: … }`.
+    /// the a2ui stream carrying a channel handle; the surface answers through
+    /// the run's channel. Returns the raw response envelope
+    /// `{ "ok": bool, "value"?: …, "error"?: … }`.
     pub async fn query_widget(
         &mut self,
         instance_id: &str,
@@ -1392,44 +1530,42 @@ impl ExecutionContext {
         args: Option<Value>,
         timeout: std::time::Duration,
     ) -> flow_like_types::Result<Value> {
-        use flow_like_types::frontend_request::{
-            abandon_frontend_request, register_frontend_request,
-        };
-
-        let request_id = flow_like_types::create_id();
-        let receiver = register_frontend_request(&request_id).await;
-
+        let channel = self.channel()?;
+        let ticket = channel.open(timeout).await?;
         let message = crate::a2ui::A2UIServerMessage::widget_query(
-            &request_id,
+            &ticket.request_id,
             instance_id,
             query,
             args,
             timeout.as_millis() as u64,
+            Some(ticket.handle.clone()),
         );
         if let Err(err) = self.stream_a2ui_update(message).await {
-            abandon_frontend_request(&request_id).await;
+            channel.abandon(&ticket).await;
             return Err(err);
         }
 
-        match flow_like_types::tokio::time::timeout(timeout, receiver).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => {
-                abandon_frontend_request(&request_id).await;
-                Err(flow_like_types::anyhow!(
-                    "Widget query '{}' on instance '{}' was dropped without a response",
-                    query,
-                    instance_id
-                ))
-            }
-            Err(_) => {
-                abandon_frontend_request(&request_id).await;
-                Err(flow_like_types::anyhow!(
-                    "Widget query '{}' on instance '{}' timed out after {}ms — no live surface answered",
-                    query,
-                    instance_id,
-                    timeout.as_millis()
-                ))
-            }
+        match channel
+            .wait(&ticket, self.cancellation_token.clone())
+            .await?
+        {
+            ChannelOutcome::Responded(response) => Ok(response),
+            ChannelOutcome::Expired => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' timed out after {}ms — no live surface answered",
+                query,
+                instance_id,
+                timeout.as_millis()
+            )),
+            ChannelOutcome::Cancelled => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' was cancelled",
+                query,
+                instance_id
+            )),
+            ChannelOutcome::Closed => Err(flow_like_types::anyhow!(
+                "Widget query '{}' on instance '{}' was dropped without a response",
+                query,
+                instance_id
+            )),
         }
     }
 
@@ -1448,16 +1584,21 @@ impl ExecutionContext {
         // keys pass through untouched; an unresolvable ref keeps its original id (it may
         // address a widget surface or create a new element).
         let retargeted = if element_id.contains('/') {
-            match self.get_frontend_elements().await {
-                Ok(Some(elements)) if !elements.contains_key(element_id) => {
-                    crate::a2ui::resolve_element_key(&elements, element_id).cloned()
+            self.with_elements(|elements| {
+                if elements.contains_key(element_id) {
+                    None
+                } else {
+                    crate::a2ui::resolve_element_key(elements, element_id).cloned()
                 }
-                _ => None,
-            }
+            })
+            .await
+            .ok()
+            .flatten()
         } else {
             None
         };
         let element_id = retargeted.as_deref().unwrap_or(element_id);
+        self.elements.write().await.clear_requested();
         tracing::info!(element_id = %element_id, value = ?value, "[A2UI] upsert_element called");
         self.log_message(
             &format!("[A2UI] upsert_element: {} -> {:?}", element_id, value),
@@ -1479,6 +1620,7 @@ impl ExecutionContext {
         component: crate::a2ui::SurfaceComponent,
         index: Option<usize>,
     ) -> flow_like_types::Result<()> {
+        self.elements.write().await.clear_requested();
         let message =
             crate::a2ui::A2UIServerMessage::create_element(surface_id, parent_id, component, index);
         self.stream_a2ui_update(message).await
@@ -1489,6 +1631,7 @@ impl ExecutionContext {
         surface_id: &str,
         element_id: &str,
     ) -> flow_like_types::Result<()> {
+        self.elements.write().await.clear_requested();
         let message = crate::a2ui::A2UIServerMessage::remove_element(surface_id, element_id);
         self.stream_a2ui_update(message).await
     }

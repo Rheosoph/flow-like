@@ -219,23 +219,33 @@ export interface DragPublisher {
 	dispose: () => void;
 }
 
+export const DRAG_WATCHDOG_MS = 3000;
+
 export function createDragPublisher(
 	options: {
 		awareness: SignalFieldSetter;
 		minIntervalMs?: number;
+		/** A drag that stops publishing (aborted by XYFlow, tab switched) self-withdraws after this. */
+		watchdogMs?: number;
 	} & SignalTimingOptions,
 ): DragPublisher {
 	const { now, schedule, cancel } = resolveTiming(options);
 	const minInterval = options.minIntervalMs ?? DRAG_PUBLISH_MIN_INTERVAL_MS;
+	const watchdogMs = options.watchdogMs ?? DRAG_WATCHDOG_MS;
 	let lastPublishAt = Number.NEGATIVE_INFINITY;
 	let pending: DragPayload["nodes"] | undefined;
 	let timer: unknown | null = null;
+	let watchdog: unknown | null = null;
 	let onWire = false;
 
 	const clear = () => {
 		if (timer !== null) {
 			cancel(timer);
 			timer = null;
+		}
+		if (watchdog !== null) {
+			cancel(watchdog);
+			watchdog = null;
 		}
 		pending = undefined;
 		if (!onWire) return;
@@ -256,6 +266,11 @@ export function createDragPublisher(
 		}
 		onWire = true;
 		options.awareness.setLocalStateField(DRAG_FIELD, payload);
+		if (watchdog !== null) cancel(watchdog);
+		watchdog = schedule(() => {
+			watchdog = null;
+			clear();
+		}, watchdogMs);
 	};
 
 	return {
@@ -293,6 +308,10 @@ export function peerPingsEqual(
  */
 export function createPingTracker(now: () => number = Date.now) {
 	const lastSeq = new Map<number, number>();
+	// Sessions this tracker has observed at least once: a session's ping that is
+	// already on the wire when the session first shows up (late join, awareness
+	// swap, peer reconnect) is history, never a fresh ripple.
+	const observed = new Set<number>();
 	let live: PeerPing[] = EMPTY_PEER_PINGS;
 	let seeded = false;
 	return {
@@ -308,10 +327,13 @@ export function createPingTracker(now: () => number = Date.now) {
 				state: Record<string, unknown> | undefined,
 				clientId: number,
 			) => {
+				// Our own pings are always deliberate, whatever this tracker knew.
+				const wasKnown = observed.has(clientId) || clientId === selfClientId;
+				observed.add(clientId);
 				const ping = sanitizePing(state?.[PING_FIELD]);
 				if (!ping || lastSeq.get(clientId) === ping.seq) return;
 				lastSeq.set(clientId, ping.seq);
-				if (!seeded) return;
+				if (!seeded || !wasKnown) return;
 				next.push({
 					key: `${clientId}:${ping.seq}`,
 					clientId,
@@ -359,6 +381,9 @@ export function createFirstSightTracker<T>(
 	keyOf: (payload: T) => string,
 ) {
 	const seen = new Map<number, string>();
+	// First sight is per SESSION: whatever a session already carries when it is
+	// first observed is history (late join, awareness swap, peer reconnect).
+	const observed = new Set<number>();
 	let seeded = false;
 	return {
 		observe(
@@ -369,12 +394,15 @@ export function createFirstSightTracker<T>(
 			const fresh: FirstSight<T>[] = [];
 			states.forEach((state, clientId) => {
 				if (clientId === selfClientId || invalidPeers?.has(clientId)) return;
+				const wasKnown = observed.has(clientId);
+				observed.add(clientId);
 				const payload = read(state);
 				if (!payload) return;
 				const key = keyOf(payload);
 				if (seen.get(clientId) === key) return;
 				seen.set(clientId, key);
-				if (seeded) fresh.push({ clientId, sub: subOf(state), payload });
+				if (seeded && wasKnown)
+					fresh.push({ clientId, sub: subOf(state), payload });
 			});
 			seeded = true;
 			return fresh;
@@ -390,15 +418,22 @@ export function createFirstSightTracker<T>(
  * after `debounceMs` so a reconnect flap cancels itself out. The local user's
  * own sub never fires.
  */
+export const PRESENCE_ROSTER_GRACE_MS = 5000;
+
 export function createPresenceEventTracker(
 	options: {
 		selfSub?: string;
 		onEvent: (event: PeerPresenceEvent) => void;
 		debounceMs?: number;
+		rosterGraceMs?: number;
 	} & SignalTimingOptions,
 ) {
-	const { schedule, cancel } = resolveTiming(options);
+	const { now, schedule, cancel } = resolveTiming(options);
 	const debounceMs = options.debounceMs ?? PRESENCE_EVENT_DEBOUNCE_MS;
+	// Peers connect one by one over WebRTC after the tracker starts; everyone
+	// who shows up within this window is the roster we joined, not a "joined".
+	const rosterGraceMs = options.rosterGraceMs ?? PRESENCE_ROSTER_GRACE_MS;
+	const startedAt = now();
 	const announced = new Set<string>();
 	const pending = new Map<
 		string,
@@ -439,7 +474,7 @@ export function createPresenceEventTracker(
 				const sub = subOf(state);
 				if (sub && sub !== options.selfSub) present.add(sub);
 			});
-			if (!seeded) {
+			if (!seeded || now() - startedAt < rosterGraceMs) {
 				seeded = true;
 				for (const sub of present) announced.add(sub);
 				return;

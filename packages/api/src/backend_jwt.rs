@@ -4,7 +4,7 @@
 //! - **Executor tokens**: For execution environments to call back to the API
 //! - **User tokens**: For users to poll execution status
 //! - **Realtime tokens**: For y-webrtc collaboration
-//! - **InteractionResponder tokens**: For users to respond to interactions
+//! - **ChannelResponder tokens**: For clients to push replies into a run's channel
 //!
 //! IMPORTANT: The keypair must be injected at deploy time via environment variables
 //! to support horizontal scaling. All API instances must use the same keypair.
@@ -52,8 +52,8 @@ pub enum TokenType {
     User,
     /// Token for realtime collaboration (y-webrtc)
     Realtime,
-    /// Token for users to respond to interactions
-    InteractionResponder,
+    /// Token for clients to push replies / inbound messages into one run's channel
+    ChannelResponder,
     /// Token for one app to call another app it is connected to.
     /// Carries both the origin and target app id; only valid for the target.
     AppConnection,
@@ -67,7 +67,7 @@ impl TokenType {
             TokenType::Compiler => "flow-like-compiler",
             TokenType::User => "flow-like-user",
             TokenType::Realtime => "y-webrtc",
-            TokenType::InteractionResponder => "flow-like-interaction-responder",
+            TokenType::ChannelResponder => "flow-like-channel-responder",
             TokenType::AppConnection => "flow-like-app-connection",
         }
     }
@@ -75,12 +75,12 @@ impl TokenType {
     /// Get the default TTL in seconds for this token type
     pub fn default_ttl_seconds(&self) -> i64 {
         match self {
-            TokenType::Executor => 24 * 60 * 60,       // 24 hours
-            TokenType::Compiler => 24 * 60 * 60,       // 24 hours
-            TokenType::User => 60 * 60,                // 1 hour
-            TokenType::Realtime => 3 * 60 * 60,        // 3 hours
-            TokenType::InteractionResponder => 5 * 60, // 5 minutes
-            TokenType::AppConnection => 10 * 60,       // 10 minutes
+            TokenType::Executor => 24 * 60 * 60,    // 24 hours
+            TokenType::Compiler => 24 * 60 * 60,    // 24 hours
+            TokenType::User => 60 * 60,             // 1 hour
+            TokenType::Realtime => 3 * 60 * 60,     // 3 hours
+            TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
+            TokenType::AppConnection => 10 * 60,    // 10 minutes
         }
     }
 }
@@ -316,6 +316,40 @@ pub fn issuer() -> &'static str {
     ISSUER
 }
 
+/// Install a throwaway P-256 keypair so signing tests exercise the real sign/verify path.
+/// Serialized: the two halves live in separate `OnceLock`s, so concurrent test threads each
+/// minting their own pair could otherwise install a private key from one and the public key
+/// from another. A no-op once a keypair is present, so it composes with `BACKEND_KEY` runs.
+#[cfg(test)]
+pub(crate) fn init_for_tests() {
+    use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        if is_configured() {
+            return;
+        }
+        let secret = loop {
+            let bytes: [u8; 32] = rand::random();
+            if let Ok(key) = p256::SecretKey::from_slice(&bytes) {
+                break key;
+            }
+        };
+        let private_pem = secret
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("test key encodes as PKCS#8 PEM");
+        let public_pem = secret
+            .public_key()
+            .to_public_key_pem(LineEnding::LF)
+            .expect("test key encodes as SPKI PEM");
+        init(
+            Some(&STANDARD.encode(private_pem.as_bytes())),
+            Some(&STANDARD.encode(public_pem.as_bytes())),
+            None,
+        );
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,9 +368,7 @@ mod tests {
 
     #[test]
     fn test_jwt_roundtrip() {
-        if !is_configured() {
-            return;
-        }
+        init_for_tests();
 
         let time = make_time_claims(TokenType::Executor, None);
         let claims = TestClaims {

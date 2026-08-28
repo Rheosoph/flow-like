@@ -242,3 +242,60 @@ describe("widget-scoped workflow elements", () => {
 		expect(merged["page-1/micro-b"]).toBeDefined();
 	});
 });
+
+describe("payload style compaction", () => {
+	const nullStyle = {
+		className: "row",
+		background: null,
+		padding: null,
+		responsiveOverrides: { sm: { opacity: null, width: "1rem" } },
+	};
+	const styled = (
+		surfaceComponent: SurfaceComponent,
+		style: unknown,
+	): SurfaceComponent =>
+		({ ...surfaceComponent, style }) as unknown as SurfaceComponent;
+
+	test("drops null style fields from components, widget definitions and flattened children", () => {
+		const child = { ...field("field", "x"), style: nullStyle };
+		const components = {
+			host: styled(widgetHost("host", "instance", [child]), nullStyle),
+			text: styled(component("text", { type: "text", hidden: null }), null),
+		};
+
+		const merged = mergeStoredElementValues({}, {}, components, "page-1");
+
+		const compactedStyle = {
+			className: "row",
+			responsiveOverrides: { sm: { width: "1rem" } },
+		};
+		const host = merged["page-1/host"] as Record<string, unknown>;
+		expect(host.style).toEqual(compactedStyle);
+		const definition = (host.component as Record<string, unknown>)
+			.inlineWidgetDef as { components: Record<string, unknown>[] };
+		expect(definition.components[0].style).toEqual(compactedStyle);
+		const flattenedChild = merged["instance/field"] as Record<string, unknown>;
+		expect(flattenedChild.style).toEqual(compactedStyle);
+
+		const text = merged["page-1/text"] as Record<string, unknown>;
+		expect("style" in text).toBe(false);
+		expect((text.component as Record<string, unknown>).hidden).toBeNull();
+	});
+
+	test("leaves the surface components untouched", () => {
+		const host = styled(
+			widgetHost("host", "instance", [
+				{ ...field("field", "x"), style: nullStyle },
+			]),
+			nullStyle,
+		);
+
+		mergeStoredElementValues({}, {}, { host }, "page-1");
+
+		const untouched = host as unknown as Record<string, unknown>;
+		expect(untouched.style).toEqual(nullStyle);
+		const definition = (untouched.component as Record<string, unknown>)
+			.inlineWidgetDef as { components: Record<string, unknown>[] };
+		expect(definition.components[0].style).toEqual(nullStyle);
+	});
+});

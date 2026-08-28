@@ -43,6 +43,10 @@ use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like_catalog::get_catalog;
+use flow_like_types::channel::{
+    Channel as _, ChannelHandle, ChannelPush, ChannelPushKind, InProcessChannel,
+    InProcessPushResult, MAX_TTL,
+};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -269,11 +273,64 @@ pub fn cancel_copilot_chat(request_id: String) -> Result<bool, String> {
     if request_id.is_empty() {
         return Err("FlowPilot cancellation requires a non-empty request id".to_string());
     }
+    Ok(cancel_registered_copilot_run(request_id))
+}
+
+fn cancel_registered_copilot_run(request_id: &str) -> bool {
     let Some(run) = ACTIVE_COPILOT_RUNS.get(request_id) else {
-        return Ok(false);
+        return false;
     };
     run.cancellation.cancel();
-    Ok(true)
+    true
+}
+
+/// Handles on the run's channel live as long as the longest run the desktop hosts (external
+/// agent phases earn wall clock up to hours); registry entries die with the last `Arc`.
+const COPILOT_RUN_CHANNEL_LIFETIME: Duration = MAX_TTL;
+
+/// The `InProcessChannel` a run's frontend tool requests are answered on.
+///
+/// Nested and delegated runs join the chat channel `global_chat` registered under the owning run
+/// id, so one channel per chat run carries every tool reply, steering message and cancel. Runs
+/// without an owner register their own channel under the frontend's stable request id (or a
+/// fresh id when none was supplied).
+async fn frontend_tool_channel(
+    tool_context: Option<&FrontendToolContext>,
+    request_id: Option<&str>,
+) -> Arc<InProcessChannel> {
+    let candidates = [
+        tool_context.and_then(|context| context.run_id.as_deref()),
+        request_id,
+    ];
+    let mut ids = candidates
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let mut first = None;
+    for id in ids.by_ref() {
+        if let Some(channel) = InProcessChannel::lookup(id).await {
+            return channel;
+        }
+        first.get_or_insert(id);
+    }
+    let channel_id = first
+        .map(str::to_string)
+        .unwrap_or_else(flow_like_types::create_id);
+    InProcessChannel::register(channel_id, COPILOT_RUN_CHANNEL_LIFETIME).await
+}
+
+/// Unsolicited channel messages are steering text; anything non-string is forwarded verbatim as
+/// JSON so a malformed push is visible to the model instead of silently dropped.
+fn steering_messages(inbound: Vec<serde_json::Value>) -> Vec<String> {
+    inbound
+        .into_iter()
+        .map(|value| match value {
+            serde_json::Value::String(text) => text,
+            other => other.to_string(),
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -3178,13 +3235,21 @@ async fn run_bits_specialist_chat(
     };
 
     let context = specialist_host_context(tool_context.as_ref(), host_context_guidance.as_deref());
+    let tool_channel = frontend_tool_channel(
+        tool_context.as_ref(),
+        request_id
+            .as_deref()
+            .or(stream_parent_request_id.as_deref()),
+    )
+    .await;
     let frontend_bridge = if nested {
         super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
             app_handle.clone(),
             super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+            tool_channel,
         )
     } else {
-        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone())
+        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone(), tool_channel)
     }
     .with_context(tool_context);
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
@@ -3195,7 +3260,7 @@ async fn run_bits_specialist_chat(
         },
         cancellation: run_cancellation.clone(),
         // A delegated specialist is not steerable; the user steers the orchestrator that called it.
-        run_id: None,
+        steerable: false,
     });
 
     let on_token = move |token: String| {
@@ -3562,13 +3627,21 @@ pub async fn copilot_chat(
     } else {
         None
     };
+    let tool_channel = frontend_tool_channel(
+        tool_context.as_ref(),
+        request_id
+            .as_deref()
+            .or(stream_parent_request_id.as_deref()),
+    )
+    .await;
     let runtime_frontend_bridge = if nested {
         super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
             app_handle.clone(),
             super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+            tool_channel,
         )
     } else {
-        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone())
+        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone(), tool_channel)
     }
     .with_context(tool_context);
     let runtime_bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
@@ -3576,7 +3649,7 @@ pub async fn copilot_chat(
         tool_set: FrontendPlatformToolSet::BoardRuntime,
         cancellation: run_cancellation.clone(),
         // Board runtime tools belong to a board/widget run, which is not steerable.
-        run_id: None,
+        steerable: false,
     });
 
     let mut run_summary = WorkflowRunSummaryEmitter::new(
@@ -3885,34 +3958,83 @@ impl GlobalChatRunBuffer {
 struct GlobalChatRun {
     buffer: StdMutex<GlobalChatRunBuffer>,
     live: StdMutex<Option<Channel<String>>>,
-    /// Instructions the user sent while this turn was generating, waiting to be folded in at the
-    /// next round boundary. Drained by the backend, never replayed.
-    steering: StdMutex<Vec<String>>,
+    /// The run's `InProcessChannel`, registered under the run id. Tool replies, steering text
+    /// (unsolicited inbound pushes, folded in at the next round boundary) and cancel all arrive
+    /// here through `channel_push`; kept alive for the resumable TTL so a client can still take
+    /// back unconsumed steering after the turn ended.
+    channel: Arc<InProcessChannel>,
     done_tx: watch::Sender<bool>,
     done_rx: watch::Receiver<bool>,
 }
 
-/// Cap on unconsumed steering messages per run. A user hammering the composer while a slow round
-/// is in flight must not grow the prompt without bound; the oldest are dropped, since the most
-/// recent instruction is the one that reflects what they now want.
-const GLOBAL_CHAT_MAX_PENDING_STEERING: usize = 8;
+/// Announces the channel a `global_chat` run answers on, so the frontend can push through
+/// `channel_push` with the channel-level handle (steer/cancel) as well as per-request handles.
+pub const GLOBAL_CHAT_CHANNEL_EVENT: &str = "flowpilot://global-chat-channel";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalChatChannelAnnouncement {
+    run_id: String,
+    channel: ChannelHandle,
+}
 
 /// Registry of live global-chat runs, keyed by the assistant message id the frontend generated.
 static GLOBAL_CHAT_RUNS: LazyLock<DashMap<String, Arc<GlobalChatRun>>> =
     LazyLock::new(DashMap::new);
 
 /// Register a new run and take ownership of its initial live channel.
-fn register_global_chat_run(run_id: &str, live: Channel<String>) -> Arc<GlobalChatRun> {
+fn register_global_chat_run(
+    run_id: &str,
+    live: Channel<String>,
+    channel: Arc<InProcessChannel>,
+) -> Arc<GlobalChatRun> {
     let (done_tx, done_rx) = watch::channel(false);
     let run = Arc::new(GlobalChatRun {
         buffer: StdMutex::new(GlobalChatRunBuffer::default()),
         live: StdMutex::new(Some(live)),
-        steering: StdMutex::new(Vec::new()),
+        channel,
         done_tx,
         done_rx,
     });
     GLOBAL_CHAT_RUNS.insert(run_id.to_string(), run.clone());
     run
+}
+
+/// Unregister a channel unless a newer channel has since claimed the same id (a retry of the
+/// same message re-registers under it and must keep its registry entry).
+async fn release_run_channel(channel: &Arc<InProcessChannel>) {
+    let registered = InProcessChannel::lookup(channel.channel_id()).await;
+    if registered.is_none_or(|registered| Arc::ptr_eq(&registered, channel)) {
+        channel.close().await;
+    }
+}
+
+/// A `cancel` pushed onto the run's channel must stop the run the way `cancel_copilot_chat`
+/// does — the SDK/CLI backends only observe the run token, not the channel flag.
+fn forward_channel_cancel_to_run(
+    run_id: String,
+    channel: Arc<InProcessChannel>,
+    mut done_rx: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if *done_rx.borrow() {
+                return;
+            }
+            if channel.is_cancelled().await {
+                cancel_registered_copilot_run(&run_id);
+                return;
+            }
+            tokio::select! {
+                changed = done_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+            }
+        }
+    });
 }
 
 /// A `Channel<String>` whose sends are mirrored into the run (buffer + live forward) instead of
@@ -3942,65 +4064,73 @@ fn finish_global_chat_run(run_id: String, run: &Arc<GlobalChatRun>) {
         tokio::time::sleep(Duration::from_secs(GLOBAL_CHAT_RUN_TTL_SECS)).await;
         // Only evict if THIS run is still registered — a retry / regeneration of the same message
         // id may have re-registered the run_id meanwhile, and we must not drop that newer run.
-        GLOBAL_CHAT_RUNS.remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run));
+        if GLOBAL_CHAT_RUNS
+            .remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run))
+            .is_some()
+        {
+            release_run_channel(&run.channel).await;
+        }
     });
 }
 
+fn global_chat_run(run_id: &str) -> Option<Arc<GlobalChatRun>> {
+    GLOBAL_CHAT_RUNS
+        .get(run_id)
+        .map(|entry| entry.value().clone())
+}
+
 /// Queue a user instruction for a turn that is already generating. Returns false when the run is
-/// unknown or already finished, so the frontend can restore the text instead of silently losing it.
+/// unknown, already finished, or its inbound buffer is full, so the frontend can restore the text
+/// instead of silently losing it. Equivalent to `channel_push` with kind `inbound` on the run's
+/// channel.
 #[tauri::command]
-pub fn global_chat_steer(run_id: String, message: String) -> Result<bool, String> {
+pub async fn global_chat_steer(run_id: String, message: String) -> Result<bool, String> {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return Ok(false);
     }
-    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
-        Some(entry) => entry.value().clone(),
-        None => return Ok(false),
+    let Some(run) = global_chat_run(&run_id) else {
+        return Ok(false);
     };
     // A finished run would never drain the queue; refusing is what lets the UI say so.
     if *run.done_rx.borrow() {
         return Ok(false);
     }
-    let mut steering = run
-        .steering
-        .lock()
-        .map_err(|_| "The steering queue lock was poisoned.".to_string())?;
-    steering.push(trimmed.to_string());
-    let overflow = steering
-        .len()
-        .saturating_sub(GLOBAL_CHAT_MAX_PENDING_STEERING);
-    if overflow > 0 {
-        steering.drain(0..overflow);
-    }
-    Ok(true)
+    let result = run
+        .channel
+        .push(ChannelPush {
+            channel_id: run_id,
+            request_id: None,
+            kind: ChannelPushKind::Inbound,
+            value: serde_json::Value::String(trimmed.to_string()),
+        })
+        .await;
+    Ok(result == InProcessPushResult::Delivered)
 }
 
 /// Hand back instructions the run never got to consume — a turn that ended before reaching a
 /// round/idle boundary, or an external CLI run that never restarted a phase. The frontend re-sends
 /// them as their own turn, so a steering message is never silently swallowed.
 #[tauri::command]
-pub fn global_chat_take_unconsumed_steering(run_id: String) -> Vec<String> {
-    drain_global_chat_steering(&run_id)
+pub async fn global_chat_take_unconsumed_steering(run_id: String) -> Vec<String> {
+    drain_global_chat_steering(&run_id).await
 }
 
-/// Take everything queued for a run, leaving the queue empty. Unknown runs drain to nothing.
-fn drain_global_chat_steering(run_id: &str) -> Vec<String> {
-    let Some(entry) = GLOBAL_CHAT_RUNS.get(run_id) else {
-        return Vec::new();
-    };
-    let run = entry.value().clone();
-    drop(entry);
-    let Ok(mut steering) = run.steering.lock() else {
-        return Vec::new();
-    };
-    std::mem::take(&mut *steering)
+/// Take everything pushed onto a run's channel since the last drain. Unknown runs drain to nothing.
+async fn drain_global_chat_steering(run_id: &str) -> Vec<String> {
+    match global_chat_run(run_id) {
+        Some(run) => steering_messages(run.channel.drain_inbound().await),
+        None => Vec::new(),
+    }
 }
 
 #[derive(Serialize)]
 pub struct GlobalChatResumeResult {
     /// True when a live/recent run was found and its transcript replayed onto the new channel.
     pub attached: bool,
+    /// Channel-level handle of the re-attached run for `channel_push` (steer/cancel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelHandle>,
 }
 
 /// Re-attach a reloaded webview to an in-flight (or just-finished) `global_chat` run: swaps the
@@ -4013,9 +4143,11 @@ pub async fn global_chat_resume(
     run_id: String,
     channel: Channel<String>,
 ) -> Result<GlobalChatResumeResult, String> {
-    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
-        Some(entry) => entry.value().clone(),
-        None => return Ok(GlobalChatResumeResult { attached: false }),
+    let Some(run) = global_chat_run(&run_id) else {
+        return Ok(GlobalChatResumeResult {
+            attached: false,
+            channel: None,
+        });
     };
 
     {
@@ -4033,7 +4165,10 @@ pub async fn global_chat_resume(
         let _ = done_rx.wait_for(|done| *done).await;
     }
 
-    Ok(GlobalChatResumeResult { attached: true })
+    Ok(GlobalChatResumeResult {
+        attached: true,
+        channel: Some(run.channel.handle()),
+    })
 }
 
 /// Reuses the same backend selection as `copilot_chat` (profile Bits models plus the GitHub Copilot,
@@ -4132,9 +4267,27 @@ pub async fn global_chat(
     // Register the run (if the frontend gave a run id) and stream through a mirror channel that
     // buffers every chunk + forwards to the live webview channel, so a reload can re-attach and
     // replay via `global_chat_resume`. Without a run id, stream straight to the raw channel.
+    // The run's channel is registered under the frontend run id before any backend starts, so
+    // every nested/delegated run joins it and the frontend can address it from the first frame.
+    let chat_channel = InProcessChannel::register(
+        run_id.clone().unwrap_or_else(flow_like_types::create_id),
+        COPILOT_RUN_CHANNEL_LIFETIME,
+    )
+    .await;
     let run = run_id
         .as_ref()
-        .map(|id| register_global_chat_run(id, channel.clone()));
+        .map(|id| register_global_chat_run(id, channel.clone(), chat_channel.clone()));
+    if let (Some(run_id), Some(run)) = (run_id.as_ref(), run.as_ref()) {
+        forward_channel_cancel_to_run(run_id.clone(), chat_channel.clone(), run.done_rx.clone());
+        crate::utils::emit_to_ui(
+            &app_handle,
+            GLOBAL_CHAT_CHANNEL_EVENT,
+            GlobalChatChannelAnnouncement {
+                run_id: run_id.clone(),
+                channel: chat_channel.handle(),
+            },
+        );
+    }
     let sink = match &run {
         Some(run) => global_chat_run_channel(run.clone()),
         None => channel,
@@ -4243,12 +4396,13 @@ pub async fn global_chat(
                     bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
                         app_handle.clone(),
                         super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+                        chat_channel.clone(),
                     )
                     .with_context(Some(global_tool_context)),
                     tool_set: FrontendPlatformToolSet::Global,
                     cancellation: run_cancellation.clone(),
-                    // Lets the core loop drain this run's steering queue between tool rounds.
-                    run_id: run_id.clone(),
+                    // Lets the core loop drain this run's channel inbox between tool rounds.
+                    steerable: true,
                 });
 
                 let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
@@ -4302,8 +4456,10 @@ pub async fn global_chat(
 
     // Mark the run finished (unblocking any resumer waiting on completion) and schedule its removal
     // after the resumable TTL. Runs on both the success and error paths so the registry never leaks.
-    if let (Some(run_id), Some(run)) = (run_id, run) {
-        finish_global_chat_run(run_id, &run);
+    match (run_id, run) {
+        (Some(run_id), Some(run)) => finish_global_chat_run(run_id, &run),
+        // Nothing can address an unregistered run after it ends; drop the channel right away.
+        _ => release_run_channel(&chat_channel).await,
     }
 
     result
@@ -4433,21 +4589,22 @@ struct DesktopPlatformBridge {
     bridge: super::frontend_tool_bridge::FrontendToolBridge,
     tool_set: FrontendPlatformToolSet,
     cancellation: CancellationToken,
-    /// Set for global-chat runs, which are steerable; board/widget runs leave it None.
-    run_id: Option<String>,
+    /// True for global-chat runs, which drain steering text pushed onto their channel;
+    /// board/widget runs share a channel with their owner and must not consume its inbox.
+    steerable: bool,
 }
 
 #[async_trait]
 impl PlatformToolBridge for DesktopPlatformBridge {
     async fn drain_steering(&self) -> Vec<String> {
-        match &self.run_id {
-            Some(run_id) => drain_global_chat_steering(run_id),
-            None => Vec::new(),
+        if !self.steerable {
+            return Vec::new();
         }
+        steering_messages(self.bridge.channel().drain_inbound().await)
     }
 
     async fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
+        self.cancellation.is_cancelled() || self.bridge.channel().is_cancelled().await
     }
 
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
@@ -5223,6 +5380,7 @@ async fn external_code_agent_chat_internal(
     };
     // Started after the same-board gate so serialized queue time does not consume the budget.
     let nested_wall_clock_deadline = nested.then(|| Instant::now() + NESTED_RUN_WALL_CLOCK_BUDGET);
+    let tool_channel = frontend_tool_channel(tool_context.as_ref(), request_id.as_deref()).await;
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -5232,6 +5390,7 @@ async fn external_code_agent_chat_internal(
         tool_context,
         memory,
         &raw_user_prompt,
+        tool_channel,
     );
     if read_only {
         tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
@@ -5674,7 +5833,7 @@ async fn external_code_agent_chat_internal(
         // still queued when the run ends is handed back to the frontend and re-sent as its own
         // turn, so a steer is never silently dropped on a single-phase run.
         if let Some(run_id) = request_id.as_deref() {
-            let steering = drain_global_chat_steering(run_id);
+            let steering = drain_global_chat_steering(run_id).await;
             if !steering.is_empty() {
                 repair_request.push_str(&format!(
                     "\n\nThe user sent this while you were working. Treat it as part of the current request and adjust course now:\n{}",
@@ -5970,6 +6129,7 @@ async fn copilot_sdk_chat_internal(
     run_summary.attach_workflow_state(workflow_state.clone());
     run_summary.record_phase();
 
+    let tool_channel = frontend_tool_channel(tool_context.as_ref(), request_id.as_deref()).await;
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -5979,6 +6139,7 @@ async fn copilot_sdk_chat_internal(
         tool_context,
         memory,
         &raw_user_prompt,
+        tool_channel,
     );
     if read_only {
         tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
@@ -6698,7 +6859,7 @@ async fn copilot_sdk_chat_internal(
                     // process never answers. Anything the user typed while this turn ran gets
                     // folded in here, before any host-generated continuation is considered.
                     if let Some(run_id) = global_run_id.as_deref() {
-                        let steering = drain_global_chat_steering(run_id);
+                        let steering = drain_global_chat_steering(run_id).await;
                         if !steering.is_empty() {
                             let prompt = format!(
                                 "The user sent this while you were working. Treat it as part of the current request and continue accordingly:\n{}",
@@ -8090,6 +8251,7 @@ fn build_flowpilot_sdk_tools(
     tool_context: Option<FrontendToolContext>,
     memory: Option<Arc<AssistantMemory>>,
     user_prompt: &str,
+    channel: Arc<InProcessChannel>,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
         copilot_sdk_tools::{
@@ -8109,9 +8271,9 @@ fn build_flowpilot_sdk_tools(
     // Build the runtime bridge once so every path carries the owning run context. Global and
     // nested tools share the global event listener; ordinary board tools keep the board listener.
     let runtime_bridge = if global || nested {
-        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT)
+        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT, channel)
     } else {
-        FrontendToolBridge::new(app_handle)
+        FrontendToolBridge::new(app_handle, channel)
     }
     .with_context(tool_context);
 

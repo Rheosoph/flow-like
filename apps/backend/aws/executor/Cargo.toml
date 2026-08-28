@@ -6,7 +6,7 @@ description = "Flow-Like AWS Lambda Executor with Streaming Support"
 
 [dependencies]
 flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
-flow-like-executor = { workspace = true, features = ["server-local-ml"] }
+flow-like-executor = { workspace = true, features = ["server-local-ml", "channel-aws"] }
 flow-like-types.workspace = true
 lambda_http.workspace = true
 mimalloc.workspace = true

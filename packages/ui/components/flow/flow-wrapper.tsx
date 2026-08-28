@@ -103,9 +103,13 @@ export function FlowWrapper({
 					const pointerEvent = event.activatorEvent as
 						| MouseEvent
 						| PointerEvent;
+					// Client coordinates, not screen: every consumer feeds this to
+					// `screenToFlowPosition`, which measures against the viewport. Screen
+					// coordinates put the node off by the browser chrome and the monitor
+					// offset, which is why drops used to land nowhere near the cursor.
 					const screenPosition = {
-						x: pointerEvent.screenX + event.delta.x,
-						y: pointerEvent.screenY + event.delta.y,
+						x: pointerEvent.clientX + event.delta.x,
+						y: pointerEvent.clientY + event.delta.y,
 					};
 
 					// Function layer dropped on the canvas -> place CallFunction node directly
@@ -115,6 +119,21 @@ export function FlowWrapper({
 								detail: {
 									type: "function-layer",
 									layerId: data.layerId,
+									screenPosition,
+								},
+							}),
+						);
+						return;
+					}
+
+					// Stored file dropped on the canvas -> mint the path nodes that address it
+					if (data.type === "storage-path") {
+						document.dispatchEvent(
+							new CustomEvent("flow-drop", {
+								detail: {
+									type: "storage-path",
+									scope: data.scope,
+									path: data.path,
 									screenPosition,
 								},
 							}),

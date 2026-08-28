@@ -139,25 +139,31 @@ export const FlowChat = memo(function FlowChat({
 	onlineCount,
 	storageKey,
 }: Readonly<FlowChatProps>) {
-	const { t } = useTranslation("flow");
+	const { t, i18n } = useTranslation("flow");
 	const title = t("boardChat", "Board Chat");
 
 	// The divider position is fixed at open time; what the user sees while the
 	// chat is open is persisted as seen, so the next open starts after it.
 	const [dividerLastSeen] = useState(() => readLastSeen(storageKey));
-	useEffect(() => {
+	// Only what the reader scrolled to counts as seen: a message that arrived
+	// while they were reading older history keeps the "New" divider next time.
+	const latestSeenRef = useRef<number | undefined>(undefined);
+	const markSeenToBottom = useCallback(() => {
 		const latest = messages[messages.length - 1]?.timestamp;
-		if (latest !== undefined) writeLastSeen(storageKey, latest);
+		if (latest === undefined) return;
+		latestSeenRef.current = latest;
+		writeLastSeen(storageKey, latest);
 	}, [messages, storageKey]);
 
 	const timeline = useMemo(
 		() =>
 			buildChatTimeline(messages, {
 				now: Date.now(),
+				locale: i18n.language,
 				lastSeenTimestamp: dividerLastSeen,
 				sub,
 			}),
-		[messages, dividerLastSeen, sub],
+		[messages, dividerLastSeen, sub, i18n.language],
 	);
 
 	const listRef = useRef<HTMLDivElement>(null);
@@ -170,7 +176,8 @@ export const FlowChat = memo(function FlowChat({
 		if (list) list.scrollTop = list.scrollHeight;
 		atBottomRef.current = true;
 		setPendingNew(0);
-	}, []);
+		markSeenToBottom();
+	}, [markSeenToBottom]);
 
 	useLayoutEffect(() => {
 		scrollToBottom();
@@ -185,14 +192,20 @@ export const FlowChat = memo(function FlowChat({
 		else setPendingNew((count) => count + added);
 	}, [messages, sub, scrollToBottom]);
 
-	const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-		const list = event.currentTarget;
-		const atBottom =
-			list.scrollHeight - list.scrollTop - list.clientHeight <=
-			CHAT_AT_BOTTOM_PX;
-		atBottomRef.current = atBottom;
-		if (atBottom) setPendingNew(0);
-	}, []);
+	const handleScroll = useCallback(
+		(event: UIEvent<HTMLDivElement>) => {
+			const list = event.currentTarget;
+			const atBottom =
+				list.scrollHeight - list.scrollTop - list.clientHeight <=
+				CHAT_AT_BOTTOM_PX;
+			atBottomRef.current = atBottom;
+			if (atBottom) {
+				setPendingNew(0);
+				markSeenToBottom();
+			}
+		},
+		[markSeenToBottom],
+	);
 
 	const [input, setInput] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -266,12 +279,17 @@ export const FlowChat = memo(function FlowChat({
 				event.preventDefault();
 				event.stopPropagation();
 				handleSend();
-			} else if (event.key === "Escape") {
-				event.stopPropagation();
-				onClose();
 			}
 		},
-		[handleSend, onClose],
+		[handleSend],
+	);
+	const handleSectionKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLElement>) => {
+			if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+			event.stopPropagation();
+			onClose();
+		},
+		[onClose],
 	);
 
 	const insertEmoji = useCallback(
@@ -302,7 +320,8 @@ export const FlowChat = memo(function FlowChat({
 	return (
 		<section
 			aria-label={title}
-			className="flex h-[26rem] max-h-[70vh] w-[22rem] flex-col overflow-hidden rounded-md border bg-background text-foreground shadow-lg"
+			onKeyDown={handleSectionKeyDown}
+			className="flex h-[26rem] max-h-[70vh] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-md border bg-background text-foreground shadow-lg"
 		>
 			<header className="flex h-9 shrink-0 items-center gap-1.5 border-b pl-3 pr-1.5">
 				<MessageCircleIcon
@@ -412,7 +431,6 @@ export const FlowChat = memo(function FlowChat({
 				</div>
 				<div className="mt-1 flex items-center gap-1">
 					<div
-						role="toolbar"
 						aria-label={t("quickReactions", "Quick reactions")}
 						className="flex items-center gap-0.5"
 					>
@@ -462,7 +480,7 @@ const TimelineItem = memo(function TimelineItem({
 	resolveNodeName?: (nodeId: string) => string | undefined;
 	onFocusNode?: (nodeId: string) => void;
 }>) {
-	const { t } = useTranslation("flow");
+	const { t, i18n } = useTranslation("flow");
 	if (item.type === "day") {
 		return <DayDivider separator={item.separator} />;
 	}
@@ -548,7 +566,9 @@ const MessageGroup = memo(function MessageGroup({
 					<div className="flex items-baseline gap-1.5 leading-4">
 						<span
 							className="truncate text-xs font-medium"
-							style={{ color: identity.color }}
+							style={{
+								color: `color-mix(in oklch, ${identity.color} 55%, var(--foreground))`,
+							}}
 						>
 							{name}
 						</span>
@@ -681,7 +701,7 @@ const NodeChip = memo(function NodeChip({
 				<button
 					type="button"
 					onClick={() => onFocusNode(nodeId)}
-					aria-label={t("focusNode", "Focus node")}
+					aria-label={t("focusNodeNamed", "Focus {{name}}", { name: label })}
 					className={cn(chipClass, "hover:bg-primary/20")}
 				>
 					{label}

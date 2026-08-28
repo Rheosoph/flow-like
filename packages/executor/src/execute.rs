@@ -568,6 +568,29 @@ pub async fn execute(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
+    let channel = match crate::channel::build_run_channel(
+        request.channel.as_ref(),
+        &claims.run_id,
+        &claims.callback_url,
+        context_token.as_deref(),
+    )
+    .await
+    {
+        Ok(channel) => channel,
+        Err(error) => {
+            let error = ExecutorError::RunInit(error.to_string());
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Setup,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
+
     let run = InternalRun::from_template(
         &request.app_id,
         template.clone(),
@@ -581,6 +604,7 @@ pub async fn execute(
         context_token,
         oauth_tokens,
         Some(claims.run_id.clone()),
+        Some(channel.clone()),
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()));
@@ -647,6 +671,8 @@ pub async fn execute(
     } else {
         Some(execution_future.as_mut().await)
     };
+
+    channel.close().await;
 
     if let Some(error) = lease_failure {
         drop(execution_future);

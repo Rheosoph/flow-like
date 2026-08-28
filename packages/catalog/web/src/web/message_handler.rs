@@ -494,6 +494,7 @@ mod tests {
             None,
             None,
             Arc::new(AHashMap::new()),
+            None,
         )
         .await
     }

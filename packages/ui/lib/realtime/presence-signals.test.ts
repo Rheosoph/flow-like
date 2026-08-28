@@ -112,6 +112,45 @@ describe("presence signals (rule 2: ids, bounded numbers, closed enums)", () => 
 		).toBeUndefined();
 	});
 
+	test("numeric bounds: coordinates, kinds, counts, timestamps, paths and zoom are clamped or refused", () => {
+		const far = sanitizeDrag({ nodes: [{ id: ID, x: 1e12, y: -1e12 }], ts: 1 });
+		expect(far?.nodes[0]).toEqual({ id: ID, x: 1e7, y: -1e7 });
+		const manyKinds = sanitizeLastEdit({
+			kinds: Object.values(ICommandType),
+			count: 1e9,
+			ts: -5,
+		});
+		expect(manyKinds?.kinds.length).toBe(8);
+		expect(manyKinds?.count).toBe(100_000);
+		expect(manyKinds?.ts).toBe(0);
+		expect(
+			sanitizeLastRun({ runId: ID, status: "ok", executed: 1e12, ts: 1 })
+				?.executed,
+		).toBe(10_000_000);
+		expect(
+			wireLayerPath(Array.from({ length: 17 }, () => ID).join("/")),
+		).toBeUndefined();
+		expect(
+			sanitizeSummon({
+				x: 0,
+				y: 0,
+				zoom: 0.001,
+				layerPath: "root",
+				seq: 1,
+				ts: 1,
+			})?.zoom,
+		).toBe(0.05);
+		expect(
+			sanitizePing({
+				x: Number.POSITIVE_INFINITY,
+				y: 0,
+				layerPath: "root",
+				seq: 1,
+				ts: 1,
+			}),
+		).toBeUndefined();
+	});
+
 	test("chat typing is a timestamp and nothing else", () => {
 		expect(sanitizeChatTyping({ ts: 7, text: "hel" })).toEqual({ ts: 7 });
 		expect(sanitizeChatTyping({ ts: 0 })).toBeUndefined();

@@ -35,6 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::channel::ChannelIssuer;
 use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
 use crate::entity::role;
@@ -347,6 +348,8 @@ pub struct State {
     pub provider: Arc<ModelProviderConfiguration>,
     pub dispatcher: Arc<Dispatcher>,
     pub compilation_dispatcher: Arc<CompilationDispatcher>,
+    /// Mints run ⇄ client channel credentials (`CHANNEL_TRANSPORT`).
+    pub channels: Arc<ChannelIssuer>,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
@@ -391,6 +394,10 @@ pub struct State {
     /// (app, board, version|etag, registry fingerprint). Entries are
     /// content-addressed, so they never go stale — TTL only bounds memory.
     pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
+    /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
+    /// like `compiled_artifact_cache`, so entries never go stale.
+    pub prerun_manifest_cache:
+        moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
@@ -727,9 +734,20 @@ impl State {
             None
         };
 
+        #[cfg(feature = "aws")]
+        let aws_client = Arc::new(aws_config::load_from_env().await);
+
+        #[cfg(feature = "aws")]
+        let channels = ChannelIssuer::from_env(&secrets, aws_client.clone()).await;
+        #[cfg(not(feature = "aws"))]
+        let channels = ChannelIssuer::from_env(&secrets).await;
+        let channels = Arc::new(channels);
+
         // Initialize dispatcher once with env config (caches AWS/Redis clients)
         let dispatch_config = DispatchConfig::from_env();
-        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone())).await;
+        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone()))
+            .await
+            .with_channel_issuer(channels.clone());
 
         // Initialize compilation dispatcher (mirrors execution dispatcher pattern)
         let compilation_config = CompilationDispatchConfig::from_env();
@@ -842,12 +860,13 @@ impl State {
             stripe_client,
             mail_client,
             #[cfg(feature = "aws")]
-            aws_client: Arc::new(aws_config::load_from_env().await),
+            aws_client,
             catalog,
             provider: Arc::new(provider),
             registry: Arc::new(registry),
             dispatcher: Arc::new(dispatcher),
             compilation_dispatcher,
+            channels,
             permission_cache: moka::sync::Cache::builder()
                 .max_capacity(32 * 1024 * 1024)
                 .time_to_live(Duration::from_secs(120))
@@ -868,6 +887,11 @@ impl State {
             compiled_artifact_cache: moka::sync::Cache::builder()
                 .max_capacity(16_384)
                 .time_to_idle(Duration::from_secs(12 * 60 * 60))
+                .build(),
+            prerun_manifest_cache: moka::sync::Cache::builder()
+                .max_capacity(4_096)
+                .time_to_idle(Duration::from_secs(24 * 60 * 60))
+                .support_invalidation_closures()
                 .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)

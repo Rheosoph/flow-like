@@ -68,14 +68,32 @@ export function FlowPingsLayer({
 		store.getSnapshot,
 		store.getSnapshot,
 	);
-	if (pings.length === 0) return null;
+	const { t } = useTranslation("flow");
+	// The live region must exist BEFORE a ping lands or screen readers never
+	// hear it, so it is rendered even while there is nothing to show.
+	const latest = pings[pings.length - 1];
+	const latestName = latest
+		? latest.sub === sub
+			? t("you", "You")
+			: ((latest.sub ? peerUsers.get(latest.sub)?.truncatedName : undefined) ??
+				t("common:user", "User"))
+		: undefined;
 	return (
-		<FlowPings
-			pings={pings}
-			currentLayerPath={currentLayerPath}
-			peerUsers={peerUsers}
-			sub={sub}
-		/>
+		<>
+			<span className="sr-only" aria-live="polite">
+				{latestName
+					? t("presencePingFrom", "{{name}} pinged here", { name: latestName })
+					: ""}
+			</span>
+			{pings.length > 0 && (
+				<FlowPings
+					pings={pings}
+					currentLayerPath={currentLayerPath}
+					peerUsers={peerUsers}
+					sub={sub}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -192,7 +210,7 @@ const PingRipple = memo(function PingRipple({ ping }: { ping: PingDisplay }) {
 				opacity: ping.opacity,
 			}}
 		>
-			<span className="sr-only">
+			<span aria-hidden="true" className="sr-only">
 				{t("presencePingFrom", "{{name}} pinged here", { name: ping.name })}
 			</span>
 			<span

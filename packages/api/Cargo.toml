@@ -21,6 +21,7 @@ flow-like-catalog-core.workspace = true
 uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
+flow-like-channels.workspace = true
 flow-like-wasm-schema = { workspace = true, features = ["bundle", "nodes", "openapi"] }
 tempfile = "3"
 serde_json.workspace = true
@@ -63,6 +64,7 @@ aws-sdk-lambda = {workspace = true, optional=true}
 aws-sdk-sqs = {workspace = true, optional=true}
 aws-sdk-sns = { version = "1.83.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
+aws-sdk-iotdataplane = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 # -----
 
 # ----- Azure dependencies ----
@@ -156,6 +158,10 @@ cosmos = ["dep:flow-like-azure-data", "dep:tokio"]
 firestore = ["dep:flow-like-gcp-data", "dep:tokio"]
 s3 = ["aws-config", "aws-sdk-s3"]
 sentry = ["dep:sentry"]
+# Channel transports (`CHANNEL_TRANSPORT`): credential minting + push forwarding per cloud.
+channel-aws = ["aws", "flow-like-channels/aws", "dep:aws-sdk-iotdataplane"]
+channel-azure = ["flow-like-channels/azure"]
+channel-gcp = ["flow-like-channels/gcp"]
 full=[
     "aws",
     "azure",
@@ -174,6 +180,9 @@ full=[
     "pubsub",
     "s3",
     "sentry",
+    "channel-aws",
+    "channel-azure",
+    "channel-gcp",
 ]
 urlencoding = []
 

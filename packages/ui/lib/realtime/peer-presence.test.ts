@@ -153,6 +153,61 @@ describe("peer activity tracker", () => {
 		expect(tracker.lastActiveAt("peer")).toBeUndefined();
 	});
 
+	test("typing predicates fire only for CHANGES on sessions we already knew, and expire", () => {
+		let clock = 1_000;
+		const tracker = createPeerActivityTracker(() => clock);
+		const cursor = (column: number, ts: number) => ({
+			anchor: { id: NODE_A, kind: "node" },
+			dLine: 0,
+			column,
+			ts,
+		});
+		const states = new Map<number, Record<string, unknown>>([
+			[
+				2,
+				{ sub: "peer", flowscriptCursor: cursor(1, 1), chatTyping: { ts: 1 } },
+			],
+		]);
+		tracker.observe(states, 1);
+		// Present at first sight: history, not typing.
+		expect(tracker.isTypingInEditor("peer")).toBe(false);
+		expect(tracker.isTypingInChat("peer")).toBe(false);
+		// A session that appears later with a cursor is history too.
+		clock = 2_000;
+		states.set(3, { sub: "late", flowscriptCursor: cursor(4, 1_900) });
+		tracker.observe(states, 1);
+		expect(tracker.isTypingInEditor("late")).toBe(false);
+		// A change on a known session is typing, until the TTL lapses.
+		clock = 3_000;
+		states.set(2, {
+			sub: "peer",
+			flowscriptCursor: cursor(2, 2_900),
+			chatTyping: { ts: 2_950 },
+		});
+		tracker.observe(states, 1);
+		expect(tracker.isTypingInEditor("peer")).toBe(true);
+		expect(tracker.isTypingInChat("peer")).toBe(true);
+		clock = 3_000 + 3_500;
+		expect(tracker.isTypingInEditor("peer")).toBe(false);
+		expect(tracker.isTypingInChat("peer")).toBe(false);
+	});
+
+	test("away flips after five quiet minutes and resets on any session change", () => {
+		let clock = 10_000;
+		const tracker = createPeerActivityTracker(() => clock);
+		const states = new Map<number, Record<string, unknown>>([
+			[2, { sub: "peer", cursor: { x: 0, y: 0 } }],
+		]);
+		tracker.observe(states, 1);
+		expect(tracker.isAway("peer")).toBe(false);
+		clock += 5 * 60_000;
+		expect(tracker.isAway("peer")).toBe(true);
+		states.set(2, { sub: "peer", cursor: { x: 1, y: 0 } });
+		tracker.observe(states, 1);
+		expect(tracker.isAway("peer")).toBe(false);
+		expect(tracker.isAway("nobody")).toBe(false);
+	});
+
 	test("a canvas click already on the wire at first sight is not fresh; a new one is", () => {
 		let clock = 1_000;
 		const tracker = createPeerActivityTracker(() => clock);

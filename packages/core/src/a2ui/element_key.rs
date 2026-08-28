@@ -37,15 +37,53 @@ pub fn resolve_element_key<'a>(
 }
 
 fn is_widget_host(elements: &Map<String, Value>, prefix: &str) -> bool {
+    host_for_prefix(elements, prefix).is_some()
+}
+
+fn is_widget_instance(value: &Value) -> bool {
+    value
+        .get("component")
+        .and_then(|component| component.get("type"))
+        .and_then(Value::as_str)
+        == Some("widgetInstance")
+}
+
+/// The widget host a child prefix names: its instance id, or its own component id.
+fn host_for_prefix<'a>(elements: &'a Map<String, Value>, prefix: &str) -> Option<&'a Value> {
     let host_suffix = format!("/{prefix}");
-    elements.iter().any(|(key, value)| {
-        (key == prefix || key.ends_with(&host_suffix))
-            && value
-                .get("component")
-                .and_then(|c| c.get("type"))
-                .and_then(|t| t.as_str())
-                == Some("widgetInstance")
-    })
+    elements
+        .iter()
+        .find(|(key, value)| {
+            is_widget_instance(value)
+                && (key.as_str() == prefix
+                    || key.ends_with(&host_suffix)
+                    || value
+                        .get("component")
+                        .and_then(|component| component.get("instanceId"))
+                        .and_then(Value::as_str)
+                        == Some(prefix))
+        })
+        .map(|(_, value)| value)
+}
+
+/// A widget child addressed as `instanceId/childId` that the payload carries only inside its
+/// host's inline definition, returned as the host stores it (`{id, component, style}`).
+pub fn resolve_in_host_defs(
+    elements: &Map<String, Value>,
+    element_id: &str,
+) -> Option<(String, Value)> {
+    let (prefix, child_id) = element_id.split_once('/')?;
+    if prefix.is_empty() || child_id.is_empty() {
+        return None;
+    }
+    let child = host_for_prefix(elements, prefix)?
+        .get("component")?
+        .get("inlineWidgetDef")?
+        .get("components")?
+        .as_array()?
+        .iter()
+        .find(|child| child.get("id").and_then(Value::as_str) == Some(child_id))?;
+    Some((element_id.to_string(), child.clone()))
 }
 
 #[cfg(test)]
@@ -117,5 +155,45 @@ mod tests {
         let map = elements(&[("page-a/progress", "progress")]);
         assert_eq!(resolve_element_key(&map, "page-b/banner"), None);
         assert_eq!(resolve_element_key(&map, "banner"), None);
+    }
+
+    fn host(instance_id: &str, children: &[&str]) -> Value {
+        let components: Vec<Value> = children
+            .iter()
+            .map(|id| json!({ "id": id, "component": { "type": "textField" }, "style": null }))
+            .collect();
+        json!({
+            "id": "host",
+            "component": {
+                "type": "widgetInstance",
+                "instanceId": instance_id,
+                "inlineWidgetDef": { "components": components }
+            }
+        })
+    }
+
+    #[test]
+    fn widget_child_resolves_from_its_host_definition() {
+        let mut map = Map::new();
+        map.insert("page-a/host".to_string(), host("inst-1", &["field"]));
+
+        let (key, value) = resolve_in_host_defs(&map, "inst-1/field").unwrap();
+        assert_eq!(key, "inst-1/field");
+        assert_eq!(value["component"]["type"], "textField");
+        assert!(resolve_in_host_defs(&map, "inst-1/missing").is_none());
+        assert!(resolve_in_host_defs(&map, "inst-2/field").is_none());
+        assert!(resolve_in_host_defs(&map, "field").is_none());
+    }
+
+    #[test]
+    fn instance_prefix_is_never_retargeted_to_the_page() {
+        let mut map = Map::new();
+        map.insert("page-a/host".to_string(), host("inst-1", &["field"]));
+        map.insert(
+            "page-a/field".to_string(),
+            json!({ "component": { "type": "text" } }),
+        );
+
+        assert_eq!(resolve_element_key(&map, "inst-1/field"), None);
     }
 }

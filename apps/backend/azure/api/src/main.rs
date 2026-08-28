@@ -3,6 +3,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use axum::{Router, routing::get};
 use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
+use flow_like_api::channel::{ChannelSweeperConfig, spawn_channel_sweeper};
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_api::telemetry::{
     TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
@@ -70,6 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     validate_security_prerequisites(&state).await?;
 
     let _run_sweeper = spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _channel_sweeper =
+        spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
     let _cache_sweeper = state
         .cache_store
         .clone()
@@ -170,6 +173,25 @@ async fn validate_security_prerequisites(state: &State) -> Result<(), StartupErr
         ));
     }
 
+    validate_channel_transport(state)?;
+
+    Ok(())
+}
+
+/// The issuer degrades to HTTP when a transport's settings or secrets are unusable; a revision
+/// that asked for Web PubSub must not come up silently on the fallback.
+fn validate_channel_transport(state: &State) -> Result<(), StartupError> {
+    let requested = flow_like_api::channel::ChannelBackend::parse(
+        std::env::var("CHANNEL_TRANSPORT").ok().as_deref(),
+    )
+    .map_err(StartupError)?;
+    if state.channels.backend() != &requested {
+        return Err(StartupError(format!(
+            "CHANNEL_TRANSPORT={} could not be initialized; check CHANNEL_WEBPUBSUB_ENDPOINT, \
+             CHANNEL_WEBPUBSUB_HUB and the Key Vault secret CHANNEL_WEBPUBSUB_ACCESS_KEY",
+            requested.transport()
+        )));
+    }
     Ok(())
 }
 

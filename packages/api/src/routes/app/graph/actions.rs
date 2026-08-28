@@ -27,7 +27,7 @@ use crate::{
         db::{get_event_from_db, sync_event_to_db},
         invoke_event::{InvokeEventQuery, InvokeEventRequest, invoke_resolved_event},
     },
-    routes::app::prerun_shared::{OAuthRequirement, compute_payload},
+    routes::app::prerun_shared::{OAuthRequirement, PrerunPayload, load_prerun_manifest},
     state::AppState,
 };
 
@@ -972,7 +972,9 @@ pub async fn prerun_ontology_action(
             "Ontology action execution requires access to the governed object data",
         ));
     }
-    let sub = permission.effective_user_id()?;
+    // Loading the board used to require an effective user; principals without
+    // one stay rejected until that is decided on purpose.
+    permission.effective_user_id()?;
     let credentials = state.master_credentials().await?;
     let connection = credentials.to_db(&app_id).await?.execute().await?;
     let ontology = lancegraph::load_overlay(&connection, &ontology_id)
@@ -1019,10 +1021,8 @@ pub async fn prerun_ontology_action(
     let version = action
         .board_version
         .map(|version| (version[0], version[1], version[2]));
-    let board = state
-        .master_board(&sub, &app_id, &action.board_id, &state, version)
-        .await?;
-    let payload = compute_payload(&board);
+    let manifest = load_prerun_manifest(&state, &app_id, &action.board_id, version).await?;
+    let payload = PrerunPayload::from(&*manifest);
     Ok(Json(OntologyActionPrerunResponse {
         oauth_requirements: payload.oauth_requirements,
         signature: payload.signature,

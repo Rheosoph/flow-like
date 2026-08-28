@@ -28,6 +28,7 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod cache;
+pub mod channel;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
@@ -140,8 +141,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/og", routes::og::routes())
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
-        .nest("/interaction", routes::interaction::routes())
-        .nest("/widget-query", routes::widget_query::routes())
+        .nest("/channels", routes::channel::routes())
         .nest("/maintenance", routes::maintenance::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())

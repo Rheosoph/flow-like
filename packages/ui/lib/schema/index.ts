@@ -139,3 +139,5 @@ export * from "./wasm";
 export * from "./usage";
 // Human-in-the-loop interaction types
 export * from "./interaction";
+// Run ⇄ client reply channel wire types
+export * from "./channel";

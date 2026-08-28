@@ -26,8 +26,35 @@ Object.assign(globalThis, {
 // @ts-expect-error — react-dom checks this flag before touching the DOM.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+// The whole surface, not just `useTranslation`: the shell reaches components that read the
+// i18n instance directly, and one missing export fails the entire import chain rather than
+// an assertion — which reads as "the shell is broken" when it is the mock that is thin.
+const translate = (_key: string, fallback: string) => fallback;
+const fakeI18n = {
+	t: translate,
+	language: "en",
+	changeLanguage: async () => {},
+	on: () => {},
+	off: () => {},
+};
 mock.module("@flow-like/locales", () => ({
-	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
+	useTranslation: () => ({ t: translate, i18n: fakeI18n }),
+	Trans: ({ children }: { children?: unknown }) => children ?? null,
+	i18n: fakeI18n,
+	getI18n: () => fakeI18n,
+	createI18n: () => fakeI18n,
+	I18nProvider: ({ children }: { children?: unknown }) => children ?? null,
+	useLanguage: () => ({ language: "en", setLanguage: () => {} }),
+	LANGUAGES: ["en"],
+	NAMESPACES: ["common"],
+	DEFAULT_NAMESPACE: "common",
+	SOURCE_LANGUAGE: "en",
+	LOCALE_CONFIG: {},
+	SOURCE_RESOURCES: {},
+	LANGUAGE_STORAGE_KEY: "language",
+	listLanguages: () => [],
+	describeLanguage: () => undefined,
+	isRtl: () => false,
 }));
 
 const { BoardActivityRail } = await import("./board-activity-rail");
