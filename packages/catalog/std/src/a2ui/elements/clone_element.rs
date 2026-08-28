@@ -91,10 +91,7 @@ impl NodeLogic for CloneElement {
         let surface_id = parts[0];
 
         // Get source element from frontend elements
-        let elements = context.get_frontend_elements().await?;
-        let source_element = elements.as_ref().and_then(|e| e.get(&source_ref)).cloned();
-
-        let Some(source) = source_element else {
+        let Some((_, source)) = context.read_element(&source_ref).await? else {
             return Err(flow_like_types::anyhow!(
                 "Source element not found: {}",
                 source_ref

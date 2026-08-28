@@ -39,6 +39,7 @@ import type {
 	IBoardVariables,
 } from "../../lib/schema/flow/board-summary";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
+import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type { IPrerunBoardResponse } from "./types";
 
 export interface IApplyFlowScriptResponse {
@@ -393,6 +394,16 @@ export interface IBoardState {
 		wildcard?: boolean,
 		version?: [number, number, number],
 	): Promise<Record<string, unknown>>;
+
+	/**
+	 * The element selectors a board reads, from its prerun manifest. Rejects when the demand
+	 * cannot be fetched; callers then fall back to sending the full element map.
+	 */
+	getElementDemand?(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand>;
 
 	/** Unified copilot chat that can handle board, UI, or both */
 	copilot_chat(

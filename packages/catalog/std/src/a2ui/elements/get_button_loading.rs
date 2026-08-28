@@ -8,7 +8,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait};
 
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 
 /// Gets the loading state of a button element.
 #[crate::register_node]
@@ -57,10 +57,10 @@ impl NodeLogic for GetButtonLoading {
         let element_id = extract_element_id_from_pin(element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         let loading = element
+            .as_ref()
             .map(|(_, el)| el)
             .and_then(|el| el.get("component"))
             .and_then(|c| c.get("loading"))

@@ -1047,6 +1047,22 @@ mod tests {
     }
 }
 
+async fn open_board_for_read(
+    handler: &AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+) -> Result<Arc<flow_like_types::sync::Mutex<Board>>, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(handler).await?;
+    match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => Ok(board),
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state).await?;
+            Ok(app.open_board(board_id, Some(true), version).await?)
+        }
+    }
+}
+
 /// Gets the elements required for executing a workflow on a specific page.
 ///
 /// This returns only the elements that are referenced by nodes in the board,
@@ -1060,18 +1076,38 @@ pub async fn get_execution_elements(
     wildcard: bool,
     version: Option<(u32, u32, u32)>,
 ) -> Result<std::collections::HashMap<String, flow_like_types::Value>, TauriFunctionError> {
-    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
-    let board = match flow_like_state.get_board(&board_id, version) {
-        Ok(board) => board,
-        Err(_) => {
-            let app = App::load(app_id, flow_like_state.clone()).await?;
-            app.open_board(board_id, Some(true), version).await?
-        }
-    };
+    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
     let board = board.lock().await;
 
     let elements = board
         .get_execution_elements(&page_id, wildcard, None)
         .await?;
     Ok(elements)
+}
+
+#[derive(serde::Serialize)]
+pub struct ElementDemandResponse {
+    pub selectors: Vec<String>,
+    pub dynamic: bool,
+    pub signature: String,
+}
+
+/// Which page elements a board reads, from its prerun manifest: the literal element
+/// selectors on read pins, and whether any read is wired (so the page must still
+/// answer on-demand reads).
+#[tauri::command(async)]
+pub async fn element_demand(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+) -> Result<ElementDemandResponse, TauriFunctionError> {
+    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
+    let board = board.lock().await;
+    let manifest = flow_like::flow::compiled::PrerunManifest::from_board(&board);
+    Ok(ElementDemandResponse {
+        selectors: manifest.element_selectors,
+        dynamic: manifest.element_reads_dynamic,
+        signature: manifest.signature,
+    })
 }

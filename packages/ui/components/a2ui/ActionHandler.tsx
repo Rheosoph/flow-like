@@ -32,6 +32,9 @@ import {
 } from "../../state/backend-state/prerun-cache";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
+import { collectRunElements } from "./collect-run-elements";
+import type { ElementSource } from "./element-materializer";
+import { handleElementsRequestMessage } from "./elements-request-handler";
 import { resolveEventActions } from "./event-handlers";
 import { useElementStorage } from "./hooks/use-element-storage";
 import {
@@ -56,9 +59,7 @@ import {
 	type WidgetElementScope,
 	collectEventRelevantInputValues,
 	elementValueScopeIds,
-	flattenSurfaceComponentsForElements,
 	legacyWidgetValueSurfaceId,
-	mergeStoredElementValues,
 	widgetComponentsForScope,
 } from "./workflow-elements";
 import {
@@ -798,7 +799,7 @@ export function useMarkComponentTriggering() {
 }
 
 /**
- * Hook to fetch and merge frontend elements for the current surface.
+ * Hook to collect the frontend elements a run of the current surface starts with.
  * Returns a function that produces the `_elements` map sent in workflow payloads.
  */
 export function useCollectEventElements(widgetScope?: WidgetElementScope) {
@@ -813,63 +814,32 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 	const widgetInstanceId = widgetScope?.instanceId;
 	const widgetComponents = widgetScope?.components;
 
-	return useCallback(async (): Promise<Record<string, unknown>> => {
-		const activeWidgetScope = widgetInstanceId
-			? {
-					instanceId: widgetInstanceId,
-					components: widgetComponents,
-				}
-			: undefined;
-		const fallbackElements = (): Record<string, unknown> =>
-			flattenSurfaceComponentsForElements(
+	return useCallback(
+		(): Promise<Record<string, unknown>> =>
+			collectRunElements({
+				backend,
+				appId,
+				boardId,
+				boardVersion,
+				surfaceId: surfaceId ?? "",
 				components,
-				surfaceId ?? "",
-				activeWidgetScope,
-			);
-
-		let elementsMap: Record<string, unknown> | undefined;
-		if (appId && boardId) {
-			try {
-				elementsMap = await backend.boardState.getExecutionElements(
-					appId,
-					boardId,
-					surfaceId || "",
-					false,
-					boardVersion,
-				);
-				if (!elementsMap || Object.keys(elementsMap).length === 0) {
-					elementsMap = fallbackElements();
-				}
-			} catch (err) {
-				console.warn(
-					"[A2UI] Failed to fetch execution elements, falling back to all components:",
-					err,
-				);
-				elementsMap = fallbackElements();
-			}
-		} else {
-			elementsMap = fallbackElements();
-		}
-
-		const storedValues = getElementValues?.() ?? {};
-		return mergeStoredElementValues(
-			elementsMap,
-			storedValues,
+				storedValues: getElementValues?.() ?? {},
+				widgetScope: widgetInstanceId
+					? { instanceId: widgetInstanceId, components: widgetComponents }
+					: undefined,
+			}),
+		[
+			appId,
+			boardId,
+			boardVersion,
+			surfaceId,
 			components,
-			surfaceId || "",
-			activeWidgetScope,
-		);
-	}, [
-		appId,
-		boardId,
-		boardVersion,
-		surfaceId,
-		components,
-		getElementValues,
-		backend.boardState,
-		widgetInstanceId,
-		widgetComponents,
-	]);
+			getElementValues,
+			backend,
+			widgetInstanceId,
+			widgetComponents,
+		],
+	);
 }
 
 export function useActions() {
@@ -987,6 +957,23 @@ export function useExecuteAction() {
 		markComponentTriggering,
 	} = useContext(ActionContext) ?? {};
 
+	const elementSourceRef = useRef<() => ElementSource | null>(() => null);
+	elementSourceRef.current = () =>
+		surfaceId === undefined
+			? null
+			: {
+					surfaceId,
+					components,
+					storedValues: getElementValues?.() ?? {},
+					widgetScope: widgetInstance?.instanceId
+						? {
+								instanceId: widgetInstance.instanceId,
+								components: widgetInstance.components,
+							}
+						: undefined,
+				};
+	const elementSource = useCallback(() => elementSourceRef.current(), []);
+
 	const handleA2UIEvents = useCallback(
 		(events: IIntercomEvent[]) => {
 			console.log("[A2UI] Received events from backend:", events);
@@ -1019,6 +1006,10 @@ export function useExecuteAction() {
 					console.log("[A2UI] A2UI message:", message);
 
 					if (handleWidgetQueryMessage(message)) {
+						continue;
+					}
+
+					if (handleElementsRequestMessage(message, elementSource)) {
 						continue;
 					}
 
@@ -1185,6 +1176,7 @@ export function useExecuteAction() {
 			appId,
 			openDialog,
 			closeDialog,
+			elementSource,
 		],
 	);
 
@@ -1422,8 +1414,6 @@ export function useExecuteAction() {
 
 						if (nodeId && effectiveBoardId && effectiveAppId) {
 							try {
-								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-								let elementsMap: Record<string, unknown> | undefined;
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1437,8 +1427,6 @@ export function useExecuteAction() {
 									effectiveAppId,
 									effectiveBoardId,
 									surfaceId,
-									cacheKey,
-									hadCachedElements: false,
 									componentIds: Object.keys(components ?? {}),
 								});
 
@@ -1464,45 +1452,21 @@ export function useExecuteAction() {
 									);
 								}
 
-								// Always fetch current execution elements in preview mode.
+								// Always fetch the current element demand in preview mode.
 								// The flow graph can change without any cache invalidation signal.
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false,
-										inheritedBoardVersion,
-									);
-
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = flattenSurfaceComponentsForElements(
-											components,
-											surfaceId ?? "",
-											widgetScope,
-										);
-									}
-								} catch (err) {
-									console.warn(
-										"[A2UI] Failed to fetch execution elements, falling back to all components:",
-										err,
-									);
-									elementsMap = flattenSurfaceComponentsForElements(
-										components,
-										surfaceId ?? "",
-										widgetScope,
-									);
-								}
-
-								// Merge in-memory element values (user input state)
 								const storedValues = getElementValues?.() ?? {};
-								const mergedElements = mergeStoredElementValues(
-									elementsMap,
-									storedValues,
+								const mergedElements = await collectRunElements({
+									backend,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									boardVersion: inheritedBoardVersion,
+									surfaceId: surfaceId ?? "",
 									components,
-									surfaceId || "",
+									storedValues,
 									widgetScope,
-								);
+									triggeringComponentId,
+									refresh: inheritedBoardVersion === undefined,
+								});
 
 								const inputComponents = widgetScope
 									? widgetComponentsForScope(components, widgetScope)
@@ -1522,6 +1486,7 @@ export function useExecuteAction() {
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
+										_elements_mode: "demand",
 										_input_values: inputValues,
 										_widget_instance_id: widgetScope?.instanceId ?? "",
 										_action_context: context,
@@ -1706,8 +1671,6 @@ export function useExecuteAction() {
 
 						if (effectiveBoardId && effectiveAppId) {
 							try {
-								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-								let elementsMap: Record<string, unknown> | undefined;
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1720,47 +1683,21 @@ export function useExecuteAction() {
 									effectiveAppId,
 									effectiveBoardId,
 									surfaceId,
-									cacheKey,
-									hadCachedElements: false,
 									componentIds: Object.keys(components ?? {}),
 								});
 
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false,
-										inheritedBoardVersion,
-									);
-
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = flattenSurfaceComponentsForElements(
-											components,
-											surfaceId ?? "",
-											widgetScope,
-										);
-									}
-								} catch (err) {
-									console.warn(
-										"[A2UI] Failed to fetch execution elements for widget_event:",
-										err,
-									);
-									elementsMap = flattenSurfaceComponentsForElements(
-										components,
-										surfaceId ?? "",
-										widgetScope,
-									);
-								}
-
 								const storedValues = getElementValues?.() ?? {};
-								const mergedElements = mergeStoredElementValues(
-									elementsMap,
-									storedValues,
+								const mergedElements = await collectRunElements({
+									backend,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									boardVersion: inheritedBoardVersion,
+									surfaceId: surfaceId ?? "",
 									components,
-									surfaceId || "",
+									storedValues,
 									widgetScope,
-								);
+									triggeringComponentId,
+								});
 
 								const inputComponents = widgetScope
 									? widgetComponentsForScope(components, widgetScope)
@@ -1780,6 +1717,7 @@ export function useExecuteAction() {
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
+										_elements_mode: "demand",
 										_input_values: inputValues,
 										_widget_instance_id: widgetInstance?.instanceId ?? "",
 										_action_id: actionId,

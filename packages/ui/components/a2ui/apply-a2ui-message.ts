@@ -478,6 +478,17 @@ interface InlineWidgetChildDef {
  * in `runtimeChildUpdates[childId]` for ordered replay after widget resolution.
  * Returns the next surface, or null when no matching widget instance exists.
  */
+/** Whether `scopeId` names a widget instance (or widget host) rendered on this surface. */
+function surfaceOwnsScope(surface: Surface, scopeId: string): boolean {
+	return Object.entries(surface.components).some(([hostId, host]) => {
+		const data = getComponentData(host);
+		if (data.type !== "widgetInstance" && data.type !== "microWidgetInstance") {
+			return false;
+		}
+		return hostId === scopeId || data.instanceId === scopeId;
+	});
+}
+
 function applyWidgetInternalUpdate(
 	surface: Surface,
 	childId: string,
@@ -689,7 +700,14 @@ export function applyA2UIMessage(
 			// A non-surface prefix addresses one declarative widget instance. Its
 			// children stay inside the host's inline definition, so resolve the
 			// instance locally and never fall back to another matching widget.
-			if (scopeId !== surface.id) {
+			// A prefix that names no instance here is another page's id: a flow
+			// written against that page retargets to this surface's component of
+			// the same name (the same rule the runtime applies to reads).
+			if (
+				scopeId !== surface.id &&
+				(surfaceOwnsScope(surface, scopeId) ||
+					surface.components[componentId] === undefined)
+			) {
 				return (
 					applyWidgetInternalUpdate(
 						surface,

@@ -7,6 +7,7 @@ import {
 	IRole,
 } from "../../../lib/schema/llm/history";
 import type { IResponseMessage } from "../../../lib/schema/llm/response";
+import { handleElementsRequestMessage } from "../../a2ui/elements-request-handler";
 import { handleWidgetQueryMessage } from "../../a2ui/widget-query-handler";
 import type {
 	IAttachment,
@@ -377,6 +378,9 @@ export function processChatEvents(
 	for (const ev of events) {
 		if (ev.event_type === "a2ui") {
 			if (handleWidgetQueryMessage(ev.payload)) {
+				continue;
+			}
+			if (handleElementsRequestMessage(ev.payload, () => null)) {
 				continue;
 			}
 			if (attachA2UIUpdate(ev.payload as Record<string, unknown>)) {

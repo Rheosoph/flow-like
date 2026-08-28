@@ -7,7 +7,6 @@ import {
 	flattenSurfaceComponentsForElements,
 	legacyWidgetValueSurfaceId,
 	mergeStoredElementValues,
-	surfaceElementsForPayload,
 } from "./workflow-elements";
 
 function component(
@@ -298,23 +297,5 @@ describe("payload style compaction", () => {
 		const definition = (untouched.component as Record<string, unknown>)
 			.inlineWidgetDef as { components: Record<string, unknown>[] };
 		expect(definition.components[0].style).toEqual(nullStyle);
-	});
-
-	test("surfaceElementsForPayload keys every component and compacts styles", () => {
-		const components = {
-			text: styled(component("text", { type: "text" }), nullStyle),
-		};
-
-		const elements = surfaceElementsForPayload(
-			"page-1",
-			Object.entries(components),
-		);
-
-		const text = elements["page-1/text"] as Record<string, unknown>;
-		expect(text.__element_id).toBe("page-1/text");
-		expect(text.style).toEqual({
-			className: "row",
-			responsiveOverrides: { sm: { width: "1rem" } },
-		});
 	});
 });

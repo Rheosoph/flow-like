@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use flow_like::a2ui::components::TextProps;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -69,8 +69,7 @@ impl NodeLogic for GetElementText {
             LogLevel::Debug,
         );
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         let text_pin = context.get_pin_by_name("text").await?;
         let exists_pin = context.get_pin_by_name("exists").await?;

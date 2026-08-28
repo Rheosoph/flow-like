@@ -1,5 +1,5 @@
 use super::element_utils::{
-    DynamicPinSig, count_matching_pins, extract_element_id, find_element, retain_dynamic_pins,
+    DynamicPinSig, count_matching_pins, extract_element_id, retain_dynamic_pins,
 };
 use super::update_schemas::{
     GanttConfig, GanttDependencyUpdate, GanttTask, GanttTaskUpdate, diff_items, ensure_item_id,
@@ -291,9 +291,9 @@ impl NodeLogic for UpdateGantt {
                 context.upsert_element(&element_id, update).await?;
             }
             "Get Tasks" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let tasks = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("tasks"))
@@ -305,9 +305,9 @@ impl NodeLogic for UpdateGantt {
             }
             "Diff Tasks" => {
                 let previous: Value = context.evaluate_pin("previous").await?;
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let current = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("tasks"))
@@ -322,9 +322,9 @@ impl NodeLogic for UpdateGantt {
                 context.set_pin_value("changed", json!(changed)).await?;
             }
             "Get Config" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let component = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .cloned()

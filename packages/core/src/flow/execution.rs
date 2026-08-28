@@ -2,6 +2,7 @@ use super::board::ExecutionStage;
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
+use crate::a2ui::ElementCache;
 use crate::app::AppVisibility;
 use crate::credentials::SharedCredentials;
 use crate::flow::compiled::CompiledRunTemplate;
@@ -510,6 +511,8 @@ pub struct Run {
     pub board: Arc<Board>,
     pub log_level: LogLevel,
     pub payload: Arc<RunPayload>,
+    /// `payload._elements`, shared by every node of the run instead of cloned per read.
+    pub elements: Arc<RwLock<ElementCache>>,
     pub sub: String,
     pub highest_log_level: LogLevel,
     pub log_initialized: bool,
@@ -892,6 +895,7 @@ pub struct RunMeta {
     pub log_spill_threshold: usize,
     pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
+    pub elements: Arc<RwLock<ElementCache>>,
 }
 
 impl RunMeta {
@@ -1146,6 +1150,9 @@ impl InternalRun {
             .unwrap_or_else(|| LOCAL_USER_SUB.to_string());
 
         let nodes_executed = Arc::new(AtomicU64::new(0));
+        let elements = Arc::new(RwLock::new(ElementCache::from_payload(
+            payload.payload.as_ref(),
+        )));
         let run = Run {
             id: run_id.clone(),
             app_id: app_id.to_string(),
@@ -1157,6 +1164,7 @@ impl InternalRun {
             log_level: board.log_level,
             board: board.clone(),
             payload: Arc::new(payload.clone()),
+            elements: elements.clone(),
             sub: sub_value.clone(),
             highest_log_level: LogLevel::Debug,
             log_initialized: false,
@@ -1343,6 +1351,7 @@ impl InternalRun {
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed,
+                elements,
             },
             board: board.clone(),
         })

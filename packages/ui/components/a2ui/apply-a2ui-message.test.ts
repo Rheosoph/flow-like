@@ -334,6 +334,36 @@ describe("applyA2UIMessage widget instance routing", () => {
 		expect(childText(updated, "host-b")).toBe("Nested update");
 	});
 
+	test("retargets a foreign page prefix to this surface's component of the same name", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "other-page/root",
+			value: { type: "setText", text: "Retargeted root" },
+		});
+
+		const root = updated.components.root.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(root.text).toBe("Retargeted root");
+		expect(childText(updated, "host-a")).toBe("First");
+		expect(childText(updated, "host-b")).toBe("Second");
+	});
+
+	test("never retargets a prefix that names a widget instance on this surface", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "instance-b/root",
+			value: { type: "setText", text: "Must not land on the page root" },
+		});
+
+		const root = updated.components.root.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(root.text).not.toBe("Must not land on the page root");
+	});
+
 	test("keeps surfaceId/componentId routing for top-level components", () => {
 		const updated = applyA2UIMessage(surface(), {
 			type: "upsertElement",

@@ -60,24 +60,7 @@ impl NodeLogic for GetTooltipContent {
         let element_value: Value = context.evaluate_pin("element_ref").await?;
         let element_id = extract_element_id_from_pin(element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
-        let elements = context.get_frontend_elements().await?;
-
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("content")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            context
-                .get_pin_by_name("side")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            return Ok(());
-        };
-
-        let Some(element) = elements_map.get(&element_id) else {
+        let Some((_, element)) = context.read_element(&element_id).await? else {
             context.log_message(
                 &format!("Element not found: {}", element_id),
                 LogLevel::Warn,

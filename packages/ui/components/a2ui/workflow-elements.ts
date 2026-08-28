@@ -84,22 +84,6 @@ export function compactSurfaceElements(
 	return compacted;
 }
 
-/** Every surface component keyed `surfaceId/componentId`, as page lifecycle events send it. */
-export function surfaceElementsForPayload(
-	surfaceId: string,
-	components: Iterable<readonly [string, SurfaceComponent]>,
-): Record<string, unknown> {
-	const elements: Record<string, unknown> = {};
-	for (const [componentId, surfaceComponent] of components) {
-		const elementId = `${surfaceId}/${componentId}`;
-		elements[elementId] = compactElementStyles({
-			...surfaceComponent,
-			__element_id: elementId,
-		});
-	}
-	return elements;
-}
-
 /** Storage prefixes owned by a surface, including each hosted widget instance. */
 export function elementValueScopeIds(
 	components: Record<string, SurfaceComponent> | undefined,

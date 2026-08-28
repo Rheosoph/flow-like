@@ -53,6 +53,7 @@ import type {
 	UnifiedCopilotResponse,
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
@@ -966,6 +967,18 @@ export class WebBoardState implements IBoardState {
 		} catch {
 			return {};
 		}
+	}
+
+	async getElementDemand(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand> {
+		const query = version ? `?version=${version.join("_")}` : "";
+		return await apiGet<IElementDemand>(
+			`apps/${appId}/board/${boardId}/element-demand${query}`,
+			this.backend.auth,
+		);
 	}
 
 	async copilot_chat(

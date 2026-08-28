@@ -1,5 +1,6 @@
 pub mod apply_flowscript;
 pub mod delete_board;
+pub mod element_demand;
 pub mod execute_commands;
 pub mod flow_ir_commit;
 pub mod format_flowscript;
@@ -102,6 +103,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{board_id}/elements",
             get(get_execution_elements::get_execution_elements),
+        )
+        .route(
+            "/{board_id}/element-demand",
+            get(element_demand::get_element_demand),
         )
         .route("/{board_id}/prerun", get(prerun_board::prerun_board))
         .route(

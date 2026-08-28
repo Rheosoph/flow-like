@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
@@ -539,11 +539,10 @@ impl NodeLogic for GetFileInputFiles {
             )
         })?;
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         if let Some((_found_id, element_value)) = element {
-            let mut files = extract_files(element_value);
+            let mut files = extract_files(&element_value);
             let signed_urls: Vec<String> = files
                 .iter()
                 .filter_map(|file| file.url.clone().or_else(|| file.backend_url.clone()))

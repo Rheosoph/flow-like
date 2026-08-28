@@ -1,4 +1,4 @@
-use super::elements::element_utils::{extract_element_id, find_element};
+use super::elements::element_utils::extract_element_id;
 use super::micro_widget_utils::{
     DYN_ARG_PREFIX, connected_widget_contract, json_schema_pin_shape, pin_connected,
     remove_stale_prefixed_pins, trace_widget_selector,
@@ -475,14 +475,13 @@ impl NodeLogic for WidgetQuery {
             }
         }
 
-        let elements = context.get_frontend_elements().await?;
         let mirror_key = format!("{}/values", element_id);
-        let mirror = elements
-            .as_ref()
-            .and_then(|e| find_element(e, &mirror_key))
-            .map(|(_, v)| v);
+        let mirror = context
+            .read_element(&mirror_key)
+            .await?
+            .map(|(_, value)| value);
 
-        if let Some(values) = mirror.and_then(extract_mirrored_values) {
+        if let Some(values) = mirror.as_ref().and_then(extract_mirrored_values) {
             let hit = values
                 .get(&query)
                 .or_else(|| value_style_key(&query).and_then(|key| values.get(&key)));

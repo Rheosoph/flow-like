@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id, find_element};
+use super::element_utils::extract_element_id;
 use super::update_schemas::{TableCellUpdate, TableColumn};
 use flow_like::a2ui::components::TableProps;
 use flow_like::flow::{
@@ -140,9 +140,9 @@ impl NodeLogic for UpdateTable {
                 context.upsert_element(&element_id, update).await?;
             }
             "Get Data" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let data = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("data"))

@@ -10,7 +10,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::prerun_shared::{
-        OAuthRequirement, PrerunPayload, RuntimeVariable, compute_payload, parse_version,
+        OAuthRequirement, PrerunPayload, RuntimeVariable, load_prerun_manifest, parse_version,
     },
     state::AppState,
 };
@@ -68,22 +68,22 @@ pub struct PrerunEventResponse {
 
 fn build_response(
     board_id: String,
-    payload: &PrerunPayload,
+    payload: PrerunPayload,
     event_execution_mode: EventExecutionMode,
     can_execute_locally: bool,
 ) -> PrerunEventResponse {
     PrerunEventResponse {
         board_id,
-        runtime_variables: payload.runtime_variables.clone(),
-        oauth_requirements: payload.oauth_requirements.clone(),
+        runtime_variables: payload.runtime_variables,
+        oauth_requirements: payload.oauth_requirements,
         requires_local_execution: payload.requires_local_execution,
-        execution_mode: payload.execution_mode.clone(),
+        execution_mode: payload.execution_mode,
         event_execution_mode,
         can_execute_locally,
         has_wasm_nodes: payload.has_wasm_nodes,
-        wasm_package_ids: payload.wasm_package_ids.clone(),
-        wasm_package_permissions: payload.wasm_package_permissions.clone(),
-        signature: payload.signature.clone(),
+        wasm_package_ids: payload.wasm_package_ids,
+        wasm_package_permissions: payload.wasm_package_permissions,
+        signature: payload.signature,
     }
 }
 
@@ -123,7 +123,10 @@ pub async fn prerun_event(
     Query(query): Query<PrerunEventQuery>,
 ) -> Result<Json<PrerunEventResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.sub()?;
+    // Loading the board used to require a caller identity; principals without
+    // one (API keys, connected apps) stay rejected until that is decided on
+    // purpose.
+    permission.sub()?;
 
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
@@ -140,14 +143,11 @@ pub async fn prerun_event(
     let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards)
         && event_execution_mode != EventExecutionMode::Remote;
 
-    let board = state
-        .master_board(&sub, &app_id, &board_id, &state, version)
-        .await?;
-    let payload = compute_payload(&board);
+    let manifest = load_prerun_manifest(&state, &app_id, &board_id, version).await?;
 
     Ok(Json(build_response(
         board_id,
-        &payload,
+        PrerunPayload::from(&*manifest),
         event_execution_mode,
         can_execute_locally,
     )))

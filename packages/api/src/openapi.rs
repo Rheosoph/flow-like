@@ -240,6 +240,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::query_logs::query_logs,
         crate::routes::app::board::get_runs::get_runs,
         crate::routes::app::board::get_execution_elements::get_execution_elements,
+        crate::routes::app::board::element_demand::get_element_demand,
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
         crate::routes::app::board::flow_ir_commit::apply_flow_ir_commit,
         // Page routes
@@ -807,6 +808,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::prerun_event::PrerunEventResponse,
         crate::routes::app::board::prerun_board::PrerunBoardResponse,
         crate::routes::app::board::prerun_board::PrerunBoardQuery,
+        crate::routes::app::board::element_demand::ElementDemandQuery,
+        crate::routes::app::board::element_demand::ElementDemandResponse,
         crate::routes::app::events::invoke_event::InvokeEventQuery,
         crate::routes::app::events::invoke_event::InvokeEventRequest,
         crate::routes::app::events::invoke_event::InvokeEventResponse,

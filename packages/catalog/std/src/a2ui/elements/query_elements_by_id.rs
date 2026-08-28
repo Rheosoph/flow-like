@@ -81,48 +81,44 @@ impl NodeLogic for QueryElementsById {
             .await
             .unwrap_or_else(|_| "contains".to_string());
 
-        let elements = context.get_frontend_elements().await?;
+        let match_type_lower = match_type.to_lowercase();
+        context
+            .ensure_elements(&[flow_like::a2ui::id_pattern_selector(
+                &pattern,
+                &match_type_lower,
+            )])
+            .await?;
 
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("elements")
-                .await?
-                .set_value(Value::Array(vec![]))
-                .await;
-            context
-                .get_pin_by_name("element_ids")
-                .await?
-                .set_value(Value::Array(vec![]))
-                .await;
-            context
-                .get_pin_by_name("count")
-                .await?
-                .set_value(Value::Number(0.into()))
-                .await;
-            return Ok(());
-        };
+        let (matching_ids, matching_elements, is_empty) = context
+            .with_elements(|elements| {
+                let mut matching_elements: Vec<Value> = Vec::new();
+                let mut matching_ids: Vec<String> = Vec::new();
 
-        let mut matching_elements: Vec<Value> = Vec::new();
-        let mut matching_ids: Vec<String> = Vec::new();
+                for (id, element) in elements {
+                    let matches = match match_type_lower.as_str() {
+                        "starts_with" | "startswith" => id.starts_with(&pattern),
+                        "ends_with" | "endswith" => id.ends_with(&pattern),
+                        "contains" => id.contains(&pattern),
+                        "exact" => *id == pattern,
+                        _ => id.contains(&pattern),
+                    };
 
-        for (id, element) in elements_map {
-            let matches = match match_type.to_lowercase().as_str() {
-                "starts_with" | "startswith" => id.starts_with(&pattern),
-                "ends_with" | "endswith" => id.ends_with(&pattern),
-                "contains" => id.contains(&pattern),
-                "exact" => id == pattern,
-                _ => id.contains(&pattern),
-            };
-
-            if matches {
-                matching_ids.push(id.clone());
-                let mut element_with_id = element.clone();
-                if let Some(obj) = element_with_id.as_object_mut() {
-                    obj.insert("_id".to_string(), Value::String(id.clone()));
+                    if matches {
+                        matching_ids.push(id.clone());
+                        let mut element_with_id = element.clone();
+                        if let Some(obj) = element_with_id.as_object_mut() {
+                            obj.insert("_id".to_string(), Value::String(id.clone()));
+                        }
+                        matching_elements.push(element_with_id);
+                    }
                 }
-                matching_elements.push(element_with_id);
-            }
+
+                (matching_ids, matching_elements, elements.is_empty())
+            })
+            .await?;
+
+        if is_empty {
+            context.log_message("No elements in payload", LogLevel::Warn);
         }
 
         let count = matching_elements.len() as i64;

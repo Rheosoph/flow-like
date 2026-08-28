@@ -1214,6 +1214,7 @@ pub fn run() {
             functions::flow::board::get_flowscript_scoped,
             functions::flow::board::get_flowscript_file,
             functions::flow::board::get_execution_elements,
+            functions::flow::board::element_demand,
             functions::flow::board::save_board,
             functions::flow::run::execute_board,
             functions::flow::run::execute_event,

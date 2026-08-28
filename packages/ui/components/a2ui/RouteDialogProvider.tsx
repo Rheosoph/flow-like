@@ -31,9 +31,11 @@ import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
+import { collectRunElements } from "./collect-run-elements";
+import type { ElementSource } from "./element-materializer";
+import { handleElementsRequestMessage } from "./elements-request-handler";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
-import { surfaceElementsForPayload } from "./workflow-elements";
 
 interface DialogState {
 	id: string;
@@ -321,16 +323,15 @@ function RouteDialogRenderer({
 		surfaceRef.current = surface;
 	}, [surface]);
 
-	// Build elements from surface components for the workflow payload
-	// Uses ref to avoid dependency on surface changing
-	const getElementsFromSurface = useCallback(() => {
+	const elementSource = useCallback((): ElementSource | null => {
 		const currentSurface = surfaceRef.current;
-		if (!currentSurface) return {};
-		return surfaceElementsForPayload(
-			currentSurface.id,
-			Object.entries(currentSurface.components),
-		);
-	}, []); // No dependencies - uses ref
+		if (!currentSurface) return null;
+		return {
+			surfaceId: currentSurface.id,
+			components: currentSurface.components,
+			storedValues: {},
+		};
+	}, []);
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
@@ -357,14 +358,25 @@ function RouteDialogRenderer({
 			setIsLoadEventRunning(true);
 
 			try {
-				// Get component data from surface (for GetElement to work)
-				const surfaceElements = getElementsFromSurface();
+				const currentSurface = surfaceRef.current;
+				const surfaceElements = currentSurface
+					? await collectRunElements({
+							backend,
+							appId,
+							boardId,
+							boardVersion: pageExecutionVersion,
+							surfaceId: currentSurface.id,
+							components: currentSurface.components,
+							storedValues: {},
+						})
+					: {};
 
 				const payload = withBoardVersion(
 					{
 						id: page.onLoadEventId,
 						payload: {
 							_elements: surfaceElements,
+							_elements_mode: "demand",
 							_route: dialog.route,
 							_query_params: dialog.queryParams || {},
 							_page_id: page.id,
@@ -381,6 +393,9 @@ function RouteDialogRenderer({
 					for (const event of events) {
 						if (event.event_type === "a2ui") {
 							if (handleWidgetQueryMessage(event.payload)) {
+								continue;
+							}
+							if (handleElementsRequestMessage(event.payload, elementSource)) {
 								continue;
 							}
 							handleServerMessage(event.payload as A2UIServerMessage);
@@ -404,10 +419,10 @@ function RouteDialogRenderer({
 		pageExecutionVersion,
 		dialog,
 		isLoading,
-		backend.boardState,
+		backend,
 		executionService,
 		handleServerMessage,
-		getElementsFromSurface,
+		elementSource,
 	]);
 
 	const activeSurface =

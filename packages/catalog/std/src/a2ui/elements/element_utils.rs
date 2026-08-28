@@ -3,7 +3,6 @@ use flow_like::flow::{
     pin::PinType,
 };
 use flow_like_types::Value;
-use flow_like_types::json::Map;
 
 /// Signature of a dynamic pin: (name, friendly_name, is_input).
 pub type DynamicPinSig = (&'static str, &'static str, bool);
@@ -37,21 +36,6 @@ pub fn count_matching_pins(node: &Node, sig: &DynamicPinSig) -> usize {
             p.name == sig.0 && p.friendly_name == sig.1 && (p.pin_type == PinType::Input) == sig.2
         })
         .count()
-}
-
-/// Finds an element in the elements map by ID.
-///
-/// Supports:
-/// - Exact match: "surfaceId/componentId"
-/// - Component ID suffix match: "componentId" (matches any "*/componentId")
-/// - Page retarget: "otherPageId/componentId" resolves to the current surface's
-///   component of the same name, unless the prefix names a widget instance.
-pub fn find_element<'a>(
-    elements: &'a Map<String, Value>,
-    element_id: &str,
-) -> Option<(&'a String, &'a Value)> {
-    let key = flow_like::a2ui::resolve_element_key(elements, element_id)?;
-    elements.get(key).map(|value| (key, value))
 }
 
 /// Extracts element ID from either a string or an element object with __element_id field.

@@ -394,6 +394,10 @@ pub struct State {
     /// (app, board, version|etag, registry fingerprint). Entries are
     /// content-addressed, so they never go stale — TTL only bounds memory.
     pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
+    /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
+    /// like `compiled_artifact_cache`, so entries never go stale.
+    pub prerun_manifest_cache:
+        moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
@@ -883,6 +887,11 @@ impl State {
             compiled_artifact_cache: moka::sync::Cache::builder()
                 .max_capacity(16_384)
                 .time_to_idle(Duration::from_secs(12 * 60 * 60))
+                .build(),
+            prerun_manifest_cache: moka::sync::Cache::builder()
+                .max_capacity(4_096)
+                .time_to_idle(Duration::from_secs(24 * 60 * 60))
+                .support_invalidation_closures()
                 .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)

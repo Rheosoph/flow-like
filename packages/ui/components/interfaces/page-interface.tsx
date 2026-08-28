@@ -42,6 +42,9 @@ import {
 	useRouteDialog,
 } from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
+import { collectRunElements } from "../a2ui/collect-run-elements";
+import type { ElementSource } from "../a2ui/element-materializer";
+import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
 import {
 	type A2UINavigationMessageInterceptor,
 	interceptA2UINavigationMessage,
@@ -52,7 +55,6 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
-import { surfaceElementsForPayload } from "../a2ui/workflow-elements";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
@@ -362,6 +364,20 @@ function PageInterfaceInner({
 		appId,
 	);
 
+	// Use ref to access current surface without creating dependency cycles
+	const surfaceRef = useRef(surface);
+	surfaceRef.current = surface;
+
+	const elementSource = useCallback((): ElementSource | null => {
+		const currentSurface = surfaceRef.current;
+		if (!currentSurface) return null;
+		return {
+			surfaceId: currentSurface.id,
+			components: currentSurface.components,
+			storedValues: {},
+		};
+	}, []);
+
 	// Written only once the run that produced it has finished, so a half-built surface is never
 	// what the next visit replays.
 	useEffect(() => {
@@ -376,6 +392,10 @@ function PageInterfaceInner({
 			console.log("[PageInterface] A2UI message:", message.type, message);
 
 			if (handleWidgetQueryMessage(message)) {
+				return;
+			}
+
+			if (handleElementsRequestMessage(message, elementSource)) {
 				return;
 			}
 
@@ -495,24 +515,11 @@ function PageInterfaceInner({
 			closeDialog,
 			handleServerMessage,
 			onNavigationMessage,
+			elementSource,
 		],
 	);
 
-	// Use ref to access current surface without creating dependency cycles
-	const surfaceRef = useRef(surface);
-	surfaceRef.current = surface;
 	const pageContainerRef = useRef<HTMLDivElement | null>(null);
-
-	// Build elements from surface components for the workflow payload
-	// Uses ref to avoid dependency on surface changing
-	const getElementsFromSurface = useCallback(() => {
-		const currentSurface = surfaceRef.current;
-		if (!currentSurface) return {};
-		return surfaceElementsForPayload(
-			currentSurface.id,
-			Object.entries(currentSurface.components),
-		);
-	}, []); // No dependencies - uses ref
 
 	const prepareLocalWidgetDefinitions = useCallback(async () => {
 		if (!appId || !backend.capabilities().canExecuteLocally) return;
@@ -580,14 +587,39 @@ function PageInterfaceInner({
 			}
 
 			try {
-				// Get component data from surface (for GetElement to work)
-				const surfaceElements = getElementsFromSurface();
+				// The render no longer waits for the board refresh, so the run does: a device
+				// that has only ever synced the board manifest must not execute the stale copy,
+				// nor read the element demand of the copy it replaces.
+				await Promise.all([
+					whenBoardReady(
+						boardReadinessKey(
+							appId,
+							boardId,
+							pageExecutionVersion ?? undefined,
+						),
+					),
+					prepareLocalWidgetDefinitions(),
+				]);
+
+				const currentSurface = surfaceRef.current;
+				const surfaceElements = currentSurface
+					? await collectRunElements({
+							backend,
+							appId,
+							boardId,
+							boardVersion: pageExecutionVersion,
+							surfaceId: currentSurface.id,
+							components: currentSurface.components,
+							storedValues: {},
+						})
+					: {};
 
 				const payload = withBoardVersion(
 					{
 						id: eventNodeId,
 						payload: {
 							_elements: surfaceElements,
+							_elements_mode: "demand",
 							_route: pageRoute || "/",
 							_query_params: { ...runtimeQueryParamsRef.current },
 							_page_id: page.id,
@@ -601,18 +633,6 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
-				// The render no longer waits for the board refresh, so the run does: a device
-				// that has only ever synced the board manifest must not execute the stale copy.
-				await Promise.all([
-					whenBoardReady(
-						boardReadinessKey(
-							appId,
-							boardId,
-							pageExecutionVersion ?? undefined,
-						),
-					),
-					prepareLocalWidgetDefinitions(),
-				]);
 				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
@@ -633,10 +653,9 @@ function PageInterfaceInner({
 			pageExecutionBoardId,
 			pageExecutionVersion,
 			pageRoute,
-			backend.boardState,
+			backend,
 			executionService,
 			handleA2UIMessage,
-			getElementsFromSurface,
 			prepareLocalWidgetDefinitions,
 		],
 	);
