@@ -24,7 +24,6 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useFeatures } from "../../../hooks/use-features";
 import { useInvoke } from "../../../hooks/use-invoke";
-import { presignCanvasSettings, presignPageAssets } from "../../../lib";
 import type { IBoard } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
 import type { IPage } from "../../../state/backend-state/page-state";
@@ -1503,61 +1502,10 @@ export function AdminAppRequestDetail({
 				}`,
 			);
 
-			let previewPage = { ...page };
-
-			if (page.components && page.components.length > 0) {
-				try {
-					previewPage = {
-						...previewPage,
-						components: await presignPageAssets(
-							appId,
-							page.components,
-							backend.storageState,
-						),
-					};
-				} catch (error) {
-					console.warn(
-						"[AdminAppRequestDetail] Failed to presign page assets",
-						{
-							pageId: page.id,
-							error,
-						},
-					);
-				}
-			}
-
-			if (page.canvasSettings?.backgroundImage) {
-				try {
-					const canvasSettings = await presignCanvasSettings(
-						appId,
-						{
-							backgroundColor: page.canvasSettings.backgroundColor ?? "",
-							backgroundImage: page.canvasSettings.backgroundImage,
-							padding: page.canvasSettings.padding ?? "",
-							customCss: page.canvasSettings.customCss,
-						},
-						backend.storageState,
-					);
-
-					previewPage = {
-						...previewPage,
-						canvasSettings: {
-							...previewPage.canvasSettings,
-							backgroundImage: canvasSettings.backgroundImage,
-						},
-					};
-				} catch (error) {
-					console.warn(
-						"[AdminAppRequestDetail] Failed to presign page background",
-						{
-							pageId: page.id,
-							error,
-						},
-					);
-				}
-			}
-
-			return previewPage;
+			// Storage paths are left as they are: the components resolve and renew
+			// their own artwork, so the preview does not freeze a signature into
+			// a query result that outlives it.
+			return page;
 		},
 		enabled: !!profile.data && !!appId && !!previewPageInfo?.pageId,
 	});

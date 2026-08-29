@@ -154,6 +154,18 @@ function parseSignedUrl(raw: string):
 	}
 }
 
+/**
+ * When the signature in `raw` stops being valid, or `undefined` when the string
+ * carries no signature at all — an `asset://` or `data:` URL, a relative path,
+ * or a plain public link, none of which ever expire.
+ */
+export function signedUrlExpiry(
+	raw: string | null | undefined,
+): number | undefined {
+	if (!raw) return undefined;
+	return parseSignedUrl(raw)?.expiresAt;
+}
+
 function loadRegistry(): Registry {
 	if (registry) return registry;
 

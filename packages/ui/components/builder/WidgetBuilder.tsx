@@ -18,15 +18,12 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAssetSource } from "../../hooks/use-asset-source";
 import { cn } from "../../lib";
 import {
 	DEFAULT_SHORTCUTS,
 	createShortcutManager,
 } from "../../lib/builder/KeyboardShortcuts";
-import {
-	presignCanvasSettings,
-	presignPageAssets,
-} from "../../lib/presign-assets";
 import {
 	type AssistantWidgetSurface,
 	useAssistantSurface,
@@ -774,113 +771,27 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 	const isDragging = activeId !== null;
 	const canvasRef = useRef<HTMLDivElement>(null);
 	const canvasId = useId();
-	const [presignedComponents, setPresignedComponents] = useState<Map<
-		string,
-		SurfaceComponent
-	> | null>(null);
-	const [presignedCanvasSettings, setPresignedCanvasSettings] =
-		useState(canvasSettings);
-	const backgroundClass = isBackgroundClass(
-		presignedCanvasSettings.backgroundColor,
-	)
-		? presignedCanvasSettings.backgroundColor
+	// Components carry storage paths and resolve their own artwork, so the canvas
+	// renders them as they are. Only the background has no component to do that.
+	const { src: canvasBackgroundImage } = useAssetSource(
+		actionContext?.appId,
+		canvasSettings.backgroundImage,
+	);
+	const backgroundClass = isBackgroundClass(canvasSettings.backgroundColor)
+		? canvasSettings.backgroundColor
 		: undefined;
 
-	// Presign assets in components for preview rendering.
-	//
-	// Every edit restarts this, and the requests can finish out of order — without
-	// the guard, a slow response from two selections ago lands last and pins the
-	// canvas to the asset the user already replaced.
-	useEffect(() => {
-		let stale = false;
-
-		const presignAssets = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedComponents(null);
-				return;
-			}
-
-			const componentsArray = Array.from(components.entries()).map(
-				([id, comp]) => ({ ...comp, id }),
-			);
-
-			try {
-				const presigned = await presignPageAssets(
-					appId,
-					componentsArray,
-					backend.storageState,
-				);
-				if (stale) return;
-				const presignedMap = new Map<string, SurfaceComponent>();
-				for (const comp of presigned) {
-					presignedMap.set(comp.id, comp);
-				}
-				setPresignedComponents(presignedMap);
-			} catch (err) {
-				if (stale) return;
-				console.warn("[VisualCanvas] Failed to presign assets:", err);
-				setPresignedComponents(null);
-			}
-		};
-
-		presignAssets();
-
-		return () => {
-			stale = true;
-		};
-	}, [components, actionContext?.appId, backend.storageState]);
-
-	// Presign canvas background image
-	useEffect(() => {
-		let stale = false;
-
-		const presignCanvas = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedCanvasSettings(canvasSettings);
-				return;
-			}
-
-			try {
-				const presigned = await presignCanvasSettings(
-					appId,
-					canvasSettings,
-					backend.storageState,
-				);
-				if (stale) return;
-				setPresignedCanvasSettings(presigned);
-			} catch (err) {
-				if (stale) return;
-				console.warn("[VisualCanvas] Failed to presign canvas settings:", err);
-				setPresignedCanvasSettings(canvasSettings);
-			}
-		};
-
-		presignCanvas();
-
-		return () => {
-			stale = true;
-		};
-	}, [canvasSettings, actionContext?.appId, backend.storageState]);
-
-	// Build the surface for rendering - use presigned components if available
 	// Memoize to prevent unnecessary re-renders when drag state changes
 	const surface: Surface = useMemo(
 		() => ({
 			id: surfaceId,
 			rootComponentId: ROOT_ID,
-			components: Object.fromEntries(presignedComponents ?? components),
-			canvasSettings: presignedCanvasSettings.customCss
-				? { customCss: presignedCanvasSettings.customCss }
+			components: Object.fromEntries(components),
+			canvasSettings: canvasSettings.customCss
+				? { customCss: canvasSettings.customCss }
 				: undefined,
 		}),
-		[
-			surfaceId,
-			presignedComponents,
-			components,
-			presignedCanvasSettings.customCss,
-		],
+		[surfaceId, components, canvasSettings.customCss],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1035,7 +946,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			<ScopedCustomCss
-				css={presignedCanvasSettings.customCss}
+				css={canvasSettings.customCss}
 				scopeSelector={`[data-canvas-id="${canvasId}"]`}
 			/>
 
@@ -1081,11 +992,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					style={{
 						backgroundColor: backgroundClass
 							? undefined
-							: presignedCanvasSettings.backgroundColor,
-						backgroundImage: presignedCanvasSettings.backgroundImage
-							? `url(${presignedCanvasSettings.backgroundImage})`
+							: canvasSettings.backgroundColor,
+						backgroundImage: canvasBackgroundImage
+							? `url(${canvasBackgroundImage})`
 							: undefined,
-						padding: presignedCanvasSettings.padding,
+						padding: canvasSettings.padding,
 					}}
 					data-canvas-background="true"
 				>
@@ -1132,16 +1043,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const effectiveSurfaceId = actionContext?.pageId ?? surfaceId;
 	const previewCanvasId = useId();
 	const [previewSurface, setPreviewSurface] = useState<Surface | null>(null);
-	const [presignedComponents, setPresignedComponents] = useState<Map<
-		string,
-		SurfaceComponent
-	> | null>(null);
-	const [presignedCanvasSettings, setPresignedCanvasSettings] =
-		useState(canvasSettings);
-	const backgroundClass = isBackgroundClass(
-		presignedCanvasSettings.backgroundColor,
-	)
-		? presignedCanvasSettings.backgroundColor
+	// Canvas styling the preview is showing right now: the builder's own settings
+	// until a running workflow overrides them with a setCanvasSettings message.
+	const [liveCanvasSettings, setLiveCanvasSettings] = useState(canvasSettings);
+	useEffect(() => setLiveCanvasSettings(canvasSettings), [canvasSettings]);
+	const { src: previewBackgroundImage } = useAssetSource(
+		actionContext?.appId,
+		liveCanvasSettings.backgroundImage,
+	);
+	const backgroundClass = isBackgroundClass(liveCanvasSettings.backgroundColor)
+		? liveCanvasSettings.backgroundColor
 		: undefined;
 	const loadEventExecutedRef = useRef<string | null>(null);
 	// Keep a ref to components to avoid stale closure in handleA2UIMessage
@@ -1161,102 +1072,15 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		[effectiveSurfaceId, components],
 	);
 
-	// Presign assets in components when they change. Responses can land out of
-	// order, so only the newest run is allowed to publish its result.
-	useEffect(() => {
-		let stale = false;
-
-		const presignAssets = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedComponents(null);
-				return;
-			}
-
-			const source = previewSurface
-				? Object.values(previewSurface.components)
-				: Array.from(components.values());
-			const componentsArray = source.map((comp) => ({ ...comp, id: comp.id }));
-
-			try {
-				const presigned = await presignPageAssets(
-					appId,
-					componentsArray,
-					backend.storageState,
-				);
-				if (stale) return;
-				const presignedMap = new Map<string, SurfaceComponent>();
-				for (const comp of presigned) {
-					presignedMap.set(comp.id, comp);
-				}
-				setPresignedComponents(presignedMap);
-			} catch (err) {
-				if (stale) return;
-				console.warn("[BuilderPreview] Failed to presign assets:", err);
-				setPresignedComponents(null);
-			}
-		};
-
-		presignAssets();
-
-		return () => {
-			stale = true;
-		};
-	}, [components, previewSurface, actionContext?.appId, backend.storageState]);
-
-	// Presign canvas background image
-	useEffect(() => {
-		let stale = false;
-
-		const presignCanvas = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedCanvasSettings(canvasSettings);
-				return;
-			}
-
-			try {
-				const presigned = await presignCanvasSettings(
-					appId,
-					canvasSettings,
-					backend.storageState,
-				);
-				if (stale) return;
-				setPresignedCanvasSettings(presigned);
-			} catch (err) {
-				if (stale) return;
-				console.warn(
-					"[BuilderPreview] Failed to presign canvas settings:",
-					err,
-				);
-				setPresignedCanvasSettings(canvasSettings);
-			}
-		};
-
-		presignCanvas();
-
-		return () => {
-			stale = true;
-		};
-	}, [canvasSettings, actionContext?.appId, backend.storageState]);
-
-	// The logical surface is whatever runtime messages have produced, falling
-	// back to the live builder components before any message arrives.
+	// A running workflow's surface wins over the builder's own once it exists.
 	const logicalSurface = previewSurface ?? builderSurface;
 
 	// Don't pass canvasSettings to A2UIRenderer — BuilderPreview handles
 	// CSS injection and canvas styling at the outer level to avoid double
-	// scoping and inline-style conflicts. Presigned URLs are render-only and
-	// must never be written back into the logical surface.
+	// scoping and inline-style conflicts.
 	const surface: Surface = useMemo(
-		() => ({
-			...logicalSurface,
-			components: presignedComponents
-				? Object.fromEntries(presignedComponents)
-				: logicalSurface.components,
-			canvasSettings: undefined,
-		}),
-		[logicalSurface, presignedComponents],
+		() => ({ ...logicalSurface, canvasSettings: undefined }),
+		[logicalSurface],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1265,11 +1089,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
-			// Canvas styling is handled by the outer div via presignedCanvasSettings,
+			// Canvas styling is handled by the outer div via liveCanvasSettings,
 			// so keep it out of the surface reducer.
 			if (message.type === "setCanvasSettings") {
 				if (message.surfaceId !== effectiveSurfaceId) return;
-				setPresignedCanvasSettings((prev) => {
+				setLiveCanvasSettings((prev) => {
 					const filtered = Object.fromEntries(
 						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
@@ -1453,16 +1277,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			style={{
 				backgroundColor: backgroundClass
 					? undefined
-					: presignedCanvasSettings.backgroundColor,
-				backgroundImage: presignedCanvasSettings.backgroundImage
-					? `url(${presignedCanvasSettings.backgroundImage})`
+					: liveCanvasSettings.backgroundColor,
+				backgroundImage: previewBackgroundImage
+					? `url(${previewBackgroundImage})`
 					: undefined,
-				padding: presignedCanvasSettings.padding,
+				padding: liveCanvasSettings.padding,
 			}}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			<ScopedCustomCss
-				css={presignedCanvasSettings.customCss}
+				css={liveCanvasSettings.customCss}
 				scopeSelector={`[data-canvas-id="${previewCanvasId}"]`}
 			/>
 			<A2UIRenderer

@@ -5,6 +5,7 @@ import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, MapMarkerDef, MiniMapComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -18,7 +19,9 @@ export function A2UIMiniMap({
 	style,
 	componentId,
 }: ComponentProps<MiniMapComponent>) {
-	const mapImage = useResolved<string>(component.mapImage);
+	const { url: mapImage } = useAssetUrl(
+		useResolved<string>(component.mapImage),
+	);
 	const width = useResolved<string>(component.width) ?? "200px";
 	const height = useResolved<string>(component.height) ?? "200px";
 	const markers = useResolved<MapMarkerDef[]>(component.markers) ?? [];

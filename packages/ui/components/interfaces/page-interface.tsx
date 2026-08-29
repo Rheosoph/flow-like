@@ -13,6 +13,7 @@ import {
 	useState,
 } from "react";
 import { useAuth } from "react-oidc-context";
+import { useAssetSource } from "../../hooks/use-asset-source";
 import { boardReadinessKey, whenBoardReady } from "../../lib/board-readiness";
 import {
 	type PageSurfaceIdentity,
@@ -20,7 +21,6 @@ import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
-import { presignPageContent } from "../../lib/presign-assets";
 import {
 	resolveEventBoardVersion,
 	withBoardVersion,
@@ -30,7 +30,6 @@ import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
-import type { IStorageState } from "../../state/backend-state/storage-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 // By module path, not through the a2ui barrel: the barrel re-exports every component in the
 // registry, which would pull the 3D scene and the mapping stack into every page load.
@@ -85,41 +84,6 @@ export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	onNavigationMessage?: A2UINavigationMessageInterceptor;
 	/** False while an embedded runtime keeps this page mounted off screen. */
 	active?: boolean;
-}
-
-/**
- * Signs every storage-backed asset the page renders in one request.
- *
- * A failure here is cosmetic — the unsigned paths simply do not resolve — so it must never
- * stop the page from rendering the rest of its content.
- */
-async function presignPage(
-	appId: string,
-	page: IPage,
-	storageState: IStorageState,
-): Promise<IPage> {
-	try {
-		const { components, backgroundImage } = await presignPageContent(
-			appId,
-			page.components ?? [],
-			page.canvasSettings,
-			storageState,
-		);
-
-		return {
-			...page,
-			components,
-			canvasSettings: page.canvasSettings
-				? { ...page.canvasSettings, backgroundImage }
-				: page.canvasSettings,
-		};
-	} catch (presignError) {
-		console.warn(
-			"[PageInterface] Failed to presign page assets:",
-			presignError,
-		);
-		return page;
-	}
 }
 
 function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
@@ -251,11 +215,8 @@ function PageInterfaceInner({
 
 	useEffect(() => {
 		if (providedPage) {
-			const presignProvidedPage = async () => {
-				setPage(await presignPage(appId, providedPage, backend.storageState));
-				setIsLoading(false);
-			};
-			presignProvidedPage();
+			setPage(providedPage);
+			setIsLoading(false);
 			return;
 		}
 
@@ -297,7 +258,7 @@ function PageInterfaceInner({
 						eventData.board_id || undefined,
 					);
 					if (pageResult) {
-						setPage(await presignPage(appId, pageResult, backend.storageState));
+						setPage(pageResult);
 					} else {
 						setError(`Page not found: ${eventData.default_page_id}`);
 					}
@@ -321,7 +282,6 @@ function PageInterfaceInner({
 		backend.routeState,
 		backend.pageState,
 		backend.eventState,
-		backend.storageState,
 	]);
 
 	// Every page keeps its last rendered surface, not only those that opt in: the alternative
@@ -761,6 +721,14 @@ function PageInterfaceInner({
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
+	const runtimeCanvasSettings =
+		activeSurface?.canvasSettings ?? page?.canvasSettings;
+	// The background is the one asset with no component of its own to resolve it.
+	const { src: backgroundImage } = useAssetSource(
+		appId,
+		runtimeCanvasSettings?.backgroundImage,
+	);
+
 	// The IndexedDB read is short and its result decides between real content and a skeleton,
 	// so it is worth waiting for rather than flashing a placeholder it would have replaced.
 	const shouldHoldForCachedState = isCacheLoading;
@@ -827,8 +795,6 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings =
-		activeSurface?.canvasSettings ?? page?.canvasSettings;
 	const backgroundClass = isBackgroundClass(
 		runtimeCanvasSettings?.backgroundColor,
 	)
@@ -840,15 +806,9 @@ function PageInterfaceInner({
 			? undefined
 			: runtimeCanvasSettings?.backgroundColor,
 		padding: runtimeCanvasSettings?.padding,
-		backgroundImage: runtimeCanvasSettings?.backgroundImage
-			? `url(${runtimeCanvasSettings.backgroundImage})`
-			: undefined,
-		backgroundSize: runtimeCanvasSettings?.backgroundImage
-			? "cover"
-			: undefined,
-		backgroundPosition: runtimeCanvasSettings?.backgroundImage
-			? "center"
-			: undefined,
+		backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
+		backgroundSize: backgroundImage ? "cover" : undefined,
+		backgroundPosition: backgroundImage ? "center" : undefined,
 	};
 
 	const customCss = runtimeCanvasSettings?.customCss;

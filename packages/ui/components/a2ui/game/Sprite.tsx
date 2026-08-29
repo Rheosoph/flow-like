@@ -4,6 +4,7 @@ import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, SpriteComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -16,7 +17,7 @@ export function A2UISprite({
 	component,
 	style,
 }: ComponentProps<SpriteComponent>) {
-	const src = useResolved<string>(component.src);
+	const { url: src } = useAssetUrl(useResolved<string>(component.src));
 	const x = useResolved<number>(component.x) ?? 0;
 	const y = useResolved<number>(component.y) ?? 0;
 	const width = useResolved<number>(component.width);
