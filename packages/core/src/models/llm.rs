@@ -527,7 +527,7 @@ mod tests {
         state::FlowLikeConfig,
     };
     use flow_like_model_provider::history::{History, HistoryMessage, Role};
-    use flow_like_model_provider::llm::UsageReportingMode;
+    use flow_like_model_provider::llm::{LLMCallback, UsageReportingMode};
     use flow_like_model_provider::provider::{
         ModelProvider, ModelProviderConfiguration, OllamaConfig,
     };
@@ -798,7 +798,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hosted_openrouter_posts_to_chat_completions_with_the_bit_id_and_current_token() {
+    async fn hosted_openrouter_streams_to_chat_completions_with_the_bit_id_and_current_token() {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind mock proxy");
@@ -831,8 +831,9 @@ mod tests {
             "ignored-upstream-model".to_string(),
             vec![HistoryMessage::from_string(Role::User, "hello")],
         );
-        history.set_stream(false);
-        let result = model.invoke(&history, None).await;
+        history.set_stream(true);
+        let callback: LLMCallback = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let result = model.invoke(&history, Some(callback)).await;
         assert!(result.is_err(), "mock proxy deliberately returns HTTP 400");
 
         let request = capture.await.expect("capture task");
@@ -846,7 +847,7 @@ mod tests {
         assert!(headers.contains("x-flow-like-run-id: run-456\r\n"));
         assert_eq!(request.body["model"], "bit_opaque_123");
         assert_eq!(request.body["usage"]["include"], true);
-        assert_eq!(request.body["stream"], false);
+        assert_eq!(request.body["stream"], true);
     }
 
     #[tokio::test]
