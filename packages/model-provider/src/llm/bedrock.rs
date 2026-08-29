@@ -44,4 +44,13 @@ impl BedrockModel {
         provider.params = Some(params);
         OpenAIModel::from_provider_chat_completions(&provider).await
     }
+
+    /// Build the Bedrock client for Flow-Like's authenticated hosted proxy.
+    ///
+    /// The proxy endpoint is already an OpenAI-compatible API root. It must not
+    /// receive the `/openai/v1` normalization used for direct Bedrock runtime
+    /// endpoints.
+    pub async fn from_proxy(provider: &ModelProvider) -> flow_like_types::Result<OpenAIModel> {
+        OpenAIModel::from_provider_chat_completions(provider).await
+    }
 }

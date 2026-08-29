@@ -457,11 +457,14 @@ impl ModelFactory {
                         "hosted:azure requires a native Azure deployment proxy adapter; the Flow-Like API currently exposes only /chat/completions"
                     ));
                 }
-                "bedrock" => {
-                    return Err(flow_like_types::anyhow!(
-                        "hosted:bedrock requires a dedicated hosted proxy adapter; the existing Bedrock model is an OpenAI-compatible direct client"
-                    ));
-                }
+                "bedrock" => Arc::new(BedrockModel::from_proxy(&model_provider).await.map_err(
+                    |e| {
+                        flow_like_types::anyhow!(
+                            "Failed to create hosted:bedrock proxy model: {}",
+                            e
+                        )
+                    },
+                )?),
                 "vertex" => {
                     return Err(flow_like_types::anyhow!(
                         "hosted:vertex requires a native Vertex proxy adapter; Rig's Vertex client cannot target the Flow-Like HTTP proxy"
@@ -876,6 +879,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn factory_routes_hosted_bedrock_to_its_chat_completions_wrapper() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        let model = factory
+            .build(
+                &completion_bit("bedrock-bit", "hosted:bedrock"),
+                state,
+                Some("token".to_string()),
+                None,
+            )
+            .await
+            .expect("hosted:bedrock should use its OpenAI-compatible Chat Completions wrapper");
+
+        assert_eq!(
+            model.usage_reporting(),
+            UsageReportingMode::OpenAIStreamOptions
+        );
+        assert_eq!(model.default_model().await.as_deref(), Some("bedrock-bit"));
+        assert!(!factory.cached_models.contains_key("bedrock-bit"));
+    }
+
+    #[tokio::test]
     async fn factory_rejects_hosted_providers_without_native_proxy_adapters() {
         let store = FlowLikeStore::Memory(Arc::new(
             flow_like_storage::object_store::memory::InMemory::new(),
@@ -886,12 +918,7 @@ mod tests {
         ));
         let mut factory = ModelFactory::new();
 
-        for provider in [
-            "hosted:anthropic",
-            "hosted:azure",
-            "hosted:bedrock",
-            "hosted:vertex",
-        ] {
+        for provider in ["hosted:anthropic", "hosted:azure", "hosted:vertex"] {
             let error = match factory
                 .build(
                     &completion_bit(provider, provider),
