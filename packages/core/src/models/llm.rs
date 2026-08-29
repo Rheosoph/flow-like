@@ -516,16 +516,90 @@ pub async fn start_gc(state: Arc<Mutex<ModelFactory>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::str;
+
     use super::*;
     use crate::{
         bit::{BitModelClassification, BitTypes, LLMParameters},
         state::FlowLikeConfig,
     };
+    use flow_like_model_provider::history::{History, HistoryMessage, Role};
     use flow_like_model_provider::llm::UsageReportingMode;
     use flow_like_model_provider::provider::{
         ModelProvider, ModelProviderConfiguration, OllamaConfig,
     };
     use flow_like_storage::files::store::FlowLikeStore;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    struct CapturedRequest {
+        request_line: String,
+        headers: String,
+        body: flow_like_types::Value,
+    }
+
+    async fn capture_one_http_request(listener: TcpListener) -> CapturedRequest {
+        let (mut stream, _) = listener.accept().await.expect("accept proxy request");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+
+        let (header_end, content_length) = loop {
+            let read = stream.read(&mut buffer).await.expect("read proxy request");
+            assert!(read > 0, "connection closed before request headers");
+            bytes.extend_from_slice(&buffer[..read]);
+
+            let Some(header_end) = bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            else {
+                continue;
+            };
+            let headers = str::from_utf8(&bytes[..header_end]).expect("UTF-8 request headers");
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| {
+                        value
+                            .trim()
+                            .parse::<usize>()
+                            .expect("numeric content length")
+                    })
+                })
+                .unwrap_or_default();
+            break (header_end, content_length);
+        };
+
+        while bytes.len() < header_end + content_length {
+            let read = stream.read(&mut buffer).await.expect("read request body");
+            assert!(read > 0, "connection closed before request body");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+
+        let headers = str::from_utf8(&bytes[..header_end])
+            .expect("UTF-8 request headers")
+            .to_string();
+        let request_line = headers.lines().next().expect("request line").to_string();
+        let body =
+            flow_like_types::json::from_slice(&bytes[header_end..header_end + content_length])
+                .expect("JSON request body");
+
+        stream
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nstop",
+            )
+            .await
+            .expect("write mock response");
+
+        CapturedRequest {
+            request_line,
+            headers,
+            body,
+        }
+    }
 
     fn completion_bit(id: &str, provider_name: &str) -> Bit {
         Bit {
@@ -718,6 +792,58 @@ mod tests {
             assert_eq!(model.default_model().await.as_deref(), Some(provider));
             assert!(!factory.cached_models.contains_key(provider));
         }
+    }
+
+    #[tokio::test]
+    async fn hosted_openrouter_posts_to_chat_completions_with_the_bit_id_and_current_token() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock proxy");
+        let proxy_url = format!("http://{}", listener.local_addr().expect("proxy address"));
+        let capture = tokio::spawn(capture_one_http_request(listener));
+
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+        let model = factory
+            .build(
+                &completion_bit("bit_opaque_123", "hosted:openrouter"),
+                state,
+                Some("current-jwt".to_string()),
+                Some(ModelUsageContext {
+                    app_id: Some("app-123".to_string()),
+                    run_id: Some("run-456".to_string()),
+                    api_base_url: Some(proxy_url),
+                }),
+            )
+            .await
+            .expect("build hosted OpenRouter model");
+
+        let mut history = History::new(
+            "ignored-upstream-model".to_string(),
+            vec![HistoryMessage::from_string(Role::User, "hello")],
+        );
+        history.set_stream(false);
+        let result = model.invoke(&history, None).await;
+        assert!(result.is_err(), "mock proxy deliberately returns HTTP 400");
+
+        let request = capture.await.expect("capture task");
+        assert_eq!(
+            request.request_line,
+            "POST /api/v1/chat/completions HTTP/1.1"
+        );
+        let headers = request.headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer current-jwt\r\n"));
+        assert!(headers.contains("x-flow-like-app-id: app-123\r\n"));
+        assert!(headers.contains("x-flow-like-run-id: run-456\r\n"));
+        assert_eq!(request.body["model"], "bit_opaque_123");
+        assert_eq!(request.body["usage"]["include"], true);
+        assert_eq!(request.body["stream"], false);
     }
 
     #[tokio::test]
