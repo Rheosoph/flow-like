@@ -427,17 +427,46 @@ impl ModelFactory {
                 .unwrap_or("openrouter");
 
             let model: Arc<dyn ModelLogic> = match hosted_type {
-                "openrouter" | "openai" | "anthropic" | "azure" | "bedrock" | "vertex" => Arc::new(
-                    OpenAIModel::from_provider(&model_provider)
+                "openrouter" => Arc::new(
+                    OpenRouterModel::from_provider(&model_provider)
                         .await
                         .map_err(|e| {
                             flow_like_types::anyhow!(
-                                "Failed to create hosted:{} proxy model: {}",
-                                hosted_type,
+                                "Failed to create hosted:openrouter proxy model: {}",
                                 e
                             )
                         })?,
                 ),
+                "openai" => Arc::new(
+                    OpenAIModel::from_provider_chat_completions(&model_provider)
+                        .await
+                        .map_err(|e| {
+                            flow_like_types::anyhow!(
+                                "Failed to create hosted:openai proxy model: {}",
+                                e
+                            )
+                        })?,
+                ),
+                "anthropic" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:anthropic requires a native Messages API proxy adapter; the Flow-Like API currently exposes only /chat/completions"
+                    ));
+                }
+                "azure" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:azure requires a native Azure deployment proxy adapter; the Flow-Like API currently exposes only /chat/completions"
+                    ));
+                }
+                "bedrock" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:bedrock requires a dedicated hosted proxy adapter; the existing Bedrock model is an OpenAI-compatible direct client"
+                    ));
+                }
+                "vertex" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:vertex requires a native Vertex proxy adapter; Rig's Vertex client cannot target the Flow-Like HTTP proxy"
+                    ));
+                }
                 _ => {
                     return Err(flow_like_types::anyhow!(
                         "Unsupported hosted provider type: {}",
@@ -492,6 +521,7 @@ mod tests {
         bit::{BitModelClassification, BitTypes, LLMParameters},
         state::FlowLikeConfig,
     };
+    use flow_like_model_provider::llm::UsageReportingMode;
     use flow_like_model_provider::provider::{
         ModelProvider, ModelProviderConfiguration, OllamaConfig,
     };
@@ -660,7 +690,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn factory_accepts_all_hosted_provider_labels() {
+    async fn factory_routes_openrouter_hosted_labels_to_the_openrouter_client() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        for provider in ["Premium", "Internal", "Hosted", "hosted:openrouter"] {
+            let model = factory
+                .build(
+                    &completion_bit(provider, provider),
+                    state.clone(),
+                    Some("token".to_string()),
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{provider} should use OpenRouter: {error}"));
+            assert_eq!(
+                model.usage_reporting(),
+                UsageReportingMode::OpenRouterUsageInclude,
+                "{provider} should use the Rig OpenRouter client"
+            );
+            assert_eq!(model.default_model().await.as_deref(), Some(provider));
+            assert!(!factory.cached_models.contains_key(provider));
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_routes_hosted_openai_to_chat_completions() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        let model = factory
+            .build(
+                &completion_bit("openai-bit", "hosted:openai"),
+                state,
+                Some("token".to_string()),
+                None,
+            )
+            .await
+            .expect("hosted:openai should use Rig's OpenAI Chat Completions client");
+
+        assert_eq!(
+            model.usage_reporting(),
+            UsageReportingMode::OpenAIStreamOptions
+        );
+        assert_eq!(model.default_model().await.as_deref(), Some("openai-bit"));
+        assert!(!factory.cached_models.contains_key("openai-bit"));
+    }
+
+    #[tokio::test]
+    async fn factory_rejects_hosted_providers_without_native_proxy_adapters() {
         let store = FlowLikeStore::Memory(Arc::new(
             flow_like_storage::object_store::memory::InMemory::new(),
         ));
@@ -671,25 +761,28 @@ mod tests {
         let mut factory = ModelFactory::new();
 
         for provider in [
-            "Premium",
-            "Internal",
-            "Hosted",
-            "hosted:openrouter",
-            "hosted:openai",
             "hosted:anthropic",
             "hosted:azure",
             "hosted:bedrock",
             "hosted:vertex",
         ] {
-            let result = factory
+            let error = match factory
                 .build(
                     &completion_bit(provider, provider),
                     state.clone(),
                     Some("token".to_string()),
                     None,
                 )
-                .await;
-            assert!(result.is_ok(), "{provider} should use the hosted proxy");
+                .await
+            {
+                Ok(_) => panic!("{provider} should require a native proxy adapter"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error.to_string().contains("proxy adapter"),
+                "unexpected error for {provider}: {error}"
+            );
         }
     }
 

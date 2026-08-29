@@ -42,6 +42,6 @@ impl BedrockModel {
 
         let mut provider = provider.clone();
         provider.params = Some(params);
-        OpenAIModel::from_provider(&provider).await
+        OpenAIModel::from_provider_chat_completions(&provider).await
     }
 }
