@@ -40,9 +40,9 @@ use crate::{
     entity::{event, event_remote_auth, event_remote_registration, sea_orm_active_enums::RunMode},
     error::ApiError,
     execution::{
-        ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, fetch_profile_for_dispatch, is_jwt_configured, resolve_wasm_packages,
-        sign_execution_jwt,
+        ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
+        ExecutionJwtParams, TokenType, fetch_profile_for_dispatch, is_jwt_configured,
+        resolve_wasm_packages, sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,

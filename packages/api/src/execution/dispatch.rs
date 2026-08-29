@@ -2993,10 +2993,9 @@ mod tests {
     #[tokio::test]
     async fn every_dispatched_run_gets_a_channel_whoever_triggered_it() {
         crate::backend_jwt::init_for_tests();
-        let dispatcher = Dispatcher::from_config(DispatchConfig::default())
-            .with_channel_issuer(Arc::new(crate::channel::ChannelIssuer::http_only(
-                "https://api.test",
-            )));
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default()).with_channel_issuer(
+            Arc::new(crate::channel::ChannelIssuer::http_only("https://api.test")),
+        );
 
         // Whether a board asks its client something is a property of the board,
         // not of what triggered it, so no trigger dispatches without a channel:

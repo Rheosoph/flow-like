@@ -13,9 +13,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
-        collect_generic_result_bytes, is_jwt_configured, rejection, resolve_wasm_packages,
-        sign_execution_jwt,
+        DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
+        collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
+        resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
