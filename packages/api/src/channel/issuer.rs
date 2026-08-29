@@ -320,7 +320,9 @@ impl ChannelIssuer {
     }
 
     /// Full grant for the configured transport: executor credentials plus the client handle
-    /// forwarded inside every request. `expires_at` is the earliest credential expiry.
+    /// forwarded inside every request. `expires_at` is the earliest credential expiry. Both
+    /// sides are minted concurrently — every dispatch pays this latency, and on AWS each side is
+    /// its own `sts:AssumeRole`.
     pub async fn grant(
         &self,
         channel_id: &str,
@@ -329,12 +331,14 @@ impl ChannelIssuer {
         ttl_secs: i64,
     ) -> Result<ChannelGrant> {
         let ttl_secs = Self::ttl(ttl_secs);
-        let Some(executor) = self.mint_executor(channel_id, sub, ttl_secs).await? else {
+        let (executor, client) = flow_like_types::tokio::join!(
+            self.mint_executor(channel_id, sub, ttl_secs),
+            self.client_handle(channel_id, sub, app_id, ttl_secs),
+        );
+        let Some(executor) = executor? else {
             return self.http_grant(channel_id, sub, app_id, ttl_secs);
         };
-        let client = self
-            .client_handle(channel_id, sub, app_id, ttl_secs)
-            .await?;
+        let client = client?;
         let expires_at = executor.expires_at.min(client.expires_at);
         Ok(ChannelGrant {
             channel_id: channel_id.to_string(),

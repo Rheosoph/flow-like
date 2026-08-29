@@ -251,6 +251,13 @@ export interface CypherPayload {
 
 export interface SqlPayload {
 	query: string;
+	/**
+	 * Values for the query's `$placeholders`, keyed without the `$`. Bound by the
+	 * DataFusion planner, so a value is never built into the statement text. Both
+	 * the REST route and the tauri command have always accepted this; only the TS
+	 * contract omitted it, which forced callers to interpolate by hand.
+	 */
+	params?: Record<string, unknown>;
 	limit?: number;
 }
 

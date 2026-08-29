@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use flow_like_types::async_trait;
 use flow_like_types::channel::{
     Channel, ChannelExecutorGrant, ChannelGrant, ChannelHandle, ChannelOutcome, ChannelTicket,
-    clamp_ttl, new_request_id, now_unix,
+    new_request_id, now_unix, ticket_deadline,
 };
 use flow_like_types::tokio::sync::oneshot;
 use flow_like_types::tokio::task::JoinHandle;
@@ -292,7 +292,7 @@ impl Channel for AwsIotChannel {
             bail!("channel '{}' is closed", self.channel_id);
         }
         let request_id = new_request_id();
-        let expires_at = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+        let expires_at = ticket_deadline(&self.handle, ttl);
         self.router.register(&request_id);
         Ok(ChannelTicket {
             handle: self.handle.for_request(&request_id, expires_at),

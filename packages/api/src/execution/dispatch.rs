@@ -299,6 +299,33 @@ impl DispatchConfig {
     }
 }
 
+/// Who set the run going. The dispatcher reads this to decide whether the run's channel is worth
+/// cloud credentials: an interactive trigger has a client on the other end that can answer a
+/// node's request, an unattended one does not, and minting for it would buy nothing while costing
+/// every dispatch a round-trip (two `sts:AssumeRole` on AWS). Unattended runs still get a channel
+/// — the HTTP grant, which is free to mint — so a node that asks still gets a real ticket and a
+/// bounded wait rather than an error.
+///
+/// Defaults to [`DispatchTrigger::User`]: a new entry point that forgets to classify itself
+/// should cost too much, not silently lose replies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchTrigger {
+    /// A person is waiting on the run: a page, a quick event, a board run from the editor.
+    #[default]
+    User,
+    /// Machine-originated with no client attached: a schedule, a webhook, a bot service, an
+    /// inbound REST/MCP call, a setup workflow.
+    System,
+}
+
+impl DispatchTrigger {
+    /// Whether a client exists that could answer a request this run opens.
+    fn is_attended(self) -> bool {
+        matches!(self, Self::User)
+    }
+}
+
 /// Request to dispatch an execution
 /// The API is responsible for resolving events to board_id + board_version before dispatch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -345,6 +372,9 @@ pub struct DispatchRequest {
     /// on every entry point (see [`Dispatcher::attach_channel`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelGrant>,
+    /// Who triggered the run. Decides how much the run's channel is worth minting.
+    #[serde(default)]
+    pub trigger: DispatchTrigger,
 }
 
 /// Response from dispatch
@@ -516,10 +546,12 @@ impl Dispatcher {
     }
 
     /// Mint the run's channel grant when the caller did not supply one — the single funnel every
-    /// dispatch entry point passes through. The cheap HTTP handle is always minted; cloud
-    /// transport credentials only for runs a client watches (`stream_state`), since a run nobody
-    /// watches has no client to answer. A failed cloud grant degrades to HTTP rather than
-    /// blocking the dispatch.
+    /// dispatch entry point passes through. Every run gets a channel, so which nodes a board runs
+    /// is never a dispatch-time guess; what the trigger decides is only whether that channel is
+    /// worth cloud credentials. An attended run gets the deployment's transport (the executor
+    /// builds it into a lazy channel, so one that never asks its client anything never connects);
+    /// an unattended one gets the HTTP grant, which mints locally and costs the API nothing. A
+    /// failed cloud grant degrades to HTTP rather than blocking the dispatch.
     async fn attach_channel(&self, request: &mut DispatchRequest) {
         if request.channel.is_some() {
             return;
@@ -529,7 +561,7 @@ impl Dispatcher {
         };
         let ttl = channel_ttl_from_jwt(&request.jwt);
         let app_id = Some(request.app_id.as_str());
-        let grant = if request.stream_state && !issuer.backend().is_http() {
+        let grant = if request.trigger.is_attended() {
             match issuer
                 .grant(&request.run_id, &request.user_id, app_id, ttl)
                 .await
@@ -1456,16 +1488,31 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
     serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
 }
 
-/// A channel outlives nothing: its lifetime is the executor JWT's, read back from the token the
-/// caller already signed so the two never drift.
-const DEFAULT_CHANNEL_TTL_SECS: i64 = 24 * 60 * 60;
+/// How long a run stays answerable. Every wait a node opens is capped by this, so it is also the
+/// longest a run nobody is watching can park an executor waiting for a reply that will never
+/// come — an hour covers a human answering a form on a page and stays far below the nine-hour
+/// channel ceiling. Deployments whose forms wait longer raise `CHANNEL_TTL_SECONDS`.
+const DEFAULT_CHANNEL_TTL_SECS: i64 = 60 * 60;
+const CHANNEL_TTL_VAR: &str = "CHANNEL_TTL_SECONDS";
+
+/// The channel's lifetime: the configured ceiling, never outliving the executor JWT that
+/// authenticates its pushes. An unreadable or already-expired token leaves the ceiling standing —
+/// the grant is bounded either way.
+fn channel_ttl(configured: Option<&str>, jwt_ttl: Option<i64>) -> i64 {
+    let configured = configured
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_CHANNEL_TTL_SECS);
+    jwt_ttl
+        .filter(|ttl| *ttl > 0)
+        .map_or(configured, |ttl| ttl.min(configured))
+}
 
 fn channel_ttl_from_jwt(jwt: &str) -> i64 {
-    crate::execution::verify_execution_jwt(jwt)
+    let jwt_ttl = crate::execution::verify_execution_jwt(jwt)
         .ok()
-        .map(|claims| claims.exp - chrono::Utc::now().timestamp())
-        .filter(|ttl| *ttl > 0)
-        .unwrap_or(DEFAULT_CHANNEL_TTL_SECS)
+        .map(|claims| claims.exp - chrono::Utc::now().timestamp());
+    channel_ttl(std::env::var(CHANNEL_TTL_VAR).ok().as_deref(), jwt_ttl)
 }
 
 /// Environment switch for the credential a synchronous executor request must
@@ -2884,6 +2931,117 @@ mod tests {
         assert!(!executor_auth_requires_gcp_id_token(Some("backend_jwt")));
         assert!(!executor_auth_requires_gcp_id_token(Some("gcp_id_tokens")));
         assert!(!executor_auth_requires_gcp_id_token(None));
+    }
+
+    // Same reason as above: the env read is handed to the pure function verbatim.
+    #[test]
+    fn channel_ttl_is_bounded_by_the_ceiling_and_the_executor_token() {
+        assert_eq!(channel_ttl(None, None), DEFAULT_CHANNEL_TTL_SECS);
+
+        // A run nobody watches must not be able to park an executor for the
+        // executor token's full 24 hours waiting on a reply that never comes.
+        assert_eq!(
+            channel_ttl(None, Some(24 * 60 * 60)),
+            DEFAULT_CHANNEL_TTL_SECS
+        );
+
+        // A token about to expire shortens the channel with it: a push it can
+        // no longer authenticate cannot reach the waiter.
+        assert_eq!(channel_ttl(None, Some(90)), 90);
+
+        // Deployments whose forms wait longer than an hour raise the ceiling.
+        assert_eq!(channel_ttl(Some(" 7200 "), Some(24 * 60 * 60)), 7200);
+        assert_eq!(channel_ttl(Some("7200"), Some(600)), 600);
+
+        // Junk and non-positive values fall back rather than minting a channel
+        // that is dead on arrival.
+        for junk in ["", "   ", "abc", "0", "-5"] {
+            assert_eq!(
+                channel_ttl(Some(junk), None),
+                DEFAULT_CHANNEL_TTL_SECS,
+                "{junk:?} should fall back to the default"
+            );
+        }
+    }
+
+    fn dispatch_request(trigger: DispatchTrigger) -> DispatchRequest {
+        DispatchRequest {
+            run_id: "run-1".into(),
+            app_id: "app-1".into(),
+            board_id: "board-1".into(),
+            board_version: None,
+            node_id: "node-1".into(),
+            event_json: None,
+            payload: None,
+            user_id: "user-1".into(),
+            credentials_json: "{}".into(),
+            jwt: String::new(),
+            callback_url: "https://api.test".into(),
+            token: None,
+            oauth_tokens: None,
+            stream_state: false,
+            execution_mode: None,
+            runtime_variables: None,
+            user_context: None,
+            profile: None,
+            wasm_packages: None,
+            channel: None,
+            trigger,
+        }
+    }
+
+    #[tokio::test]
+    async fn every_dispatched_run_gets_a_channel_whoever_triggered_it() {
+        crate::backend_jwt::init_for_tests();
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default())
+            .with_channel_issuer(Arc::new(crate::channel::ChannelIssuer::http_only(
+                "https://api.test",
+            )));
+
+        // Whether a board asks its client something is a property of the board,
+        // not of what triggered it, so no trigger dispatches without a channel:
+        // an unattended run that reaches an interaction node gets a real ticket
+        // and a bounded wait rather than "no channel attached to run".
+        for trigger in [DispatchTrigger::User, DispatchTrigger::System] {
+            let mut request = dispatch_request(trigger);
+            dispatcher.attach_channel(&mut request).await;
+
+            let grant = request
+                .channel
+                .unwrap_or_else(|| panic!("{trigger:?} run must be answerable"));
+            assert_eq!(grant.channel_id, "run-1");
+
+            // Bounded: an unanswered wait cannot outlive the channel.
+            let now = flow_like_types::channel::now_unix();
+            assert!(grant.expires_at > now);
+            assert!(grant.expires_at <= now + DEFAULT_CHANNEL_TTL_SECS + 1);
+        }
+
+        // A caller that already minted its own grant keeps it.
+        let mut request = dispatch_request(DispatchTrigger::User);
+        let mine = dispatcher
+            .channels
+            .as_ref()
+            .unwrap()
+            .http_grant("run-1", "user-1", None, 42)
+            .unwrap();
+        request.channel = Some(mine.clone());
+        dispatcher.attach_channel(&mut request).await;
+        assert_eq!(request.channel.map(|c| c.expires_at), Some(mine.expires_at));
+    }
+
+    // The saving is the point of the trigger split: on a cloud transport an
+    // attended run mints credentials for it, an unattended one must not — that
+    // is two `sts:AssumeRole` per dispatch on AWS for a client that will never
+    // connect. The http_only issuer here cannot show the difference, so this
+    // pins the decision itself.
+    #[test]
+    fn only_attended_triggers_are_worth_cloud_credentials() {
+        assert!(DispatchTrigger::User.is_attended());
+        assert!(!DispatchTrigger::System.is_attended());
+        // An entry point that forgets to classify itself pays too much rather
+        // than silently losing its client's replies.
+        assert!(DispatchTrigger::default().is_attended());
     }
 
     #[test]

@@ -1287,7 +1287,17 @@ export function GlobalToolBridge() {
 	const pathname = usePathname();
 	const backend = useBackend();
 	const queryClient = useQueryClient();
-	const executeRuntimeTool = useFrontendRuntimeToolExecutor();
+	// The open Data Studio page is the only thing that knows which overlay "the
+	// ontology" refers to. Without it an omitted `overlay_id` reached graphState as
+	// "" — the web path has no apply_tool_context equivalent to fill it in.
+	// Deliberately NOT supplying defaultAppId: it also short-circuits
+	// assertAppVisibleForRuntime for every tool, which is a separate decision.
+	const dataStudioOverlayId = useAssistantSurface(
+		(s) => s.dataStudioSurface?.overlayId,
+	);
+	const executeRuntimeTool = useFrontendRuntimeToolExecutor({
+		defaultOverlayId: dataStudioOverlayId,
+	});
 	// Auth state gates online (cloud) app creation; keep it in a ref so the stable runTool
 	// callback reads the latest value without re-creating on every token refresh.
 	const auth = useAuth();

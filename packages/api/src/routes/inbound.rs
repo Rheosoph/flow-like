@@ -53,7 +53,7 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
+        DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
         collect_generic_result_bytes, is_jwt_configured, rejection, resolve_wasm_packages,
         sign_execution_jwt,
     },
@@ -1934,6 +1934,8 @@ async fn dispatch_event_collect(
         },
         wasm_packages,
         channel: None,
+        // An external REST/MCP caller, not a Flow-Like client.
+        trigger: DispatchTrigger::System,
     };
 
     let now = chrono::Utc::now().naive_utc();

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use flow_like_types::channel::{
     Channel, ChannelExecutorGrant, ChannelGrant, ChannelHandle, ChannelOutcome, ChannelTicket,
-    clamp_ttl, new_request_id, now_unix,
+    new_request_id, now_unix, ticket_deadline,
 };
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, anyhow, async_trait};
@@ -17,6 +17,10 @@ use super::auth::FirebaseAuth;
 use super::router::{Flags, Router, StreamKind, Subscription};
 use super::stream::{self, StreamConfig};
 use super::{database_root, json_url, path_segments};
+
+/// The sign-in that gates the connection: the streams behind it are long-lived, so the ceiling
+/// sits on this call rather than on the shared client.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct FirebaseRtdbChannel {
     channel_id: String,
@@ -57,12 +61,20 @@ impl FirebaseRtdbChannel {
             api_key.clone(),
             custom_token.clone(),
         ));
-        auth.id_token().await.map_err(|err| {
-            anyhow!(
-                "channel {}: firebase sign-in failed: {err}",
-                grant.channel_id
-            )
-        })?;
+        flow_like_types::tokio::time::timeout(CONNECT_TIMEOUT, auth.id_token())
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "channel {}: firebase sign-in timed out after {CONNECT_TIMEOUT:?}",
+                    grant.channel_id
+                )
+            })?
+            .map_err(|err| {
+                anyhow!(
+                    "channel {}: firebase sign-in failed: {err}",
+                    grant.channel_id
+                )
+            })?;
 
         let router = Arc::new(Router::new(&grant.channel_id));
         let stop = CancellationToken::new();
@@ -215,7 +227,7 @@ impl Channel for FirebaseRtdbChannel {
 
     async fn open(&self, ttl: Duration) -> flow_like_types::Result<ChannelTicket> {
         let request_id = new_request_id();
-        let expires_at = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+        let expires_at = ticket_deadline(&self.handle, ttl);
         self.router.register(&request_id);
         Ok(ChannelTicket {
             handle: self.handle.for_request(&request_id, expires_at),

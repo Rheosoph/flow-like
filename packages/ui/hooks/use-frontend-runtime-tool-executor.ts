@@ -1123,7 +1123,11 @@ async function executeGraphTool(
 						rows: await graphState.sql(
 							appId,
 							overlayId,
-							{ query: getArgString(args, "query") ?? "", limit },
+							{
+								query: getArgString(args, "query") ?? "",
+								params: args.params as Record<string, unknown> | undefined,
+								limit,
+							},
 							userScoped,
 						),
 					};

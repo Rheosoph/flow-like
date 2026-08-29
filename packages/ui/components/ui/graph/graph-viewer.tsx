@@ -1240,6 +1240,7 @@ export function GraphViewer({
 						<div className="absolute bottom-3 left-3 z-10">
 							<GraphLegend
 								entries={legendEntries}
+								hidden={hiddenLabels}
 								onToggleVisibility={handleToggleVisibility}
 								onStyleChange={onStyleChange}
 							/>
