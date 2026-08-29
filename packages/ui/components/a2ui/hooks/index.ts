@@ -12,7 +12,7 @@ export {
 } from "./use-bound-input-value";
 export { useAction, useActionCallback } from "./use-action";
 export { useElementStorage } from "./use-element-storage";
-export { useAssetUrl, useAssetUrls } from "./use-asset-url";
+export { useAssetUrl } from "./use-asset-url";
 export {
 	DEFAULT_EVENT_DEBOUNCE_MS,
 	MIN_EVENT_DEBOUNCE_MS,

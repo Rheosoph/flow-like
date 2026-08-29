@@ -1,19 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
+import { useAssetSource } from "../../../hooks/use-asset-source";
+import { isStorageAssetPath } from "../../../lib/asset-url-cache";
 import {
 	resolveChatPlaceholderBubbleState,
 	resolveChatPlaceholderTypingMotion,
 	resolveChatPlaceholderVisual,
 } from "../../../lib/chat-appearance";
 import type { IComposerActivityChannel } from "../../../lib/composer-activity";
-import {
-	isStoragePrefix,
-	presignSinglePath,
-} from "../../../lib/presign-assets";
 import type { IEventPayloadChat } from "../../../lib/schema/flow/event-payload-chat";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
 import { BubbleOrbFilm } from "../../global-chat/bubble-orb-film";
 import { ChatEmptyOrb } from "./chat-empty-orb";
 
@@ -30,39 +27,14 @@ interface IChatPlaceholderProps {
 }
 
 /**
- * Resolves a storage path to a signed URL. Plain URLs are handed straight back, so an external
- * image keeps working with no app storage involved.
+ * Resolves a storage path to a signed URL, renewing it before it lapses. Plain URLs are handed
+ * straight back, so an external image keeps working with no app storage involved.
  */
 function useResolvedImage(source: string, appId?: string) {
-	const backend = useBackend();
-	const [resolved, setResolved] = useState<string | undefined>(() =>
-		source && !isStoragePrefix(source) ? source : undefined,
-	);
-
-	useEffect(() => {
-		if (!source) {
-			setResolved(undefined);
-			return;
-		}
-		if (!isStoragePrefix(source)) {
-			setResolved(source);
-			return;
-		}
-		if (!appId) {
-			setResolved(undefined);
-			return;
-		}
-		let cancelled = false;
-		void presignSinglePath(appId, source, backend.storageState).then((url) => {
-			if (cancelled) return;
-			setResolved(url && !isStoragePrefix(url) ? url : undefined);
-		});
-		return () => {
-			cancelled = true;
-		};
-	}, [source, appId, backend.storageState]);
-
-	return resolved;
+	const { src } = useAssetSource(appId, source || undefined);
+	// A path that came back unresolved has nothing to show; drawing it would only
+	// point the element at the page's own origin.
+	return isStorageAssetPath(src) ? undefined : src;
 }
 
 /** The bubble needs a sized, positioned host — the film reads its box and pointer from it. */

@@ -20,8 +20,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType, fetch_profile_for_dispatch,
-        is_jwt_configured, payload_storage, rejection, resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType,
+        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, rejection,
+        resolve_wasm_packages, sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,

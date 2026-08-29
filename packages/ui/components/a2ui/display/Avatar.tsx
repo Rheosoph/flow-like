@@ -5,6 +5,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { AvatarComponent, BoundValue } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -24,7 +25,7 @@ export function A2UIAvatar({
 	component,
 	style,
 }: ComponentProps<AvatarComponent>) {
-	const src = useResolved<string>(component.src);
+	const { url: src } = useAssetUrl(useResolved<string>(component.src));
 	const fallback = useResolved<string>(component.fallback);
 	const size = useResolved<string>(component.size);
 

@@ -8,6 +8,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { normalizeBoxes } from "../bbox-utils";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, ImageLabelerComponent, LabelBox } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -47,7 +48,7 @@ export function A2UIImageLabeler({
 	const imageRef = useRef<HTMLImageElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 
-	const src = useResolved<string>(component.src);
+	const { url: src } = useAssetUrl(useResolved<string>(component.src));
 	const alt =
 		useResolved<string>(component.alt) ?? t("imageToLabel", "Image to label");
 	const rawBoxes = useResolved<unknown>(component.boxes);

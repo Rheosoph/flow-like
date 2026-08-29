@@ -9,6 +9,7 @@ import { AudioPlayback, type VoiceVariant } from "../../voice";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, FilePreviewComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -92,7 +93,9 @@ export function A2UIFilePreview({
 	style,
 }: ComponentProps<FilePreviewComponent>) {
 	const { t } = useTranslation("common");
-	const src = useResolved<string>(component.src ?? component.url);
+	const { url: src, isLoading } = useAssetUrl(
+		useResolved<string>(component.src ?? component.url),
+	);
 	const filename = useResolved<string>(component.filename);
 	const mimeType = useResolved<string>(component.mimeType);
 	const fileTypeOverride = useResolved<string>(component.fileType);
@@ -158,7 +161,9 @@ export function A2UIFilePreview({
 				)}
 				style={resolveInlineStyle(style)}
 			>
-				{fallbackText}
+				{/* Nothing is wrong yet while the storage path is being signed, so
+				    hold the frame rather than declaring the file unavailable. */}
+				{isLoading && !error ? null : fallbackText}
 			</div>
 		);
 	}

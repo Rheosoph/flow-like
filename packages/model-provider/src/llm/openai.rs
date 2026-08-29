@@ -13,6 +13,7 @@ use flow_like_types::{Cacheable, Result, async_trait, json::json};
 #[derive(Clone)]
 enum OpenAIClientType {
     OpenAI(rig::providers::openai::Client),
+    OpenAIChatCompletions(rig::providers::openai::CompletionsClient),
     Azure(rig::providers::azure::Client),
 }
 
@@ -21,6 +22,7 @@ impl OpenAIClientType {
     fn into_boxed(self) -> Box<dyn CompletionClientDyn + Send + Sync> {
         match self {
             OpenAIClientType::OpenAI(client) => Box::new(client),
+            OpenAIClientType::OpenAIChatCompletions(client) => Box::new(client),
             OpenAIClientType::Azure(client) => Box::new(client),
         }
     }
@@ -139,6 +141,33 @@ impl OpenAIModel {
             default_model: model_id,
         })
     }
+
+    /// Build an OpenAI client that uses the Chat Completions API.
+    ///
+    /// Rig's default OpenAI client uses the Responses API. Flow-Like's hosted
+    /// model proxy exposes an OpenAI-compatible `/chat/completions` endpoint,
+    /// so hosted OpenAI Bits must opt into Rig's completions client explicitly.
+    /// Direct OpenAI models keep using [`Self::from_provider`] and the Responses
+    /// API.
+    pub async fn from_provider_chat_completions(
+        provider: &ModelProvider,
+    ) -> flow_like_types::Result<Self> {
+        let Self {
+            client,
+            default_model,
+        } = Self::from_provider(provider).await?;
+        let client = match client {
+            OpenAIClientType::OpenAI(client) => {
+                OpenAIClientType::OpenAIChatCompletions(client.completions_api())
+            }
+            other => other,
+        };
+
+        Ok(Self {
+            client,
+            default_model,
+        })
+    }
 }
 
 impl Cacheable for OpenAIModel {
@@ -186,6 +215,8 @@ impl ModelLogic for OpenAIModel {
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
+    use std::collections::HashMap;
+
     use flow_like_types::tokio;
     use rig::agent::MultiTurnStreamItem;
     use rig::completion::ToolDefinition;
@@ -202,6 +233,52 @@ mod tests {
         provider::{ModelProviderConfiguration, OpenAIConfig},
     };
     use dotenv::dotenv;
+
+    fn proxy_provider() -> ModelProvider {
+        ModelProvider {
+            provider_name: "hosted:openai".to_string(),
+            model_id: Some("upstream-model".to_string()),
+            version: None,
+            params: Some(HashMap::from([
+                (
+                    "api_key".to_string(),
+                    flow_like_types::Value::String("test-token".to_string()),
+                ),
+                (
+                    "endpoint".to_string(),
+                    flow_like_types::Value::String("https://proxy.example/api/v1".to_string()),
+                ),
+                (
+                    "model_id".to_string(),
+                    flow_like_types::Value::String("bit-id".to_string()),
+                ),
+            ])),
+        }
+    }
+
+    #[tokio::test]
+    async fn hosted_proxy_constructor_uses_openai_chat_completions() {
+        let provider = proxy_provider();
+        let model = OpenAIModel::from_provider_chat_completions(&provider)
+            .await
+            .expect("hosted proxy client should build");
+
+        assert!(matches!(
+            model.client,
+            OpenAIClientType::OpenAIChatCompletions(_)
+        ));
+        assert_eq!(model.default_model.as_deref(), Some("bit-id"));
+    }
+
+    #[tokio::test]
+    async fn direct_constructor_keeps_the_openai_responses_api() {
+        let provider = proxy_provider();
+        let model = OpenAIModel::from_provider(&provider)
+            .await
+            .expect("direct OpenAI client should build");
+
+        assert!(matches!(model.client, OpenAIClientType::OpenAI(_)));
+    }
 
     #[tokio::test]
     async fn test_openai_model_no_stream() {

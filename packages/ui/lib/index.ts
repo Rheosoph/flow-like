@@ -47,7 +47,7 @@ export * from "./realtime/webrtc";
 export * from "./oauth";
 export * from "./builder/KeyboardShortcuts";
 export * from "./flowpilot/index";
-export * from "./presign-assets";
+export * from "./asset-url-cache";
 export * from "./storage-url";
 export * from "./storage-tree";
 export * from "./bulk-upload";
