@@ -22,7 +22,7 @@ pub use channel_jwt::{
 };
 pub use dispatch::{
     ArtifactEnsurer, ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse,
-    Dispatcher, ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
+    DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
     hydrate_profile_custom_bit_secrets,
 };
 pub use jwt::{

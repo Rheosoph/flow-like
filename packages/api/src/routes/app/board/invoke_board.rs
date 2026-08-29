@@ -23,7 +23,7 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
+        ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
         completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
         proxy_sse_response, resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
     },
@@ -360,6 +360,7 @@ pub async fn invoke_board(
         profile,
         wasm_packages,
         channel: None,
+        trigger: DispatchTrigger::User,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async

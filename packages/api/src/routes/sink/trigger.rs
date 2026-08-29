@@ -13,7 +13,7 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
+        DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
         collect_generic_result_bytes, is_jwt_configured, rejection, resolve_wasm_packages,
         sign_execution_jwt,
     },
@@ -772,6 +772,8 @@ pub async fn trigger_event(
         profile: hydrated_sink_profile(state, &sink).await,
         wasm_packages,
         channel: None,
+        // Programmatic trigger: cron workers, Lambda handlers, queue processors.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1079,6 +1081,8 @@ pub async fn trigger_http(
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
         channel: None,
+        // Inbound webhook.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1482,6 +1486,8 @@ pub async fn trigger_telegram(
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
         channel: None,
+        // Telegram bot service.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1820,6 +1826,8 @@ pub async fn trigger_discord(
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
         channel: None,
+        // Discord bot service.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record

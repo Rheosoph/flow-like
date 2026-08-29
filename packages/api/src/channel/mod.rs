@@ -12,6 +12,18 @@
 //!
 //! Every non-HTTP handle carries the HTTP push endpoint as its fallback; a push arriving there
 //! for a cloud-transport channel is forwarded onto that transport.
+//!
+//! Every dispatched run gets a grant, whoever triggered it — which nodes a board runs is not
+//! something dispatch can know in advance. What the trigger decides is how much that grant is
+//! worth minting: an attended run (`DispatchTrigger::User` — a page, a quick event, a board run
+//! from the editor) gets the transport above, an unattended one (a schedule, a webhook, a bot, an
+//! inbound REST/MCP call) gets the HTTP grant, which mints locally instead of spending a
+//! round-trip on credentials for a client that will never connect. The executor opens the
+//! connection only when a node actually asks its client something.
+//!
+//! `CHANNEL_TTL_SECONDS` (default 3600) caps a channel's life, and with it how long a run whose
+//! trigger left no client behind can sit waiting for a reply; the executor JWT's own expiry caps
+//! it further.
 
 #[cfg(feature = "channel-aws")]
 pub mod aws;

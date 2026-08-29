@@ -1265,7 +1265,7 @@ function GraphEvents({
 	return null;
 }
 
-function SigmaRefresher({ refreshKey }: { refreshKey: string }) {
+function SigmaRefresher({ refreshKey }: { refreshKey: readonly unknown[] }) {
 	const sigma = useSigma();
 	useEffect(() => {
 		void refreshKey;
@@ -1813,8 +1813,30 @@ export function GraphCanvas({
 		highlightRef.current.connectedEdgeSet = sets.connectedEdgeSet;
 	}, [selectedNodeId, graph]);
 
-	// Force sigma refresh when visibility/highlight props change
-	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${visibleNodeIds ? `v${visibleNodeIds.size}:${[...visibleNodeIds].join(",")}` : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
+	// Sigma renders from mutable graph attributes, so a prop that only feeds the
+	// reducers needs an explicit refresh. This tuple's IDENTITY is the trigger —
+	// serialising the sets rebuilt a ~300KB key per render on a 10k-node stage, and
+	// every distinct key ran a full re-indexation. Safe because every set arrives
+	// from a useMemo or useState in GraphViewer, the only consumer; a set allocated
+	// fresh each render would refresh each render.
+	const sigmaRefreshTrigger = useMemo(
+		() => [
+			hiddenLabels,
+			highlightedNodeIds,
+			highlightedEdgeIds,
+			visibleNodeIds,
+			selectedEdgeKey,
+			themeTick,
+		],
+		[
+			hiddenLabels,
+			highlightedNodeIds,
+			highlightedEdgeIds,
+			visibleNodeIds,
+			selectedEdgeKey,
+			themeTick,
+		],
+	);
 
 	// Stable reducers — read all dynamic state from ref
 	const nodeReducer = useCallback(
@@ -1908,13 +1930,25 @@ export function GraphCanvas({
 			const origColor = graph.getEdgeAttribute(edge, "originalColor") as string;
 			const isHoveredEdge = hl.hoveredEdge === edge;
 
-			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
+			const hasNodeHighlight = Boolean(
+				hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0,
+			);
+			const hasEdgeHighlight = Boolean(
+				hl.highlightedEdgeIds && hl.highlightedEdgeIds.size > 0,
+			);
+
+			// Either channel alone drives the dim treatment. Gating the edge set behind a
+			// non-empty node set made "highlight these relationships" unexpressible.
+			if (hasNodeHighlight || hasEdgeHighlight) {
 				const edgeId = graph.getEdgeAttribute(edge, "edgeId") as
 					| string
 					| undefined;
-				const isHighlighted = hl.highlightedEdgeIds
-					? Boolean(edgeId && hl.highlightedEdgeIds.has(edgeId))
-					: hl.highlightedNodeIds.has(src) || hl.highlightedNodeIds.has(tgt);
+				const isHighlighted = hasEdgeHighlight
+					? Boolean(edgeId && hl.highlightedEdgeIds?.has(edgeId))
+					: Boolean(
+							hl.highlightedNodeIds?.has(src) ||
+								hl.highlightedNodeIds?.has(tgt),
+						);
 				if (!isHighlighted) {
 					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
@@ -2081,7 +2115,7 @@ export function GraphCanvas({
 							onRunningChange={setIsWorkerLayoutRunning}
 						/>
 					) : null}
-					<SigmaRefresher refreshKey={sigmaRefreshKey} />
+					<SigmaRefresher refreshKey={sigmaRefreshTrigger} />
 					<SigmaControls onResetLayout={handleResetLayout} disabled={isBusy} />
 				</SigmaContainer>
 			) : null}

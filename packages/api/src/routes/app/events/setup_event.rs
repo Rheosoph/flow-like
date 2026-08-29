@@ -40,7 +40,7 @@ use crate::{
     entity::{event, event_remote_auth, event_remote_registration, sea_orm_active_enums::RunMode},
     error::ApiError,
     execution::{
-        ByteStream, DispatchError, DispatchRequest, ExecutionBackend, ExecutionJwtParams,
+        ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
         TokenType, fetch_profile_for_dispatch, is_jwt_configured, resolve_wasm_packages,
         sign_execution_jwt,
     },
@@ -357,6 +357,8 @@ pub(crate) async fn run_event_setup(
         profile,
         wasm_packages,
         channel: None,
+        // A background setup workflow emitting config.
+        trigger: DispatchTrigger::System,
     };
 
     let backend = state.dispatcher.backend();

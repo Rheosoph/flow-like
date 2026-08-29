@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flow_like_types::channel::{
     Channel, ChannelExecutorGrant, ChannelGrant, ChannelHandle, ChannelOutcome, ChannelTicket,
-    clamp_ttl, new_request_id, now_unix,
+    new_request_id, now_unix, ticket_deadline,
 };
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, async_trait};
@@ -114,7 +114,7 @@ impl Channel for AzureWebPubSubChannel {
 
     async fn open(&self, ttl: Duration) -> flow_like_types::Result<ChannelTicket> {
         let request_id = new_request_id();
-        let expires_at = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+        let expires_at = ticket_deadline(&self.client, ttl);
         self.shared.register(&request_id);
         Ok(ChannelTicket {
             handle: self.client.for_request(&request_id, expires_at),

@@ -44,6 +44,18 @@ pub fn clamp_ttl(ttl: Duration) -> Duration {
     ttl.clamp(MIN_TTL, MAX_TTL)
 }
 
+/// Deadline for one request opened on `handle`: the caller's TTL, clamped to the channel bounds
+/// and never past the credential the client would answer with. Waiting on a handle whose token
+/// has already died is not patience, it is a stalled run — the waiter gives up instead.
+pub fn ticket_deadline(handle: &ChannelHandle, ttl: Duration) -> i64 {
+    let requested = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+    if handle.expires_at > 0 {
+        requested.min(handle.expires_at)
+    } else {
+        requested
+    }
+}
+
 /// One registered request the waiter can block on.
 #[derive(Debug, Clone)]
 pub struct ChannelTicket {
@@ -93,4 +105,45 @@ pub trait Channel: Send + Sync {
 
     /// Release everything the channel holds (rows, connections, registry entries).
     async fn close(&self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handle(expires_at: i64) -> ChannelHandle {
+        ChannelHandle {
+            channel_id: "run".into(),
+            request_id: None,
+            expires_at,
+            transport: ChannelClientDescriptor::Http {
+                push_url: "https://api/api/v1/channels/run/push".into(),
+                token: "t".into(),
+            },
+            fallback: None,
+        }
+    }
+
+    #[test]
+    fn ticket_never_outlives_the_credential_that_would_answer_it() {
+        let now = now_unix();
+
+        // A wait that fits inside the channel keeps its own deadline.
+        let deadline = ticket_deadline(&handle(now + 3600), Duration::from_secs(120));
+        assert!((deadline - now - 120).abs() <= 1);
+
+        // A node asking for longer than the channel lives is cut back to it:
+        // past that point no client can authenticate a reply, so the run would
+        // be waiting on nothing.
+        let deadline = ticket_deadline(&handle(now + 300), Duration::from_secs(8 * 60 * 60));
+        assert_eq!(deadline, now + 300);
+
+        // Nine hours stays the ceiling for a channel that outlives it.
+        let deadline = ticket_deadline(&handle(now + 100 * 60 * 60), Duration::from_secs(u64::MAX));
+        assert!((deadline - now - MAX_TTL.as_secs() as i64).abs() <= 1);
+
+        // An already-dead handle expires the wait immediately rather than
+        // parking the run until its own TTL runs out.
+        assert!(ticket_deadline(&handle(now - 10), Duration::from_secs(600)) <= now);
+    }
 }

@@ -1,6 +1,8 @@
 //! [`ChannelStore`] over the API's `/api/v1/channels` surface, for executors that have no
 //! database. Every call is a short request; the executor never holds a connection open.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use super::polling::{ChannelPoll, ChannelStore};
@@ -31,6 +33,11 @@ pub struct ChannelStatusResponse {
     pub cancelled: bool,
 }
 
+/// Every hub call is a short control-plane request. Without a ceiling a hung API leaves the run
+/// blocked inside `open` or `poll`, where the ticket's own deadline cannot reach it.
+const HUB_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const HUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct HubChannelStore {
     base_url: String,
     token: String,
@@ -42,7 +49,11 @@ impl HubChannelStore {
         Self {
             base_url: format!("{}/api/v1/channels", hub_url.trim_end_matches('/')),
             token: token.into(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(HUB_CONNECT_TIMEOUT)
+                .timeout(HUB_REQUEST_TIMEOUT)
+                .build()
+                .unwrap_or_default(),
         }
     }
 

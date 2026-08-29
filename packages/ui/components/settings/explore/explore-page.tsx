@@ -123,14 +123,53 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	const setDataStudioSurface = useAssistantSurface(
 		(state) => state.setDataStudioSurface,
 	);
+	// `data_studio_section` already renders app/overlay NAMES and has been showing raw ids
+	// because nothing populated them. Both queries are keyed exactly as DatabaseOverview's,
+	// so react-query serves them from the same cache entry rather than refetching.
+	const surfaceBackend = useBackend();
+	const surfaceAppMeta = useInvoke(
+		surfaceBackend.appState.getAppMeta,
+		surfaceBackend.appState,
+		[appId],
+	);
+	const surfaceOverlays = useInvoke(
+		surfaceBackend.graphState.listOverlays,
+		surfaceBackend.graphState,
+		[appId],
+	);
+	const overlayNames = useMemo(
+		() => (surfaceOverlays.data ?? []).map((overlay) => overlay.name),
+		[surfaceOverlays.data],
+	);
+	const overlayName = useMemo(
+		() =>
+			overlayParam
+				? (surfaceOverlays.data ?? []).find(
+						(overlay) => overlay.id === overlayParam,
+					)?.name
+				: undefined,
+		[surfaceOverlays.data, overlayParam],
+	);
+	const appName = surfaceAppMeta.data?.name;
 	useEffect(() => {
 		setDataStudioSurface({
 			appId,
+			appName,
 			overlayId: overlayParam ?? undefined,
+			overlayName,
+			overlayNames,
 			selectedTable: table || undefined,
 		});
 		return () => setDataStudioSurface(null);
-	}, [appId, overlayParam, table, setDataStudioSurface]);
+	}, [
+		appId,
+		appName,
+		overlayParam,
+		overlayName,
+		overlayNames,
+		table,
+		setDataStudioSurface,
+	]);
 
 	// The ontology and table views are what FlowPilot actually works on here, so they get the
 	// launcher; DatabaseOverview decides for itself per tab.

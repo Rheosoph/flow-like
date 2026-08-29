@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     Channel, ChannelClientDescriptor, ChannelHandle, ChannelOutcome, ChannelPush, ChannelPushKind,
-    ChannelTicket, clamp_ttl, new_request_id, now_unix,
+    ChannelTicket, clamp_ttl, new_request_id, now_unix, ticket_deadline,
 };
 use crate::Value;
 use crate::async_trait;
@@ -145,14 +145,15 @@ impl Channel for InProcessChannel {
 
     async fn open(&self, ttl: Duration) -> crate::Result<ChannelTicket> {
         let request_id = new_request_id();
-        let expires_at = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+        let handle = self.handle();
+        let expires_at = ticket_deadline(&handle, ttl);
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().await.insert(request_id.clone(), sender);
         // The receiver is re-created in `wait` from the registry entry; keep the sender alive by
         // parking the receiver alongside it.
         RECEIVERS.lock().await.insert(request_id.clone(), receiver);
         Ok(ChannelTicket {
-            handle: self.handle().for_request(&request_id, expires_at),
+            handle: handle.for_request(&request_id, expires_at),
             request_id,
             expires_at,
         })

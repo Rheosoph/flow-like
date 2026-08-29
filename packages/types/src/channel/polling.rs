@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::{
     Channel, ChannelHandle, ChannelOutcome, ChannelTicket, DEFAULT_POLL_INTERVAL,
-    MAX_POLL_INTERVAL, clamp_ttl, new_request_id, now_unix,
+    MAX_POLL_INTERVAL, new_request_id, now_unix, ticket_deadline,
 };
 use crate::Value;
 use crate::async_trait;
@@ -82,7 +82,7 @@ impl<S: ChannelStore> Channel for PollingChannel<S> {
 
     async fn open(&self, ttl: Duration) -> crate::Result<ChannelTicket> {
         let request_id = new_request_id();
-        let expires_at = now_unix() + clamp_ttl(ttl).as_secs() as i64;
+        let expires_at = ticket_deadline(&self.handle, ttl);
         self.store
             .register(&self.channel_id, &request_id, expires_at)
             .await?;
